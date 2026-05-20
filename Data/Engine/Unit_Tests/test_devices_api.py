@@ -2147,7 +2147,7 @@ def test_metadata_field_definition_and_device_value_api(engine_harness: EngineTe
     finally:
         conn.close()
 
-    assert row == ("AT-12345", "engine", "admin")
+    assert row == (base64.b64encode(b"AT-12345").decode("ascii"), "engine", "admin")
 
 
 def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harness: EngineTestHarness) -> None:
@@ -2159,7 +2159,17 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
                 device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("GUID-TEST-0001", 1, "field_001", "engine-new", 200, "engine", "admin", 200, 200),
+            (
+                "GUID-TEST-0001",
+                1,
+                "field_001",
+                base64.b64encode(b"engine-new").decode("ascii"),
+                200,
+                "engine",
+                "admin",
+                200,
+                200,
+            ),
         )
         conn.commit()
     finally:
@@ -2175,16 +2185,24 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
             "service_mode": "system",
             "metrics": {},
             "metadata_fields": {
-                "field_001": {"value": "agent-old", "modified_at": 100, "source": "cli"},
+                "field_001": {
+                    "value": base64.b64encode(b"agent-old").decode("ascii"),
+                    "modified_at": 100,
+                    "source": "cli",
+                },
                 "field_002": {"value": "", "modified_at": 300, "source": "cli"},
-                "field_003": {"value": "future", "modified_at": before + 10_000, "source": "cli"},
+                "field_003": {
+                    "value": base64.b64encode(b"future").decode("ascii"),
+                    "modified_at": before + 10_000,
+                    "source": "cli",
+                },
             },
         },
     )
 
     assert response.status_code == 200
     body = response.get_json()
-    assert body["metadata_fields"]["field_001"]["value"] == "engine-new"
+    assert body["metadata_fields"]["field_001"]["value"] == base64.b64encode(b"engine-new").decode("ascii")
     assert "field_002" in body["metadata_field_acks"]
 
     conn = sqlite3.connect(str(engine_harness.db_path))
@@ -2203,10 +2221,10 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
     finally:
         conn.close()
 
-    assert rows[1][1] == "engine-new"
+    assert rows[1][1] == base64.b64encode(b"engine-new").decode("ascii")
     assert rows[2][1] == ""
     assert rows[2][2] == 300
-    assert rows[3][1] == "future"
+    assert rows[3][1] == base64.b64encode(b"future").decode("ascii")
     assert before <= int(rows[3][2]) <= int(time.time()) + 5
 
 

@@ -21,6 +21,7 @@ from Data.Engine.services.activity_history import insert_activity_history_row
 from Data.Engine.services.auth import RequestAuthContext, UserSiteAccessManager
 from Data.Engine.services.metadata_fields import (
     METADATA_VALUE_MAX_LENGTH,
+    decode_metadata_value,
     device_metadata_rows,
     list_metadata_definitions,
     metadata_field_key,
@@ -118,7 +119,6 @@ def register_metadata_fields(app: Flask, adapters: "EngineServiceAdapters") -> N
                 "fields": fields,
                 "count": len(fields),
                 "value_limit": METADATA_VALUE_MAX_LENGTH,
-                "plain_text_warning": "Metadata field values are stored as plain text. Do not store secrets.",
             }
         )
 
@@ -168,7 +168,6 @@ def register_metadata_fields(app: Flask, adapters: "EngineServiceAdapters") -> N
                 "fields": rows,
                 "count": len(rows),
                 "value_limit": METADATA_VALUE_MAX_LENGTH,
-                "plain_text_warning": "Metadata field values are stored as plain text. Do not store secrets.",
             }
         )
 
@@ -233,6 +232,7 @@ def register_metadata_fields(app: Flask, adapters: "EngineServiceAdapters") -> N
                     **definition,
                     **row,
                     "label": definition.get("description") or definition.get("default_label") or metadata_field_label(parsed),
+                    "value": decode_metadata_value(row.get("value", "")),
                     "has_value": bool(value),
                 }
             }

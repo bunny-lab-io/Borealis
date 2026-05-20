@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from Data.Engine.db import dbapi as sqlite3
 import time
@@ -451,7 +452,17 @@ def test_filter_preview_supports_metadata_fields(engine_harness: EngineTestHarne
                 device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("GUID-TEST-0001", 7, "field_007", "west-wing", now, "engine", "admin", now, now),
+            (
+                "GUID-TEST-0001",
+                7,
+                "field_007",
+                base64.b64encode(b"west-wing").decode("ascii"),
+                now,
+                "engine",
+                "admin",
+                now,
+                now,
+            ),
         )
         conn.execute(
             """

@@ -173,14 +173,12 @@ export async function loadMetadataFieldsPageData(request) {
     return {
       fields: Array.isArray(payload?.fields) ? payload.fields : [],
       initialError: "",
-      plainTextWarning: payload?.plain_text_warning || "",
     };
   } catch (error) {
     rethrowIfRouteRedirect(error);
     return {
       fields: [],
       initialError: getRouteErrorMessage(error, "Unable to load metadata fields."),
-      plainTextWarning: "",
     };
   } finally {
     progress.finalize();
@@ -192,7 +190,6 @@ export default function MetadataFieldList() {
   const [rows, setRows] = useState(() => (Array.isArray(loaderData?.fields) ? loaderData.fields : []));
   const [loading, setLoading] = useState(() => !loaderData?.fields && !loaderData?.initialError);
   const [error, setError] = useState(() => String(loaderData?.initialError || ""));
-  const [plainTextWarning, setPlainTextWarning] = useState(() => String(loaderData?.plainTextWarning || ""));
   const gridRef = useRef(null);
   const notifyOperator = useAppNotifications({
     title: "Metadata Fields",
@@ -212,7 +209,6 @@ export default function MetadataFieldList() {
     try {
       const payload = await fetchRouteJson("/api/metadata_fields");
       setRows(Array.isArray(payload?.fields) ? payload.fields : []);
-      setPlainTextWarning(payload?.plain_text_warning || "");
     } catch (err) {
       setRows([]);
       setError(getRouteErrorMessage(err, "Unable to load metadata fields."));
@@ -299,7 +295,6 @@ export default function MetadataFieldList() {
   const stack = (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 1.25 }}>
       {loading ? <LinearProgress /> : null}
-      {plainTextWarning ? <Alert severity="warning">{plainTextWarning}</Alert> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Typography sx={{ color: "#94a3b8", fontSize: "0.86rem" }}>
         Empty descriptions fall back to Field 001 through Field 500.

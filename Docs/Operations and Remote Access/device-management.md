@@ -35,9 +35,9 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## Agent Metadata Fields
 - Borealis exposes 500 fixed text metadata fields per device, keyed as `field_001` through `field_500` and displayed as `Field 001` through `Field 500` unless an admin sets a global description.
 - Global descriptions live in Admin Settings > Metadata Fields. Values live per device and are editable from Device Summary > Metadata Fields.
-- Values are plain text with a 1024-character limit. Do not store credentials or other sensitive data.
+- Values have a 1024-character decoded limit and are base64-encoded at rest in both Engine storage and `agent.json`.
 - Device values are sparse. Empty fields are omitted from `agent.json` and from agent-to-engine value payloads after Engine acknowledges a clear.
-- `agent.metadata_fields` stores changed values with `value`, `modified_at`, `source`, and optional `actor`. The Engine stores the same data in `device_metadata_fields`.
+- `agent.metadata_fields` stores changed values with base64 `value`, `modified_at`, `source`, and optional `actor`. The Engine stores the same encoded value in `device_metadata_fields` and decodes it only for device-field API/UI reads and filter matching.
 - Newest `modified_at` wins. Agent-provided timestamps more than five minutes in the future are clamped to Engine time before conflict resolution.
 - Scripts and automations should write through the Agent CLI: `Agent.exe --update-metadata --field=1 --value="text"`. Passing a blank value queues a clear until the next heartbeat acknowledgement.
 

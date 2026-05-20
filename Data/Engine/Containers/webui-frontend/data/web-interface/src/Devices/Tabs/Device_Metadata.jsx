@@ -123,7 +123,6 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [plainTextWarning, setPlainTextWarning] = useState("");
   const [valueLimit, setValueLimit] = useState(1024);
   const notifyOperator = useAppNotifications({
     title: "Device Metadata",
@@ -142,7 +141,6 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
     try {
       const payload = await fetchRouteJson(`/api/devices/${encodeURIComponent(targetId)}/metadata_fields`);
       setRows(Array.isArray(payload?.fields) ? payload.fields : []);
-      setPlainTextWarning(payload?.plain_text_warning || "");
       setValueLimit(Number(payload?.value_limit || 1024) || 1024);
     } catch (err) {
       setRows([]);
@@ -252,7 +250,6 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
   return (
     <Stack spacing={1.5} sx={{ minHeight: 0, flexGrow: 1, height: "100%" }}>
       {loading ? <LinearProgress /> : null}
-      {plainTextWarning ? <Alert severity="warning">{plainTextWarning}</Alert> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Box sx={{ minHeight: 0, flexGrow: 1, height: "100%" }}>
         <GridShell sx={{ height: "100%", minHeight: 520 }}>
@@ -277,4 +274,3 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
     </Stack>
   );
 }
-

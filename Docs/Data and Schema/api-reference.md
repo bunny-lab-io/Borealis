@@ -71,7 +71,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
 - `GET /api/metadata_fields` (Token Authenticated) - list 500 global Agent Metadata Field definitions, default labels, descriptions, and value limits.
 - `PUT /api/metadata_fields/<field_number>` (Admin) - update one global Agent Metadata Field description.
-- `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all 500 metadata field rows for an in-scope device, including sparse values and modification metadata.
+- `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all 500 metadata field rows for an in-scope device, including decoded sparse values and modification metadata.
 - `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one in-scope device metadata field. Blank value clears the field.
 - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
 - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO.

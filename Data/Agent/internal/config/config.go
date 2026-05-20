@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -520,12 +521,35 @@ func ParseMetadataFieldNumber(value string) (int, bool) {
 }
 
 func NormalizeMetadataFieldValue(value string) string {
-	clean := strings.ReplaceAll(value, "\x00", "")
-	runes := []rune(clean)
+	runes := []rune(value)
 	if len(runes) > MetadataValueMaxLength {
 		return string(runes[:MetadataValueMaxLength])
 	}
-	return clean
+	return value
+}
+
+func EncodeMetadataFieldValue(value string) string {
+	clean := NormalizeMetadataFieldValue(value)
+	if clean == "" {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(clean))
+}
+
+func DecodeMetadataFieldValue(value string) string {
+	clean := strings.TrimSpace(value)
+	if clean == "" {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(clean)
+	if err != nil {
+		return NormalizeMetadataFieldValue(value)
+	}
+	return NormalizeMetadataFieldValue(string(decoded))
+}
+
+func NormalizeEncodedMetadataFieldValue(value string) string {
+	return EncodeMetadataFieldValue(DecodeMetadataFieldValue(value))
 }
 
 func NormalizeMetadataFields(fields map[string]MetadataFieldSection) map[string]MetadataFieldSection {
@@ -551,7 +575,7 @@ func normalizeMetadataField(field *MetadataFieldSection) {
 	if field == nil {
 		return
 	}
-	field.Value = NormalizeMetadataFieldValue(field.Value)
+	field.Value = NormalizeEncodedMetadataFieldValue(field.Value)
 	field.Source = strings.TrimSpace(field.Source)
 	field.Actor = strings.TrimSpace(field.Actor)
 	if field.ModifiedAt < 0 {
@@ -574,7 +598,7 @@ func UpdateMetadataField(path string, fieldNumber int, value string, source stri
 			cfg.Agent.MetadataFields = map[string]MetadataFieldSection{}
 		}
 		cfg.Agent.MetadataFields[key] = MetadataFieldSection{
-			Value:      NormalizeMetadataFieldValue(value),
+			Value:      EncodeMetadataFieldValue(value),
 			ModifiedAt: now,
 			Source:     strings.TrimSpace(source),
 		}
@@ -612,7 +636,7 @@ func ApplyMetadataSyncResponse(path string, updates map[string]MetadataFieldSect
 			}
 			key := MetadataFieldKey(number)
 			current, exists := cfg.Agent.MetadataFields[key]
-			if exists && current.Value == "" {
+			if exists && DecodeMetadataFieldValue(current.Value) == "" {
 				delete(cfg.Agent.MetadataFields, key)
 			}
 		}

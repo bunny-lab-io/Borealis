@@ -278,7 +278,7 @@ func TestMetadataFieldsNormalizePersistAndAckClear(t *testing.T) {
 	if !ok {
 		t.Fatalf("metadata field missing: %#v", loaded.Agent.MetadataFields)
 	}
-	if field.Value != "asset-tag-123" || field.ModifiedAt <= 0 || field.Source != "cli" {
+	if field.Value != "YXNzZXQtdGFnLTEyMw==" || DecodeMetadataFieldValue(field.Value) != "asset-tag-123" || field.ModifiedAt <= 0 || field.Source != "cli" {
 		t.Fatalf("metadata field not normalized: %#v", field)
 	}
 
@@ -313,13 +313,13 @@ func TestSavePreservesNewerMetadataFieldsFromDisk(t *testing.T) {
 	path := filepath.Join(dir, FileName)
 	stale := Default()
 	stale.Agent.MetadataFields = map[string]MetadataFieldSection{
-		"field_001": {Value: "old", ModifiedAt: 10, Source: "test"},
+		"field_001": {Value: EncodeMetadataFieldValue("old"), ModifiedAt: 10, Source: "test"},
 	}
 	if err := Save(path, &stale); err != nil {
 		t.Fatal(err)
 	}
 	if err := ApplyMetadataSyncResponse(path, map[string]MetadataFieldSection{
-		"field_001": {Value: "new", ModifiedAt: 20, Source: "engine"},
+		"field_001": {Value: EncodeMetadataFieldValue("new"), ModifiedAt: 20, Source: "engine"},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +334,7 @@ func TestSavePreservesNewerMetadataFieldsFromDisk(t *testing.T) {
 	if loaded.ServerURL != "https://new.example" {
 		t.Fatalf("server_url = %q", loaded.ServerURL)
 	}
-	if loaded.Agent.MetadataFields["field_001"].Value != "new" {
+	if DecodeMetadataFieldValue(loaded.Agent.MetadataFields["field_001"].Value) != "new" {
 		t.Fatalf("newer metadata field was clobbered: %#v", loaded.Agent.MetadataFields)
 	}
 }

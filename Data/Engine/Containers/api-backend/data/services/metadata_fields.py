@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
@@ -62,10 +64,36 @@ def normalize_metadata_value(value: Any) -> str:
         text = str(value)
     except Exception:
         text = ""
-    text = text.replace("\x00", "")
     if len(text) > METADATA_VALUE_MAX_LENGTH:
         text = text[:METADATA_VALUE_MAX_LENGTH]
     return text
+
+
+def encode_metadata_value(value: Any) -> str:
+    text = normalize_metadata_value(value)
+    if not text:
+        return ""
+    return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def decode_metadata_value(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        encoded = str(value)
+    except Exception:
+        return ""
+    if encoded == "":
+        return ""
+    try:
+        decoded = base64.b64decode(encoded.encode("ascii"), validate=True)
+        return normalize_metadata_value(decoded.decode("utf-8", errors="replace"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        return normalize_metadata_value(encoded)
+
+
+def normalize_encoded_metadata_value(value: Any) -> str:
+    return encode_metadata_value(decode_metadata_value(value))
 
 
 def normalize_metadata_description(value: Any) -> str:
@@ -127,7 +155,7 @@ def normalize_agent_metadata_payload(
         normalized[field_number] = {
             "field_number": field_number,
             "field_key": metadata_field_key(field_number),
-            "value": normalize_metadata_value(value),
+            "value": normalize_encoded_metadata_value(value),
             "modified_at": modified_at,
             "source": source[:64],
             "actor": actor[:255],
@@ -230,7 +258,7 @@ def fetch_device_metadata_values(conn: sqlite3.Connection, device_guid: str) -> 
             values[field_number] = {
                 "field_number": field_number,
                 "field_key": row[1] or metadata_field_key(field_number),
-                "value": normalize_metadata_value(row[2]),
+                "value": normalize_encoded_metadata_value(row[2]),
                 "modified_at": int(row[3] or 0),
                 "source": str(row[4] or ""),
                 "actor": str(row[5] or ""),
@@ -251,6 +279,7 @@ def upsert_device_metadata_value(
     modified_at: Optional[int] = None,
     source: str = "engine",
     actor: str = "",
+    value_is_encoded: bool = False,
 ) -> Dict[str, Any]:
     guid = str(device_guid or "").strip()
     parsed = normalize_field_number(field_number)
@@ -261,7 +290,7 @@ def upsert_device_metadata_value(
     now_ts = int(time.time())
     modified_value = normalize_modified_at(modified_at, now_ts=now_ts, clamp_future=True)
     field_key = metadata_field_key(parsed)
-    clean_value = normalize_metadata_value(value)
+    clean_value = normalize_encoded_metadata_value(value) if value_is_encoded else encode_metadata_value(value)
     conn.execute(
         """
         INSERT INTO device_metadata_fields(
@@ -301,11 +330,11 @@ def device_metadata_rows(conn: sqlite3.Connection, device_guid: str) -> List[Dic
         rows.append(
             {
                 **definition,
-                "value": value_record.get("value", ""),
+                "value": decode_metadata_value(value_record.get("value", "")),
                 "modified_at": int(value_record.get("modified_at") or 0),
                 "source": value_record.get("source", ""),
                 "actor": value_record.get("actor", ""),
-                "has_value": bool(str(value_record.get("value", ""))),
+                "has_value": bool(decode_metadata_value(value_record.get("value", ""))),
             }
         )
     return rows
@@ -315,12 +344,12 @@ def sparse_device_metadata_payload(conn: sqlite3.Connection, device_guid: str) -
     values = fetch_device_metadata_values(conn, device_guid)
     payload: Dict[str, Dict[str, Any]] = {}
     for field_number, record in values.items():
-        value = normalize_metadata_value(record.get("value"))
-        if not value:
+        encoded_value = normalize_encoded_metadata_value(record.get("value"))
+        if not decode_metadata_value(encoded_value):
             continue
         key = metadata_field_key(field_number)
         payload[key] = {
-            "value": value,
+            "value": encoded_value,
             "modified_at": int(record.get("modified_at") or 0),
             "source": str(record.get("source") or "engine"),
         }
@@ -355,28 +384,31 @@ def process_agent_metadata_sync(
                 modified_at=int(record.get("modified_at") or now_value),
                 source="agent",
                 actor=record.get("actor") or "agent",
+                value_is_encoded=True,
             )
         elif current and int(record["modified_at"]) == int(current.get("modified_at") or 0):
-            if normalize_metadata_value(record.get("value")) == normalize_metadata_value(current.get("value")):
+            if normalize_encoded_metadata_value(record.get("value")) == normalize_encoded_metadata_value(current.get("value")):
                 continue
 
     latest = fetch_device_metadata_values(conn, guid)
     updates: Dict[str, Dict[str, Any]] = {}
     acks: List[str] = []
     for field_number, current in latest.items():
-        current_value = normalize_metadata_value(current.get("value"))
+        current_value = normalize_encoded_metadata_value(current.get("value"))
+        current_decoded_value = decode_metadata_value(current_value)
         current_modified = int(current.get("modified_at") or 0)
         incoming_record = incoming.get(field_number)
         key = metadata_field_key(field_number)
         if incoming_record is None:
-            if current_value:
+            if current_decoded_value:
                 updates[key] = {
                     "value": current_value,
                     "modified_at": current_modified,
                     "source": str(current.get("source") or "engine"),
                 }
             continue
-        incoming_value = normalize_metadata_value(incoming_record.get("value"))
+        incoming_value = normalize_encoded_metadata_value(incoming_record.get("value"))
+        incoming_decoded_value = decode_metadata_value(incoming_value)
         incoming_modified = int(incoming_record.get("modified_at") or 0)
         if current_modified > incoming_modified or (
             current_modified == incoming_modified and current_value != incoming_value
@@ -387,7 +419,7 @@ def process_agent_metadata_sync(
                 "source": str(current.get("source") or "engine"),
             }
             continue
-        if not incoming_value and not current_value and field_number in incoming_numbers:
+        if not incoming_decoded_value and not current_decoded_value and field_number in incoming_numbers:
             acks.append(key)
     return {"updates": updates, "acks": sorted(set(acks))}
 
@@ -416,8 +448,7 @@ def metadata_value_lookup_for_devices(
             field_number = normalize_field_number(row[1])
             if not guid or field_number is None:
                 continue
-            lookup.setdefault(guid, {})[metadata_field_key(field_number)] = normalize_metadata_value(row[2])
+            lookup.setdefault(guid, {})[metadata_field_key(field_number)] = decode_metadata_value(row[2])
     except Exception:
         return {}
     return lookup
-

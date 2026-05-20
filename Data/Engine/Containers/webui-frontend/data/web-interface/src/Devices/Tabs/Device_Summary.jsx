@@ -157,12 +157,12 @@ const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
   { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
-  { key: "metadata", label: "Metadata Fields", icon: LabelRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
   { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
   { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
   { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
+  { key: "metadata", label: "Metadata Fields", icon: LabelRoundedIcon, align: "right" },
   { key: "agent_health", label: "Agent Health", icon: DeveloperBoardRoundedIcon, align: "right" },
 ];
 const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({

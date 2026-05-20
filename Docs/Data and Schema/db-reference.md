@@ -493,7 +493,7 @@ finally:
 - `/api/agent/heartbeat` metadata sync.
 - `DeviceFilterMatcher` metadata-field criteria.
 - Notes:
-- Values are plain text, capped at 1024 characters, and omitted from agent payloads after blank clears are acknowledged.
+- Values are base64-encoded at rest, capped at 1024 decoded characters, and omitted from agent payloads after blank clears are acknowledged.
 
 #### `device_filter_sites`
 - Status: Active.
