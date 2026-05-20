@@ -141,9 +141,41 @@ $configPath = %s
 $buildId = %s
 $expectedSha256 = %s
 $agentServiceName = %s
+$validateExe = $pending + ".validate.exe"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
 function Write-UpdaterLog([string]$message) {
   Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
+}
+function Set-JsonNoteProperty($target, [string]$name, $value) {
+  if ($target.PSObject.Properties[$name]) {
+    $target.$name = $value
+  } else {
+    $target | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+  }
+}
+function Mark-AgentUpdateFailed([string]$reason) {
+  try {
+    if (!(Test-Path -LiteralPath $configPath)) { return }
+    $json = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if (-not $json.agent) { return }
+    if (-not $json.agent.update) { $json.agent | Add-Member -NotePropertyName update -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $now = [int64](([DateTimeOffset]::UtcNow).ToUnixTimeSeconds())
+    Set-JsonNoteProperty $json.agent.update "status" "failed"
+    Set-JsonNoteProperty $json.agent.update "updated_at" $now
+    Set-JsonNoteProperty $json.agent.update "last_error" $reason
+    if ($json.agent.state) {
+      Set-JsonNoteProperty $json.agent.state "revision" ([int64]$json.agent.state.revision + 1)
+      Set-JsonNoteProperty $json.agent.state "writer" "updater:deferred"
+      Set-JsonNoteProperty $json.agent.state "last_write_at" $now
+    }
+    $tmp = $configPath + ".deferred-failed.tmp"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tmp, ($json | ConvertTo-Json -Depth 20), $utf8NoBom)
+    Move-Item -LiteralPath $tmp -Destination $configPath -Force
+    Write-UpdaterLog "Marked update failed in agent.json: $reason"
+  } catch {
+    Write-UpdaterLog ("Mark update failed skipped: " + $_.Exception.Message)
+  }
 }
 function Get-AgentServiceState {
   try {
@@ -171,20 +203,27 @@ function Ensure-AgentServiceRunning {
   }
   return $false
 }
+function Invoke-PendingAgentValidation {
+  Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath $pending -Destination $validateExe -Force -ErrorAction Stop
+  try {
+    $validateOutput = & $validateExe --validate-config --config-path $configPath 2>&1
+    foreach ($line in $validateOutput) { Write-UpdaterLog ("validate-pending: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      throw "pending Agent.exe rejected current agent.json with exit $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  }
+}
 Write-UpdaterLog "Deferred Agent.exe replacement starting. pending=$pending destination=$destination build=$buildId expected_sha256=$expectedSha256"
 Start-Sleep -Seconds 3
 for ($attempt = 1; $attempt -le 20; $attempt++) {
   try {
     if (!(Test-Path -LiteralPath $pending)) {
-      Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
-      exit 1
+      throw "pending binary missing"
     }
-    $validateOutput = & $pending --validate-config --config-path $configPath 2>&1
-    foreach ($line in $validateOutput) { Write-UpdaterLog ("validate-pending: " + $line) }
-    if ($LASTEXITCODE -ne 0) {
-      Write-UpdaterLog "Attempt $attempt failed: pending Agent.exe rejected current agent.json with exit $LASTEXITCODE."
-      exit 1
-    }
+    Invoke-PendingAgentValidation
     sc.exe stop $agentServiceName *> $null
     Get-Process -Name Agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
@@ -212,9 +251,14 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   }
 }
 Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($destination + '.tmp') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($pending + '.tmp') -Force -ErrorAction SilentlyContinue
 Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts; staged update artifacts removed."
+Mark-AgentUpdateFailed "Deferred Agent.exe replacement failed after all attempts."
+if (!(Ensure-AgentServiceRunning)) {
+  Write-UpdaterLog "Deferred failure recovery could not restart Borealis Agent service."
+}
 exit 1
 `,
 		powershellSingleQuoted(logPath),
