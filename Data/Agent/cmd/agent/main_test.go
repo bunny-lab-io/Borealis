@@ -27,9 +27,6 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := agentconfig.Load(configPath); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("strict load should reject flat release_channel, got %v", err)
-	}
 
 	err := persistInstallConfig(agentruntime.Options{
 		ConfigPath:     configPath,
@@ -62,6 +59,48 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	}
 	if strings.Contains(string(rewritten), "\n  \"release_channel\"") {
 		t.Fatalf("flat release_channel survived rewrite: %s", string(rewritten))
+	}
+}
+
+func TestValidateAgentConfigAcceptsFutureFields(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+	raw := `{
+  "schema_version": 1,
+  "server_url": "https://borealis.example.com",
+  "agent": {
+    "branch": "feature/test",
+    "future_liveness_gate": true
+  },
+  "identity": {},
+  "tokens": {},
+  "trust": {},
+  "future_top_level": {"enabled": true}
+}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAgentConfig(configPath); err != nil {
+		t.Fatalf("validateAgentConfig failed: %v", err)
+	}
+}
+
+func TestValidateAgentConfigRejectsFutureSchema(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+	raw := `{
+  "schema_version": 999,
+  "server_url": "https://borealis.example.com",
+  "agent": {},
+  "identity": {},
+  "tokens": {},
+  "trust": {}
+}`
+	if err := os.WriteFile(configPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAgentConfig(configPath); err == nil || !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected unsupported schema error, got %v", err)
 	}
 }
 

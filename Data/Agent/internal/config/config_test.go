@@ -258,7 +258,7 @@ func TestDefaultBranch(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsUnknownFields(t *testing.T) {
+func TestLoadToleratesUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
 	raw := `{
@@ -273,8 +273,12 @@ func TestLoadRejectsUnknownFields(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
-		t.Fatalf("expected unknown field error, got %v", err)
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if loaded.ServerURL != "https://borealis.example.com" {
+		t.Fatalf("server_url = %q", loaded.ServerURL)
 	}
 }
 

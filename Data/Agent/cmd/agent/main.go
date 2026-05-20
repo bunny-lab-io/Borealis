@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -35,6 +33,7 @@ func run() int {
 	var finalizeUpdate bool
 	var service bool
 	var watchdogCheck bool
+	var validateConfig bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
 	var repoRef string
@@ -54,6 +53,7 @@ func run() int {
 	flag.BoolVar(&updateCheck, "update-check", false, "Run one Agent release-channel update check.")
 	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
+	flag.BoolVar(&validateConfig, "validate-config", false, "Validate agent.json compatibility and exit.")
 	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
 	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
@@ -67,6 +67,23 @@ func run() int {
 
 	if printVersion {
 		fmt.Println(version)
+		return 0
+	}
+	if validateConfig {
+		configPath := options.ConfigPath
+		if configPath == "" {
+			var err error
+			configPath, err = agentconfig.PathFromBinary()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
+				return 1
+			}
+		}
+		if err := validateAgentConfig(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "validate config: %v\n", err)
+			return 1
+		}
+		fmt.Println("agent config ok")
 		return 0
 	}
 
@@ -253,24 +270,5 @@ func persistInstallConfig(options agentruntime.Options) error {
 }
 
 func loadInstallConfig(configPath string) (agentconfig.AgentConfig, error) {
-	cfg, err := agentconfig.LoadOrCreate(configPath)
-	if err == nil {
-		return cfg, nil
-	}
-	if !strings.Contains(err.Error(), "unknown field") {
-		return cfg, err
-	}
-	data, readErr := os.ReadFile(configPath)
-	if readErr != nil {
-		return cfg, err
-	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return agentconfig.Default(), nil
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if decodeErr := decoder.Decode(&cfg); decodeErr != nil {
-		return cfg, err
-	}
-	cfg.ApplyDefaults()
-	return cfg, nil
+	return agentconfig.LoadOrCreate(configPath)
 }

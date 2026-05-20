@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -17,13 +18,7 @@ import (
 )
 
 func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID string, logger *BootstrapLogger) (bool, error) {
-	candidates := []string{
-		filepath.Join(sourceRoot, "Agent.exe"),
-		filepath.Join(sourceRoot, "Data", "Agent", "Agent.exe"),
-		filepath.Join(sourceRoot, "Data", "Agent", "dist", "windows-amd64", "Agent.exe"),
-		filepath.Join(sourceRoot, "dist", "windows-amd64", "Agent.exe"),
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range agentUpdateBinaryCandidates(sourceRoot) {
 		if !fileExists(candidate) {
 			continue
 		}
@@ -40,6 +35,10 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 			return false, err
 		}
 		if err := verifyFileSHA256(pending, expectedSHA256); err != nil {
+			_ = os.Remove(pending)
+			return false, err
+		}
+		if err := validateAgentUpdateCandidate(cfg, pending, "staged", logger); err != nil {
 			_ = os.Remove(pending)
 			return false, err
 		}
@@ -71,6 +70,44 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 		return false, fmt.Errorf("Go Agent source archive does not include a built Windows Agent.exe; update artifact must include Data\\Agent\\dist\\windows-amd64\\Agent.exe")
 	}
 	return false, fmt.Errorf("update artifact missing Agent.exe")
+}
+
+func agentUpdateBinaryCandidates(sourceRoot string) []string {
+	return []string{
+		filepath.Join(sourceRoot, "Agent.exe"),
+		filepath.Join(sourceRoot, "Data", "Agent", "Agent.exe"),
+		filepath.Join(sourceRoot, "Data", "Agent", "dist", "windows-amd64", "Agent.exe"),
+		filepath.Join(sourceRoot, "dist", "windows-amd64", "Agent.exe"),
+	}
+}
+
+func validateAgentUpdateSource(cfg BootstrapConfig, sourceRoot string, logger *BootstrapLogger) error {
+	for _, candidate := range agentUpdateBinaryCandidates(sourceRoot) {
+		if !fileExists(candidate) {
+			continue
+		}
+		return validateAgentUpdateCandidate(cfg, candidate, "source", logger)
+	}
+	return fmt.Errorf("update artifact missing Agent.exe")
+}
+
+func validateAgentUpdateCandidate(cfg BootstrapConfig, candidate string, label string, logger *BootstrapLogger) error {
+	configPath := agentConfigPath(cfg.InstallDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, candidate, "--validate-config", "--config-path", configPath)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s Agent.exe config validation timed out", label)
+	}
+	if err != nil {
+		return fmt.Errorf("%s Agent.exe rejected current agent.json: %w output=%s", label, err, text)
+	}
+	if logger != nil {
+		logger.Tracef("Agent update candidate config validation passed: label=%s candidate=%s output=%s", label, candidate, text)
+	}
+	return nil
 }
 
 func scheduleAgentSelfReplacement(cfg BootstrapConfig, pending string, destination string, buildID string, expectedSHA256 string, logger *BootstrapLogger) error {
@@ -140,6 +177,12 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   try {
     if (!(Test-Path -LiteralPath $pending)) {
       Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
+      exit 1
+    }
+    $validateOutput = & $pending --validate-config --config-path $configPath 2>&1
+    foreach ($line in $validateOutput) { Write-UpdaterLog ("validate-pending: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      Write-UpdaterLog "Attempt $attempt failed: pending Agent.exe rejected current agent.json with exit $LASTEXITCODE."
       exit 1
     }
     sc.exe stop $agentServiceName *> $null

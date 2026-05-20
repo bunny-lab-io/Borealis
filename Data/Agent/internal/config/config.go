@@ -65,7 +65,7 @@ type AgentUpdateSection struct {
 	PreviousBranch   string `json:"previous_branch,omitempty"`
 	TargetChannel    string `json:"target_channel,omitempty"`
 	TargetBranch     string `json:"target_branch,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
+	LastError        string `json:"last_error,omitempty"`
 	RecoveryAttempts int    `json:"recovery_attempts,omitempty"`
 }
 
@@ -194,7 +194,6 @@ func Load(path string) (AgentConfig, error) {
 		return cfg, nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
@@ -321,7 +320,6 @@ func loadUnlocked(path string) (AgentConfig, error) {
 		return cfg, nil
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}

@@ -110,6 +110,9 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	sourceRoot := resolveSourceRoot(extractRoot)
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
+	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
 	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
@@ -175,6 +178,9 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 		return err
 	}
 	markConfigUpdateOperation(configPath, "staging", "")
+	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
 	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
