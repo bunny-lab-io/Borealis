@@ -182,7 +182,7 @@ Use this section for agent-only work (Borealis agent runtime under `Data/Agent` 
 
 #### Execution contexts and roles
 - Go roles are explicit packages under `Data/Agent/internal/roles`.
-- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
+- First PR supports SYSTEM/root quick-job script execution, Windows CURRENTUSER helper session health plus direct session PowerShell/Batch execution, core device audit inventory including Windows domain/workgroup telemetry, SYSTEM/root file management, SYSTEM/root process management, SYSTEM/root service management, SYSTEM/root software management, SYSTEM/root WireGuard tunnel lifecycle, SYSTEM/root Remote Shell over WireGuard, Windows VNC lifecycle/credential brokerage over WireGuard, and Go release-channel self-update.
 - Pending ports are tracked in `Data/Agent/Golang_Agent_Migration.md`.
 - Service tasks depend on Windows service and scheduled-task creation rights; failures should surface through Engine logging and `Logs/Agent/role_recovery.log`.
 

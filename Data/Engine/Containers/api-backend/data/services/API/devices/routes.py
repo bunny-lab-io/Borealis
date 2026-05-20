@@ -500,6 +500,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         )
         if metrics.get("last_user"):
             updates["last_user"] = str(metrics["last_user"])
+        if metrics.get("domain"):
+            updates["domain"] = str(metrics["domain"])
         if metrics.get("operating_system"):
             updates["operating_system"] = str(metrics["operating_system"])
         if metrics.get("last_reboot"):

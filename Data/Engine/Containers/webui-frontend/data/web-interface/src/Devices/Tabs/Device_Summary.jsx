@@ -2943,6 +2943,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           value: meta.agentVersionStatus || summary.agent_version_status || "Needs Updated",
         },
         {
+          id: "agent-last-seen",
+          label: "Last Seen",
+          value: formatDateValue(meta.lastSeen || summary.last_seen || device?.last_seen || "", "unknown"),
+        },
+        {
           id: "agent-branch-channel",
           label: "Agent Branch/Channel",
           value: `${effectiveChannel} - ${currentBranch}`,
@@ -2982,6 +2987,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [
       meta.agentGuid,
       meta.agentVersionStatus,
+      meta.lastSeen,
       meta.agentReleaseChannel,
       meta.agentReleaseChannelEffective,
       meta.agentReleaseChannelOverride,
@@ -2996,6 +3002,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       agentBranchChannelSaving,
       summary.agent_guid,
       summary.agent_version_status,
+      summary.last_seen,
       summary.agent_release_channel,
       summary.agent_release_channel_effective,
       summary.agent_release_channel_override,
@@ -3006,6 +3013,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       summary.last_enrollment_at,
       summary.created,
       device?.agent_guid,
+      device?.last_seen,
       device?.last_enrollment_at,
       device?.created,
       device?.created_at,

@@ -2049,6 +2049,7 @@ def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineT
             "service_mode": "system",
             "metrics": {
                 "last_user": r"BUNNY-LAB\nicole.rappe",
+                "domain": "BUNNY-LAB",
                 "operating_system": "Windows 11 Pro 25H2 Build 26200.8457",
                 "last_reboot": "05/14/2026 @ 10:05PM",
                 "uptime": 3600,
@@ -2082,7 +2083,7 @@ def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineT
     try:
         row = conn.execute(
             """
-            SELECT last_user, operating_system, last_reboot, uptime, cpu, storage, network
+            SELECT last_user, domain, operating_system, last_reboot, uptime, cpu, storage, network
               FROM devices
              WHERE hostname = ?
             """,
@@ -2093,13 +2094,14 @@ def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineT
 
     assert row is not None
     assert row[0] == r"BUNNY-LAB\nicole.rappe"
-    assert row[1] == "Windows 11 Pro 25H2 Build 26200.8457"
-    assert row[2] == "05/14/2026 @ 10:05PM"
-    assert row[3] == 3600
-    assert json.loads(row[4])["system_serial_number"] == "ABC1234"
-    storage = json.loads(row[5])
+    assert row[1] == "BUNNY-LAB"
+    assert row[2] == "Windows 11 Pro 25H2 Build 26200.8457"
+    assert row[3] == "05/14/2026 @ 10:05PM"
+    assert row[4] == 3600
+    assert json.loads(row[5])["system_serial_number"] == "ABC1234"
+    storage = json.loads(row[6])
     assert storage[1]["disk_type"] == "CD-ROM"
-    network = json.loads(row[6])
+    network = json.loads(row[7])
     assert network[0]["link_speed"] == "1 Gbps"
 
 
