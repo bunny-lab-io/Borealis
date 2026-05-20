@@ -39,9 +39,12 @@ func run() int {
 	var service bool
 	var watchdogCheck bool
 	var validateConfig bool
+	var updateMetadata bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
 	var repoRef string
+	var metadataFieldNumber int
+	var metadataValue string
 	var helperSessionID int
 	var helperStateDir string
 	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to agent.json. Defaults beside Agent.exe.")
@@ -59,8 +62,11 @@ func run() int {
 	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
 	flag.BoolVar(&validateConfig, "validate-config", false, "Validate agent.json compatibility and exit.")
+	flag.BoolVar(&updateMetadata, "update-metadata", false, "Update one Agent metadata field in agent.json.")
 	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
 	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
+	flag.IntVar(&metadataFieldNumber, "field", 0, "Metadata field number, 1 through 500.")
+	flag.StringVar(&metadataValue, "value", "", "Metadata field value. Empty value clears the field after Engine acknowledgement.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
 	flag.BoolVar(&service, "service", false, "Run as managed Agent service.")
 	helperMode := flag.Bool("helper", false, "Run as current-user helper.")
@@ -89,6 +95,28 @@ func run() int {
 			return 1
 		}
 		fmt.Println("agent config ok")
+		return 0
+	}
+	if updateMetadata {
+		configPath := options.ConfigPath
+		if configPath == "" {
+			var err error
+			configPath, err = agentconfig.PathFromBinary()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
+				return 1
+			}
+		}
+		if err := agentconfig.UpdateMetadataField(configPath, metadataFieldNumber, metadataValue, "cli"); err != nil {
+			fmt.Fprintf(os.Stderr, "update metadata: %v\n", err)
+			return 1
+		}
+		key := agentconfig.MetadataFieldKey(metadataFieldNumber)
+		if metadataValue == "" {
+			fmt.Printf("%s clear queued\n", key)
+		} else {
+			fmt.Printf("%s updated\n", key)
+		}
 		return 0
 	}
 

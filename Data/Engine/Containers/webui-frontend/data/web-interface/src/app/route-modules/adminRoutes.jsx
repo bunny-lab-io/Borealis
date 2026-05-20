@@ -3,6 +3,7 @@ import ServerInfo, { loadServerOverviewPageData } from "../../Admin/Server_Info.
 import LogManagement from "../../Admin/Log_Management.jsx";
 import DevTools from "../../DevTools/Dev_Tools.jsx";
 import EngineStatus from "../../Admin/Engine_Status.jsx";
+import MetadataFieldList, { loadMetadataFieldsPageData } from "../../Admin/Metadata_Field_List.jsx";
 
 export async function ServerRouteLoader({ request }) {
   return loadServerOverviewPageData(request);
@@ -18,6 +19,14 @@ export function EngineStatusRoute() {
 
 export function LogsRoute() {
   return <LogManagement />;
+}
+
+export async function MetadataFieldsRouteLoader({ request }) {
+  return loadMetadataFieldsPageData(request);
+}
+
+export function MetadataFieldsRoute() {
+  return <MetadataFieldList />;
 }
 
 export function DevToolsRoute() {

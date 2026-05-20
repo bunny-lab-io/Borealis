@@ -263,6 +263,82 @@ func TestSavePreservesNewerDependencyStateFromDisk(t *testing.T) {
 	}
 }
 
+func TestMetadataFieldsNormalizePersistAndAckClear(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+
+	if err := UpdateMetadataField(path, 1, "asset-tag-123", "cli"); err != nil {
+		t.Fatalf("UpdateMetadataField failed: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, ok := loaded.Agent.MetadataFields["field_001"]
+	if !ok {
+		t.Fatalf("metadata field missing: %#v", loaded.Agent.MetadataFields)
+	}
+	if field.Value != "asset-tag-123" || field.ModifiedAt <= 0 || field.Source != "cli" {
+		t.Fatalf("metadata field not normalized: %#v", field)
+	}
+
+	if err := UpdateMetadataField(path, 1, "", "cli"); err != nil {
+		t.Fatalf("clear UpdateMetadataField failed: %v", err)
+	}
+	loaded, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Agent.MetadataFields["field_001"]; !ok {
+		t.Fatalf("blank clear marker should remain until ack: %#v", loaded.Agent.MetadataFields)
+	}
+	if loaded.Agent.MetadataFields["field_001"].Value != "" {
+		t.Fatalf("clear marker value = %q", loaded.Agent.MetadataFields["field_001"].Value)
+	}
+
+	if err := ApplyMetadataSyncResponse(path, nil, []string{"field_001"}); err != nil {
+		t.Fatalf("ApplyMetadataSyncResponse failed: %v", err)
+	}
+	loaded, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Agent.MetadataFields) != 0 {
+		t.Fatalf("acked blank metadata field survived: %#v", loaded.Agent.MetadataFields)
+	}
+}
+
+func TestSavePreservesNewerMetadataFieldsFromDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	stale := Default()
+	stale.Agent.MetadataFields = map[string]MetadataFieldSection{
+		"field_001": {Value: "old", ModifiedAt: 10, Source: "test"},
+	}
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMetadataSyncResponse(path, map[string]MetadataFieldSection{
+		"field_001": {Value: "new", ModifiedAt: 20, Source: "engine"},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	stale.ServerURL = "https://new.example"
+	if err := Save(path, &stale); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ServerURL != "https://new.example" {
+		t.Fatalf("server_url = %q", loaded.ServerURL)
+	}
+	if loaded.Agent.MetadataFields["field_001"].Value != "new" {
+		t.Fatalf("newer metadata field was clobbered: %#v", loaded.Agent.MetadataFields)
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	cfg := Default()
 	cfg.ApplyDefaults()

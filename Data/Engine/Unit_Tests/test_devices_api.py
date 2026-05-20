@@ -2105,6 +2105,111 @@ def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineT
     assert network[0]["link_speed"] == "1 Gbps"
 
 
+def test_metadata_field_definition_and_device_value_api(engine_harness: EngineTestHarness) -> None:
+    client = admin_client(engine_harness)
+
+    definition_response = client.put(
+        "/api/metadata_fields/1",
+        json={"description": "Asset Tag"},
+    )
+    assert definition_response.status_code == 200
+    assert definition_response.get_json()["field"]["label"] == "Asset Tag"
+
+    value_response = client.put(
+        "/api/devices/GUID-TEST-0001/metadata_fields/1",
+        json={"value": "AT-12345"},
+    )
+    assert value_response.status_code == 200
+    value_body = value_response.get_json()["field"]
+    assert value_body["field_key"] == "field_001"
+    assert value_body["value"] == "AT-12345"
+    assert value_body["label"] == "Asset Tag"
+
+    list_response = client.get("/api/devices/GUID-TEST-0001/metadata_fields")
+    assert list_response.status_code == 200
+    body = list_response.get_json()
+    assert body["count"] == 500
+    first = body["fields"][0]
+    assert first["default_label"] == "Field 001"
+    assert first["label"] == "Asset Tag"
+    assert first["value"] == "AT-12345"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        row = conn.execute(
+            """
+            SELECT value, source, actor
+              FROM device_metadata_fields
+             WHERE device_guid = ? AND field_number = ?
+            """,
+            ("GUID-TEST-0001", 1),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == ("AT-12345", "engine", "admin")
+
+
+def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_metadata_fields(
+                device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("GUID-TEST-0001", 1, "field_001", "engine-new", 200, "engine", "admin", 200, 200),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    before = int(time.time())
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {},
+            "metadata_fields": {
+                "field_001": {"value": "agent-old", "modified_at": 100, "source": "cli"},
+                "field_002": {"value": "", "modified_at": 300, "source": "cli"},
+                "field_003": {"value": "future", "modified_at": before + 10_000, "source": "cli"},
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["metadata_fields"]["field_001"]["value"] == "engine-new"
+    assert "field_002" in body["metadata_field_acks"]
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        rows = {
+            row[0]: row
+            for row in conn.execute(
+                """
+                SELECT field_number, value, modified_at, source
+                  FROM device_metadata_fields
+                 WHERE device_guid = ?
+                """,
+                ("GUID-TEST-0001",),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert rows[1][1] == "engine-new"
+    assert rows[2][1] == ""
+    assert rows[2][2] == 300
+    assert rows[3][1] == "future"
+    assert before <= int(rows[3][2]) <= int(time.time()) + 5
+
+
 def test_agent_heartbeat_closes_agent_maintenance_job_success(engine_harness: EngineTestHarness) -> None:
     operation_id = "op-switch-123"
     now = 1_779_230_000

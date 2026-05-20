@@ -31,6 +31,13 @@ except Exception:  # pragma: no cover - fallback when dependency is unavailable
         pass
 
 from Data.Engine.auth.guid_utils import normalize_guid
+from Data.Engine.services.metadata_fields import (
+    METADATA_FIELD_COUNT,
+    list_metadata_definitions,
+    metadata_field_key,
+    metadata_value_lookup_for_devices,
+    normalize_field_number,
+)
 
 
 SITE_MODE_GLOBAL = "global"
@@ -179,6 +186,14 @@ FILTER_FIELD_METADATA: List[Dict[str, Any]] = [
         "supports_source": True,
         "supports_version": True,
     },
+    {
+        "value": "metadata_field",
+        "label": "Metadata Field",
+        "kind": "metadata_field",
+        "operators": list(TEXT_OPERATORS),
+        "supports_regex": True,
+        "supports_field_picker": True,
+    },
 ]
 
 FILTER_FIELD_BY_ID: Dict[str, Dict[str, Any]] = {entry["value"]: entry for entry in FILTER_FIELD_METADATA}
@@ -252,10 +267,33 @@ _DEVICE_SELECT_SQL = """
 """
 
 
-def filter_metadata() -> Dict[str, Any]:
+def filter_metadata(*, db_conn_factory: Optional[Callable[[], sqlite3.Connection]] = None) -> Dict[str, Any]:
     """Return a deep copy of the filter metadata payload."""
 
-    return deepcopy(FILTER_METADATA_PAYLOAD)
+    payload = deepcopy(FILTER_METADATA_PAYLOAD)
+    fields: List[Dict[str, Any]] = []
+    if db_conn_factory is not None:
+        conn = db_conn_factory()
+        try:
+            fields = list_metadata_definitions(conn)
+        except Exception:
+            fields = []
+        finally:
+            conn.close()
+    if not fields:
+        fields = [
+            {
+                "field_number": number,
+                "field_key": metadata_field_key(number),
+                "default_label": f"Field {number:03d}",
+                "label": f"Field {number:03d}",
+                "description": "",
+                "value_limit": 1024,
+            }
+            for number in range(1, METADATA_FIELD_COUNT + 1)
+        ]
+    payload["metadata_fields"] = fields
+    return payload
 
 
 def normalize_software_name(value: Any) -> str:
@@ -502,8 +540,10 @@ class DeviceFilterMatcher:
         finally:
             conn.close()
         guids = [normalize_guid(row["guid"]) or "" for row in rows]
-        software_map = self._load_software_by_guid([guid for guid in guids if guid])
-        return [self._row_to_device(row, software_map=software_map) for row in rows]
+        guid_values = [guid for guid in guids if guid]
+        software_map = self._load_software_by_guid(guid_values)
+        metadata_map = self._load_metadata_by_guid(guid_values)
+        return [self._row_to_device(row, software_map=software_map, metadata_map=metadata_map) for row in rows]
 
     def _load_software_by_guid(self, guids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
         lookup: Dict[str, List[Dict[str, Any]]] = {}
@@ -543,11 +583,24 @@ class DeviceFilterMatcher:
             )
         return lookup
 
+    def _load_metadata_by_guid(self, guids: Sequence[str]) -> Dict[str, Dict[str, str]]:
+        unique = [guid for guid in {normalize_guid(value) or str(value or "").strip() for value in guids if value}]
+        if not unique:
+            return {}
+        conn = self._conn()
+        try:
+            return metadata_value_lookup_for_devices(conn, unique)
+        except Exception:
+            return {}
+        finally:
+            conn.close()
+
     def _row_to_device(
         self,
         row: sqlite3.Row,
         *,
         software_map: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        metadata_map: Optional[Dict[str, Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         device_guid = normalize_guid(row["guid"]) or ""
         last_seen = row["last_seen"] or 0
@@ -577,6 +630,7 @@ class DeviceFilterMatcher:
         storage = _safe_json(row["storage"], [])
         cpu = _safe_json(row["cpu"], {})
         normalized_software = list((software_map or {}).get(device_guid) or [])
+        metadata_fields = dict((metadata_map or {}).get(device_guid) or {})
         if not normalized_software:
             # Fallback to the raw stored detail payload when the normalized
             # inventory table is empty or not yet refreshed.
@@ -628,6 +682,7 @@ class DeviceFilterMatcher:
             "network": network,
             "software": software,
             "software_records": normalized_software,
+            "metadata_fields": metadata_fields,
             "storage": storage,
             "cpu": cpu,
             "device_type": summary["device_type"],
@@ -796,6 +851,13 @@ class DeviceFilterMatcher:
                 item.get("version_operator") or item.get("versionOperator")
             ).lower()
             normalized["version_value"] = _normalize_string(item.get("version_value") or item.get("versionValue"))
+        if normalized["field"] == "metadata_field":
+            normalized["metadata_field_number"] = normalize_field_number(
+                item.get("metadata_field_number")
+                or item.get("metadataFieldNumber")
+                or item.get("field_number")
+                or item.get("fieldNumber")
+            )
         return normalized
 
     def _normalize_advanced_condition(self, item: Dict[str, Any], index: int) -> Dict[str, Any]:
@@ -861,6 +923,17 @@ class DeviceFilterMatcher:
         elif field["kind"] == "number":
             if _coerce_float(value) is None:
                 errors.append(f"{path}: numeric value is required.")
+        elif field["kind"] == "metadata_field":
+            field_number = normalize_field_number(
+                criterion.get("metadata_field_number")
+                or criterion.get("metadataFieldNumber")
+                or criterion.get("field_number")
+                or criterion.get("fieldNumber")
+            )
+            if field_number is None:
+                errors.append(f"{path}: metadata field is required.")
+            if not _normalize_string(value) and operator != "equals":
+                errors.append(f"{path}: value is required.")
         if use_regex:
             try:
                 _regex_engine.compile(_normalize_string(value))
@@ -982,6 +1055,8 @@ class DeviceFilterMatcher:
             return False
         if spec["kind"] == "software":
             return self._evaluate_software(device, criterion)
+        if spec["kind"] == "metadata_field":
+            return self._evaluate_metadata_field(device, criterion)
         operator = _normalize_string(criterion.get("operator")).lower() or "contains"
         value = criterion.get("value")
         use_regex = _coerce_bool(criterion.get("use_regex"))
@@ -991,6 +1066,22 @@ class DeviceFilterMatcher:
         if spec["kind"] == "number":
             return _numeric_match(operator, field_value, value)
         return False
+
+    def _evaluate_metadata_field(self, device: Dict[str, Any], criterion: Dict[str, Any]) -> bool:
+        field_number = normalize_field_number(
+            criterion.get("metadata_field_number")
+            or criterion.get("metadataFieldNumber")
+            or criterion.get("field_number")
+            or criterion.get("fieldNumber")
+        )
+        if field_number is None:
+            return False
+        operator = _normalize_string(criterion.get("operator")).lower() or "contains"
+        value = criterion.get("value", "")
+        use_regex = _coerce_bool(criterion.get("use_regex"))
+        metadata_fields = device.get("metadata_fields") if isinstance(device.get("metadata_fields"), dict) else {}
+        field_value = metadata_fields.get(metadata_field_key(field_number), "")
+        return _text_match(operator, _normalize_string(field_value), _normalize_string(value), use_regex=use_regex)
 
     def _evaluate_software(self, device: Dict[str, Any], criterion: Dict[str, Any]) -> bool:
         operator = _normalize_string(criterion.get("operator")).lower() or "contains"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ const (
 	ReleaseChannelStable    = "stable"
 	ReleaseChannelUnstable  = "unstable"
 	DefaultLogRetentionDays = 1
+	MetadataFieldCount      = 500
+	MetadataValueMaxLength  = 1024
 )
 
 var fileMu sync.Mutex
@@ -44,6 +47,7 @@ type AgentSection struct {
 	Update           AgentUpdateSection                `json:"update,omitempty"`
 	Liveness         AgentLivenessSection              `json:"liveness"`
 	DependencyState  map[string]DependencyStateSection `json:"dependency_state,omitempty"`
+	MetadataFields   map[string]MetadataFieldSection   `json:"metadata_fields,omitempty"`
 }
 
 type AgentStateSection struct {
@@ -107,6 +111,13 @@ type DependencyStateSection struct {
 	LastAttemptAt    int64  `json:"last_attempt_at,omitempty"`
 	LastSuccessAt    int64  `json:"last_success_at,omitempty"`
 	LastError        string `json:"last_error,omitempty"`
+}
+
+type MetadataFieldSection struct {
+	Value      string `json:"value"`
+	ModifiedAt int64  `json:"modified_at"`
+	Source     string `json:"source,omitempty"`
+	Actor      string `json:"actor,omitempty"`
 }
 
 func Default() AgentConfig {
@@ -221,6 +232,7 @@ func SaveWithWriter(path string, writer string, cfg *AgentConfig) error {
 				mergeNewerLiveness(&cfg.Agent.Liveness, current.Agent.Liveness)
 				mergeNewerUpdateState(&cfg.Agent.Update, current.Agent.Update)
 				mergeNewerDependencyState(&cfg.Agent.DependencyState, current.Agent.DependencyState)
+				mergeNewerMetadataFields(&cfg.Agent.MetadataFields, current.Agent.MetadataFields)
 				if current.Agent.State.Revision > cfg.Agent.State.Revision {
 					cfg.Agent.State.Revision = current.Agent.State.Revision
 				}
@@ -421,6 +433,28 @@ func mergeNewerUpdateState(target *AgentUpdateSection, current AgentUpdateSectio
 	}
 }
 
+func mergeNewerMetadataFields(target *map[string]MetadataFieldSection, current map[string]MetadataFieldSection) {
+	if target == nil || len(current) == 0 {
+		return
+	}
+	if *target == nil {
+		*target = map[string]MetadataFieldSection{}
+	}
+	for rawKey, currentField := range current {
+		fieldNumber, ok := ParseMetadataFieldNumber(rawKey)
+		if !ok {
+			continue
+		}
+		key := MetadataFieldKey(fieldNumber)
+		normalizeMetadataField(&currentField)
+		targetField, exists := (*target)[key]
+		normalizeMetadataField(&targetField)
+		if !exists || currentField.ModifiedAt > targetField.ModifiedAt {
+			(*target)[key] = currentField
+		}
+	}
+}
+
 func dependencyStateTimestamp(state DependencyStateSection) int64 {
 	if state.LastSuccessAt > state.LastAttemptAt {
 		return state.LastSuccessAt
@@ -454,6 +488,138 @@ func (c *AgentConfig) ApplyDefaults() {
 		}
 		c.Agent.DependencyState = normalized
 	}
+	if len(c.Agent.MetadataFields) > 0 {
+		c.Agent.MetadataFields = NormalizeMetadataFields(c.Agent.MetadataFields)
+	}
+}
+
+func MetadataFieldKey(fieldNumber int) string {
+	return fmt.Sprintf("field_%03d", fieldNumber)
+}
+
+func ParseMetadataFieldNumber(value string) (int, bool) {
+	text := strings.ToLower(strings.TrimSpace(value))
+	if text == "" {
+		return 0, false
+	}
+	text = strings.TrimPrefix(text, "metadata")
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "field")
+	text = strings.Trim(text, " _-")
+	if text == "" {
+		return 0, false
+	}
+	number, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, false
+	}
+	if number < 1 || number > MetadataFieldCount {
+		return 0, false
+	}
+	return number, true
+}
+
+func NormalizeMetadataFieldValue(value string) string {
+	clean := strings.ReplaceAll(value, "\x00", "")
+	runes := []rune(clean)
+	if len(runes) > MetadataValueMaxLength {
+		return string(runes[:MetadataValueMaxLength])
+	}
+	return clean
+}
+
+func NormalizeMetadataFields(fields map[string]MetadataFieldSection) map[string]MetadataFieldSection {
+	if len(fields) == 0 {
+		return nil
+	}
+	normalized := map[string]MetadataFieldSection{}
+	for rawKey, field := range fields {
+		number, ok := ParseMetadataFieldNumber(rawKey)
+		if !ok {
+			continue
+		}
+		normalizeMetadataField(&field)
+		normalized[MetadataFieldKey(number)] = field
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func normalizeMetadataField(field *MetadataFieldSection) {
+	if field == nil {
+		return
+	}
+	field.Value = NormalizeMetadataFieldValue(field.Value)
+	field.Source = strings.TrimSpace(field.Source)
+	field.Actor = strings.TrimSpace(field.Actor)
+	if field.ModifiedAt < 0 {
+		field.ModifiedAt = 0
+	}
+}
+
+func UpdateMetadataField(path string, fieldNumber int, value string, source string) error {
+	if fieldNumber < 1 || fieldNumber > MetadataFieldCount {
+		return fmt.Errorf("field must be between 1 and %d", MetadataFieldCount)
+	}
+	writer := "metadata:" + strings.TrimSpace(source)
+	if strings.TrimSpace(source) == "" {
+		writer = "metadata:cli"
+	}
+	key := MetadataFieldKey(fieldNumber)
+	now := time.Now().Unix()
+	return UpdateWithWriter(path, writer, func(cfg *AgentConfig) {
+		if cfg.Agent.MetadataFields == nil {
+			cfg.Agent.MetadataFields = map[string]MetadataFieldSection{}
+		}
+		cfg.Agent.MetadataFields[key] = MetadataFieldSection{
+			Value:      NormalizeMetadataFieldValue(value),
+			ModifiedAt: now,
+			Source:     strings.TrimSpace(source),
+		}
+	})
+}
+
+func ApplyMetadataSyncResponse(path string, updates map[string]MetadataFieldSection, acks []string) error {
+	if len(updates) == 0 && len(acks) == 0 {
+		return nil
+	}
+	return UpdateWithWriter(path, "metadata:engine_sync", func(cfg *AgentConfig) {
+		if cfg.Agent.MetadataFields == nil {
+			cfg.Agent.MetadataFields = map[string]MetadataFieldSection{}
+		}
+		for rawKey, update := range updates {
+			number, ok := ParseMetadataFieldNumber(rawKey)
+			if !ok {
+				continue
+			}
+			key := MetadataFieldKey(number)
+			normalizeMetadataField(&update)
+			if strings.TrimSpace(update.Source) == "" {
+				update.Source = "engine"
+			}
+			current, exists := cfg.Agent.MetadataFields[key]
+			normalizeMetadataField(&current)
+			if !exists || update.ModifiedAt >= current.ModifiedAt {
+				cfg.Agent.MetadataFields[key] = update
+			}
+		}
+		for _, rawKey := range acks {
+			number, ok := ParseMetadataFieldNumber(rawKey)
+			if !ok {
+				continue
+			}
+			key := MetadataFieldKey(number)
+			current, exists := cfg.Agent.MetadataFields[key]
+			if exists && current.Value == "" {
+				delete(cfg.Agent.MetadataFields, key)
+			}
+		}
+		if len(cfg.Agent.MetadataFields) == 0 {
+			cfg.Agent.MetadataFields = nil
+		}
+	})
 }
 
 func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {

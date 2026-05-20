@@ -39,6 +39,7 @@ DEFAULT_API_GROUPS: Sequence[str] = (
     "tokens",
     "enrollment",
     "devices",
+    "metadata_fields",
     "filters",
     "server",
     "assemblies",
@@ -362,6 +363,12 @@ def _register_filters(app: Flask, adapters: EngineServiceAdapters) -> None:
     filters_management.register_filters(app, adapters)
 
 
+def _register_metadata_fields(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .metadata_fields import register_metadata_fields
+
+    register_metadata_fields(app, adapters)
+
+
 def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .scheduled_jobs import management as scheduled_jobs_management
 
@@ -412,6 +419,7 @@ _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] 
     "tokens": _register_tokens,
     "enrollment": _register_enrollment,
     "devices": _register_devices,
+    "metadata_fields": _register_metadata_fields,
     "filters": _register_filters,
     "server": _register_server,
     "assemblies": _register_assemblies,
@@ -442,6 +450,8 @@ def register_api(app: Flask, context: EngineContext) -> None:
     normalized = [group.strip().lower() for group in enabled_groups if group]
     if "filters" not in normalized:
         normalized.append("filters")
+    if "metadata_fields" not in normalized:
+        normalized.append("metadata_fields")
     if "notifications" not in normalized:
         normalized.append("notifications")
     if "watchdogs" not in normalized:

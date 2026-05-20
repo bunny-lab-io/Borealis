@@ -30,6 +30,7 @@ import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
@@ -39,6 +40,7 @@ import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
 import AgentHealthTab from "./Agent_Health.jsx";
+import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -155,6 +157,7 @@ const TOP_TABS = [
   { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
   { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
   { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
+  { key: "metadata", label: "Metadata Fields", icon: LabelRoundedIcon },
   { key: "services", label: "Services", icon: SettingsRoundedIcon },
   { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
   { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
@@ -166,6 +169,7 @@ const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
   summary: "device_summary",
   file_management: "file_management",
   software: "installed_software",
+  metadata: "metadata_fields",
   services: "services",
   process_management: "process_management",
   watchdogs: "watchdogs",
@@ -179,6 +183,8 @@ const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
   file_management: "file_management",
   installed_software: "software",
   software: "software",
+  metadata_fields: "metadata",
+  metadata: "metadata",
   services: "services",
   process_management: "process_management",
   processes: "process_management",
@@ -3289,6 +3295,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
 
   const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
+  const renderMetadataTab = () => (
+    <DeviceMetadataTab
+      deviceId={deviceId}
+      deviceGuid={meta.agentGuid || summary.agent_guid || device?.agent_guid || agent?.agent_guid || ""}
+      hostname={activityHostname}
+    />
+  );
 
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
@@ -3348,6 +3361,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     summary: renderDeviceSummaryTab,
     file_management: renderFileManagementTab,
     software: renderSoftware,
+    metadata: renderMetadataTab,
     services: renderServicesTab,
     process_management: renderProcessManagementTab,
     watchdogs: renderWatchdogsTab,

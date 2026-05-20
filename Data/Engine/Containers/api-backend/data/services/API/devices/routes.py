@@ -28,6 +28,7 @@ from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from ...activity_history import update_activity_history_row
+from ...metadata_fields import process_agent_metadata_sync
 from .software_icons import load_software_icon_overrides
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
@@ -492,6 +493,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     updates[key] = encoded
 
         metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        incoming_metadata_fields = payload.get("metadata_fields") if "metadata_fields" in payload else None
         incoming_role_health = payload.get("agent_role_health")
         incoming_service_mode = (
             payload.get("service_mode")
@@ -553,10 +555,13 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             updates["agent_update_source"] = str(update_source).strip()
 
         conn = db_conn_factory()
+        metadata_sync_response: Dict[str, Any] = {"updates": {}, "acks": []}
+        target_guid_for_sync: Optional[str] = None
         try:
             cur = conn.cursor()
 
             def _apply_updates() -> int:
+                nonlocal target_guid_for_sync
                 if not updates and incoming_role_health is None:
                     return 0
                 pending_updates = dict(updates)
@@ -575,6 +580,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     if not selected_guid and rows:
                         selected_guid = rows[0][0]
                 target_guid = selected_guid or ctx.guid
+                target_guid_for_sync = target_guid
                 if incoming_role_health is not None:
                     existing_role_health = None
                     try:
@@ -650,6 +656,16 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             if rowcount == 0:
                 log("agents", f"heartbeat missing device record guid={ctx.guid}", context_label, level="ERROR")
                 return jsonify({"error": "device_not_registered"}), 404
+            if incoming_metadata_fields is not None:
+                try:
+                    metadata_sync_response = process_agent_metadata_sync(
+                        conn,
+                        target_guid_for_sync or ctx.guid,
+                        incoming_metadata_fields,
+                        now_ts=now_ts,
+                    )
+                except Exception:
+                    log("agents", f"metadata field sync failed guid={ctx.guid}", context_label, level="WARNING")
             if guid_lookup:
                 try:
                     cur.execute(
@@ -699,6 +715,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "poll_after_ms": 15000,
                 "site_id": site_id,
                 "site_name": site_name,
+                "metadata_fields": metadata_sync_response.get("updates") or {},
+                "metadata_field_acks": metadata_sync_response.get("acks") or [],
             }
         )
 

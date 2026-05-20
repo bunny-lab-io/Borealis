@@ -55,6 +55,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_filters(conn, logger=logger)
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
+        _ensure_metadata_fields(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
         ensure_job_scheduler_tables(conn)
@@ -891,6 +892,62 @@ def _ensure_device_software_inventory(conn: sqlite3.Connection, *, logger: Optio
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure device_software_inventory table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_metadata_fields(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata_field_definitions (
+                field_number INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                updated_by TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_metadata_fields (
+                device_guid TEXT NOT NULL,
+                field_number INTEGER NOT NULL,
+                field_key TEXT NOT NULL,
+                value TEXT NOT NULL DEFAULT '',
+                modified_at INTEGER NOT NULL,
+                source TEXT NOT NULL DEFAULT 'engine',
+                actor TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                PRIMARY KEY(device_guid, field_number)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_metadata_fields_guid
+                ON device_metadata_fields(device_guid)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_metadata_fields_number_value
+                ON device_metadata_fields(field_number, value)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_metadata_field_definitions_updated
+                ON metadata_field_definitions(updated_at)
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure metadata field tables: %s", exc, exc_info=True)
         else:
             raise
     finally:

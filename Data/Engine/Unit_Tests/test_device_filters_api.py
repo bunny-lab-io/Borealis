@@ -438,3 +438,89 @@ def test_filter_preview_supports_does_not_contain(engine_harness: EngineTestHarn
     body = response.get_json()
     assert body["matched_device_count"] == 1
     assert [device["hostname"] for device in body["devices"]] == ["test-device"]
+
+
+def test_filter_preview_supports_metadata_fields(engine_harness: EngineTestHarness) -> None:
+    _seed_filter_inventory(engine_harness)
+    now = int(time.time())
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_metadata_fields(
+                device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("GUID-TEST-0001", 7, "field_007", "west-wing", now, "engine", "admin", now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO metadata_field_definitions(field_number, description, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            """,
+            (7, "Location Code", now, "admin"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = _filter_client_with_admin_session(engine_harness)
+    metadata_response = client.get("/api/device_filters/metadata")
+    assert metadata_response.status_code == 200
+    metadata_body = metadata_response.get_json()
+    assert any(field["value"] == "metadata_field" for field in metadata_body["fields"])
+    assert metadata_body["metadata_fields"][6]["label"] == "Location Code"
+
+    response = client.post(
+        "/api/device_filters/preview",
+        json={
+            "name": "Location Code Filter",
+            "description": "Metadata field filter",
+            "site_mode": "global",
+            "criteria": {
+                "groups": [
+                    {
+                        "join_with": "",
+                        "conditions": [
+                            {
+                                "field": "metadata_field",
+                                "metadata_field_number": 7,
+                                "operator": "equals",
+                                "value": "west-wing",
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["matched_device_count"] == 1
+    assert [device["hostname"] for device in body["devices"]] == ["test-device"]
+
+    empty_response = client.post(
+        "/api/device_filters/preview",
+        json={
+            "name": "Empty Metadata Field Filter",
+            "site_mode": "global",
+            "criteria": {
+                "groups": [
+                    {
+                        "join_with": "",
+                        "conditions": [
+                            {
+                                "field": "metadata_field",
+                                "metadata_field_number": 8,
+                                "operator": "equals",
+                                "value": "",
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+    )
+    assert empty_response.status_code == 200
+    empty_body = empty_response.get_json()
+    assert sorted(device["hostname"] for device in empty_body["devices"]) == ["linux-node", "test-device"]

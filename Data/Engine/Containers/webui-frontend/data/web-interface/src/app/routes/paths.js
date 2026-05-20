@@ -51,6 +51,7 @@ export const APP_PATHS = {
   engineStatus: "/engine-status",
   siteWorkers: "/engine-status",
   logs: "/logs",
+  metadataFields: "/metadata-fields",
   devTools: "/dev-tools",
   pageStyleTemplate: "/dev-tools?tab=page_style_template",
   pageTemplate: "/dev-tools?tab=page_style_template",

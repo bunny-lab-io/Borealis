@@ -35,6 +35,7 @@ import {
   AdminPanelSettings as AdminPanelSettingsIcon,
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
+  LabelRounded as MetadataFieldsIcon,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { APP_PATHS } from "./app/routes/paths.js";
@@ -224,6 +225,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Engine Status",
         navKey: "engine-status",
         to: APP_PATHS.engineStatus,
+      },
+      {
+        icon: MetadataFieldsIcon,
+        label: "Metadata Fields",
+        navKey: "metadata-fields",
+        to: APP_PATHS.metadataFields,
       },
       {
         icon: LogsIcon,
