@@ -24,6 +24,7 @@ from .queue import (
     WORK_STATUS_FAILED,
     WORK_STATUS_SUCCEEDED,
     WORK_KIND_ONBOARDING_RUN,
+    WORK_KIND_AGENT_MAINTENANCE_RUN,
     WORK_KIND_SCHEDULED_RUN,
     WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     WORKER_STATUS_IDLE,
@@ -251,7 +252,7 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
                 "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
             }
         ]
-    if kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and job_id > 0:
+    if kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and job_id > 0:
         task_link = payload.get("task_link") if isinstance(payload.get("task_link"), Mapping) else {}
         if task_link:
             return [dict(task_link)]
@@ -283,6 +284,99 @@ def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: thr
                 if isinstance(link, Mapping):
                     links.append(dict(link))
         return links
+
+
+def _update_agent_maintenance_run(
+    db_factory,
+    *,
+    run_id: int,
+    status: str,
+    stdout: str = "",
+    stderr: str = "",
+) -> None:
+    now = _now_ts()
+    finished = now if status in {"Success", "Failed", "Skipped"} else None
+    conn = db_factory()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE scheduled_job_runs
+               SET status=?,
+                   updated_at=?,
+                   finished_ts=COALESCE(?, finished_ts),
+                   error=?
+             WHERE id=?
+            """,
+            (status, now, finished, stderr[:512], int(run_id)),
+        )
+        cur.execute(
+            """
+            UPDATE scheduled_job_run_targets
+               SET resolution_status=?,
+                   resolution_reason=?
+             WHERE run_id=?
+            """,
+            ("eligible" if status != "Failed" else "unresolved", stderr[:512], int(run_id)),
+        )
+        cur.execute(
+            """
+            SELECT s.activity_id
+              FROM scheduled_job_run_activity s
+             WHERE s.run_id=?
+             LIMIT 1
+            """,
+            (int(run_id),),
+        )
+        row = cur.fetchone()
+        if row and row[0]:
+            from Data.Engine.services.activity_history import update_activity_history_row
+
+            update_activity_history_row(
+                conn,
+                int(row[0]),
+                status=status,
+                stdout=stdout,
+                stderr=stderr,
+                append_output=True,
+                updated_at=now,
+                finished_at=finished,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _run_agent_maintenance_item(settings, db_factory, item: Mapping[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+    run_id = int(payload.get("run_id") or item.get("run_id") or 0)
+    hostname = str(payload.get("hostname") or "").strip()
+    operation_id = str(payload.get("operation_id") or "").strip()
+    event_payload = payload.get("event_payload") if isinstance(payload.get("event_payload"), Mapping) else {}
+    if not run_id or not hostname or not operation_id or not event_payload:
+        raise RuntimeError("agent maintenance work item payload incomplete")
+    response = _post_internal(
+        str(settings.secret_key or ""),
+        "/api/internal/job-scheduler/host-service-event",
+        {
+            "hostname": hostname,
+            "service_mode": str(payload.get("service_mode") or "system"),
+            "event_name": str(payload.get("event_name") or "agent_maintenance_request"),
+            "payload": dict(event_payload),
+        },
+        timeout=30.0,
+    )
+    if not bool(response.get("emitted")):
+        error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
+        _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
+        raise RuntimeError(error)
+    stdout = (
+        f"Site worker emitted agent maintenance operation_id={operation_id} "
+        f"action={payload.get('action') or '-'} release_channel={payload.get('release_channel') or '-'} "
+        f"branch={payload.get('branch') or '-'}\n"
+    )
+    _update_agent_maintenance_run(db_factory, run_id=run_id, status="Running", stdout=stdout)
+    return WORK_STATUS_SUCCEEDED
 
 
 def _heartbeat_until(
@@ -328,6 +422,8 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
         item_kind = str(item.get("kind") or "")
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
+        elif item_kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
+            final_status = _run_agent_maintenance_item(settings, db_factory, item)
         elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
             scheduler._dispatch_workflow_run(
@@ -452,7 +548,7 @@ def main() -> None:
                 kind = str((entry.get("item") or {}).get("kind") or "")
                 if kind == WORK_KIND_ONBOARDING_RUN:
                     onboarding_count += 1
-                elif kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
+                elif kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
                     scheduled_count += 1
             lanes = []
             if onboarding_count:
@@ -492,7 +588,7 @@ def main() -> None:
                         current_lanes = list(active_lanes)
                         if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
                             current_lanes.append(LANE_ONBOARDING)
-                        if item_kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
+                        if item_kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
                             current_lanes.append(LANE_SCHEDULED_JOB)
                         heartbeat_worker(
                             conn,

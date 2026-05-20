@@ -35,6 +35,7 @@ from flask import Blueprint, jsonify, request, send_file
 from ...auth import UserSiteAccessManager
 from ....auth.guid_utils import normalize_guid
 from ...activity_history import insert_activity_history_row, update_activity_history_row
+from ...job_scheduler.queue import enqueue_agent_maintenance_run
 from ..assemblies.execution import dispatch_inline_quick_job
 from .software_icons import (
     canonicalize_software_icon_override_resource,
@@ -2076,8 +2077,6 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             operator_id=operator_id,
         )
 
-        call_host_service_event = getattr(adapters.context, "call_host_service_event", None)
-        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
         queued: List[Dict[str, Any]] = []
         errors: List[Dict[str, Any]] = []
         for device in devices:
@@ -2123,36 +2122,56 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 "channel": target_channel,
                 "target_channel": target_channel,
                 "branch": target_branch,
+                "target_branch": target_branch,
                 "requested_at": int(time.time()),
                 "requested_by": operator_id,
                 "scheduled_job_id": job_id,
                 "scheduled_job_run_id": run_id,
             }
-            response: Any = None
-            emitted = False
-            if callable(call_host_service_event):
-                try:
-                    response = call_host_service_event(hostname, "system", "agent_maintenance_request", event_payload, timeout=20.0)
-                    emitted = isinstance(response, dict) and normalize_text(response.get("status")).lower() == "ok"
-                except Exception:
-                    response = None
-                    emitted = False
-            if not emitted and callable(emit_host_service_event):
-                try:
-                    emitted = bool(emit_host_service_event(hostname, "system", "agent_maintenance_request", event_payload))
-                except Exception:
-                    emitted = False
-            if emitted:
+            try:
                 stdout = (
-                    f"Agent accepted operation_id={operation_id} "
+                    f"Queued operation_id={operation_id} for site-worker dispatch "
                     f"release_channel={target_channel} branch={target_branch}\n"
                 )
-                _update_agent_maintenance_run(run_id=run_id, status="Running", stdout=stdout, operation_id=operation_id)
-                queued.append({"hostname": hostname, "guid": device.get("guid") or "", "operation_id": operation_id, "run_id": run_id})
-            else:
-                stderr = "Agent SYSTEM socket unavailable or did not acknowledge maintenance request.\n"
+                _update_agent_maintenance_run(run_id=run_id, status="Pending", stdout=stdout, operation_id=operation_id)
+                conn = adapters.db_conn_factory()
+                try:
+                    work_id = enqueue_agent_maintenance_run(
+                        conn,
+                        job_id=int(job_id),
+                        run_id=int(run_id),
+                        scheduled_ts=int(time.time()),
+                        site_id=device.get("site_id"),
+                        hostname=hostname,
+                        operation_id=operation_id,
+                        action=action,
+                        release_channel=target_channel,
+                        branch=target_branch,
+                        event_payload=event_payload,
+                        task_link={
+                            "kind": "agent_maintenance",
+                            "label": "Switch Agent Branch/Channel" if action == "switch_branch_channel" else "Update Borealis Agent",
+                            "job_id": int(job_id),
+                            "run_id": int(run_id),
+                            "path": f"/jobs/{int(job_id)}?tab=job_history",
+                        },
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                queued.append(
+                    {
+                        "hostname": hostname,
+                        "guid": device.get("guid") or "",
+                        "operation_id": operation_id,
+                        "run_id": run_id,
+                        "work_id": work_id,
+                    }
+                )
+            except Exception as exc:
+                stderr = f"Failed to queue site-worker agent maintenance dispatch: {exc}\n"
                 _update_agent_maintenance_run(run_id=run_id, status="Failed", stderr=stderr, operation_id=operation_id)
-                errors.append({"hostname": hostname, "guid": device.get("guid") or "", "error": "agent_unavailable", "run_id": run_id})
+                errors.append({"hostname": hostname, "guid": device.get("guid") or "", "error": "queue_failed", "run_id": run_id})
 
         _agent_update_log_event(
             "agent_maintenance_request action={0} job_id={1} queued={2} errors={3} operator={4} remote={5}".format(

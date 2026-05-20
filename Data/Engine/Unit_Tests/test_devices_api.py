@@ -2245,6 +2245,87 @@ def test_agent_heartbeat_closes_agent_maintenance_job_success(engine_harness: En
     )
 
 
+def test_agent_maintenance_endpoint_queues_site_worker_work(engine_harness: EngineTestHarness) -> None:
+    device_guid = "870A0384-06F0-4A62-9BBD-1F72271ACDF3"
+    set_seed_device_guid(engine_harness, device_guid)
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        engine_database._ensure_activity_history(conn, logger=None)
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = admin_client(engine_harness)
+    response = client.post(
+        "/api/devices/agent-maintenance",
+        json={
+            "action": "switch_branch_channel",
+            "guids": [device_guid],
+            "release_channel": "unstable",
+            "branch": "feature/convert-agent-to-windows-service-with-watchdog",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert len(payload["queued"]) == 1
+    queued = payload["queued"][0]
+    operation_id = queued["operation_id"]
+    run_id = int(queued["run_id"])
+    work_id = int(queued["work_id"])
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        job_row = conn.execute(
+            "SELECT name, job_kind, enabled FROM scheduled_jobs WHERE id=?",
+            (int(payload["job_id"]),),
+        ).fetchone()
+        run_row = conn.execute(
+            "SELECT status, target_hostname, component_kind FROM scheduled_job_runs WHERE id=?",
+            (run_id,),
+        ).fetchone()
+        target_row = conn.execute(
+            "SELECT resolution_status, site_id FROM scheduled_job_run_targets WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+        activity_row = conn.execute(
+            """
+            SELECT status, stdout, metadata_json
+              FROM activity_history
+             WHERE id=(SELECT activity_id FROM scheduled_job_run_activity WHERE run_id=? LIMIT 1)
+            """,
+            (run_id,),
+        ).fetchone()
+        work_row = conn.execute(
+            "SELECT kind, lane, site_id, job_id, run_id, payload_json FROM job_scheduler_work_items WHERE id=?",
+            (work_id,),
+        ).fetchone()
+        device_row = conn.execute(
+            "SELECT agent_release_channel, agent_branch FROM devices WHERE guid=?",
+            (device_guid,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert job_row == ("Switch Agent Branch/Channel", "agent_maintenance", 0)
+    assert run_row == ("Pending", "test-device", "agent_maintenance")
+    assert target_row == ("eligible", 1)
+    assert activity_row is not None
+    assert activity_row[0] == "Queued"
+    assert f"Queued operation_id={operation_id} for site-worker dispatch" in activity_row[1]
+    metadata = json.loads(activity_row[2] or "{}")
+    assert metadata["operation_id"] == operation_id
+    assert work_row is not None
+    assert work_row[:5] == ("agent_maintenance_run", "scheduled_job", 1, int(payload["job_id"]), run_id)
+    work_payload = json.loads(work_row[5] or "{}")
+    assert work_payload["operation_id"] == operation_id
+    assert work_payload["event_name"] == "agent_maintenance_request"
+    assert work_payload["event_payload"]["target_channel"] == "unstable"
+    assert work_payload["event_payload"]["target_branch"] == "feature/convert-agent-to-windows-service-with-watchdog"
+    assert device_row == ("unstable", "feature/convert-agent-to-windows-service-with-watchdog")
+
+
 def test_agent_status_updates_startup_timeline_without_replacing_other_roles(
     engine_harness: EngineTestHarness,
 ) -> None:

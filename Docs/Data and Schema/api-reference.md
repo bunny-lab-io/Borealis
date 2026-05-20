@@ -71,6 +71,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
 - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
 - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO.
+- `POST /api/devices/agent-maintenance` (Token Authenticated) - queue on-demand Agent updates or Agent branch/channel switches for selected devices. Requests create `agent_maintenance` scheduled-job history and site-worker `agent_maintenance_run` work items; site workers fan out to agents through the internal socket bridge.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
 - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service on an in-scope device.
