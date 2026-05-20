@@ -470,10 +470,10 @@ func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {
 	update.OperationID = strings.TrimSpace(update.OperationID)
 	update.Kind = strings.TrimSpace(update.Kind)
 	update.Status = strings.ToLower(strings.TrimSpace(update.Status))
-	update.PreviousChannel = NormalizeReleaseChannel(update.PreviousChannel)
-	update.PreviousBranch = NormalizeBranch(update.PreviousBranch)
-	update.TargetChannel = NormalizeReleaseChannel(update.TargetChannel)
-	update.TargetBranch = NormalizeBranch(update.TargetBranch)
+	update.PreviousChannel = normalizeOptionalReleaseChannel(update.PreviousChannel)
+	update.PreviousBranch = normalizeOptionalBranch(update.PreviousBranch)
+	update.TargetChannel = normalizeOptionalReleaseChannel(update.TargetChannel)
+	update.TargetBranch = normalizeOptionalBranch(update.TargetBranch)
 	if update.PreviousChannel == ReleaseChannelStable {
 		update.PreviousBranch = DefaultBranch
 	}
@@ -482,6 +482,22 @@ func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {
 	}
 	update.LastError = strings.TrimSpace(update.LastError)
 	return update
+}
+
+func normalizeOptionalReleaseChannel(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	return NormalizeReleaseChannel(text)
+}
+
+func normalizeOptionalBranch(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	return NormalizeBranch(text)
 }
 
 func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {

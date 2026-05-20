@@ -258,6 +258,41 @@ func TestDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestEmptyUpdateSectionDoesNotDefaultToStableMain(t *testing.T) {
+	cfg := Default()
+	cfg.ApplyDefaults()
+	if cfg.Agent.Update.PreviousChannel != "" || cfg.Agent.Update.PreviousBranch != "" || cfg.Agent.Update.TargetChannel != "" || cfg.Agent.Update.TargetBranch != "" {
+		t.Fatalf("empty update section defaulted channel/branch: %#v", cfg.Agent.Update)
+	}
+}
+
+func TestUpdateSectionNormalizesPresentChannelsAndBranches(t *testing.T) {
+	cfg := Default()
+	cfg.Agent.Update = AgentUpdateSection{
+		OperationID:     " operation-1 ",
+		Kind:            " switch_branch_channel ",
+		Status:          " SUCCESS ",
+		PreviousChannel: "release",
+		PreviousBranch:  "feature/old",
+		TargetChannel:   "source",
+		TargetBranch:    " feature/new ",
+		LastError:       " done ",
+	}
+	cfg.ApplyDefaults()
+	if cfg.Agent.Update.OperationID != "operation-1" || cfg.Agent.Update.Kind != "switch_branch_channel" || cfg.Agent.Update.Status != "success" {
+		t.Fatalf("update metadata not normalized: %#v", cfg.Agent.Update)
+	}
+	if cfg.Agent.Update.PreviousChannel != ReleaseChannelStable || cfg.Agent.Update.PreviousBranch != DefaultBranch {
+		t.Fatalf("previous stable channel not normalized to main: %#v", cfg.Agent.Update)
+	}
+	if cfg.Agent.Update.TargetChannel != ReleaseChannelUnstable || cfg.Agent.Update.TargetBranch != "feature/new" {
+		t.Fatalf("target unstable branch not normalized: %#v", cfg.Agent.Update)
+	}
+	if cfg.Agent.Update.LastError != "done" {
+		t.Fatalf("last error not trimmed: %q", cfg.Agent.Update.LastError)
+	}
+}
+
 func TestLoadToleratesUnknownFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
