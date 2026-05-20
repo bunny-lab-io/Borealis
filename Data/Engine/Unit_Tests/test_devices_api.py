@@ -2227,7 +2227,7 @@ def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harnes
     assert rows[2][1] == ""
     assert rows[2][2] == 300
     assert rows[3][1] == base64.b64encode(b"future").decode("ascii")
-    assert rows[3][3] == "cli"
+    assert rows[3][3] == "agent"
     assert before <= int(rows[3][2]) <= int(time.time()) + 5
 
 

@@ -382,7 +382,7 @@ def process_agent_metadata_sync(
                 field_number,
                 record.get("value", ""),
                 modified_at=int(record.get("modified_at") or now_value),
-                source=str(record.get("source") or "agent"),
+                source="agent",
                 actor=record.get("actor") or record.get("source") or "agent",
                 value_is_encoded=True,
             )
