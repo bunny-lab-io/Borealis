@@ -3,7 +3,9 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,7 +26,12 @@ type Client struct {
 	conn        *websocket.Conn
 	writeMu     sync.Mutex
 	handlerMu   sync.RWMutex
+	stateMu     sync.RWMutex
+	connected   bool
+	timeout     time.Duration
 }
+
+const defaultNamespaceConnectTimeout = 45 * time.Second
 
 func NewClient(baseURL string, headers map[string]string) *Client {
 	copiedHeaders := map[string]string{}
@@ -35,6 +42,7 @@ func NewClient(baseURL string, headers map[string]string) *Client {
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		headers:  copiedHeaders,
 		handlers: map[string]Handler{},
+		timeout:  defaultNamespaceConnectTimeout,
 	}
 }
 
@@ -46,6 +54,12 @@ func (c *Client) On(event string, handler Handler) {
 
 func (c *Client) OnConnected(fn func(context.Context) error) {
 	c.onConnected = fn
+}
+
+func (c *Client) SetConnectTimeout(timeout time.Duration) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.timeout = timeout
 }
 
 func (c *Client) Connect(ctx context.Context) error {
@@ -64,10 +78,24 @@ func (c *Client) Connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.resetConnected()
+	c.writeMu.Lock()
 	c.conn = conn
+	c.writeMu.Unlock()
 	defer func() {
+		c.writeMu.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.writeMu.Unlock()
 		_ = conn.Close()
 	}()
+	connectTimeout := c.connectTimeout()
+	deadlineActive := false
+	if connectTimeout > 0 {
+		_ = conn.SetReadDeadline(time.Now().Add(connectTimeout))
+		deadlineActive = true
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -76,10 +104,17 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			if deadlineActive && isTimeoutError(err) && !c.isConnected() {
+				return fmt.Errorf("socket namespace connect timeout after %s", connectTimeout)
+			}
 			return err
 		}
 		if err := c.handleMessage(ctx, string(message)); err != nil {
 			return err
+		}
+		if deadlineActive && c.isConnected() {
+			_ = conn.SetReadDeadline(time.Time{})
+			deadlineActive = false
 		}
 	}
 }
@@ -124,8 +159,11 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 	switch packet[0] {
 	case '0':
 		if c.onConnected != nil {
-			return c.onConnected(ctx)
+			if err := c.onConnected(ctx); err != nil {
+				return err
+			}
 		}
+		c.markConnected()
 	case '2':
 		eventName, payload, ackID, err := parseEventPacket(packet[1:])
 		if err != nil {
@@ -156,6 +194,35 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) resetConnected() {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.connected = false
+}
+
+func (c *Client) markConnected() {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.connected = true
+}
+
+func (c *Client) isConnected() bool {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.connected
+}
+
+func (c *Client) connectTimeout() time.Duration {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.timeout
+}
+
+func isTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func socketURL(baseURL string) (string, error) {

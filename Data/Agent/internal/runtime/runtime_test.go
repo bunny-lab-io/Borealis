@@ -299,6 +299,11 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_disconnected_age=3m1s"},
 		},
 		{
+			name:  "socket connecting restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "connecting", LastSocketStateAt: now.Add(-181 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_connecting_age=3m1s"},
+		},
+		{
 			name:  "stale heartbeat restart",
 			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastHeartbeatSuccessAt: now.Add(-241 * time.Second).Unix(), Now: now},
 			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "stale_heartbeat_success_age=4m1s"},
@@ -326,5 +331,26 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 				t.Fatalf("decision = %#v, want %#v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestEngineSocketRoleSnapshot(t *testing.T) {
+	now := time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC).Unix()
+	agent := &Agent{}
+	agent.socketState = "connecting"
+	agent.socketStateAt = now - int64((watchdogSocketStaleAfter + time.Second).Seconds())
+	stale := agent.engineSocketRoleSnapshot(now)
+	if stale.Status != "unhealthy" || stale.StatusCode != "unhealthy" {
+		t.Fatalf("stale socket status = %s/%s, want unhealthy", stale.Status, stale.StatusCode)
+	}
+	if stale.Detail != "Engine Socket.IO control channel is stuck connecting." {
+		t.Fatalf("stale socket detail = %q", stale.Detail)
+	}
+
+	agent.socketState = "connected"
+	agent.socketStateAt = now
+	healthy := agent.engineSocketRoleSnapshot(now)
+	if healthy.Status != "healthy" || healthy.StatusCode != "healthy" {
+		t.Fatalf("connected socket status = %s/%s, want healthy", healthy.Status, healthy.StatusCode)
 	}
 }

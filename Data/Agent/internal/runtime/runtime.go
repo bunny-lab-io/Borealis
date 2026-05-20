@@ -38,31 +38,34 @@ type Options struct {
 }
 
 type Agent struct {
-	options     Options
-	configPath  string
-	config      agentconfig.AgentConfig
-	authClient  *auth.Client
-	logger      *log.Logger
-	hostname    string
-	bootID      string
-	dispatcher  *currentuser.Dispatcher
-	auditor     *deviceaudit.Auditor
-	files       *filemanagement.Manager
-	processes   *processmanagement.Manager
-	remoteShell *remoteshell.Manager
-	services    *servicemanagement.Manager
-	software    *softwaremanagement.Manager
-	vnc         *vncrole.Manager
-	wireguard   *wireguardtunnel.Manager
-	supervisor  *RoleSupervisor
-	uiMu        sync.RWMutex
-	uiSnapshot  localui.StatusSnapshot
-	auditMu     sync.Mutex
-	auditCache  deviceaudit.Snapshot
-	auditAt     time.Time
-	roleMu      sync.Mutex
-	roleStates  map[string]string
-	roleDetails map[string]string
+	options       Options
+	configPath    string
+	config        agentconfig.AgentConfig
+	authClient    *auth.Client
+	logger        *log.Logger
+	hostname      string
+	bootID        string
+	dispatcher    *currentuser.Dispatcher
+	auditor       *deviceaudit.Auditor
+	files         *filemanagement.Manager
+	processes     *processmanagement.Manager
+	remoteShell   *remoteshell.Manager
+	services      *servicemanagement.Manager
+	software      *softwaremanagement.Manager
+	vnc           *vncrole.Manager
+	wireguard     *wireguardtunnel.Manager
+	supervisor    *RoleSupervisor
+	uiMu          sync.RWMutex
+	uiSnapshot    localui.StatusSnapshot
+	auditMu       sync.Mutex
+	auditCache    deviceaudit.Snapshot
+	auditAt       time.Time
+	roleMu        sync.Mutex
+	roleStates    map[string]string
+	roleDetails   map[string]string
+	socketMu      sync.RWMutex
+	socketState   string
+	socketStateAt int64
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -524,6 +527,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 			},
 			CheckedAt: now,
 		},
+		a.engineSocketRoleSnapshot(now),
 		roleSnapshotFromHealth("system:context_currentuser", "context_currentuser", "Current User Context", "currentuser", currentUserHealth.Status, currentUserHealth.StatusCode, currentUserHealth.Detail, currentUserHealth.Details, now),
 		roleSnapshotFromHealth("system:device_auditor", "device_auditor", "Device Auditor", "system", auditSnapshot.Health.Status, auditSnapshot.Health.StatusCode, auditSnapshot.Health.Detail, auditSnapshot.Health.Details, now),
 		roleSnapshotFromHealth("system:file_management", "file_management", "File Management", "system", fileHealth.Status, fileHealth.StatusCode, fileHealth.Detail, fileHealth.Details, now),
@@ -684,6 +688,59 @@ func firstNonNil(values ...any) any {
 		}
 	}
 	return ""
+}
+
+func (a *Agent) engineSocketRoleSnapshot(now int64) RoleSnapshot {
+	socketState, socketStateAt := a.currentSocketState()
+	normalizedState := strings.ToLower(strings.TrimSpace(socketState))
+	status := "recovering"
+	statusCode := "recovering"
+	runningStatus := "Starting"
+	detail := "Engine Socket.IO control channel has not connected yet."
+	if normalizedState == "" {
+		normalizedState = "not_started"
+	}
+	switch normalizedState {
+	case "connected":
+		status = "healthy"
+		statusCode = "healthy"
+		runningStatus = "Ready"
+		detail = "Engine Socket.IO control channel is connected."
+	case "connecting":
+		runningStatus = "Connecting"
+		detail = "Engine Socket.IO control channel is connecting."
+		if socketStateAt > 0 && time.Unix(now, 0).Sub(time.Unix(socketStateAt, 0)) > watchdogSocketStaleAfter {
+			status = "unhealthy"
+			statusCode = "unhealthy"
+			runningStatus = "Stale"
+			detail = "Engine Socket.IO control channel is stuck connecting."
+		}
+	case "disconnected":
+		status = "unhealthy"
+		statusCode = "unhealthy"
+		runningStatus = "Disconnected"
+		detail = "Engine Socket.IO control channel is disconnected."
+	}
+	details := map[string]any{
+		"running_status": runningStatus,
+		"runtime":        "go",
+		"socket_state":   normalizedState,
+	}
+	if socketStateAt > 0 {
+		details["socket_state_at"] = socketStateAt
+		details["socket_state_age_seconds"] = now - socketStateAt
+	}
+	return RoleSnapshot{
+		RoleID:     "system:engine_socket",
+		RoleName:   "engine_socket",
+		RoleLabel:  "Engine Socket",
+		Context:    "system",
+		Status:     status,
+		StatusCode: statusCode,
+		Detail:     detail,
+		Details:    details,
+		CheckedAt:  now,
+	}
 }
 
 type startupMilestoneDefinition struct {

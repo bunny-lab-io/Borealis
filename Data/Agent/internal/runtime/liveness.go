@@ -79,10 +79,24 @@ func (a *Agent) recordSocketState(state string) {
 	if clean == "" {
 		return
 	}
+	now := time.Now().Unix()
+	a.socketMu.Lock()
+	a.socketState = clean
+	a.socketStateAt = now
+	a.socketMu.Unlock()
 	a.updateLivenessWithWriter("runtime:socket_state", func(l *agentconfig.AgentLivenessSection) {
 		l.LastSocketState = clean
-		l.LastSocketStateAt = time.Now().Unix()
+		l.LastSocketStateAt = now
 	})
+}
+
+func (a *Agent) currentSocketState() (string, int64) {
+	if a == nil {
+		return "", 0
+	}
+	a.socketMu.RLock()
+	defer a.socketMu.RUnlock()
+	return a.socketState, a.socketStateAt
 }
 
 func (a *Agent) logRecovery(component string, roleID string, action string, outcome string, reason string, err error) {

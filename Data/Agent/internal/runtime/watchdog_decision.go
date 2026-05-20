@@ -23,9 +23,9 @@ type watchdogDecisionInput struct {
 }
 
 const (
-	watchdogStaleAfter              = 180 * time.Second
-	watchdogSocketDisconnectedAfter = 180 * time.Second
-	watchdogHeartbeatStaleAfter     = 240 * time.Second
+	watchdogStaleAfter          = 180 * time.Second
+	watchdogSocketStaleAfter    = 180 * time.Second
+	watchdogHeartbeatStaleAfter = 240 * time.Second
 )
 
 type watchdogDecision struct {
@@ -55,10 +55,10 @@ func decideWatchdogRecovery(input watchdogDecisionInput) watchdogDecision {
 		return restartWatchdogDecision(input, fmt.Sprintf("stale_liveness_age=%s", age.Round(time.Second)))
 	}
 	socketState := strings.ToLower(strings.TrimSpace(input.LastSocketState))
-	if socketState == "disconnected" && input.LastSocketStateAt > 0 {
+	if (socketState == "disconnected" || socketState == "connecting") && input.LastSocketStateAt > 0 {
 		socketAge := input.Now.Sub(time.Unix(input.LastSocketStateAt, 0))
-		if socketAge > watchdogSocketDisconnectedAfter {
-			return restartWatchdogDecision(input, fmt.Sprintf("socket_disconnected_age=%s", socketAge.Round(time.Second)))
+		if socketAge > watchdogSocketStaleAfter {
+			return restartWatchdogDecision(input, fmt.Sprintf("socket_%s_age=%s", socketState, socketAge.Round(time.Second)))
 		}
 	}
 	if input.LastHeartbeatSuccessAt > 0 {
