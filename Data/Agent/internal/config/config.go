@@ -24,14 +24,13 @@ const (
 var fileMu sync.Mutex
 
 type AgentConfig struct {
-	SchemaVersion      int                        `json:"schema_version"`
-	ServerURL          string                     `json:"server_url"`
-	EnrollmentCode     string                     `json:"enrollment_code,omitempty"`
-	Agent              AgentSection               `json:"agent"`
-	Identity           IdentitySection            `json:"identity"`
-	Tokens             TokenSection               `json:"tokens"`
-	Trust              TrustSection               `json:"trust"`
-	DependencyVersions *DependencyVersionsSection `json:"dependency_versions,omitempty"`
+	SchemaVersion  int             `json:"schema_version"`
+	ServerURL      string          `json:"server_url"`
+	EnrollmentCode string          `json:"enrollment_code,omitempty"`
+	Agent          AgentSection    `json:"agent"`
+	Identity       IdentitySection `json:"identity"`
+	Tokens         TokenSection    `json:"tokens"`
+	Trust          TrustSection    `json:"trust"`
 }
 
 type AgentSection struct {
@@ -97,11 +96,6 @@ type TokenSection struct {
 
 type TrustSection struct {
 	ServerSigningKeySPKIB64 string `json:"server_signing_key_spki_b64"`
-}
-
-type DependencyVersionsSection struct {
-	WireGuard string `json:"wireguard,omitempty"`
-	UltraVNC  string `json:"ultravnc,omitempty"`
 }
 
 type DependencyStateSection struct {
@@ -448,10 +442,6 @@ func (c *AgentConfig) ApplyDefaults() {
 	if c.Agent.LogRetentionDays <= 0 {
 		c.Agent.LogRetentionDays = DefaultLogRetentionDays
 	}
-	if c.DependencyVersions != nil {
-		c.DependencyVersions.WireGuard = NormalizeDependencyVersion(c.DependencyVersions.WireGuard)
-		c.DependencyVersions.UltraVNC = NormalizeDependencyVersion(c.DependencyVersions.UltraVNC)
-	}
 	if len(c.Agent.DependencyState) > 0 {
 		normalized := map[string]DependencyStateSection{}
 		for name, state := range c.Agent.DependencyState {
@@ -498,13 +488,6 @@ func normalizeOptionalBranch(value string) string {
 		return ""
 	}
 	return NormalizeBranch(text)
-}
-
-func (c *AgentConfig) EnsureDependencyVersions() *DependencyVersionsSection {
-	if c.DependencyVersions == nil {
-		c.DependencyVersions = &DependencyVersionsSection{}
-	}
-	return c.DependencyVersions
 }
 
 func (c *AgentConfig) UpdateDependencyState(name string, update func(*DependencyStateSection)) {

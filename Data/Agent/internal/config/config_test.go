@@ -18,7 +18,18 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.Agent.ReleaseChannel = "Unstable"
 	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
-	cfg.DependencyVersions = &DependencyVersionsSection{WireGuard: "1.1\r\n", UltraVNC: "1.8.2.1"}
+	cfg.UpdateDependencyState("WireGuard", func(state *DependencyStateSection) {
+		state.Phase = "healthy"
+		state.Status = "healthy"
+		state.DesiredVersion = " 1.1 "
+		state.InstalledVersion = "1.1\r\n"
+	})
+	cfg.UpdateDependencyState("UltraVNC", func(state *DependencyStateSection) {
+		state.Phase = "healthy"
+		state.Status = "healthy"
+		state.DesiredVersion = "1.8.2.1"
+		state.InstalledVersion = "1.8.2.1"
+	})
 	cfg.Identity.PublicKeySPKIB64 = "pub"
 
 	if err := Save(path, &cfg); err != nil {
@@ -49,20 +60,25 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.Agent.State.Revision <= 0 || loaded.Agent.State.Writer == "" || loaded.Agent.State.LastWriteAt <= 0 {
 		t.Fatalf("state metadata missing: %#v", loaded.Agent.State)
 	}
-	if loaded.DependencyVersions == nil {
-		t.Fatal("dependency_versions missing")
+	wireGuardState, ok := loaded.Agent.DependencyState["wireguard"]
+	if !ok {
+		t.Fatalf("wireguard dependency_state missing: %#v", loaded.Agent.DependencyState)
 	}
-	if loaded.DependencyVersions.WireGuard != "1.1" {
-		t.Fatalf("wireguard dependency version mismatch: %q", loaded.DependencyVersions.WireGuard)
+	if wireGuardState.DesiredVersion != "1.1" || wireGuardState.InstalledVersion != "1.1" {
+		t.Fatalf("wireguard dependency state mismatch: %#v", wireGuardState)
 	}
-	if loaded.DependencyVersions.UltraVNC != "1.8.2.1" {
-		t.Fatalf("ultravnc dependency version mismatch: %q", loaded.DependencyVersions.UltraVNC)
+	ultraVNCState, ok := loaded.Agent.DependencyState["ultravnc"]
+	if !ok {
+		t.Fatalf("ultravnc dependency_state missing: %#v", loaded.Agent.DependencyState)
+	}
+	if ultraVNCState.DesiredVersion != "1.8.2.1" || ultraVNCState.InstalledVersion != "1.8.2.1" {
+		t.Fatalf("ultravnc dependency state mismatch: %#v", ultraVNCState)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unexpected := range []string{"\"runtime\"", "\"feature_flags\"", "\"last_saved_at\"", "\"extra\""} {
+	for _, unexpected := range []string{"\"runtime\"", "\"feature_flags\"", "\"last_saved_at\"", "\"extra\"", "\"dependency_versions\""} {
 		if strings.Contains(string(raw), unexpected) {
 			t.Fatalf("config contains unexpected field %s: %s", unexpected, string(raw))
 		}

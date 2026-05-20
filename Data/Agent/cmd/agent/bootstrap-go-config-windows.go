@@ -152,17 +152,14 @@ func writeConfigReleaseTarget(cfg BootstrapConfig, releaseChannel string, branch
 
 func readConfigDependencyVersion(cfg BootstrapConfig, name string) string {
 	current, err := agentconfig.Load(agentConfigPath(cfg.InstallDir))
-	if err != nil || current.DependencyVersions == nil {
+	if err != nil || len(current.Agent.DependencyState) == 0 {
 		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "wireguard":
-		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.WireGuard)
-	case "ultravnc":
-		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.UltraVNC)
-	default:
+	state, ok := current.Agent.DependencyState[agentconfig.NormalizeDependencyName(name)]
+	if !ok {
 		return ""
 	}
+	return agentconfig.NormalizeDependencyVersion(state.InstalledVersion)
 }
 
 func writeConfigDependencyVersion(cfg BootstrapConfig, name string, version string) error {
@@ -175,16 +172,13 @@ func writeConfigDependencyVersion(cfg BootstrapConfig, name string, version stri
 	if err != nil {
 		return err
 	}
-	versions := current.EnsureDependencyVersions()
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "wireguard":
-		versions.WireGuard = normalizedVersion
-	case "ultravnc":
-		versions.UltraVNC = normalizedVersion
-	default:
+	if agentconfig.NormalizeDependencyName(name) == "" {
 		return nil
 	}
-	if err := agentconfig.SaveWithWriter(path, "bootstrap:dependency_version:"+strings.ToLower(strings.TrimSpace(name)), &current); err != nil {
+	current.UpdateDependencyState(name, func(state *agentconfig.DependencyStateSection) {
+		state.InstalledVersion = normalizedVersion
+	})
+	if err := agentconfig.SaveWithWriter(path, "bootstrap:dependency_version:"+agentconfig.NormalizeDependencyName(name), &current); err != nil {
 		return err
 	}
 	return nil
