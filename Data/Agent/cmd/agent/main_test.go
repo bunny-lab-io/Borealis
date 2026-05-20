@@ -151,3 +151,27 @@ func TestFreshDeployInstallRequiresServerURLAndEnrollmentCode(t *testing.T) {
 		t.Fatalf("fresh deploy with server URL and enrollment code failed: %v", err)
 	}
 }
+
+func TestMetadataSetCLIQueuesAgentSource(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+
+	if code := runMetadataCommand(configPath, []string{"set", "1", "asset-tag-123"}); code != 0 {
+		t.Fatalf("runMetadataCommand exit = %d", code)
+	}
+
+	fields, err := agentconfig.LoadQueuedMetadataFields(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, ok := fields["field_001"]
+	if !ok {
+		t.Fatalf("field_001 missing: %#v", fields)
+	}
+	if field.Source != "agent" {
+		t.Fatalf("source = %q", field.Source)
+	}
+	if agentconfig.DecodeMetadataFieldValue(field.Value) != "asset-tag-123" {
+		t.Fatalf("value = %q", agentconfig.DecodeMetadataFieldValue(field.Value))
+	}
+}
