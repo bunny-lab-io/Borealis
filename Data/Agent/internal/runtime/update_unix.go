@@ -10,7 +10,7 @@ import (
 
 func startLocalUpdater(configPath string) error {
 	if _, err := exec.LookPath("systemctl"); err == nil {
-		if runErr := exec.Command("systemctl", "start", "borealis-agent-updater.service").Run(); runErr == nil {
+		if runErr := exec.Command("systemctl", "start", linuxUpdaterServiceName).Run(); runErr == nil {
 			return nil
 		}
 	}

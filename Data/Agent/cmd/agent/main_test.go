@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,11 @@ import (
 )
 
 func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.T) {
+	originalResolver := resolveInstallRepoRefBuildIDFunc
+	t.Cleanup(func() { resolveInstallRepoRefBuildIDFunc = originalResolver })
+	resolveInstallRepoRefBuildIDFunc = func(ctx context.Context, repoRef string) (string, error) {
+		return "ABCDEF123456", nil
+	}
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, agentconfig.FileName)
 	raw := `{
@@ -52,6 +58,9 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	}
 	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("release_channel = %q", loaded.Agent.ReleaseChannel)
+	}
+	if loaded.Agent.InstalledBuildID != "abcdef123456" {
+		t.Fatalf("installed_build_id = %q", loaded.Agent.InstalledBuildID)
 	}
 	rewritten, err := os.ReadFile(configPath)
 	if err != nil {

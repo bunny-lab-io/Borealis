@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
@@ -15,6 +19,7 @@ import (
 )
 
 var version = "dev"
+var resolveInstallRepoRefBuildIDFunc = resolveInstallRepoRefBuildID
 
 func main() {
 	os.Exit(run())
@@ -266,9 +271,62 @@ func persistInstallConfig(options agentruntime.Options) error {
 	if options.ReleaseChannel != "" {
 		cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
 	}
+	if buildID := resolveInstallBuildID(options, cfg); buildID != "" {
+		cfg.Agent.InstalledBuildID = buildID
+	}
 	return agentconfig.Save(configPath, &cfg)
 }
 
 func loadInstallConfig(configPath string) (agentconfig.AgentConfig, error) {
 	return agentconfig.LoadOrCreate(configPath)
+}
+
+func resolveInstallBuildID(options agentruntime.Options, cfg agentconfig.AgentConfig) string {
+	if agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID) != "" {
+		return agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
+	}
+	repoRef := strings.TrimSpace(options.RepoRef)
+	if repoRef == "" {
+		repoRef = strings.TrimSpace(cfg.Agent.Branch)
+	}
+	channel := cfg.Agent.ReleaseChannel
+	if strings.TrimSpace(options.ReleaseChannel) != "" {
+		channel = options.ReleaseChannel
+	}
+	if repoRef != "" && agentconfig.UsesUnstableReleaseChannel(channel) {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if buildID, err := resolveInstallRepoRefBuildIDFunc(ctx, repoRef); err == nil {
+			return buildID
+		}
+	}
+	return agentconfig.NormalizeBuildID(options.BuildID)
+}
+
+func resolveInstallRepoRefBuildID(ctx context.Context, repoRef string) (string, error) {
+	apiURL := "https://api.github.com/repos/bunny-lab-io/Borealis/commits/" + url.PathEscape(strings.TrimSpace(repoRef))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GitHub commit API HTTP %d", resp.StatusCode)
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	sha := agentconfig.NormalizeBuildID(payload.SHA)
+	if sha == "" {
+		return "", fmt.Errorf("GitHub commit API returned empty sha")
+	}
+	return sha, nil
 }

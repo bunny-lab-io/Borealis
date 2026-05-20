@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 const (
@@ -670,11 +672,17 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 
 func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) (string, error) {
 	clientExe := resolveWireGuardClientExe()
-	installedVersion := readConfigDependencyVersion(cfg, dependencyNameWireGuard)
+	installedVersion := wireGuardInstalledVersion(cfg, clientExe, logger)
 	writeConfigDependencyState(cfg, dependencyNameWireGuard, "detected", "recovering", wireGuardMSIVersion, installedVersion, dependencyFallbackText(clientExe, "WireGuard client executable not found."), "")
-	if clientExe != "" && dependencyVersionAtLeast(installedVersion, wireGuardMSIVersion) {
+	if clientExe != "" {
+		if strings.TrimSpace(installedVersion) == "" {
+			installedVersion = wireGuardMSIVersion
+		}
+		if err := writeConfigDependencyVersion(cfg, dependencyNameWireGuard, installedVersion); err != nil {
+			logger.Tracef("WireGuard dependency version write skipped: %v", err)
+		}
 		writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, installedVersion, clientExe, "")
-		logger.Tracef("WireGuard Windows client MSI %s already installed at %s; config version=%s", wireGuardMSIVersion, clientExe, installedVersion)
+		logger.Tracef("WireGuard Windows client already installed at %s; detected_version=%s desired_version=%s. Skipping MSI install.", clientExe, installedVersion, wireGuardMSIVersion)
 		return clientExe, nil
 	}
 	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installing", "recovering", wireGuardMSIVersion, installedVersion, "WireGuard MSI starting.", "")
@@ -691,6 +699,40 @@ func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) 
 	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, wireGuardMSIVersion, clientExe, "")
 	logger.Infof("WireGuard Windows client MSI %s installed at %s.", wireGuardMSIVersion, clientExe)
 	return clientExe, nil
+}
+
+func wireGuardInstalledVersion(cfg BootstrapConfig, clientExe string, logger *BootstrapLogger) string {
+	if strings.TrimSpace(clientExe) != "" {
+		if fileVersion := readWindowsFileVersion(clientExe, logger); strings.TrimSpace(fileVersion) != "" {
+			return agentconfig.NormalizeDependencyVersion(fileVersion)
+		}
+		if registryVersion := readWireGuardRegistryVersion(logger); strings.TrimSpace(registryVersion) != "" {
+			return agentconfig.NormalizeDependencyVersion(registryVersion)
+		}
+	}
+	return readConfigDependencyVersion(cfg, dependencyNameWireGuard)
+}
+
+func readWireGuardRegistryVersion(logger *BootstrapLogger) string {
+	for _, key := range []string{
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+		`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+	} {
+		output, err := runCommandTimeout(logger, 15*time.Second, "reg.exe", "query", key, "/v", "DisplayVersion")
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(output, "\n") {
+			if !strings.Contains(strings.ToLower(line), "displayversion") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				return fields[len(fields)-1]
+			}
+		}
+	}
+	return ""
 }
 
 func shouldInstallWireGuardManagerService() bool {
