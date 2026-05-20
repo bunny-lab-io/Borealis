@@ -79,6 +79,38 @@ def _json_dict(value: Any) -> Dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _display_bounds_from_topology(topology: list[Any]) -> Dict[str, Any]:
+    displays = [item for item in topology if isinstance(item, dict)]
+    if not displays:
+        return {}
+    bounds = []
+    for item in displays:
+        try:
+            left = int(item.get("left") or 0)
+            top = int(item.get("top") or 0)
+            right = int(item.get("right") or (left + int(item.get("width") or 0)))
+            bottom = int(item.get("bottom") or (top + int(item.get("height") or 0)))
+        except (TypeError, ValueError):
+            continue
+        if right <= left or bottom <= top:
+            continue
+        bounds.append((left, top, right, bottom))
+    if not bounds:
+        return {}
+    left = min(item[0] for item in bounds)
+    top = min(item[1] for item in bounds)
+    right = max(item[2] for item in bounds)
+    bottom = max(item[3] for item in bounds)
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": right - left,
+        "height": bottom - top,
+    }
+
+
 def _normalize_status_code(value: Any) -> str:
     text = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
     aliases = {
@@ -764,10 +796,10 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(cached_response)
 
         role = {
-            "role_id": "startup:system_heartbeat",
+            "role_id": "system:system_heartbeat",
             "role_name": "system_heartbeat",
             "role_label": "Startup Timeline",
-            "context": "startup",
+            "context": "system",
             "status_code": status_code,
             "status": status_code,
             "detail": message or phase or "Startup status updated.",
@@ -1203,12 +1235,14 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             active_session_payload = dict(active_session)
         else:
             active_session_payload = {}
-        display_topology = []
+        display_topology = list(advertised_display_topology or []) if isinstance(advertised_display_topology, list) else []
         display_virtual_bounds: Dict[str, Any] = {}
         if not display_topology:
             display_topology = list(role_health.get("display_topology") or [])
         if not display_virtual_bounds:
             display_virtual_bounds = dict(role_health.get("display_virtual_bounds") or {})
+        if not display_virtual_bounds:
+            display_virtual_bounds = _display_bounds_from_topology(display_topology)
         _vnc_trace(
             "R04",
             context_hint,

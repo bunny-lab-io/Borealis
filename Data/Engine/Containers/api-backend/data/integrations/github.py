@@ -19,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
+from urllib.parse import quote
 
 from flask import has_request_context, request
 
@@ -295,11 +296,10 @@ class GitHubIntegration:
         token = self._github_token(force_refresh=force_refresh)
         if token:
             headers["Authorization"] = f"Bearer {token}"
-
-
         try:
+            encoded_ref = quote(branch, safe="")
             response = self._http_get(
-                f"https://api.github.com/repos/{repo}/branches/{branch}",
+                f"https://api.github.com/repos/{repo}/commits/{encoded_ref}",
                 headers=headers,
                 timeout=20,
             )
@@ -309,7 +309,8 @@ class GitHubIntegration:
                     data = response.json()
                 except Exception as exc:
                     return None, f"GitHub REST API repo head decode error: {exc}"
-                sha = ((data.get("commit") or {}).get("sha") or "").strip()
+                commit_payload = data.get("commit") if isinstance(data.get("commit"), dict) else {}
+                sha = (data.get("sha") or commit_payload.get("sha") or "").strip()
                 if sha:
                     return sha, None
                 return None, "GitHub REST API repo head missing commit SHA"
@@ -334,12 +335,6 @@ class GitHubIntegration:
             header_token = (request.headers.get("X-GitHub-Token") or "").strip()
             if header_token:
                 return header_token
-            if not force_refresh:
-                auth_header = request.headers.get("Authorization") or ""
-                if auth_header.lower().startswith("bearer "):
-                    candidate = auth_header.split(" ", 1)[1].strip()
-                    if candidate:
-                        return candidate
 
         now = time.time()
         with self._token_lock:

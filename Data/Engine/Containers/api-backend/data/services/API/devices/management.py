@@ -1813,7 +1813,7 @@ class DeviceManagementService:
         if supplied_branch:
             cleaned_override = "unstable"
             effective_channel = "unstable"
-            release_channel = "unstable"
+            release_channel = "source" if raw_override in {"source", "branch", "repo", "repository"} else "unstable"
             target_branch = supplied_branch
         else:
             effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)

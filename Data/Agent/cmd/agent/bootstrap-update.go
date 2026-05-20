@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,7 +55,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	installed := readConfigInstalledBuildID(cfg)
 	logger.Tracef("Agent update check start: release_channel=%s repo_ref=%s installed_build_id=%s", cfg.ReleaseChannel, cfg.RepoRef, installed)
 	if shouldUseRepoRefUpdate(cfg) {
-		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt)
+		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt, serverURL, token)
 	}
 	manifest, err := fetchUpdateManifest(serverURL, token, installed)
 	if err != nil {
@@ -153,12 +154,17 @@ func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
 	return agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel)
 }
 
-func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time) error {
+func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string) error {
 	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	ref := strings.TrimSpace(cfg.RepoRef)
-	target, err := resolveGithubRefSHA(cfg.RepoURL, ref)
+	target, err := resolveEngineRepoRefSHA(serverURL, token, cfg.RepoURL, ref)
 	if err != nil {
-		return fmt.Errorf("resolve repo_ref %q update target; refusing manifest fallback: %w", ref, err)
+		engineErr := err
+		logger.Warnf("Engine repo hash lookup failed for repo_ref %q; trying GitHub fallback: %v", ref, engineErr)
+		target, err = resolveGithubRefSHA(cfg.RepoURL, ref)
+		if err != nil {
+			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", ref, engineErr, err)
+		}
 	}
 	target = strings.TrimSpace(strings.ToLower(target))
 	logger.Tracef("Agent repo_ref update target: repo_ref=%s target_build_id=%s installed_build_id=%s", ref, target, installed)
@@ -225,6 +231,52 @@ func downloadRepoRefUpdateSource(cfg BootstrapConfig, logger *BootstrapLogger, r
 	}
 	logger.Tracef("Agent repo_ref update source resolved: %s", sourceRoot)
 	return sourceRoot, nil
+}
+
+func resolveEngineRepoRefSHA(serverURL string, token string, repoURL string, ref string) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	if baseURL == "" {
+		return "", fmt.Errorf("server URL missing")
+	}
+	owner, repo, err := githubRepoParts(repoURL)
+	if err != nil {
+		return "", err
+	}
+	params := url.Values{}
+	params.Set("repo", owner+"/"+repo)
+	params.Set("branch", strings.TrimSpace(ref))
+	params.Set("ttl", "300")
+	apiURL := baseURL + "/api/repo/current_hash?" + params.Encode()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	if strings.TrimSpace(token) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("Engine repo hash API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(payload.SHA)
+	if sha == "" {
+		return "", fmt.Errorf("Engine repo hash API returned empty sha")
+	}
+	return sha, nil
 }
 
 func resolveGithubRefSHA(repoURL string, ref string) (string, error) {

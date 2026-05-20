@@ -77,6 +77,8 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
 
     def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
         calls["count"] += 1
+        calls.setdefault("urls", []).append(url)
+        calls.setdefault("headers", []).append(dict(headers or {}))
         if calls["count"] == 1:
             return DummyResponse(200, {"commit": {"sha": "abc123"}})
         raise request_exception("network error")
@@ -3395,6 +3397,8 @@ def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeyp
 
 def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
+    monkeypatch.delenv("BOREALIS_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     _patch_repo_call(monkeypatch, calls)
 
     client = engine_harness.app.test_client()
@@ -3406,6 +3410,34 @@ def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness
     payload = response.get_json()
     assert payload["sha"] == "abc123"
     assert calls["count"] == 1
+    assert "Authorization" not in calls["headers"][0]
+
+
+def test_repo_current_hash_encodes_branch_refs(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from Data.Engine.integrations import github as github_integration
+
+    calls: dict[str, Any] = {"count": 0}
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, str]:
+            return {"sha": "def456"}
+
+    def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
+        calls["count"] += 1
+        calls["url"] = url
+        return DummyResponse()
+
+    monkeypatch.setattr(github_integration.requests, "get", fake_get)
+
+    client = admin_client(engine_harness)
+    response = client.get("/api/repo/current_hash?repo=test/test&branch=feature/agent-metadata-fields&refresh=1")
+
+    assert response.status_code == 200
+    assert response.get_json()["sha"] == "def456"
+    assert calls["count"] == 1
+    assert calls["url"] == "https://api.github.com/repos/test/test/commits/feature%2Fagent-metadata-fields"
 
 
 def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:

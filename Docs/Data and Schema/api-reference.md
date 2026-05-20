@@ -116,7 +116,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
 - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
-- `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash.
+- `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash for optional `repo`, `branch`, and `ttl` query parameters; feature branch refs with slashes are supported.
 - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
 - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
 - `GET /api/agent/hash_list` (Admin + Loopback) - list agent hashes (local diagnostics).

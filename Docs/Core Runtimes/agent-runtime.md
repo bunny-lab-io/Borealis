@@ -39,7 +39,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
 - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
 - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
-- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `startup:system_heartbeat`.
+- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
 - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
@@ -128,7 +128,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - If CURRENTUSER execution fails, inspect the Go helper broker migration status in `Data/Agent/Golang_Agent_Migration.md`.
 - Operator-requested manual updates arrive over the SYSTEM Socket.IO channel as `agent_update_request` and start the local AutoUpdater path immediately so the same updater-owned path is used for both manual and hourly runs.
 - Engine-managed release channels cache a Go Agent binary bundle containing `Data/Agent/dist/windows-amd64/Agent.exe` and `Data/Agent/dist/linux-amd64/Agent`. Agents download that authenticated bundle, verify SHA-256 when provided, validate the candidate with `--validate-config --config-path <agent.json>`, stage the platform binary, and restart through the local service manager.
-- Branch installs persist the operator-selected branch in `agent.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally.
+- Branch installs persist the operator-selected branch in `agent.json` as `agent.branch`; local update checks use that branch when it is not `main` so feature-branch agents do not jump release channels accidentally. Repo-ref update checks resolve target commit through Engine `/api/repo/current_hash` first so Engine cache absorbs GitHub API usage; direct GitHub lookup is fallback only.
 - Installed build tracking lives in `agent.json` as `agent.installed_build_id`; fresh unstable/source branch bootstraps stamp this from the resolved repository commit SHA so the Engine can prove the exact branch build before the first update cycle. The Go Agent does not create a standalone `installed_build_id.txt`.
 - Update checks do not persist `update_status.json`; transient state such as `state`, `update_available`, and `last_checked_at` is intentionally not stored by the Go Agent.
 - Metadata fields can be updated by scripts through `Agent.exe --update-metadata --field=1 --value="text"` on Windows or `Agent --update-metadata --field=1 --value="text"` on Linux. The CLI base64-encodes the supplied value before writing `agent.json`; blank values queue clears. Decoded values are capped at 1024 characters.
