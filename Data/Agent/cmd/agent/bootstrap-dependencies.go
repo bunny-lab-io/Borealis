@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
 const (
@@ -25,9 +27,9 @@ const (
 	ultraVNCServiceName                  = "BorealisAgentUltraVNC"
 	ultraVNCServiceDisplayName           = "Borealis Agent - UltraVNC"
 	ultraVNCVersion                      = "1.8.2.1"
-	ultraVNCMSIName                      = "UltraVNC_1821_x64_Setup.msi"
-	ultraVNCMSIURL                       = "https://uvnc.eu/download/1800/UltraVNC_1821_x64_Setup.msi"
-	ultraVNCMSISHA256                    = "cc7a41d546523dc5e33324b12a23d2fbb2d0a9b0b9f7c08b0e242ebe5da3c2b9"
+	ultraVNCInstallerName                = "UltraVNC_1821_x64_Setup.exe"
+	ultraVNCInstallerURL                 = "https://uvnc.eu/download/1800/UltraVNC_1821_x64_Setup.exe"
+	ultraVNCInstallerSHA256              = "7c12518b05a25f5cd502fa21818c7271c766cacff312cbc47bc3942468b14919"
 	wireGuardManagerServiceName          = "WireGuardManager"
 	wireGuardManagerDisplayName          = "Borealis Agent - WireGuard Manager"
 	wireGuardInstallManagerServiceEnvVar = "BOREALIS_WIREGUARD_INSTALL_MANAGER_SERVICE"
@@ -43,29 +45,44 @@ func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error
 	startedAt := time.Now()
 	logger.Tracef("Dependency coordinator start.")
 	optionalSteps := []struct {
-		name string
-		fn   func(BootstrapConfig, *BootstrapLogger) error
+		name       string
+		dependency string
+		fn         func(BootstrapConfig, *BootstrapLogger) error
 	}{
-		{"UltraVNC Server", ensureUltraVNCServer},
-		{"WireGuard VPN Adapter", ensureWireGuardInstaller},
+		{"UltraVNC Server", dependencyNameUltraVNC, ensureUltraVNCServer},
+		{"WireGuard VPN Adapter", dependencyNameWireGuard, ensureWireGuardInstaller},
 	}
 	for _, step := range optionalSteps {
 		stepStartedAt := time.Now()
 		task := dependencyTaskName(step.name)
 		logger.Tracef("Dependency step start: %s", step.name)
+		writeConfigDependencyState(cfg, step.dependency, "install_needed", "recovering", dependencyDesiredVersion(step.dependency), "", "Dependency reconciliation started.", "")
 		writeTimeline(cfg, "running", task, "Installing "+step.name+".", 1)
 		if err := step.fn(cfg, logger); err != nil {
+			writeConfigDependencyState(cfg, step.dependency, "failed", "failed", dependencyDesiredVersion(step.dependency), readConfigDependencyVersion(cfg, step.dependency), step.name+" dependency deferred.", err.Error())
 			logger.Warnf("%s dependency deferred: %v", step.name, err)
 			writeTimeline(cfg, "failed", task, step.name+" dependency deferred: "+err.Error(), 1)
 			logger.Tracef("Dependency step deferred: %s duration=%s error=%v", step.name, time.Since(stepStartedAt).Round(time.Millisecond), err)
 			continue
 		}
+		writeConfigDependencyState(cfg, step.dependency, "healthy", "healthy", dependencyDesiredVersion(step.dependency), readConfigDependencyVersion(cfg, step.dependency), step.name+" dependency ready.", "")
 		writeTimeline(cfg, "completed", task, step.name+" dependency ready.", 0)
 		logger.Tracef("Dependency step complete: %s duration=%s", step.name, time.Since(stepStartedAt).Round(time.Millisecond))
 	}
 	cleanupDependencyWorkspace(cfg, logger)
 	logger.Tracef("Dependency coordinator complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func dependencyDesiredVersion(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case dependencyNameUltraVNC:
+		return ultraVNCVersion
+	case dependencyNameWireGuard:
+		return wireGuardMSIVersion
+	default:
+		return ""
+	}
 }
 
 func dependencyTaskName(name string) string {
@@ -182,67 +199,76 @@ func ensureUltraVNCSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) e
 	root := filepath.Join(cfg.InstallDir, "Dependencies", "UltraVNC_Server")
 	exePath := resolveUltraVNCInstalledExe()
 	installedVersion := readConfigDependencyVersion(cfg, dependencyNameUltraVNC)
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "detected", "recovering", ultraVNCVersion, installedVersion, dependencyFallbackText(exePath, "UltraVNC executable not found."), "")
 	if exePath != "" && dependencyVersionAtLeast(installedVersion, ultraVNCVersion) {
+		writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, installedVersion, exePath, "")
 		logger.Tracef("UltraVNC %s already installed at %s; config version=%s", ultraVNCVersion, exePath, installedVersion)
 		return nil
 	}
+	if exePath != "" {
+		fileVersion := readWindowsFileVersion(exePath, logger)
+		version := dependencyFallbackText(fileVersion, dependencyFallbackText(installedVersion, ultraVNCVersion))
+		logger.Tracef("UltraVNC executable already present at %s; config version=%s file_version=%s. Skipping setup reinstall.", exePath, installedVersion, dependencyFallbackText(fileVersion, "unknown"))
+		if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, version); err != nil {
+			logger.Warnf("UltraVNC dependency version write failed: %v", err)
+		}
+		writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, version, exePath, "")
+		return nil
+	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installing", "recovering", ultraVNCVersion, installedVersion, "UltraVNC setup starting.", "")
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return err
 	}
-	msiPath := filepath.Join(root, ultraVNCMSIName)
-	if !fileExists(msiPath) {
-		logger.Tracef("UltraVNC MSI missing; downloading to %s", msiPath)
-		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+	installerPath := filepath.Join(root, ultraVNCInstallerName)
+	if !fileExists(installerPath) {
+		logger.Tracef("UltraVNC installer missing; downloading to %s", installerPath)
+		if err := downloadFileLogged(context.Background(), ultraVNCInstallerURL, installerPath, 240*time.Second, logger); err != nil {
 			return err
 		}
 	}
-	actual, err := sha256File(msiPath)
+	actual, err := sha256File(installerPath)
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(actual, ultraVNCMSISHA256) {
-		_ = os.Remove(msiPath)
-		logger.Warnf("UltraVNC MSI checksum mismatch expected=%s actual=%s; redownloading.", ultraVNCMSISHA256, actual)
-		if err := downloadFileLogged(context.Background(), ultraVNCMSIURL, msiPath, 240*time.Second, logger); err != nil {
+	if !strings.EqualFold(actual, ultraVNCInstallerSHA256) {
+		_ = os.Remove(installerPath)
+		logger.Warnf("UltraVNC installer checksum mismatch expected=%s actual=%s; redownloading.", ultraVNCInstallerSHA256, actual)
+		if err := downloadFileLogged(context.Background(), ultraVNCInstallerURL, installerPath, 240*time.Second, logger); err != nil {
 			return err
 		}
-		actual, err = sha256File(msiPath)
+		actual, err = sha256File(installerPath)
 		if err != nil {
 			return err
 		}
-		if !strings.EqualFold(actual, ultraVNCMSISHA256) {
-			return fmt.Errorf("UltraVNC MSI checksum mismatch expected=%s actual=%s", ultraVNCMSISHA256, actual)
+		if !strings.EqualFold(actual, ultraVNCInstallerSHA256) {
+			return fmt.Errorf("UltraVNC installer checksum mismatch expected=%s actual=%s", ultraVNCInstallerSHA256, actual)
 		}
 	}
 	if _, err := ensureUltraVNCBootstrapConfig(cfg, logger); err != nil {
 		return err
 	}
-	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-msi-install.log")
+	prepareUltraVNCMSIInstall(logger)
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "UltraVNC", "ultravnc-setup.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return err
 	}
-	logger.Tracef("UltraVNC MSI install command starting: version=%s msi=%s", ultraVNCVersion, msiPath)
+	logger.Tracef("UltraVNC installer command starting: version=%s installer=%s", ultraVNCVersion, installerPath)
 	if _, err := runCommandTimeout(
 		logger,
 		4*time.Minute,
-		"msiexec.exe",
-		"/i",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"DO_NOT_LAUNCH=1",
-		"/l*v",
-		logPath,
+		installerPath,
+		ultraVNCInnoInstallArgs(logPath)...,
 	); err != nil {
-		return fmt.Errorf("UltraVNC MSI install failed: %w", err)
+		return fmt.Errorf("UltraVNC installer failed: %w", err)
 	}
 	exePath = resolveUltraVNCInstalledExe()
 	if exePath == "" {
-		return fmt.Errorf("UltraVNC winvnc.exe not found after MSI install")
+		return fmt.Errorf("UltraVNC winvnc.exe not found after setup install")
 	}
 	if err := writeConfigDependencyVersion(cfg, dependencyNameUltraVNC, ultraVNCVersion); err != nil {
 		logger.Warnf("UltraVNC dependency version write failed: %v", err)
 	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "installed", "healthy", ultraVNCVersion, ultraVNCVersion, exePath, "")
 	logger.Infof("UltraVNC %s installed at %s.", ultraVNCVersion, exePath)
 	return nil
 }
@@ -259,7 +285,46 @@ func ensureUltraVNCServer(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if err != nil {
 		return err
 	}
-	return ensureUltraVNCServiceRegistration(exePath, configPath, logger)
+	if err := ensureUltraVNCServiceRegistration(exePath, configPath, logger); err != nil {
+		return err
+	}
+	writeConfigDependencyState(cfg, dependencyNameUltraVNC, "service_registered", "healthy", ultraVNCVersion, readConfigDependencyVersion(cfg, dependencyNameUltraVNC), ultraVNCServiceName, "")
+	return nil
+}
+
+func prepareUltraVNCMSIInstall(logger *BootstrapLogger) {
+	for _, service := range []string{ultraVNCServiceName, "uvnc_service", "uvnc_service_64", "UltraVNC", "WinVNC"} {
+		stopServiceAndWait(service, 20*time.Second, logger)
+	}
+	removeLegacyUltraVNCServices(logger)
+	stopNamedDependencyProcesses(logger, []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe"}, []string{"borealis", "ultravnc", "uvnc"})
+}
+
+func readWindowsFileVersion(path string, logger *BootstrapLogger) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	script := fmt.Sprintf(`$item = Get-Item -LiteralPath %s -ErrorAction SilentlyContinue; if ($item -and $item.VersionInfo) { $value = $item.VersionInfo.ProductVersion; if (-not $value) { $value = $item.VersionInfo.FileVersion }; if ($value) { (($value -replace ',', '.') -replace '\s+', '') } }`, powershellSingleQuoted(path))
+	output, err := runCommandTimeout(logger, 15*time.Second, powershellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err != nil {
+		if logger != nil {
+			logger.Tracef("File version probe failed: path=%s err=%v", path, err)
+		}
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(output))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+func dependencyFallbackText(value string, fallback string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return fallback
+	}
+	return text
 }
 
 func resolveUltraVNCBootstrapExe(cfg BootstrapConfig) (string, error) {
@@ -401,6 +466,23 @@ func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string
 func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger *BootstrapLogger) error {
 	removeLegacyUltraVNCServices(logger)
 	desiredBinPath := fmt.Sprintf(`"%s" -service`, exePath)
+	err := createOrUpdateUltraVNCService(desiredBinPath, logger)
+	if isWindowsServiceMarkedForDeletionError(err) {
+		if logger != nil {
+			logger.Tracef("UltraVNC service marked for deletion; waiting before service recreation.")
+		}
+		waitForServiceDeletion(ultraVNCServiceName, 45*time.Second, logger)
+		err = createOrUpdateUltraVNCService(desiredBinPath, logger)
+	}
+	if err != nil {
+		return err
+	}
+	configureUltraVNCServiceRecovery(logger)
+	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
+	return nil
+}
+
+func createOrUpdateUltraVNCService(desiredBinPath string, logger *BootstrapLogger) error {
 	if _, err := runCommandTimeout(logger, 20*time.Second, "sc.exe", "query", ultraVNCServiceName); err != nil {
 		if _, createErr := runCommandTimeout(
 			logger,
@@ -434,12 +516,37 @@ func ensureUltraVNCServiceRegistration(exePath string, configPath string, logger
 		"DisplayName=",
 		ultraVNCServiceDisplayName,
 	)
-	if err != nil {
-		return err
+	return err
+}
+
+func waitForServiceDeletion(name string, timeout time.Duration, logger *BootstrapLogger) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		_, exists := queryServiceState(name)
+		if !exists {
+			if logger != nil {
+				logger.Tracef("Service deletion observed: name=%s", name)
+			}
+			return true
+		}
+		time.Sleep(1 * time.Second)
 	}
-	configureUltraVNCServiceRecovery(logger)
-	logger.Tracef("UltraVNC service registration verified: service=%s bin_path=%s", ultraVNCServiceName, desiredBinPath)
-	return nil
+	if logger != nil {
+		logger.Warnf("Service deletion wait timed out: name=%s", name)
+	}
+	return false
+}
+
+func isWindowsServiceMarkedForDeletionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1072 {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "1072") || strings.Contains(lower, "marked for deletion")
 }
 
 func reconcileUltraVNCServiceAfterRuntimeStage(cfg BootstrapConfig, logger *BootstrapLogger) {
@@ -542,6 +649,7 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	}
 	if !shouldInstallWireGuardManagerService() {
 		removeWireGuardManagerService(clientExe, logger)
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "healthy", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), "WireGuard client ready; tunnel service installs on demand.", "")
 		logger.Infof("WireGuard client ready at %s; manager service disabled to keep bootstrap headless. Tunnel service will install on demand.", clientExe)
 		return nil
 	}
@@ -551,10 +659,12 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 	}
 	state, exists := queryServiceState(wireGuardManagerServiceName)
 	if !exists {
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "healthy", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), "WireGuard client ready; manager service absent.", "")
 		logger.Infof("WireGuard client ready at %s; manager service not present, tunnel service will install on demand.", clientExe)
 		return nil
 	}
 	ensureWireGuardManagerServiceDisplayName(logger)
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "service_registered", "healthy", wireGuardMSIVersion, readConfigDependencyVersion(cfg, dependencyNameWireGuard), wireGuardManagerServiceName, "")
 	logger.Infof("WireGuard manager service installed.")
 	logger.Tracef("WireGuard manager service verified: name=%s state=%s client=%s", wireGuardManagerServiceName, state, clientExe)
 	return nil
@@ -562,11 +672,20 @@ func ensureWireGuardInstaller(cfg BootstrapConfig, logger *BootstrapLogger) erro
 
 func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) (string, error) {
 	clientExe := resolveWireGuardClientExe()
-	installedVersion := readConfigDependencyVersion(cfg, dependencyNameWireGuard)
-	if clientExe != "" && dependencyVersionAtLeast(installedVersion, wireGuardMSIVersion) {
-		logger.Tracef("WireGuard Windows client MSI %s already installed at %s; config version=%s", wireGuardMSIVersion, clientExe, installedVersion)
+	installedVersion := wireGuardInstalledVersion(cfg, clientExe, logger)
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "detected", "recovering", wireGuardMSIVersion, installedVersion, dependencyFallbackText(clientExe, "WireGuard client executable not found."), "")
+	if clientExe != "" {
+		if strings.TrimSpace(installedVersion) == "" {
+			installedVersion = wireGuardMSIVersion
+		}
+		if err := writeConfigDependencyVersion(cfg, dependencyNameWireGuard, installedVersion); err != nil {
+			logger.Tracef("WireGuard dependency version write skipped: %v", err)
+		}
+		writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, installedVersion, clientExe, "")
+		logger.Tracef("WireGuard Windows client already installed at %s; detected_version=%s desired_version=%s. Skipping MSI install.", clientExe, installedVersion, wireGuardMSIVersion)
 		return clientExe, nil
 	}
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installing", "recovering", wireGuardMSIVersion, installedVersion, "WireGuard MSI starting.", "")
 	if err := installWireGuardMSI(cfg, logger); err != nil {
 		return "", err
 	}
@@ -577,8 +696,43 @@ func ensureWireGuardSystemInstall(cfg BootstrapConfig, logger *BootstrapLogger) 
 	if err := writeConfigDependencyVersion(cfg, dependencyNameWireGuard, wireGuardMSIVersion); err != nil {
 		logger.Warnf("WireGuard dependency version write failed: %v", err)
 	}
+	writeConfigDependencyState(cfg, dependencyNameWireGuard, "installed", "healthy", wireGuardMSIVersion, wireGuardMSIVersion, clientExe, "")
 	logger.Infof("WireGuard Windows client MSI %s installed at %s.", wireGuardMSIVersion, clientExe)
 	return clientExe, nil
+}
+
+func wireGuardInstalledVersion(cfg BootstrapConfig, clientExe string, logger *BootstrapLogger) string {
+	if strings.TrimSpace(clientExe) != "" {
+		if fileVersion := readWindowsFileVersion(clientExe, logger); strings.TrimSpace(fileVersion) != "" {
+			return agentconfig.NormalizeDependencyVersion(fileVersion)
+		}
+		if registryVersion := readWireGuardRegistryVersion(logger); strings.TrimSpace(registryVersion) != "" {
+			return agentconfig.NormalizeDependencyVersion(registryVersion)
+		}
+	}
+	return readConfigDependencyVersion(cfg, dependencyNameWireGuard)
+}
+
+func readWireGuardRegistryVersion(logger *BootstrapLogger) string {
+	for _, key := range []string{
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+		`HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\` + wireGuardMSIProductCode,
+	} {
+		output, err := runCommandTimeout(logger, 15*time.Second, "reg.exe", "query", key, "/v", "DisplayVersion")
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(output, "\n") {
+			if !strings.Contains(strings.ToLower(line), "displayversion") {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				return fields[len(fields)-1]
+			}
+		}
+	}
+	return ""
 }
 
 func shouldInstallWireGuardManagerService() bool {
@@ -668,13 +822,7 @@ func runWireGuardMSIInstall(logger *BootstrapLogger, msiPath string, logPath str
 		logger,
 		300*time.Second,
 		"msiexec.exe",
-		"/i",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"DO_NOT_LAUNCH=1",
-		"/l*v",
-		logPath,
+		msiInstallArgs(msiPath, logPath, "DO_NOT_LAUNCH=1")...,
 	)
 	return err
 }
@@ -737,12 +885,7 @@ func uninstallWireGuardMSIProduct(cfg BootstrapConfig, msiPath string, logger *B
 		logger,
 		180*time.Second,
 		"msiexec.exe",
-		"/x",
-		msiPath,
-		"/qn",
-		"/norestart",
-		"/l*v",
-		logPath,
+		msiUninstallArgs(msiPath, logPath)...,
 	)
 	if isWindowsInstallerSoftSuccess(err) || isWindowsInstallerBenignUninstall(err) {
 		logger.Warnf("WireGuard MSI uninstall returned benign installer status; continuing: %v. MSI log: %s", err, logPath)
@@ -764,6 +907,7 @@ func prepareWireGuardMSIInstall(logger *BootstrapLogger) {
 		deleteServiceAndWait(service, 20*time.Second, logger)
 	}
 	stopServiceAndWait(wireGuardManagerServiceName, 20*time.Second, logger)
+	stopNamedDependencyProcesses(logger, []string{"wireguard.exe"}, []string{"wireguard"})
 }
 
 func removeWireGuardManagerService(clientExe string, logger *BootstrapLogger) {

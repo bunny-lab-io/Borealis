@@ -47,8 +47,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
 
 ### Agent
-- Generates device-wide Ed25519 key pairs on first launch, storing PKCS8/SPKI base64 material in protected `config.json` beside `Agent.exe`.
-- Stores refresh/access tokens in protected `config.json` and re-enrolls on authentication failures.
+- Generates device-wide Ed25519 key pairs on first launch, storing PKCS8/SPKI base64 material in protected `agent.json` beside `Agent.exe`.
+- Stores refresh/access tokens in protected `agent.json` and re-enrolls on authentication failures.
 - Uses the system trust store and hostname validation for the public Engine FQDN instead of rotating a pinned public Engine certificate.
 - Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing or invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
 - Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through the Go auth client, forcing token refresh logic before retrying.
@@ -92,9 +92,9 @@ If you deploy the agent via Group Policy or another automation platform, you can
 ```
 **Linux**:
 ```bash
-/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983" --install-service
+/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
 ```
-Passing an enrollment code writes it into protected `config.json` before the service starts so the supplied code wins over cached installer codes.
+Passing an enrollment code writes it into protected `agent.json` before the service starts so the supplied code wins over cached installer codes.
 
 ### Automatic Local-Network Enrollment
 - Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
@@ -120,7 +120,7 @@ sequenceDiagram
     Note over SYS,Server: Public CA validation plus hostname checks stop MITM
 
     SYS->>SYS: Generate Ed25519 identity key pair
-    Note right of SYS: Private key stored in protected config.json
+    Note right of SYS: Private key stored in protected agent.json
 
     SYS->>Server: Enrollment request (installer code, public key, fingerprint)
 
@@ -133,7 +133,7 @@ sequenceDiagram
     Note over Server,Operator: Server verifies signature and records GUID plus key fingerprint
 
     Server->>SYS: Issue GUID, short-lived token, refresh token, script-signing key
-    Note over SYS,Server: Agent stores GUID and tokens in protected config.json
+    Note over SYS,Server: Agent stores GUID and tokens in protected agent.json
     Note over Server,Operator: Database keeps refresh token hash, key fingerprint, audit trail
 
     loop Secure Sessions
@@ -191,7 +191,7 @@ sequenceDiagram
     end
 
     Server->>Server: Record results and logs alongside job metadata
-    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, protected config.json secrets, and helper-local IPC defend against tampering and replay
+    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, protected agent.json secrets, and helper-local IPC defend against tampering and replay
 ```
 
 ## API Endpoints
@@ -244,7 +244,7 @@ sequenceDiagram
 - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
 ### Key material locations (Agent)
-- Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `config.json` beside installed `Agent.exe`.
+- Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
 
 ### Enrollment sequence (step-by-step)
 1) Agent generates Ed25519 key pair and a fingerprint.
@@ -283,7 +283,7 @@ sequenceDiagram
 ### Agent Refresh Tokens (Full)
 #### What a refresh token is
 - A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
-- Stored locally in protected `config.json` alongside token metadata and the agent GUID.
+- Stored locally in protected `agent.json` alongside token metadata and the agent GUID.
 - Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
 
 #### How the agent obtains it

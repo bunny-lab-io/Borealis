@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 )
 
 const (
@@ -148,6 +149,25 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.ensureFromEngine(context.Background(), "agent_startup")
 }
 
+func (m *Manager) RequestEnsure(reason string) {
+	if m == nil {
+		return
+	}
+	cleanReason := cleanText(reason)
+	if cleanReason == "" {
+		cleanReason = "role_supervisor_recovery"
+	}
+	go func() {
+		if err := m.ensureFromEngine(context.Background(), cleanReason); err != nil {
+			m.mu.Lock()
+			m.lastError = err.Error()
+			m.lastEnsureAt = time.Now().Unix()
+			m.mu.Unlock()
+			m.logf("VNC recovery ensure failed reason=%s error=%v", cleanReason, err)
+		}
+	}()
+}
+
 func (m *Manager) Stop(ctx context.Context) {
 	if m == nil {
 		return
@@ -240,7 +260,9 @@ func (m *Manager) HandleCredentialRequest(ctx context.Context, payload any) (any
 	if shouldRotateCredential(reason) {
 		m.rotateCredential(reason)
 	} else {
-		m.ensureCredentialFresh(reason)
+		if !m.ensureCredentialFresh(reason) && m.credentialFastPathReady() {
+			return m.credentialPayload(cleanText(data["request_id"]), reason), nil
+		}
 	}
 	_ = m.ensureAlwaysOn(ctx, reason)
 	return m.credentialPayload(cleanText(data["request_id"]), reason), nil
@@ -586,15 +608,27 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string) error 
 
 func (m *Manager) startService(ctx context.Context, service string) error {
 	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "start", service)
-	if err != nil {
+	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
+	if err != nil && !isServiceAlreadyRunning(result, output, err) {
 		return err
 	}
-	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
-	if result.ExitCode != 0 && !strings.Contains(output, "1056") && !strings.Contains(strings.ToLower(output), "already running") {
+	if result.ExitCode != 0 && !isServiceAlreadyRunning(result, output, err) {
 		return fmt.Errorf("UltraVNC service start failed: %s", output)
 	}
 	m.logf("VNC service start requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
 	return nil
+}
+
+func isServiceAlreadyRunning(result commandResult, output string, err error) bool {
+	lowerOutput := strings.ToLower(output)
+	if result.ExitCode == 1056 || strings.Contains(output, "1056") || strings.Contains(lowerOutput, "already running") {
+		return true
+	}
+	if err != nil {
+		lowerError := strings.ToLower(err.Error())
+		return strings.Contains(lowerError, "exit status 1056") || strings.Contains(lowerError, "already running")
+	}
+	return false
 }
 
 func (m *Manager) restartService(ctx context.Context, service string, reason string) error {
@@ -746,6 +780,17 @@ func (m *Manager) ready() bool {
 	return m.lastReady
 }
 
+func (m *Manager) credentialFastPathReady() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return strings.TrimSpace(m.controllerPassword) != "" &&
+		strings.TrimSpace(m.allowedIPs) != "" &&
+		m.port > 0 &&
+		m.lastReady &&
+		isServiceRunning(m.lastServiceState) &&
+		strings.EqualFold(strings.TrimSpace(m.lastListenerState), "listening")
+}
+
 func (m *Manager) recentlyReady(lastReadyAt int64) bool {
 	return lastReadyAt > 0 && time.Now().Unix()-lastReadyAt <= recentReadyGraceSeconds
 }
@@ -772,16 +817,13 @@ func (m *Manager) logf(format string, args ...any) {
 	if m == nil {
 		return
 	}
-	line := fmt.Sprintf("[%s] [vnc] %s\n", time.Now().Format("2006-01-02T15:04:05"), fmt.Sprintf(format, args...))
-	if err := os.MkdirAll(filepath.Dir(m.logPath), 0755); err != nil {
-		return
-	}
-	file, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.WriteString(line)
+	logutil.Append(
+		m.logPath,
+		logutil.RetentionDaysFromConfig(m.configPath),
+		"[%s] [vnc] %s",
+		time.Now().Format("2006-01-02T15:04:05"),
+		fmt.Sprintf(format, args...),
+	)
 }
 
 func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {

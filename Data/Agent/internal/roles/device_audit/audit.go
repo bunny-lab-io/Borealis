@@ -37,6 +37,7 @@ type platformMetadata struct {
 	OperatingSystem string
 	LastReboot      string
 	LastUser        string
+	Domain          string
 	Manufacturer    string
 	SystemModelRaw  string
 	SystemModel     string
@@ -60,7 +61,7 @@ func collectPlatformMetadata(ctx context.Context) platformMetadata {
 }
 
 func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
-	const script = `$ErrorActionPreference='SilentlyContinue'; $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS; $baseboard=Get-CimInstance Win32_BaseBoard; $cv=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'; $lastBoot=''; if($os -and $os.LastBootUpTime){ $lastBoot=$os.LastBootUpTime.ToString('MM/dd/yyyy @ hh:mmtt') }; [pscustomobject]@{ Caption=$os.Caption; DisplayVersion=$cv.DisplayVersion; ReleaseId=$cv.ReleaseId; BuildNumber=$os.BuildNumber; UBR=$cv.UBR; Version=$os.Version; LastBootUpTime=$lastBoot; UserName=$cs.UserName; LastLoggedOnSAMUser=$logon.LastLoggedOnSAMUser; LastLoggedOnUser=$logon.LastLoggedOnUser; ComputerName=$env:COMPUTERNAME; Domain=$cs.Domain; PartOfDomain=[bool]$cs.PartOfDomain; Manufacturer=$cs.Manufacturer; Model=$cs.Model; SerialNumber=$bios.SerialNumber; BaseBoardSerialNumber=$baseboard.SerialNumber } | ConvertTo-Json -Compress -Depth 4`
+	const script = `$ErrorActionPreference='SilentlyContinue'; $os=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem; $bios=Get-CimInstance Win32_BIOS; $baseboard=Get-CimInstance Win32_BaseBoard; $cv=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'; $logon=Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI'; $lastBoot=''; if($os -and $os.LastBootUpTime){ $lastBoot=$os.LastBootUpTime.ToString('MM/dd/yyyy @ hh:mmtt') }; [pscustomobject]@{ Caption=$os.Caption; DisplayVersion=$cv.DisplayVersion; ReleaseId=$cv.ReleaseId; BuildNumber=$os.BuildNumber; UBR=$cv.UBR; Version=$os.Version; LastBootUpTime=$lastBoot; UserName=$cs.UserName; LastLoggedOnSAMUser=$logon.LastLoggedOnSAMUser; LastLoggedOnUser=$logon.LastLoggedOnUser; ComputerName=$env:COMPUTERNAME; Domain=$cs.Domain; Workgroup=$cs.Workgroup; PartOfDomain=[bool]$cs.PartOfDomain; Manufacturer=$cs.Manufacturer; Model=$cs.Model; SerialNumber=$bios.SerialNumber; BaseBoardSerialNumber=$baseboard.SerialNumber } | ConvertTo-Json -Compress -Depth 4`
 	out, err := commandOutput(ctx, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script)
 	if err != nil {
 		return platformMetadata{}
@@ -85,6 +86,7 @@ func collectWindowsPlatformMetadata(ctx context.Context) platformMetadata {
 		),
 		LastReboot:     strings.TrimSpace(asString(item["LastBootUpTime"])),
 		LastUser:       normalizeWindowsLastUser(item),
+		Domain:         normalizeWindowsDomainValue(item),
 		Manufacturer:   manufacturer,
 		SystemModelRaw: modelRaw,
 		SystemModel:    combineManufacturerModel(manufacturer, modelRaw),
@@ -138,6 +140,9 @@ func (a *Auditor) Collect(ctx context.Context) Snapshot {
 		metrics["last_user"] = platform.LastUser
 	} else if userName := currentUserName(); userName != "" {
 		metrics["last_user"] = userName
+	}
+	if platform.Domain != "" {
+		metrics["domain"] = platform.Domain
 	}
 	if platform.OperatingSystem != "" {
 		metrics["operating_system"] = platform.OperatingSystem
@@ -533,6 +538,55 @@ func normalizeWindowsLastUser(item map[string]any) string {
 	}
 	if last := normalizeWindowsUserValue(asString(item["LastLoggedOnUser"]), computerName, domainName, partOfDomain); last != "" {
 		return last
+	}
+	return ""
+}
+
+func normalizeWindowsDomainValue(item map[string]any) string {
+	computerName := strings.TrimSpace(asString(item["ComputerName"]))
+	domainName := strings.TrimSpace(asString(item["Domain"]))
+	workgroupName := strings.TrimSpace(asString(item["Workgroup"]))
+	partOfDomain := asBool(item["PartOfDomain"])
+	if partOfDomain {
+		if domainName != "" && !strings.EqualFold(domainName, computerName) {
+			return domainName
+		}
+		for _, key := range []string{"LastLoggedOnSAMUser", "LastLoggedOnUser", "UserName"} {
+			if prefix := windowsUserDomainPrefix(asString(item[key]), computerName); prefix != "" {
+				return prefix
+			}
+		}
+		return ""
+	}
+	if workgroupName != "" && !strings.EqualFold(workgroupName, computerName) {
+		return workgroupName
+	}
+	if domainName != "" && !strings.EqualFold(domainName, computerName) {
+		return domainName
+	}
+	return ""
+}
+
+func windowsUserDomainPrefix(value string, computerName string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if strings.Contains(value, `\`) {
+		parts := strings.SplitN(value, `\`, 2)
+		prefix := strings.TrimSpace(parts[0])
+		name := strings.TrimSpace(parts[1])
+		if prefix == "" || prefix == "." || strings.EqualFold(prefix, computerName) || isIgnoredWindowsUser(name) {
+			return ""
+		}
+		return prefix
+	}
+	if strings.Contains(value, "@") {
+		parts := strings.SplitN(value, "@", 2)
+		if isIgnoredWindowsUser(parts[0]) {
+			return ""
+		}
+		return strings.TrimSpace(parts[1])
 	}
 	return ""
 }

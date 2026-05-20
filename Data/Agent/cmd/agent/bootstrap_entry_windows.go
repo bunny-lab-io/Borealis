@@ -28,7 +28,7 @@ func maybeRunBootstrap(args []string) (int, bool) {
 func hasRuntimeFlag(args []string) bool {
 	for _, arg := range args {
 		switch arg {
-		case "--system-service", "--helper", "--config-path", "--install-service", "--uninstall-service", "--update-check", "--finalize-update", "--once", "--version":
+		case "--service", "--helper", "--config-path", "--install-service", "--uninstall-service", "--update-check", "--watchdog-check", "--finalize-update", "--validate-config", "--once", "--version":
 			return true
 		}
 	}

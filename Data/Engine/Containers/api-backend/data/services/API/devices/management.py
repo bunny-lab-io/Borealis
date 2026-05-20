@@ -55,6 +55,7 @@ from ....public_endpoints import public_base_url as resolve_public_base_url
 from ....public_endpoints import public_hostname as resolve_public_hostname
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
+from ...activity_history import update_activity_history_row
 from ..scheduled_jobs.targets import prune_device_targets
 from .agent_role_health import (
     merge_agent_role_health,
@@ -718,6 +719,97 @@ class DeviceManagementService:
         except Exception:
             self.logger.debug("Failed to emit agent_release_channel_changed for hostname=%s", normalized_hostname, exc_info=True)
 
+    def _reconcile_agent_maintenance_operation(
+        self,
+        *,
+        hostname: str,
+        update_status: Dict[str, Any],
+        release_channel: str,
+        branch: str,
+        installed_build_id: str,
+    ) -> None:
+        operation_id = _clean_device_str(update_status.get("operation_id"))
+        if not operation_id:
+            return
+        raw_state = _clean_device_str(update_status.get("state") or update_status.get("status")).lower()
+        if not raw_state:
+            return
+        terminal_success = raw_state in {"success", "completed", "complete", "up_to_date", "applied"}
+        terminal_failed = raw_state in {"failed", "error"}
+        run_status = "Running"
+        activity_status = "Running"
+        finished_at = None
+        now = int(time.time())
+        stdout = (
+            f"Agent reported operation_id={operation_id} state={raw_state} "
+            f"release_channel={release_channel or '-'} branch={branch or '-'} "
+            f"installed_build_id={installed_build_id or '-'}\n"
+        )
+        stderr = ""
+        if terminal_success:
+            run_status = "Success"
+            activity_status = "Success"
+            finished_at = now
+        elif terminal_failed:
+            run_status = "Failed"
+            activity_status = "Failed"
+            finished_at = now
+            stderr = _clean_device_str(update_status.get("last_error")) or "Agent update operation failed."
+
+        conn = self._db_conn()
+        try:
+            cur = conn.cursor()
+            like_token = f"%{operation_id}%"
+            cur.execute(
+                """
+                SELECT r.id, h.id
+                  FROM scheduled_job_runs r
+                  JOIN scheduled_job_run_activity s ON s.run_id = r.id
+                  JOIN activity_history h ON h.id = s.activity_id
+                  JOIN scheduled_jobs j ON j.id = r.job_id
+                 WHERE LOWER(COALESCE(h.hostname, '')) = LOWER(?)
+                   AND (COALESCE(h.metadata_json, '') LIKE ? OR COALESCE(h.stdout, '') LIKE ?)
+                   AND COALESCE(j.job_kind, '') = 'agent_maintenance'
+                   AND LOWER(COALESCE(r.status, '')) NOT IN ('success', 'failed', 'skipped')
+                """,
+                (hostname, like_token, like_token),
+            )
+            rows = cur.fetchall() or []
+            for run_id, activity_id in rows:
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           updated_at=?,
+                           finished_ts=COALESCE(?, finished_ts),
+                           error=?
+                     WHERE id=?
+                    """,
+                    (run_status, now, finished_at, stderr[:512], run_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?
+                     WHERE run_id=?
+                    """,
+                    ("eligible" if not terminal_failed else "unresolved", stderr[:512], run_id),
+                )
+                update_activity_history_row(
+                    conn,
+                    activity_id,
+                    status=activity_status,
+                    stdout=stdout,
+                    stderr=(stderr + "\n") if stderr else "",
+                    append_output=True,
+                    updated_at=now,
+                    finished_at=finished_at,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _target_repo_config(self) -> Tuple[str, str]:
         repo_name = (os.environ.get("BOREALIS_UPDATE_REPO") or "bunny-lab-io/Borealis").strip()
         branch_name = (os.environ.get("BOREALIS_UPDATE_BRANCH") or "main").strip()
@@ -914,7 +1006,11 @@ class DeviceManagementService:
         created_at = mapping.get("created_at") or 0
         last_enrollment_at = mapping.get("last_enrollment_at") or created_at or 0
         last_seen = mapping.get("last_seen") or 0
-        role_health = normalize_agent_role_health(mapping.get("agent_role_health"))
+        role_health = normalize_agent_role_health(
+            mapping.get("agent_role_health"),
+            mark_stale=True,
+            now_ts=int(time.time()),
+        )
         services_payload = normalize_device_services(mapping.get("services"))
         sessions_payload = normalize_device_sessions(mapping.get("sessions"))
         processes_payload = normalize_device_processes(mapping.get("processes"))
@@ -1607,6 +1703,30 @@ class DeviceManagementService:
                 )
 
             conn.commit()
+            if incoming_update_status:
+                try:
+                    self._reconcile_agent_maintenance_operation(
+                        hostname=hostname,
+                        update_status=incoming_update_status,
+                        release_channel=(
+                            incoming_agent_release_channel
+                            or _clean_device_str(merged_summary.get("agent_release_channel"))
+                            or ""
+                        ),
+                        branch=(
+                            incoming_agent_branch
+                            or _clean_device_str(merged_summary.get("agent_branch"))
+                            or ""
+                        ),
+                        installed_build_id=(
+                            agent_hash
+                            or _clean_device_str(merged_summary.get("agent_build_id"))
+                            or _clean_device_str(merged_summary.get("agent_hash"))
+                            or ""
+                        ),
+                    )
+                except Exception:
+                    self.logger.debug("Failed to reconcile agent maintenance operation", exc_info=True)
             if services_changed:
                 self._emit_device_services_changed(hostname, change="updated")
             if software_changed:
@@ -1693,7 +1813,7 @@ class DeviceManagementService:
         if supplied_branch:
             cleaned_override = "unstable"
             effective_channel = "unstable"
-            release_channel = "source"
+            release_channel = "unstable"
             target_branch = supplied_branch
         else:
             effective_channel, target_build_id, target_published_at = self._resolve_agent_target(cleaned_override)
@@ -1704,7 +1824,7 @@ class DeviceManagementService:
                         target_branch = _normalize_agent_branch(target.get("branch")) or ""
                 except Exception:
                     target_branch = ""
-            release_channel = "source" if (_clean_device_str(effective_channel) or "").lower() == "unstable" else "stable"
+            release_channel = "unstable" if (_clean_device_str(effective_channel) or "").lower() == "unstable" else "stable"
 
         stored_override = cleaned_override or None
 

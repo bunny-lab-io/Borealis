@@ -14,7 +14,7 @@ import (
 
 func TestNewUsesAgentRemoteShellLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
-	manager := New("LAB-01", "system", filepath.Join(dir, "config.json"))
+	manager := New("LAB-01", "system", filepath.Join(dir, "agent.json"))
 
 	if got := manager.logPath; got != filepath.Join(dir, "Logs", "Agent", "remote_shell.log") {
 		t.Fatalf("unexpected log path: %s", got)

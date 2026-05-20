@@ -36,6 +36,7 @@ LANE_SERVICE_ACTION = "service_action"
 WORK_KIND_ONBOARDING_RUN = "onboarding_run"
 WORK_KIND_SCHEDULED_RUN = "scheduled_run"
 WORK_KIND_SCHEDULED_WORKFLOW_RUN = "scheduled_workflow_run"
+WORK_KIND_AGENT_MAINTENANCE_RUN = "agent_maintenance_run"
 
 
 def _now_ts() -> int:
@@ -83,6 +84,8 @@ def _payload_task_type(kind: str, payload: Mapping[str, Any]) -> str:
         return "Onboarding"
     if normalized_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
         return "Workflow"
+    if normalized_kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
+        return "Agent Maintenance"
     if normalized_kind == WORK_KIND_SCHEDULED_RUN:
         script_components = payload.get("script_components")
         ansible_components = payload.get("ansible_components")
@@ -353,6 +356,50 @@ def enqueue_scheduled_workflow_run(
         target_id=None,
         payload=payload,
         priority=40,
+    )
+
+
+def enqueue_agent_maintenance_run(
+    conn: sqlite3.Connection,
+    *,
+    job_id: int,
+    run_id: int,
+    scheduled_ts: int,
+    site_id: Optional[int],
+    hostname: str,
+    operation_id: str,
+    action: str,
+    release_channel: str,
+    branch: str,
+    event_payload: Mapping[str, Any],
+    task_link: Optional[Mapping[str, Any]] = None,
+) -> int:
+    payload = {
+        "job_id": int(job_id),
+        "run_id": int(run_id),
+        "scheduled_ts": int(scheduled_ts),
+        "hostname": str(hostname or "").strip(),
+        "operation_id": str(operation_id or "").strip(),
+        "action": str(action or "").strip(),
+        "release_channel": str(release_channel or "").strip(),
+        "branch": str(branch or "").strip(),
+        "service_mode": "system",
+        "event_name": "agent_maintenance_request",
+        "event_payload": dict(event_payload or {}),
+        "task_link": dict(task_link or {}),
+    }
+    site_scope = int(site_id or 0)
+    return _insert_work_item(
+        conn,
+        dedupe_key=f"agent-maintenance:{int(run_id)}:{payload['operation_id'] or payload['hostname']}",
+        kind=WORK_KIND_AGENT_MAINTENANCE_RUN,
+        site_id=site_scope,
+        lane=LANE_SCHEDULED_JOB,
+        job_id=int(job_id),
+        run_id=int(run_id),
+        target_id=None,
+        payload=payload,
+        priority=45,
     )
 
 

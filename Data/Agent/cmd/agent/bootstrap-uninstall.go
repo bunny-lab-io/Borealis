@@ -96,6 +96,7 @@ func removableServiceNames(logger *BootstrapLogger) []string {
 		"Borealis Agent - UltraVNC":     true,
 		"Borealis Agent - WireGuard":    true,
 		"BorealisOnboarding":            true,
+		"BorealisAgent":                 true,
 		"BorealisAgentBootstrap":        true,
 		"BorealisAgentBootstrapper":     true,
 		"BorealisAgentUltraVNC":         true,
@@ -297,8 +298,9 @@ func queryServiceState(name string) (string, bool) {
 func removeBorealisScheduledTasks(logger *BootstrapLogger) {
 	logger.Tracef("Removing Borealis scheduled tasks.")
 	taskNames := map[string]bool{
-		agentTaskName:        true,
-		agentUpdaterTaskName: true,
+		legacyAgentTaskName:   true,
+		agentUpdaterTaskName:  true,
+		agentWatchdogTaskName: true,
 	}
 	for _, taskName := range queryBorealisScheduledTasks(logger) {
 		if strings.TrimSpace(taskName) != "" {
@@ -339,25 +341,35 @@ func queryBorealisScheduledTasks(logger *BootstrapLogger) []string {
 
 func stopBorealisDependencyProcesses(cfg BootstrapConfig, logger *BootstrapLogger) {
 	logger.Tracef("Stopping Borealis dependency processes.")
-	for _, name := range []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe", "wireguard.exe"} {
+	stopNamedDependencyProcesses(logger, []string{"winvnc.exe", "winvnc64.exe", "uvnc_service.exe", "wireguard.exe"}, []string{"borealis", "ultravnc", "uvnc", "wireguard"})
+}
+
+func stopNamedDependencyProcesses(logger *BootstrapLogger, names []string, markers []string) {
+	for _, name := range names {
 		err := eachProcess(func(pid uint32, exe string, commandLine string) {
 			lower := strings.ToLower(commandLine + " " + exe)
-			if !strings.Contains(lower, "borealis") &&
-				!strings.Contains(lower, "ultravnc") &&
-				!strings.Contains(lower, "uvnc") &&
-				!strings.Contains(lower, "wireguard") {
+			if !containsAny(lower, markers) {
 				return
 			}
 			if int(pid) == os.Getpid() {
 				return
 			}
-			logger.Tracef("Dependency process matched for uninstall: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
+			logger.Tracef("Dependency process matched: pid=%d exe=%s command_line=%s", pid, exe, commandLine)
 			killProcessTree(int(pid))
 		}, name)
 		if err != nil {
 			logger.Tracef("Dependency process scan failed: image=%s error=%v", name, err)
 		}
 	}
+}
+
+func containsAny(text string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.TrimSpace(marker) != "" && strings.Contains(text, strings.ToLower(strings.TrimSpace(marker))) {
+			return true
+		}
+	}
+	return false
 }
 
 func removeDependencyInstallRoots(logger *BootstrapLogger) {
@@ -413,17 +425,23 @@ func removeInstallDirWithRetries(path string, finalLog string, logger *Bootstrap
 	var lastErr error
 	for attempt := 1; attempt <= 15; attempt++ {
 		if !dirExists(path) {
-			logger.Tracef("Install directory already removed: %s", path)
+			if logger != nil {
+				logger.Tracef("Install directory already removed: %s", path)
+			}
 			return nil
 		}
-		if attempt == 1 || attempt%3 == 0 {
+		if logger != nil && (attempt == 1 || attempt%3 == 0) {
 			clearInstallDirAttributes(path, logger)
 		}
-		logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
+		if logger != nil {
+			logger.Tracef("Install directory removal attempt %d: %s", attempt, path)
+		}
 		if err := os.RemoveAll(path); err != nil {
 			lastErr = err
 			appendUninstallLog(finalLog, fmt.Sprintf("Remove attempt %d failed: %v", attempt, err))
-			logger.Warnf("Install directory removal attempt %d failed: %v", attempt, err)
+			if logger != nil {
+				logger.Warnf("Install directory removal attempt %d failed: %v", attempt, err)
+			}
 			time.Sleep(2 * time.Second)
 			continue
 		}

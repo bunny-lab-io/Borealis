@@ -84,6 +84,43 @@ func TestNormalizeWindowsLastUserPrefersDomainUserAndSkipsMachineAccount(t *test
 	}
 }
 
+func TestNormalizeWindowsDomainValueAvoidsHostnameFallback(t *testing.T) {
+	domainJoined := normalizeWindowsDomainValue(map[string]any{
+		"ComputerName": "LAB-DC-03",
+		"Domain":       "BUNNY-LAB",
+		"PartOfDomain": true,
+	})
+	if domainJoined != "BUNNY-LAB" {
+		t.Fatalf("domain joined value = %q", domainJoined)
+	}
+	derived := normalizeWindowsDomainValue(map[string]any{
+		"ComputerName":        "LAB-DC-03",
+		"Domain":              "LAB-DC-03",
+		"PartOfDomain":        true,
+		"LastLoggedOnSAMUser": "BUNNY-LAB\\nicole.rappe",
+	})
+	if derived != "BUNNY-LAB" {
+		t.Fatalf("derived domain = %q", derived)
+	}
+	workgroup := normalizeWindowsDomainValue(map[string]any{
+		"ComputerName": "VEEAM-DRAAS-01",
+		"Domain":       "VEEAM-DRAAS-01",
+		"Workgroup":    "WORKGROUP",
+		"PartOfDomain": false,
+	})
+	if workgroup != "WORKGROUP" {
+		t.Fatalf("workgroup domain = %q", workgroup)
+	}
+	hostnameOnly := normalizeWindowsDomainValue(map[string]any{
+		"ComputerName": "LAB-CA-01",
+		"Domain":       "LAB-CA-01",
+		"PartOfDomain": false,
+	})
+	if hostnameOnly != "" {
+		t.Fatalf("hostname-only domain = %q", hostnameOnly)
+	}
+}
+
 func TestHardwareIdentityHelpers(t *testing.T) {
 	platform := platformMetadata{
 		Manufacturer:   "Dell Inc.",

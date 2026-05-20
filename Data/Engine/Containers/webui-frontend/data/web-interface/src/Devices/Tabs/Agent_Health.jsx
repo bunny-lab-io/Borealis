@@ -147,6 +147,7 @@ export default function AgentHealthTab({
   onRequestRefresh = null,
 }) {
   const refreshTimerRef = useRef(null);
+  const refreshIntervalRef = useRef(null);
   const payload = agentRoleHealth && typeof agentRoleHealth === "object" ? agentRoleHealth : {};
   const items = Array.isArray(payload?.roles) ? payload.roles : [];
 
@@ -155,7 +156,13 @@ export default function AgentHealthTab({
       const rawRoleName = String(item?.role_name || item?.role || "").trim();
       const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
       const presentation = resolveAgentHealthPresentation(item, index);
-      const detailsMap = normalizeAgentHealthServiceDetails(item?.details);
+      const detailsMap = normalizeAgentHealthServiceDetails({
+        ...(item?.details && typeof item.details === "object" ? item.details : {}),
+        desired_state: item?.desired_state,
+        observed_state: item?.observed_state,
+        last_error: item?.last_error,
+        recovery_attempts: item?.recovery_attempts,
+      });
       return {
         id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
         baseLabel: presentation.label,
@@ -168,6 +175,12 @@ export default function AgentHealthTab({
         statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
         lastCheckedAt: item?.last_checked_at ?? null,
         lastCheckedText: formatTimestamp(item?.last_checked_at),
+        lastSuccessAt: item?.last_success_at ?? null,
+        lastSuccessText: formatTimestamp(item?.last_success_at),
+        desiredState: String(item?.desired_state || detailsMap?.desired_state || "").trim(),
+        observedState: String(item?.observed_state || detailsMap?.observed_state || "").trim(),
+        lastError: String(item?.last_error || "").trim(),
+        recoveryAttempts: Number(item?.recovery_attempts || 0),
         detail: normalizeAgentHealthDetailText(item?.detail),
         detailsMap,
       };
@@ -258,7 +271,9 @@ export default function AgentHealthTab({
       const payloadHost = String(eventPayload?.hostname || "").trim().toLowerCase();
       if (payloadHost && payloadHost !== expectedHost) return;
       if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = window.setTimeout(() => onRequestRefresh({ silent: true, includeAgents: false }), 250);
+      refreshTimerRef.current = window.setTimeout(() => {
+        void onRequestRefresh({ silent: true, includeAgents: false });
+      }, 250);
     };
     socket.on("agent_status_changed", handler);
     return () => {
@@ -266,6 +281,17 @@ export default function AgentHealthTab({
       socket.off("agent_status_changed", handler);
     };
   }, [hostname, onRequestRefresh]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof onRequestRefresh !== "function") return undefined;
+    refreshIntervalRef.current = window.setInterval(() => {
+      void onRequestRefresh({ silent: true, includeAgents: false });
+    }, 20000);
+    return () => {
+      if (refreshIntervalRef.current) window.clearInterval(refreshIntervalRef.current);
+      refreshIntervalRef.current = null;
+    };
+  }, [onRequestRefresh]);
 
   return (
     <Box

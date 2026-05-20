@@ -74,7 +74,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		installed = agentconfig.NormalizeBuildID(options.BuildID)
 	}
 	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
-	if agentconfig.UsesSourceReleaseChannel(cfg.Agent.ReleaseChannel) {
+	if agentconfig.UsesUnstableReleaseChannel(cfg.Agent.ReleaseChannel) {
 		return runLinuxRepoRefUpdateCheck(ctx, configPath, &cfg, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
@@ -131,7 +131,7 @@ func releaseChannelForLinuxUpdateManifest(effective string, target string) strin
 	}
 	switch channel {
 	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelSource
+		return agentconfig.ReleaseChannelUnstable
 	default:
 		return agentconfig.ReleaseChannelStable
 	}
@@ -336,7 +336,26 @@ func stageLinuxAgentBinary(configPath string, binary []byte) error {
 		_ = os.Remove(pending)
 		return err
 	}
+	if err := validateLinuxAgentUpdateCandidate(configPath, pending); err != nil {
+		_ = os.Remove(pending)
+		return err
+	}
 	return os.Rename(pending, destination)
+}
+
+func validateLinuxAgentUpdateCandidate(configPath string, candidate string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, candidate, "--validate-config", "--config-path", configPath)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("linux Agent candidate config validation timed out")
+	}
+	if err != nil {
+		return fmt.Errorf("linux Agent candidate rejected current agent.json: %w output=%s", err, text)
+	}
+	return nil
 }
 
 func linuxAgentBinaryFromArchive(archivePath string) ([]byte, error) {

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, List, Optional
 
+ROLE_HEALTH_STALE_SECONDS = 90
 
 STATUS_LABELS = {
     "healthy": "Healthy",
@@ -12,6 +14,8 @@ STATUS_LABELS = {
     "pending": "Pending",
     "loaded": "Loaded",
     "unsupported": "Unsupported",
+    "not_applicable": "Not Applicable",
+    "stale": "Stale",
     "unknown": "Unknown",
 }
 
@@ -85,6 +89,7 @@ def _normalize_status_code(value: Any) -> str:
         "failed": "unhealthy",
         "error": "unhealthy",
         "broken": "unhealthy",
+        "stale": "stale",
     }
     normalized = aliases.get(text, text)
     if normalized in STATUS_LABELS:
@@ -131,15 +136,24 @@ def _normalize_payload_shape(raw: Any) -> Dict[str, Any]:
             return {
                 "roles": roles,
                 "reported_at": _coerce_int(candidate.get("reported_at"), 0),
+                "supervisor_revision": _coerce_int(candidate.get("supervisor_revision"), 0),
             }
         return {
             "roles": [],
             "reported_at": _coerce_int(candidate.get("reported_at"), 0),
+            "supervisor_revision": _coerce_int(candidate.get("supervisor_revision"), 0),
         }
     return {"roles": [], "reported_at": 0}
 
 
-def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = None) -> Dict[str, Any]:
+def normalize_agent_role_health(
+    raw: Any,
+    *,
+    default_context: Optional[str] = None,
+    mark_stale: bool = False,
+    now_ts: Optional[int] = None,
+    stale_after_seconds: int = ROLE_HEALTH_STALE_SECONDS,
+) -> Dict[str, Any]:
     payload = _normalize_payload_shape(raw)
     normalized_context = _normalize_context(default_context)
     reported_at = _coerce_int(payload.get("reported_at"), 0)
@@ -163,6 +177,12 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
             item.get("last_checked_at") or item.get("checked_at") or reported_at,
             reported_at,
         )
+        details = _clean_details_map(item.get("details") or item.get("metadata") or item.get("info"))
+        desired_state = _clean_text(item.get("desired_state") or details.get("desired_state"))
+        observed_state = _clean_text(item.get("observed_state") or details.get("observed_state"))
+        last_success_at = _coerce_int(item.get("last_success_at"), 0)
+        recovery_attempts = _coerce_int(item.get("recovery_attempts"), 0)
+        last_error = _clean_text(item.get("last_error") or details.get("last_error"))
         role = {
             "role_id": role_id,
             "role_name": role_name,
@@ -171,9 +191,21 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
             "status_code": status_code,
             "status": STATUS_LABELS.get(status_code, "Unknown"),
             "detail": _clean_text(item.get("detail") or item.get("message")),
-            "details": _clean_details_map(item.get("details") or item.get("metadata") or item.get("info")),
+            "details": details,
             "last_checked_at": last_checked_at,
         }
+        if desired_state:
+            role["desired_state"] = desired_state
+        if observed_state:
+            role["observed_state"] = observed_state
+        if last_success_at:
+            role["last_success_at"] = last_success_at
+        if recovery_attempts:
+            role["recovery_attempts"] = recovery_attempts
+        if last_error:
+            role["last_error"] = last_error
+        if mark_stale:
+            role = _mark_role_stale_if_needed(role, now_ts=now_ts, stale_after_seconds=stale_after_seconds)
         roles.append(role)
     deduped: Dict[str, Dict[str, Any]] = {}
     for role in roles:
@@ -190,7 +222,35 @@ def normalize_agent_role_health(raw: Any, *, default_context: Optional[str] = No
     return {
         "roles": normalized_roles,
         "reported_at": reported_at,
+        "supervisor_revision": _coerce_int(payload.get("supervisor_revision"), 0),
     }
+
+
+def _mark_role_stale_if_needed(role: Dict[str, Any], *, now_ts: Optional[int], stale_after_seconds: int) -> Dict[str, Any]:
+    if not isinstance(role, dict):
+        return role
+    status_code = str(role.get("status_code") or "").strip().lower()
+    if status_code in {"unsupported", "not_applicable", "stale"}:
+        return role
+    checked_at = _coerce_int(role.get("last_checked_at"), 0)
+    if checked_at <= 0:
+        return role
+    now_value = _coerce_int(now_ts, 0) or int(time.time())
+    age = max(0, now_value - checked_at)
+    if age <= max(1, stale_after_seconds):
+        return role
+    stale = dict(role)
+    details = dict(stale.get("details") or {})
+    details["stale_age_seconds"] = str(age)
+    details["previous_status_code"] = status_code or "unknown"
+    stale["details"] = details
+    stale["status_code"] = "stale"
+    stale["status"] = STATUS_LABELS["stale"]
+    stale["observed_state"] = "stale"
+    stale["last_error"] = f"Role health stale for {age} seconds."
+    if not str(stale.get("detail") or "").strip():
+        stale["detail"] = stale["last_error"]
+    return stale
 
 
 def merge_agent_role_health(
@@ -231,9 +291,14 @@ def merge_agent_role_health(
         _coerce_int(incoming.get("reported_at"), 0),
         max((_coerce_int(item.get("last_checked_at"), 0) for item in merged_roles), default=0),
     )
+    supervisor_revision = max(
+        _coerce_int(existing.get("supervisor_revision"), 0),
+        _coerce_int(incoming.get("supervisor_revision"), 0),
+    )
     return {
         "roles": merged_roles,
         "reported_at": reported_at,
+        "supervisor_revision": supervisor_revision,
     }
 
 

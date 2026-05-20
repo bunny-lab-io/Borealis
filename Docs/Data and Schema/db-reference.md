@@ -562,7 +562,7 @@ finally:
 - Scheduler background loop.
 - Notes:
 - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
-- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment.
+- `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment. `job_kind = agent_maintenance` records on-demand Agent update and branch/channel switch requests.
 - Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in these saved JSON entries and are stripped only when runtime parsing expands the target list. New onboarding target rows preserve the raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to the summary row. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
 #### `scheduled_job_runs`
@@ -657,8 +657,8 @@ finally:
 - `job-scheduler` scheduled ticking and service-action dispatch.
 - Site-worker onboarding execution.
 - Notes:
-- Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, and `service_action`.
-- `scheduled_run` and `scheduled_workflow_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
+- Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `service_action`.
+- `scheduled_run`, `scheduled_workflow_run`, and `agent_maintenance_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
 - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
 - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
 

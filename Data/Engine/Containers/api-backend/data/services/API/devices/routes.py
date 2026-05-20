@@ -27,6 +27,7 @@ from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
+from ...activity_history import update_activity_history_row
 from .software_icons import load_software_icon_overrides
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
@@ -120,6 +121,15 @@ def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
 def _text_bool(value: Any) -> bool:
     normalized = str(value or "").strip().lower()
     return normalized in {"1", "true", "yes", "y", "on", "healthy", "ready", "listening"}
+
+
+def _clean_agent_text(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        return str(value).strip()
+    except Exception:
+        return ""
 
 
 def register_agents(app, adapters: "EngineServiceAdapters") -> None:
@@ -216,6 +226,103 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         script_signing_key_cache["expires_at"] = now_mono + 300.0
         return signing_key
 
+    def _reconcile_agent_maintenance_operation(
+        *,
+        hostname: str,
+        update_status: Dict[str, Any],
+        release_channel: str,
+        branch: str,
+        installed_build_id: str,
+    ) -> None:
+        operation_id = _clean_agent_text(update_status.get("operation_id"))
+        if not operation_id:
+            return
+        raw_state = _clean_agent_text(update_status.get("state") or update_status.get("status")).lower()
+        if not raw_state:
+            return
+
+        terminal_success = raw_state in {"success", "completed", "complete", "up_to_date", "applied"}
+        terminal_failed = raw_state in {"failed", "error"}
+        run_status = "Running"
+        activity_status = "Running"
+        finished_at = None
+        now = int(time.time())
+        stdout = (
+            f"Agent reported operation_id={operation_id} state={raw_state} "
+            f"release_channel={release_channel or '-'} branch={branch or '-'} "
+            f"installed_build_id={installed_build_id or '-'}\n"
+        )
+        stderr = ""
+        if terminal_success:
+            run_status = "Success"
+            activity_status = "Success"
+            finished_at = now
+        elif terminal_failed:
+            run_status = "Failed"
+            activity_status = "Failed"
+            finished_at = now
+            stderr = _clean_agent_text(update_status.get("last_error")) or "Agent update operation failed."
+
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            like_token = f"%{operation_id}%"
+            cur.execute(
+                """
+                SELECT r.id, h.id
+                  FROM scheduled_job_runs r
+                  JOIN scheduled_job_run_activity s ON s.run_id = r.id
+                  JOIN activity_history h ON h.id = s.activity_id
+                  JOIN scheduled_jobs j ON j.id = r.job_id
+                 WHERE LOWER(COALESCE(h.hostname, '')) = LOWER(?)
+                   AND (COALESCE(h.metadata_json, '') LIKE ? OR COALESCE(h.stdout, '') LIKE ?)
+                   AND COALESCE(j.job_kind, '') = 'agent_maintenance'
+                   AND LOWER(COALESCE(r.status, '')) NOT IN ('success', 'failed', 'skipped')
+                """,
+                (hostname, like_token, like_token),
+            )
+            rows = cur.fetchall() or []
+            for run_id, activity_id in rows:
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           updated_at=?,
+                           finished_ts=COALESCE(?, finished_ts),
+                           error=?
+                     WHERE id=?
+                    """,
+                    (run_status, now, finished_at, stderr[:512], run_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE scheduled_job_run_targets
+                       SET resolution_status=?,
+                           resolution_reason=?
+                     WHERE run_id=?
+                    """,
+                    ("eligible" if not terminal_failed else "unresolved", stderr[:512], run_id),
+                )
+                update_activity_history_row(
+                    conn,
+                    activity_id,
+                    status=activity_status,
+                    stdout=stdout,
+                    stderr=(stderr + "\n") if stderr else "",
+                    append_output=True,
+                    updated_at=now,
+                    finished_at=finished_at,
+                )
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            log("agents", f"agent maintenance reconciliation failed hostname={hostname}", "system", level="DEBUG")
+        finally:
+            conn.close()
+
     def _vnc_trace(step: str, context_hint: Optional[str], *, level: str = "INFO", **fields: Any) -> None:
         parts = [f"vnc_trace step={str(step or '-').strip() or '-'}"]
         for key, value in fields.items():
@@ -304,7 +411,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             row = cur.fetchone()
             if not row or row[0] in (None, ""):
                 return dict(default_payload)
-            normalized = normalize_agent_role_health(row[0])
+            normalized = normalize_agent_role_health(row[0], mark_stale=True, now_ts=int(time.time()))
             for role in normalized.get("roles") or []:
                 if str(role.get("role_name") or "").strip().lower() != "vnc":
                     continue
@@ -393,6 +500,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         )
         if metrics.get("last_user"):
             updates["last_user"] = str(metrics["last_user"])
+        if metrics.get("domain"):
+            updates["domain"] = str(metrics["domain"])
         if metrics.get("operating_system"):
             updates["operating_system"] = str(metrics["operating_system"])
         if metrics.get("last_reboot"):
@@ -421,6 +530,12 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
         if isinstance(agent_build_id, str) and agent_build_id.strip():
             updates["agent_hash"] = agent_build_id.strip()
         incoming_update_status = payload.get("agent_update_status") if isinstance(payload.get("agent_update_status"), dict) else {}
+        incoming_agent_release_channel = _clean_agent_text(payload.get("agent_release_channel"))
+        incoming_agent_branch = _clean_agent_text(payload.get("agent_branch"))
+        if incoming_agent_release_channel:
+            updates["agent_release_channel"] = incoming_agent_release_channel
+        if incoming_agent_branch:
+            updates["agent_branch"] = incoming_agent_branch
         if incoming_update_status:
             update_channel = (
                 incoming_update_status.get("target_channel")
@@ -561,6 +676,22 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             conn.commit()
         finally:
             conn.close()
+
+        if incoming_update_status:
+            try:
+                _reconcile_agent_maintenance_operation(
+                    hostname=str(updates.get("hostname") or hostname or "").strip(),
+                    update_status=incoming_update_status,
+                    release_channel=_clean_agent_text(
+                        incoming_update_status.get("target_channel")
+                        or incoming_update_status.get("effective_channel")
+                        or incoming_agent_release_channel
+                    ),
+                    branch=_clean_agent_text(incoming_update_status.get("target_branch") or incoming_agent_branch),
+                    installed_build_id=_clean_agent_text(agent_build_id),
+                )
+            except Exception:
+                log("agents", "agent maintenance heartbeat reconciliation failed", context_label, level="DEBUG")
 
         return jsonify(
             {

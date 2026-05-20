@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -12,16 +13,12 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID string, logger *BootstrapLogger) (bool, error) {
-	candidates := []string{
-		filepath.Join(sourceRoot, "Agent.exe"),
-		filepath.Join(sourceRoot, "Data", "Agent", "Agent.exe"),
-		filepath.Join(sourceRoot, "Data", "Agent", "dist", "windows-amd64", "Agent.exe"),
-		filepath.Join(sourceRoot, "dist", "windows-amd64", "Agent.exe"),
-	}
-	for _, candidate := range candidates {
+	for _, candidate := range agentUpdateBinaryCandidates(sourceRoot) {
 		if !fileExists(candidate) {
 			continue
 		}
@@ -38,6 +35,10 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 			return false, err
 		}
 		if err := verifyFileSHA256(pending, expectedSHA256); err != nil {
+			_ = os.Remove(pending)
+			return false, err
+		}
+		if err := validateAgentUpdateCandidate(cfg, pending, "staged", logger); err != nil {
 			_ = os.Remove(pending)
 			return false, err
 		}
@@ -71,6 +72,44 @@ func stageAgentUpdateBinary(cfg BootstrapConfig, sourceRoot string, buildID stri
 	return false, fmt.Errorf("update artifact missing Agent.exe")
 }
 
+func agentUpdateBinaryCandidates(sourceRoot string) []string {
+	return []string{
+		filepath.Join(sourceRoot, "Agent.exe"),
+		filepath.Join(sourceRoot, "Data", "Agent", "Agent.exe"),
+		filepath.Join(sourceRoot, "Data", "Agent", "dist", "windows-amd64", "Agent.exe"),
+		filepath.Join(sourceRoot, "dist", "windows-amd64", "Agent.exe"),
+	}
+}
+
+func validateAgentUpdateSource(cfg BootstrapConfig, sourceRoot string, logger *BootstrapLogger) error {
+	for _, candidate := range agentUpdateBinaryCandidates(sourceRoot) {
+		if !fileExists(candidate) {
+			continue
+		}
+		return validateAgentUpdateCandidate(cfg, candidate, "source", logger)
+	}
+	return fmt.Errorf("update artifact missing Agent.exe")
+}
+
+func validateAgentUpdateCandidate(cfg BootstrapConfig, candidate string, label string, logger *BootstrapLogger) error {
+	configPath := agentConfigPath(cfg.InstallDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, candidate, "--validate-config", "--config-path", configPath)
+	output, err := cmd.CombinedOutput()
+	text := strings.TrimSpace(string(output))
+	if ctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("%s Agent.exe config validation timed out", label)
+	}
+	if err != nil {
+		return fmt.Errorf("%s Agent.exe rejected current agent.json: %w output=%s", label, err, text)
+	}
+	if logger != nil {
+		logger.Tracef("Agent update candidate config validation passed: label=%s candidate=%s output=%s", label, candidate, text)
+	}
+	return nil
+}
+
 func scheduleAgentSelfReplacement(cfg BootstrapConfig, pending string, destination string, buildID string, expectedSHA256 string, logger *BootstrapLogger) error {
 	if logger != nil {
 		logger.Tracef("Scheduling Agent.exe self-replacement: pending=%s destination=%s expected_sha256=%s", pending, destination, expectedSHA256)
@@ -101,20 +140,91 @@ $destination = %s
 $configPath = %s
 $buildId = %s
 $expectedSha256 = %s
-$agentTaskName = %s
+$agentServiceName = %s
+$validateExe = $pending + ".validate.exe"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
 function Write-UpdaterLog([string]$message) {
   Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
+}
+function Set-JsonNoteProperty($target, [string]$name, $value) {
+  if ($target.PSObject.Properties[$name]) {
+    $target.$name = $value
+  } else {
+    $target | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force
+  }
+}
+function Mark-AgentUpdateFailed([string]$reason) {
+  try {
+    if (!(Test-Path -LiteralPath $configPath)) { return }
+    $json = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    if (-not $json.agent) { return }
+    if (-not $json.agent.update) { $json.agent | Add-Member -NotePropertyName update -NotePropertyValue ([pscustomobject]@{}) -Force }
+    $now = [int64](([DateTimeOffset]::UtcNow).ToUnixTimeSeconds())
+    Set-JsonNoteProperty $json.agent.update "status" "failed"
+    Set-JsonNoteProperty $json.agent.update "updated_at" $now
+    Set-JsonNoteProperty $json.agent.update "last_error" $reason
+    if ($json.agent.state) {
+      Set-JsonNoteProperty $json.agent.state "revision" ([int64]$json.agent.state.revision + 1)
+      Set-JsonNoteProperty $json.agent.state "writer" "updater:deferred"
+      Set-JsonNoteProperty $json.agent.state "last_write_at" $now
+    }
+    $tmp = $configPath + ".deferred-failed.tmp"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($tmp, ($json | ConvertTo-Json -Depth 20), $utf8NoBom)
+    Move-Item -LiteralPath $tmp -Destination $configPath -Force
+    Write-UpdaterLog "Marked update failed in agent.json: $reason"
+  } catch {
+    Write-UpdaterLog ("Mark update failed skipped: " + $_.Exception.Message)
+  }
+}
+function Get-AgentServiceState {
+  try {
+    $service = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $agentServiceName) -ErrorAction Stop
+    if ($service) { return [string]$service.State }
+  } catch {
+    Write-UpdaterLog ("Service state query failed: " + $_.Exception.Message)
+  }
+  return ""
+}
+function Ensure-AgentServiceRunning {
+  Write-UpdaterLog "Ensuring Borealis Agent service after update."
+  $installOutput = & $destination --install-service --config-path $configPath 2>&1
+  foreach ($line in $installOutput) { Write-UpdaterLog ("install-service: " + $line) }
+  if ($LASTEXITCODE -ne 0) {
+    Write-UpdaterLog "install-service exited $LASTEXITCODE."
+  }
+  for ($serviceAttempt = 1; $serviceAttempt -le 15; $serviceAttempt++) {
+    $state = Get-AgentServiceState
+    Write-UpdaterLog "Service start verification attempt $serviceAttempt state=$state."
+    if ($state -eq "Running") { return $true }
+    try { Start-Service -Name $agentServiceName -ErrorAction SilentlyContinue } catch {}
+    sc.exe start $agentServiceName *> $null
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+function Invoke-PendingAgentValidation {
+  Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath $pending -Destination $validateExe -Force -ErrorAction Stop
+  try {
+    $validateOutput = & $validateExe --validate-config --config-path $configPath 2>&1
+    foreach ($line in $validateOutput) { Write-UpdaterLog ("validate-pending: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      throw "pending Agent.exe rejected current agent.json with exit $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  }
 }
 Write-UpdaterLog "Deferred Agent.exe replacement starting. pending=$pending destination=$destination build=$buildId expected_sha256=$expectedSha256"
 Start-Sleep -Seconds 3
 for ($attempt = 1; $attempt -le 20; $attempt++) {
   try {
     if (!(Test-Path -LiteralPath $pending)) {
-      Write-UpdaterLog "Attempt $attempt failed: pending binary missing."
-      exit 1
+      throw "pending binary missing"
     }
-    schtasks.exe /End /TN $agentTaskName *> $null
+    Invoke-PendingAgentValidation
+    sc.exe stop $agentServiceName *> $null
     Get-Process -Name Agent -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
     Move-Item -LiteralPath $pending -Destination $destination -Force -ErrorAction Stop
@@ -129,7 +239,10 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
       Write-UpdaterLog "Attempt $attempt failed: finalize exited $LASTEXITCODE."
       exit 1
     }
-    schtasks.exe /Run /TN $agentTaskName *> $null
+    if (!(Ensure-AgentServiceRunning)) {
+      Write-UpdaterLog "Attempt $attempt failed: service did not reach Running after replacement."
+      exit 1
+    }
     Write-UpdaterLog "Deferred Agent.exe replacement complete."
     exit 0
   } catch {
@@ -138,9 +251,14 @@ for ($attempt = 1; $attempt -le 20; $attempt++) {
   }
 }
 Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($destination + '.tmp') -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath ($pending + '.tmp') -Force -ErrorAction SilentlyContinue
 Write-UpdaterLog "Deferred Agent.exe replacement failed after all attempts; staged update artifacts removed."
+Mark-AgentUpdateFailed "Deferred Agent.exe replacement failed after all attempts."
+if (!(Ensure-AgentServiceRunning)) {
+  Write-UpdaterLog "Deferred failure recovery could not restart Borealis Agent service."
+}
 exit 1
 `,
 		powershellSingleQuoted(logPath),
@@ -149,7 +267,7 @@ exit 1
 		powershellSingleQuoted(configPath),
 		powershellSingleQuoted(agentconfigBuildID(buildID)),
 		powershellSingleQuoted(strings.ToLower(strings.TrimSpace(expectedSHA256))),
-		powershellSingleQuoted(agentTaskName),
+		powershellSingleQuoted(agentruntime.WindowsServiceName),
 	)
 }
 

@@ -11,7 +11,15 @@ import (
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
 
-func TestHandleReleaseChannelChangedStoresSourceBranch(t *testing.T) {
+func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
+	originalStarter := startLocalUpdaterForRequest
+	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+	startedUpdater := false
+	startLocalUpdaterForRequest = func(configPath string) error {
+		startedUpdater = true
+		return nil
+	}
+
 	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
 	cfg := agentconfig.Default()
 	cfg.ServerURL = "https://borealis.example.com"
@@ -36,19 +44,25 @@ func TestHandleReleaseChannelChangedStoresSourceBranch(t *testing.T) {
 	if body["status"] != "ok" {
 		t.Fatalf("status = %v", body["status"])
 	}
-	if body["release_channel"] != agentconfig.ReleaseChannelSource {
+	if body["release_channel"] != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("release_channel = %v", body["release_channel"])
+	}
+	if !startedUpdater {
+		t.Fatalf("local updater was not started")
 	}
 
 	loaded, err := agentconfig.Load(configPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelSource {
+	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("stored release_channel = %q", loaded.Agent.ReleaseChannel)
 	}
 	if loaded.Agent.Branch != "feature/rewrite-borealis-agent-in-golang" {
 		t.Fatalf("stored branch = %q", loaded.Agent.Branch)
+	}
+	if loaded.Agent.Update.OperationID == "" || loaded.Agent.Update.Status != "updater_started" {
+		t.Fatalf("update operation not tracked: %#v", loaded.Agent.Update)
 	}
 }
 
@@ -82,9 +96,9 @@ func TestReleaseChannelFromPayloadAliases(t *testing.T) {
 		payload map[string]any
 		want    string
 	}{
-		{name: "source", payload: map[string]any{"release_channel": "source"}, want: agentconfig.ReleaseChannelSource},
-		{name: "unstable", payload: map[string]any{"channel": "unstable"}, want: agentconfig.ReleaseChannelSource},
-		{name: "branch", payload: map[string]any{"target_channel": "branch"}, want: agentconfig.ReleaseChannelSource},
+		{name: "source", payload: map[string]any{"release_channel": "source"}, want: agentconfig.ReleaseChannelUnstable},
+		{name: "unstable", payload: map[string]any{"channel": "unstable"}, want: agentconfig.ReleaseChannelUnstable},
+		{name: "branch", payload: map[string]any{"target_channel": "branch"}, want: agentconfig.ReleaseChannelUnstable},
 		{name: "stable", payload: map[string]any{"effective_channel": "stable"}, want: agentconfig.ReleaseChannelStable},
 		{name: "release", payload: map[string]any{"release_channel": "release"}, want: agentconfig.ReleaseChannelStable},
 	}

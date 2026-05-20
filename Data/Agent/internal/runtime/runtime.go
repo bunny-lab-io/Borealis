@@ -38,24 +38,34 @@ type Options struct {
 }
 
 type Agent struct {
-	options     Options
-	configPath  string
-	config      agentconfig.AgentConfig
-	authClient  *auth.Client
-	logger      *log.Logger
-	hostname    string
-	bootID      string
-	dispatcher  *currentuser.Dispatcher
-	auditor     *deviceaudit.Auditor
-	files       *filemanagement.Manager
-	processes   *processmanagement.Manager
-	remoteShell *remoteshell.Manager
-	services    *servicemanagement.Manager
-	software    *softwaremanagement.Manager
-	vnc         *vncrole.Manager
-	wireguard   *wireguardtunnel.Manager
-	uiMu        sync.RWMutex
-	uiSnapshot  localui.StatusSnapshot
+	options       Options
+	configPath    string
+	config        agentconfig.AgentConfig
+	authClient    *auth.Client
+	logger        *log.Logger
+	hostname      string
+	bootID        string
+	dispatcher    *currentuser.Dispatcher
+	auditor       *deviceaudit.Auditor
+	files         *filemanagement.Manager
+	processes     *processmanagement.Manager
+	remoteShell   *remoteshell.Manager
+	services      *servicemanagement.Manager
+	software      *softwaremanagement.Manager
+	vnc           *vncrole.Manager
+	wireguard     *wireguardtunnel.Manager
+	supervisor    *RoleSupervisor
+	uiMu          sync.RWMutex
+	uiSnapshot    localui.StatusSnapshot
+	auditMu       sync.Mutex
+	auditCache    deviceaudit.Snapshot
+	auditAt       time.Time
+	roleMu        sync.Mutex
+	roleStates    map[string]string
+	roleDetails   map[string]string
+	socketMu      sync.RWMutex
+	socketState   string
+	socketStateAt int64
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -121,16 +131,46 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		software:    softwareManager,
 		vnc:         vncManager,
 		wireguard:   wireGuardManager,
+		supervisor:  NewRoleSupervisor(nil),
+		roleStates:  map[string]string{},
+		roleDetails: map[string]string{},
 	}
+	agent.supervisor.logRecovery = agent.logRecovery
+	agent.registerRoleRecoveryHandlers()
 	if agent.wireguard != nil {
 		agent.wireguard.SetStatusReporter(agent.postWireGuardStatus)
 	}
 	return agent, nil
 }
 
+func (a *Agent) registerRoleRecoveryHandlers() {
+	if a == nil || a.supervisor == nil {
+		return
+	}
+	if a.vnc != nil {
+		a.supervisor.RegisterRecoveryHandler("system:vnc", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "vnc_ensure", nil)
+			a.vnc.RequestEnsure("role_supervisor_recovery")
+		})
+	}
+	if a.wireguard != nil {
+		a.supervisor.RegisterRecoveryHandler("system:wireguard_tunnel", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "wireguard_ensure", nil)
+			a.wireguard.RequestEnsure("role_supervisor_recovery")
+		})
+	}
+	if a.remoteShell != nil {
+		a.supervisor.RegisterRecoveryHandler("system:remote_shell", func(snapshot RoleSnapshot) {
+			a.logRecovery("role_supervisor", snapshot.RoleID, "recover", "start", "remote_shell_restart", nil)
+			a.remoteShell.Restart(context.Background(), "role_supervisor_recovery")
+		})
+	}
+}
+
 func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Printf("agent starting service_mode=%s config=%s", auth.NormalizeServiceMode(a.options.ServiceMode), a.configPath)
 	a.updateUIStatus("process_start", "starting", "Agent process starting.")
+	a.startLivenessLoop(ctx.Done())
 	if err := writeInstalledBuildID(a.configPath, a.options.BuildID); err != nil {
 		a.logger.Printf("record installed build failed: %v", err)
 	}
@@ -141,8 +181,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.dispatcher != nil {
 		a.dispatcher.Start(ctx, a.configPath)
 	}
-	if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
-		_ = a.postStatus(context.Background(), "authenticating", "unhealthy", err.Error())
+	if err := a.waitAuthenticated(ctx); err != nil {
 		return err
 	}
 	if a.services != nil {
@@ -175,19 +214,58 @@ func (a *Agent) Run(ctx context.Context) error {
 	return a.socketLoop(ctx)
 }
 
-func (a *Agent) heartbeatLoop(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
+func (a *Agent) waitAuthenticated(ctx context.Context) error {
+	backoff := 5 * time.Second
 	for {
 		select {
 		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		a.updateUIStatus("authenticating", "recovering", "Engine authentication starting.")
+		if err := a.authClient.EnsureAuthenticated(ctx); err != nil {
+			a.logger.Printf("authentication failed; retrying: %v", err)
+			a.logRecovery("runtime", "startup:auth", "authenticate", "retry", "auth_failed", err)
+			a.updateUIStatus("authenticating", "recovering", err.Error())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			if backoff < time.Minute {
+				backoff *= 2
+				if backoff > time.Minute {
+					backoff = time.Minute
+				}
+			}
+			continue
+		}
+		a.updateUIStatus("authenticated", "healthy", "Engine authentication complete.")
+		a.logRecovery("runtime", "startup:auth", "authenticate", "success", "authenticated", nil)
+		return nil
+	}
+}
+
+func (a *Agent) heartbeatLoop(ctx context.Context) {
+	for {
+		waitFor := heartbeatIntervalWithJitter(time.Now())
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := a.postHeartbeat(ctx); err != nil {
 				a.logger.Printf("heartbeat failed: %v", err)
 			}
 		}
 	}
+}
+
+func heartbeatIntervalWithJitter(now time.Time) time.Duration {
+	base := 20 * time.Second
+	jitter := time.Duration(now.UnixNano() % int64(5*time.Second))
+	return base + jitter
 }
 
 func (a *Agent) socketLoop(ctx context.Context) error {
@@ -199,6 +277,7 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 		default:
 		}
 		if err := a.connectSocket(ctx); err != nil {
+			a.recordSocketState("disconnected")
 			a.logger.Printf("socket disconnected: %v", err)
 			if err := a.postStatus(context.Background(), "socket_disconnected", "degraded", err.Error()); err != nil {
 				a.logger.Printf("status post failed: %v", err)
@@ -216,6 +295,7 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 }
 
 func (a *Agent) connectSocket(ctx context.Context) error {
+	a.recordSocketState("connecting")
 	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Engine socket connecting."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
 	}
@@ -252,6 +332,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	socket.On("agent_update_request", a.handleUpdateRequest)
 	socket.On("agent_release_channel_changed", a.handleReleaseChannelChanged)
+	socket.On("agent_maintenance_request", a.handleAgentMaintenanceRequest)
 	socket.OnConnected(func(ctx context.Context) error {
 		payload := map[string]any{
 			"agent_id":     a.authClient.AgentID(),
@@ -278,6 +359,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		if err := socket.Emit("connect_agent", payload); err != nil {
 			return err
 		}
+		a.recordSocketState("connected")
 		if a.wireguard != nil {
 			a.wireguard.RequestEnsure("socket_connect")
 		}
@@ -331,22 +413,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.dispatcher != nil {
 		currentUserHealth = a.dispatcher.RoleHealth()
 	}
-	auditSnapshot := deviceaudit.Snapshot{
-		Inventory: map[string]any{},
-		Metrics:   map[string]any{},
-		Health: deviceaudit.RoleHealth{
-			Status:     "recovering",
-			StatusCode: "recovering",
-			Detail:     "Device audit inventory has not run.",
-			Details: map[string]any{
-				"running_status": "Starting",
-				"runtime":        "go",
-			},
-		},
-	}
-	if a.auditor != nil {
-		auditSnapshot = a.auditor.Collect(ctx)
-	}
+	auditSnapshot := a.cachedAuditSnapshot(ctx)
 	fileHealth := filemanagement.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -440,130 +507,44 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 			metrics[key] = value
 		}
 	}
-	payload := map[string]any{
-		"hostname":       a.hostname,
-		"service_mode":   auth.NormalizeServiceMode(a.options.ServiceMode),
-		"metrics":        metrics,
-		"inventory":      auditSnapshot.Inventory,
-		"agent_build_id": strings.TrimSpace(a.options.BuildID),
-		"agent_role_health": map[string]any{
-			"roles": []map[string]any{
-				{
-					"role_id":         "system:context_system",
-					"role_name":       "context_system",
-					"role_label":      "SYSTEM Context",
-					"context":         "system",
-					"status":          "healthy",
-					"status_code":     "healthy",
-					"detail":          "Go SYSTEM script listener is ready.",
-					"last_checked_at": time.Now().Unix(),
-					"details": map[string]any{
-						"running_status":    "Ready",
-						"execution_context": "SYSTEM",
-						"runtime":           "go",
-					},
-				},
-				{
-					"role_id":         "system:context_currentuser",
-					"role_name":       "context_currentuser",
-					"role_label":      "Current User Context",
-					"context":         "currentuser",
-					"status":          currentUserHealth.Status,
-					"status_code":     currentUserHealth.StatusCode,
-					"detail":          currentUserHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         currentUserHealth.Details,
-				},
-				{
-					"role_id":         "system:device_auditor",
-					"role_name":       "device_auditor",
-					"role_label":      "Device Auditor",
-					"context":         "system",
-					"status":          auditSnapshot.Health.Status,
-					"status_code":     auditSnapshot.Health.StatusCode,
-					"detail":          auditSnapshot.Health.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         auditSnapshot.Health.Details,
-				},
-				{
-					"role_id":         "system:file_management",
-					"role_name":       "file_management",
-					"role_label":      "File Management",
-					"context":         "system",
-					"status":          fileHealth.Status,
-					"status_code":     fileHealth.StatusCode,
-					"detail":          fileHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         fileHealth.Details,
-				},
-				{
-					"role_id":         "system:process_management",
-					"role_name":       "process_management",
-					"role_label":      "Process Management",
-					"context":         "system",
-					"status":          processHealth.Status,
-					"status_code":     processHealth.StatusCode,
-					"detail":          processHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         processHealth.Details,
-				},
-				{
-					"role_id":         "system:remote_shell",
-					"role_name":       "remote_shell",
-					"role_label":      "Remote Shell",
-					"context":         "system",
-					"status":          remoteShellHealth.Status,
-					"status_code":     remoteShellHealth.StatusCode,
-					"detail":          remoteShellHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         remoteShellHealth.Details,
-				},
-				{
-					"role_id":         "system:service_management",
-					"role_name":       "service_management",
-					"role_label":      "Service Management",
-					"context":         "system",
-					"status":          serviceHealth.Status,
-					"status_code":     serviceHealth.StatusCode,
-					"detail":          serviceHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         serviceHealth.Details,
-				},
-				{
-					"role_id":         "system:software_management",
-					"role_name":       "software_management",
-					"role_label":      "Software Management",
-					"context":         "system",
-					"status":          softwareHealth.Status,
-					"status_code":     softwareHealth.StatusCode,
-					"detail":          softwareHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         softwareHealth.Details,
-				},
-				{
-					"role_id":         "system:vnc",
-					"role_name":       "vnc",
-					"role_label":      "UltraVNC Service",
-					"context":         "system",
-					"status":          vncHealth.Status,
-					"status_code":     vncHealth.StatusCode,
-					"detail":          vncHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         vncHealth.Details,
-				},
-				{
-					"role_id":         "system:wireguard_tunnel",
-					"role_name":       "wireguard_tunnel",
-					"role_label":      "WireGuard VPN",
-					"context":         "system",
-					"status":          wireGuardHealth.Status,
-					"status_code":     wireGuardHealth.StatusCode,
-					"detail":          wireGuardHealth.Detail,
-					"last_checked_at": time.Now().Unix(),
-					"details":         wireGuardHealth.Details,
-				},
+	now := time.Now().Unix()
+	if a.supervisor == nil {
+		a.supervisor = NewRoleSupervisor(a.logRecovery)
+	}
+	roleHealthPayload := a.supervisor.Update([]RoleSnapshot{
+		{
+			RoleID:     "system:context_system",
+			RoleName:   "context_system",
+			RoleLabel:  "SYSTEM Context",
+			Context:    "system",
+			Status:     "healthy",
+			StatusCode: "healthy",
+			Detail:     "Go SYSTEM script listener is ready.",
+			Details: map[string]any{
+				"running_status":    "Ready",
+				"execution_context": "SYSTEM",
+				"runtime":           "go",
 			},
+			CheckedAt: now,
 		},
+		a.engineSocketRoleSnapshot(now),
+		roleSnapshotFromHealth("system:context_currentuser", "context_currentuser", "Current User Context", "currentuser", currentUserHealth.Status, currentUserHealth.StatusCode, currentUserHealth.Detail, currentUserHealth.Details, now),
+		roleSnapshotFromHealth("system:device_auditor", "device_auditor", "Device Auditor", "system", auditSnapshot.Health.Status, auditSnapshot.Health.StatusCode, auditSnapshot.Health.Detail, auditSnapshot.Health.Details, now),
+		roleSnapshotFromHealth("system:file_management", "file_management", "File Management", "system", fileHealth.Status, fileHealth.StatusCode, fileHealth.Detail, fileHealth.Details, now),
+		roleSnapshotFromHealth("system:process_management", "process_management", "Process Management", "system", processHealth.Status, processHealth.StatusCode, processHealth.Detail, processHealth.Details, now),
+		roleSnapshotFromHealth("system:remote_shell", "remote_shell", "Remote Shell", "system", remoteShellHealth.Status, remoteShellHealth.StatusCode, remoteShellHealth.Detail, remoteShellHealth.Details, now),
+		roleSnapshotFromHealth("system:service_management", "service_management", "Service Management", "system", serviceHealth.Status, serviceHealth.StatusCode, serviceHealth.Detail, serviceHealth.Details, now),
+		roleSnapshotFromHealth("system:software_management", "software_management", "Software Management", "system", softwareHealth.Status, softwareHealth.StatusCode, softwareHealth.Detail, softwareHealth.Details, now),
+		roleSnapshotFromHealth("system:vnc", "vnc", "UltraVNC Service", "system", vncHealth.Status, vncHealth.StatusCode, vncHealth.Detail, vncHealth.Details, now),
+		roleSnapshotFromHealth("system:wireguard_tunnel", "wireguard_tunnel", "WireGuard VPN", "system", wireGuardHealth.Status, wireGuardHealth.StatusCode, wireGuardHealth.Detail, wireGuardHealth.Details, now),
+	})
+	payload := map[string]any{
+		"hostname":          a.hostname,
+		"service_mode":      auth.NormalizeServiceMode(a.options.ServiceMode),
+		"metrics":           metrics,
+		"inventory":         auditSnapshot.Inventory,
+		"agent_build_id":    strings.TrimSpace(a.options.BuildID),
+		"agent_role_health": roleHealthPayload,
 	}
 	if auditSnapshot.InternalIP != "" {
 		payload["internal_ip"] = auditSnapshot.InternalIP
@@ -582,9 +563,184 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	payload["installed_build_id"] = installedBuildID
 	payload["agent_release_channel"] = agentconfig.NormalizeReleaseChannel(cfg.Agent.ReleaseChannel)
 	payload["agent_branch"] = agentconfig.NormalizeBranch(cfg.Agent.Branch)
+	if strings.TrimSpace(cfg.Agent.Update.OperationID) != "" {
+		payload["agent_update_status"] = map[string]any{
+			"operation_id":     cfg.Agent.Update.OperationID,
+			"kind":             cfg.Agent.Update.Kind,
+			"state":            cfg.Agent.Update.Status,
+			"target_channel":   cfg.Agent.Update.TargetChannel,
+			"target_branch":    cfg.Agent.Update.TargetBranch,
+			"previous_channel": cfg.Agent.Update.PreviousChannel,
+			"previous_branch":  cfg.Agent.Update.PreviousBranch,
+			"started_at":       cfg.Agent.Update.StartedAt,
+			"updated_at":       cfg.Agent.Update.UpdatedAt,
+			"completed_at":     cfg.Agent.Update.CompletedAt,
+			"deadline_at":      cfg.Agent.Update.DeadlineAt,
+			"last_error":       cfg.Agent.Update.LastError,
+		}
+	}
 	a.updateUIHeartbeat(payload)
+	a.recordHeartbeatAttempt()
 	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
+	a.recordHeartbeatResult(err)
 	return err
+}
+
+func roleSnapshotFromHealth(roleID string, roleName string, roleLabel string, contextLabel string, status string, statusCode string, detail string, details map[string]any, checkedAt int64) RoleSnapshot {
+	return RoleSnapshot{
+		RoleID:     roleID,
+		RoleName:   roleName,
+		RoleLabel:  roleLabel,
+		Context:    contextLabel,
+		Status:     status,
+		StatusCode: statusCode,
+		Detail:     detail,
+		Details:    details,
+		CheckedAt:  checkedAt,
+	}
+}
+
+func (a *Agent) cachedAuditSnapshot(ctx context.Context) deviceaudit.Snapshot {
+	fallback := deviceaudit.Snapshot{
+		Inventory: map[string]any{},
+		Metrics:   map[string]any{},
+		Health: deviceaudit.RoleHealth{
+			Status:     "recovering",
+			StatusCode: "recovering",
+			Detail:     "Device audit inventory has not run.",
+			Details: map[string]any{
+				"running_status": "Starting",
+				"runtime":        "go",
+			},
+		},
+	}
+	if a.auditor == nil {
+		return fallback
+	}
+	a.auditMu.Lock()
+	if !a.auditAt.IsZero() && time.Since(a.auditAt) < 5*time.Minute {
+		snapshot := a.auditCache
+		a.auditMu.Unlock()
+		return snapshot
+	}
+	a.auditMu.Unlock()
+	snapshot := a.auditor.Collect(ctx)
+	a.auditMu.Lock()
+	a.auditCache = snapshot
+	a.auditAt = time.Now()
+	a.auditMu.Unlock()
+	return snapshot
+}
+
+func (a *Agent) recordRoleHealthTransitions(payload map[string]any) {
+	rawHealth, _ := payload["agent_role_health"].(map[string]any)
+	rawRoles, _ := rawHealth["roles"].([]map[string]any)
+	if len(rawRoles) == 0 {
+		if anyRoles, ok := rawHealth["roles"].([]any); ok {
+			for _, item := range anyRoles {
+				if mapped, ok := item.(map[string]any); ok {
+					a.recordOneRoleHealth(mapped)
+				}
+			}
+		}
+		return
+	}
+	for _, role := range rawRoles {
+		a.recordOneRoleHealth(role)
+	}
+}
+
+func (a *Agent) recordOneRoleHealth(role map[string]any) {
+	roleID := strings.TrimSpace(fmt.Sprint(role["role_id"]))
+	status := strings.TrimSpace(fmt.Sprint(firstNonNil(role["status_code"], role["status"])))
+	detail := strings.TrimSpace(fmt.Sprint(role["detail"]))
+	if roleID == "" || status == "" {
+		return
+	}
+	a.roleMu.Lock()
+	if a.roleStates == nil {
+		a.roleStates = map[string]string{}
+	}
+	if a.roleDetails == nil {
+		a.roleDetails = map[string]string{}
+	}
+	previous := a.roleStates[roleID]
+	previousDetail := a.roleDetails[roleID]
+	if previous != status {
+		a.roleStates[roleID] = status
+	}
+	if previousDetail != detail {
+		a.roleDetails[roleID] = detail
+	}
+	a.roleMu.Unlock()
+	if previous != "" && previous != status {
+		a.logRecovery("role_supervisor", roleID, "status_transition", status, detail, nil)
+	}
+	if (status == "unhealthy" || status == "recovering" || status == "failed") && (previous != status || previousDetail != detail) {
+		a.logRecovery("role_supervisor", roleID, "health_check", status, detail, nil)
+	}
+}
+
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return ""
+}
+
+func (a *Agent) engineSocketRoleSnapshot(now int64) RoleSnapshot {
+	socketState, socketStateAt := a.currentSocketState()
+	normalizedState := strings.ToLower(strings.TrimSpace(socketState))
+	status := "recovering"
+	statusCode := "recovering"
+	runningStatus := "Starting"
+	detail := "Engine Socket.IO control channel has not connected yet."
+	if normalizedState == "" {
+		normalizedState = "not_started"
+	}
+	switch normalizedState {
+	case "connected":
+		status = "healthy"
+		statusCode = "healthy"
+		runningStatus = "Ready"
+		detail = "Engine Socket.IO control channel is connected."
+	case "connecting":
+		runningStatus = "Connecting"
+		detail = "Engine Socket.IO control channel is connecting."
+		if socketStateAt > 0 && time.Unix(now, 0).Sub(time.Unix(socketStateAt, 0)) > watchdogSocketStaleAfter {
+			status = "unhealthy"
+			statusCode = "unhealthy"
+			runningStatus = "Stale"
+			detail = "Engine Socket.IO control channel is stuck connecting."
+		}
+	case "disconnected":
+		status = "unhealthy"
+		statusCode = "unhealthy"
+		runningStatus = "Disconnected"
+		detail = "Engine Socket.IO control channel is disconnected."
+	}
+	details := map[string]any{
+		"running_status": runningStatus,
+		"runtime":        "go",
+		"socket_state":   normalizedState,
+	}
+	if socketStateAt > 0 {
+		details["socket_state_at"] = socketStateAt
+		details["socket_state_age_seconds"] = now - socketStateAt
+	}
+	return RoleSnapshot{
+		RoleID:     "system:engine_socket",
+		RoleName:   "engine_socket",
+		RoleLabel:  "Engine Socket",
+		Context:    "system",
+		Status:     status,
+		StatusCode: statusCode,
+		Detail:     detail,
+		Details:    details,
+		CheckedAt:  now,
+	}
 }
 
 type startupMilestoneDefinition struct {

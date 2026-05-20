@@ -515,6 +515,9 @@ func parseWindowsSoftware(output string) ([]Software, error) {
 		if name == "" {
 			continue
 		}
+		if shouldSuppressWindowsSoftwareRow(name) {
+			continue
+		}
 		source := normalizeSoftwareSource(item["source"])
 		if source == "" {
 			source = "local_installed"
@@ -531,6 +534,13 @@ func parseWindowsSoftware(output string) ([]Software, error) {
 		rows = append(rows, row)
 	}
 	return dedupeAndSort(rows), nil
+}
+
+func shouldSuppressWindowsSoftwareRow(name string) bool {
+	cleanName := strings.ToLower(cleanText(name))
+	return strings.Contains(cleanName, "ultravnc") &&
+		strings.Contains(cleanName, "unregistered") &&
+		strings.Contains(cleanName, "wrapped using msi wrapper")
 }
 
 func dedupeAndSort(rows []Software) []Software {

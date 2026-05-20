@@ -3,6 +3,7 @@ package vnc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func sampleDisplayTopology() []map[string]any {
 
 func TestNewUsesUltraVNCLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
-	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "config.json"))
+	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "agent.json"))
 
 	if got := manager.logPath; got != filepath.Join(dir, "Logs", "UltraVNC", "vnc.log") {
 		t.Fatalf("unexpected log path: %s", got)
@@ -123,6 +124,53 @@ func TestCredentialPayloadIncludesDisplayTopology(t *testing.T) {
 	bounds := payload["display_virtual_bounds"].(map[string]any)
 	if bounds["width"] != 4480 || bounds["height"] != 1440 {
 		t.Fatalf("unexpected bounds: %#v", bounds)
+	}
+}
+
+func TestCredentialRequestUsesFastPathWhenReady(t *testing.T) {
+	runnerCalls := 0
+	manager := &Manager{
+		authClient:         fakeVNCAuthClient{agentID: "agent-1"},
+		supported:          true,
+		started:            true,
+		displayCollector:   sampleDisplayTopology,
+		controllerPassword: "bootpass",
+		credentialRevision: 12345,
+		credentialIssuedAt: time.Now(),
+		allowedIPs:         "10.255.0.1/32",
+		lastServiceState:   "RUNNING",
+		lastListenerState:  "listening",
+		lastReady:          true,
+		port:               5900,
+		runner: func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+			runnerCalls++
+			return commandResult{}, errors.New("runner should not be called on credential fast path")
+		},
+	}
+
+	rawPayload, err := manager.HandleCredentialRequest(context.Background(), map[string]any{
+		"agent_id":   "agent-1",
+		"request_id": "request-1",
+		"reason":     "vnc_establish",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := rawPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %#v", rawPayload)
+	}
+	if runnerCalls != 0 {
+		t.Fatalf("credential fast path touched service runner %d times", runnerCalls)
+	}
+	if payload["controller_password"] != "bootpass" {
+		t.Fatalf("unexpected password payload: %#v", payload)
+	}
+	if payload["ready"] != true {
+		t.Fatalf("unexpected ready payload: %#v", payload)
+	}
+	if got := payload["display_topology"].([]map[string]any); len(got) != 2 {
+		t.Fatalf("unexpected topology: %#v", got)
 	}
 }
 
@@ -309,6 +357,19 @@ func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T)
 
 	if containsCall(calls, "sc.exe stop "+serviceName) || containsCall(calls, "sc.exe start "+serviceName) {
 		t.Fatalf("expected no stop/start calls for unchanged config, got %#v", calls)
+	}
+}
+
+func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			return commandResult{Stdout: "[SC] StartService FAILED 1056:\n\nAn instance of the service is already running.", ExitCode: 1056}, errors.New("exit status 1056")
+		},
+	}
+
+	if err := manager.startService(context.Background(), serviceName); err != nil {
+		t.Fatalf("startService returned error for already-running service: %v", err)
 	}
 }
 

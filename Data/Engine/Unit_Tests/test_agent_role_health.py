@@ -1,4 +1,4 @@
-from Data.Engine.services.API.devices.agent_role_health import merge_agent_role_health
+from Data.Engine.services.API.devices.agent_role_health import merge_agent_role_health, normalize_agent_role_health
 
 
 def test_merge_agent_role_health_replaces_all_contexts_present_in_incoming_payload() -> None:
@@ -115,3 +115,61 @@ def test_merge_agent_role_health_preserves_startup_timeline_across_system_heartb
     assert "startup:system_heartbeat" in role_ids
     assert "system:context_system" in role_ids
     assert "currentuser:context_currentuser" in role_ids
+
+
+def test_normalize_agent_role_health_preserves_supervisor_fields() -> None:
+    normalized = normalize_agent_role_health(
+        {
+            "reported_at": 300,
+            "supervisor_revision": 7,
+            "roles": [
+                {
+                    "role_name": "vnc",
+                    "role_label": "UltraVNC Service",
+                    "context": "system",
+                    "status_code": "recovering",
+                    "desired_state": "running",
+                    "observed_state": "recovering",
+                    "last_success_at": 250,
+                    "last_error": "listener warming",
+                    "recovery_attempts": 2,
+                    "details": {"runtime": "go", "desired_state": "running"},
+                    "last_checked_at": 300,
+                }
+            ],
+        }
+    )
+
+    assert normalized["supervisor_revision"] == 7
+    role = normalized["roles"][0]
+    assert role["desired_state"] == "running"
+    assert role["observed_state"] == "recovering"
+    assert role["last_success_at"] == 250
+    assert role["last_error"] == "listener warming"
+    assert role["recovery_attempts"] == 2
+
+
+def test_normalize_agent_role_health_marks_stale_when_requested() -> None:
+    normalized = normalize_agent_role_health(
+        {
+            "reported_at": 100,
+            "roles": [
+                {
+                    "role_name": "wireguard_tunnel",
+                    "context": "system",
+                    "status_code": "healthy",
+                    "last_checked_at": 100,
+                }
+            ],
+        },
+        mark_stale=True,
+        now_ts=250,
+        stale_after_seconds=90,
+    )
+
+    role = normalized["roles"][0]
+    assert role["status_code"] == "stale"
+    assert role["status"] == "Stale"
+    assert role["observed_state"] == "stale"
+    assert role["details"]["previous_status_code"] == "healthy"
+    assert role["details"]["stale_age_seconds"] == "150"

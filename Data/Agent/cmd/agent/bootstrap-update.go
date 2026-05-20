@@ -15,6 +15,8 @@ import (
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 type updateManifest struct {
@@ -29,6 +31,13 @@ type updateManifest struct {
 
 func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
+	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
+	markConfigUpdateOperation(configPath, "running", "")
+	_ = logutil.RotateAndPrune(
+		filepath.Join(cfg.InstallDir, "Logs", "Agent", "updater.log"),
+		logutil.RetentionDaysFromConfig(configPath),
+		startedAt,
+	)
 	defer cleanupAgentTemp(cfg, logger)
 	cleanupStaleAgentUpdateBinary(cfg, logger)
 	serverURL := strings.TrimRight(strings.TrimSpace(cfg.ServerURL), "/")
@@ -59,8 +68,8 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	writeConfigReleaseTarget(cfg, releaseChannelForUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent update check: up to date (%s).", target)
-		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
-			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		if err := ensureAgentTasks(cfg, logger); err != nil {
+			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
 		}
 		logger.Tracef("Agent update check complete: up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -78,6 +87,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		downloadURL = serverURL + downloadURL
 	}
 	archivePath := filepath.Join(updateTempDir(cfg), "agent-update.zip")
+	markConfigUpdateOperation(configPath, "staging", "")
 	logger.Tracef("Agent update artifact download start: url=%s authed=%t archive=%s", downloadURL, authed, archivePath)
 	if err := downloadUpdateArtifact(downloadURL, token, authed, archivePath); err != nil {
 		return err
@@ -100,13 +110,17 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	sourceRoot := resolveSourceRoot(extractRoot)
 	logger.Tracef("Agent update source resolved: %s", sourceRoot)
-	stopScheduledTask(agentTaskName, logger)
+	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
+	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
 		return err
 	}
 	if deferred {
+		markConfigUpdateOperation(configPath, "restarting", "")
 		logger.Infof("Agent update staged (%s); deferred replacement will finalize after Agent.exe exits.", target)
 		logger.Tracef("Agent update check complete: deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -116,6 +130,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	writeInstalledBuildID(cfg, target)
+	markConfigUpdateOperation(configPath, "success", "")
 	logger.Infof("Agent update applied (%s).", target)
 	logger.Tracef("Agent update check complete: applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil
@@ -128,17 +143,18 @@ func releaseChannelForUpdateManifest(effective string, target string) string {
 	}
 	switch channel {
 	case "unstable", "source", "branch":
-		return agentconfig.ReleaseChannelSource
+		return agentconfig.ReleaseChannelUnstable
 	default:
 		return agentconfig.ReleaseChannelStable
 	}
 }
 
 func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
-	return agentconfig.UsesSourceReleaseChannel(cfg.ReleaseChannel)
+	return agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel)
 }
 
 func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time) error {
+	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	ref := strings.TrimSpace(cfg.RepoRef)
 	target, err := resolveGithubRefSHA(cfg.RepoURL, ref)
 	if err != nil {
@@ -151,8 +167,8 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	}
 	if installed != "" && strings.EqualFold(installed, target) {
 		logger.Infof("Agent repo_ref update check: up to date (%s).", target)
-		if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
-			logger.Warnf("AutoUpdater task reconciliation skipped: %v", err)
+		if err := ensureAgentTasks(cfg, logger); err != nil {
+			logger.Warnf("Agent service/task reconciliation skipped: %v", err)
 		}
 		logger.Tracef("Agent update check complete: repo_ref_up_to_date duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -161,13 +177,18 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 	if err != nil {
 		return err
 	}
-	stopScheduledTask(agentTaskName, logger)
+	markConfigUpdateOperation(configPath, "staging", "")
+	if err := validateAgentUpdateSource(cfg, sourceRoot, logger); err != nil {
+		return err
+	}
+	stopServiceAndWait(agentruntime.WindowsServiceName, 30*time.Second, logger)
 	stopBorealisProcesses(cfg, logger)
 	deferred, err := stageAgentUpdateBinary(cfg, sourceRoot, target, logger)
 	if err != nil {
 		return err
 	}
 	if deferred {
+		markConfigUpdateOperation(configPath, "restarting", "")
 		logger.Infof("Agent repo_ref update staged (%s @ %s); deferred replacement will finalize after Agent.exe exits.", ref, target)
 		logger.Tracef("Agent update check complete: repo_ref_deferred duration=%s", time.Since(startedAt).Round(time.Millisecond))
 		return nil
@@ -177,6 +198,7 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 		return err
 	}
 	writeInstalledBuildID(cfg, target)
+	markConfigUpdateOperation(configPath, "success", "")
 	logger.Infof("Agent repo_ref update applied (%s @ %s).", ref, target)
 	logger.Tracef("Agent update check complete: repo_ref_applied duration=%s", time.Since(startedAt).Round(time.Millisecond))
 	return nil

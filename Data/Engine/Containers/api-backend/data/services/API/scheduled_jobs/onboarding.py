@@ -2955,7 +2955,6 @@ class OnboardingSchedulerMixin:
             server_url,
             "--site-enrollment-code",
             enrollment_code,
-            "--install-service",
         ]
         quoted_args = " ".join(shlex.quote(str(arg)) for arg in args)
         quoted_url = shlex.quote(agent_url)

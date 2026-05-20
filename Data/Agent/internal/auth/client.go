@@ -155,11 +155,52 @@ func (c *Client) StoreServerSigningKey(value string) error {
 func (c *Client) StoreAgentReleaseTarget(releaseChannel string, branch string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cfg.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(releaseChannel)
-	if strings.TrimSpace(branch) != "" {
-		c.cfg.Agent.Branch = agentconfig.NormalizeBranch(branch)
+	channel := agentconfig.NormalizeReleaseChannel(releaseChannel)
+	targetBranch := agentconfig.NormalizeBranch(branch)
+	if channel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
 	}
+	c.cfg.Agent.ReleaseChannel = channel
+	c.cfg.Agent.Branch = targetBranch
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func (c *Client) StoreAgentUpdateOperation(operationID string, kind string, releaseChannel string, branch string) (agentconfig.AgentUpdateSection, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := time.Now().Unix()
+	channel := agentconfig.NormalizeReleaseChannel(releaseChannel)
+	targetBranch := agentconfig.NormalizeBranch(branch)
+	if channel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
+	}
+	previousChannel := agentconfig.NormalizeReleaseChannel(c.cfg.Agent.ReleaseChannel)
+	previousBranch := agentconfig.NormalizeBranch(c.cfg.Agent.Branch)
+	if previousChannel == agentconfig.ReleaseChannelStable {
+		previousBranch = agentconfig.DefaultBranch
+	}
+	if strings.TrimSpace(operationID) == "" {
+		operationID = fmt.Sprintf("%d", now)
+	}
+	operation := agentconfig.AgentUpdateSection{
+		OperationID:     strings.TrimSpace(operationID),
+		Kind:            strings.TrimSpace(kind),
+		Status:          "config_written",
+		StartedAt:       now,
+		UpdatedAt:       now,
+		DeadlineAt:      now + int64(15*time.Minute/time.Second),
+		PreviousChannel: previousChannel,
+		PreviousBranch:  previousBranch,
+		TargetChannel:   channel,
+		TargetBranch:    targetBranch,
+	}
+	c.cfg.Agent.ReleaseChannel = channel
+	c.cfg.Agent.Branch = targetBranch
+	c.cfg.Agent.Update = operation
+	if err := agentconfig.Save(c.configPath, c.cfg); err != nil {
+		return agentconfig.AgentUpdateSection{}, err
+	}
+	return operation, nil
 }
 
 func (c *Client) LoadServerSigningKey() string {
@@ -382,12 +423,14 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodPost, "/api/agent/token/refresh", payload, &response, true); err != nil {
-		c.mu.Lock()
-		c.cfg.Tokens.AccessToken = ""
-		c.cfg.Tokens.RefreshToken = ""
-		c.cfg.Tokens.AccessExpiresAt = 0
-		_ = agentconfig.Save(c.configPath, c.cfg)
-		c.mu.Unlock()
+		if permanentRefreshFailure(err) {
+			c.mu.Lock()
+			c.cfg.Tokens.AccessToken = ""
+			c.cfg.Tokens.RefreshToken = ""
+			c.cfg.Tokens.AccessExpiresAt = 0
+			_ = agentconfig.Save(c.configPath, c.cfg)
+			c.mu.Unlock()
+		}
 		if strings.TrimSpace(enrollmentCode) != "" {
 			return c.performEnrollmentLocked(ctx)
 		}
@@ -405,4 +448,27 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 	c.cfg.Tokens.AccessToken = strings.TrimSpace(response.AccessToken)
 	c.cfg.Tokens.AccessExpiresAt = time.Now().Unix() + expiresIn - 5
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func permanentRefreshFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	if strings.Contains(text, "http 401") || strings.Contains(text, "http 403") {
+		return true
+	}
+	for _, marker := range []string{
+		"invalid_refresh",
+		"refresh_token_expired",
+		"device_purged",
+		"fingerprint_mismatch",
+		"token_version",
+		"revoked",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }

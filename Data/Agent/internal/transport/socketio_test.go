@@ -78,6 +78,105 @@ func TestConnectAcksUnsupportedEvent(t *testing.T) {
 	}
 }
 
+func TestConnectInvokesOnConnectedAfterNamespaceConnect(t *testing.T) {
+	connectedCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.OnConnected(func(ctx context.Context) error {
+		connectedCh <- struct{}{}
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(ctx)
+	}()
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case <-connectedCh:
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for connect exit")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for namespace connect")
+	}
+}
+
+func TestConnectTimesOutWaitingForNamespaceConnect(t *testing.T) {
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.SetConnectTimeout(50 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := client.Connect(ctx)
+	if err == nil || !strings.Contains(err.Error(), "socket namespace connect timeout") {
+		t.Fatalf("Connect error = %v, want namespace connect timeout", err)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func runSocketAckScenario(t *testing.T, eventPacket string, register func(*Client)) string {
 	t.Helper()
 

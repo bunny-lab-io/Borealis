@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 )
 
 const (
@@ -144,6 +146,7 @@ func (m *Manager) Stop(ctx context.Context) {
 	listener := m.listener
 	m.listener = nil
 	m.listening = false
+	m.started = false
 	m.lastCheckedAt = time.Now().Unix()
 	m.mu.Unlock()
 	if listener != nil {
@@ -154,6 +157,19 @@ func (m *Manager) Stop(ctx context.Context) {
 	case <-ctx.Done():
 	default:
 	}
+}
+
+func (m *Manager) Restart(ctx context.Context, reason string) {
+	if m == nil {
+		return
+	}
+	cleanReason := strings.TrimSpace(reason)
+	if cleanReason == "" {
+		cleanReason = "role_supervisor_recovery"
+	}
+	m.logf("Remote shell restart requested reason=%s", cleanReason)
+	m.Stop(context.Background())
+	m.Start(ctx)
 }
 
 func (m *Manager) Health() RoleHealth {
@@ -325,16 +341,7 @@ func (m *Manager) logf(format string, args ...any) {
 	}
 	message := fmt.Sprintf(format, args...)
 	timestamp := time.Now().Format("2006-01-02T15:04:05")
-	line := fmt.Sprintf("[%s] [vpn-shell] %s\n", timestamp, message)
-	if err := os.MkdirAll(filepath.Dir(m.logPath), 0755); err != nil {
-		return
-	}
-	file, err := os.OpenFile(m.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer file.Close()
-	_, _ = file.WriteString(line)
+	logutil.Append(m.logPath, logutil.RetentionDaysFromConfig(m.configPath), "[%s] [vpn-shell] %s", timestamp, message)
 }
 
 func newShellSession(conn net.Conn, address string, shellKind string, shellBin string, logf func(string, ...any), onClosed func(*shellSession)) *shellSession {

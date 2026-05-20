@@ -26,6 +26,7 @@ from Data.Engine.assembly_management import initialise_assembly_runtime
 from .queue import (
     WORK_STATUS_FAILED,
     WORK_STATUS_SUCCEEDED,
+    WORK_KIND_AGENT_MAINTENANCE_RUN,
     WORK_KIND_SCHEDULED_RUN,
     WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     LANE_SCHEDULED_JOB,
@@ -739,6 +740,77 @@ def _process_service_actions(db_factory, logger) -> None:
 def _run_scheduler_work_item(scheduler, item: Mapping[str, Any]) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
     kind = str(item.get("kind") or "")
+    if kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
+        run_id = int(payload.get("run_id") or item.get("run_id") or 0)
+        hostname = str(payload.get("hostname") or "").strip()
+        operation_id = str(payload.get("operation_id") or "").strip()
+        event_payload = payload.get("event_payload") if isinstance(payload.get("event_payload"), Mapping) else {}
+        if not run_id or not hostname or not operation_id or not event_payload:
+            raise RuntimeError("agent maintenance work item payload incomplete")
+        emitter = getattr(scheduler, "_emit_host_service_event", None)
+        emitted = bool(
+            emitter(
+                hostname,
+                str(payload.get("service_mode") or "system"),
+                str(payload.get("event_name") or "agent_maintenance_request"),
+                dict(event_payload),
+            )
+        ) if callable(emitter) else False
+        now = _now_ts()
+        conn = scheduler._conn()
+        try:
+            cur = conn.cursor()
+            if emitted:
+                stdout = (
+                    f"Job scheduler emitted agent maintenance operation_id={operation_id} "
+                    f"action={payload.get('action') or '-'} release_channel={payload.get('release_channel') or '-'} "
+                    f"branch={payload.get('branch') or '-'}\n"
+                )
+                cur.execute(
+                    "UPDATE scheduled_job_runs SET status=?, updated_at=? WHERE id=?",
+                    ("Running", now, int(run_id)),
+                )
+                cur.execute(
+                    "UPDATE scheduled_job_run_targets SET resolution_status=?, resolution_reason=? WHERE run_id=?",
+                    ("eligible", "", int(run_id)),
+                )
+                activity_status = "Running"
+                stderr = ""
+                work_status = WORK_STATUS_SUCCEEDED
+            else:
+                stdout = ""
+                stderr = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
+                cur.execute(
+                    "UPDATE scheduled_job_runs SET status=?, finished_ts=?, updated_at=?, error=? WHERE id=?",
+                    ("Failed", now, now, stderr[:512], int(run_id)),
+                )
+                cur.execute(
+                    "UPDATE scheduled_job_run_targets SET resolution_status=?, resolution_reason=? WHERE run_id=?",
+                    ("unresolved", stderr[:512], int(run_id)),
+                )
+                activity_status = "Failed"
+                work_status = WORK_STATUS_FAILED
+            cur.execute("SELECT activity_id FROM scheduled_job_run_activity WHERE run_id=? LIMIT 1", (int(run_id),))
+            row = cur.fetchone()
+            if row and row[0]:
+                from Data.Engine.services.activity_history import update_activity_history_row
+
+                update_activity_history_row(
+                    conn,
+                    int(row[0]),
+                    status=activity_status,
+                    stdout=stdout,
+                    stderr=stderr,
+                    append_output=True,
+                    updated_at=now,
+                    finished_at=now if not emitted else None,
+                )
+            conn.commit()
+        finally:
+            conn.close()
+        if not emitted:
+            raise RuntimeError(stderr)
+        return work_status
     if kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
         scheduler._dispatch_workflow_run(
             job_id=int(payload.get("job_id") or item.get("job_id") or 0),

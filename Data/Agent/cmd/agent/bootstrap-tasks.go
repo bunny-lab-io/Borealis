@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 	"golang.org/x/sys/windows/svc"
 )
 
@@ -25,6 +26,14 @@ func runBootstrapWindowsService(cli cliOptions) int {
 	cfg, err := loadBootstrapConfig(cli, true)
 	if err != nil {
 		return 2
+	}
+	if shouldResetForFreshBootstrap(cfg) {
+		if err := validateFreshBootstrap(cfg); err != nil {
+			return 1
+		}
+		if err := resetInstallRootForFreshBootstrap(cfg); err != nil {
+			return 1
+		}
 	}
 	logger, closeLog, err := openBootstrapLogger(cfg, false)
 	if err != nil {
@@ -131,21 +140,21 @@ func deleteScheduledTask(taskName string, logger *BootstrapLogger) {
 func ensureAgentTasks(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
-	logger.Tracef("Ensuring Agent scheduled tasks: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
+	logger.Tracef("Ensuring Agent service and scheduled support tasks: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
 	if !fileExists(agentExe) {
 		return fmt.Errorf("Agent.exe not found at %s", agentExe)
 	}
-	taskAction := fmt.Sprintf(`"%s" --system-service`, agentExe)
-	if err := createOrReplaceTask(agentTaskName, taskAction, "ONSTART", logger); err != nil {
-		return err
-	}
+	deleteScheduledTask(legacyAgentTaskName, logger)
 	if err := ensureAgentUpdaterTask(cfg, logger); err != nil {
 		return err
 	}
-	if err := startScheduledTask(agentTaskName, logger); err != nil {
+	if err := ensureAgentWatchdogTask(cfg, logger); err != nil {
 		return err
 	}
-	logger.Tracef("Agent scheduled tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
+	if err := agentruntime.InstallService(agentExe); err != nil {
+		return err
+	}
+	logger.Tracef("Agent service and support tasks ensured duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
 
@@ -155,8 +164,18 @@ func ensureAgentUpdaterTask(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	if !fileExists(agentExe) {
 		return fmt.Errorf("Agent.exe not found at %s", agentExe)
 	}
-	updateAction := fmt.Sprintf(`"%s" --update-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "config.json"))
+	updateAction := fmt.Sprintf(`"%s" --update-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "agent.json"))
 	return createOrReplaceTask(agentUpdaterTaskName, updateAction, "HOURLY", logger)
+}
+
+func ensureAgentWatchdogTask(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	agentExe := filepath.Join(cfg.InstallDir, "Agent.exe")
+	logger.Tracef("Ensuring Agent Watchdog scheduled task: agent_exe=%s agent_exe_exists=%t", agentExe, fileExists(agentExe))
+	if !fileExists(agentExe) {
+		return fmt.Errorf("Agent.exe not found at %s", agentExe)
+	}
+	action := fmt.Sprintf(`"%s" --watchdog-check --config-path "%s"`, agentExe, filepath.Join(cfg.InstallDir, "agent.json"))
+	return createOrReplaceTask(agentWatchdogTaskName, action, "MINUTE", logger)
 }
 
 func createOrReplaceTask(name string, command string, schedule string, logger *BootstrapLogger) error {
@@ -171,7 +190,7 @@ func createOrReplaceTask(name string, command string, schedule string, logger *B
 		"/RL", "HIGHEST",
 		"/F",
 	}
-	if schedule == "HOURLY" {
+	if schedule == "HOURLY" || schedule == "MINUTE" {
 		args = append(args, "/MO", "1")
 	}
 	_, err := runCommandTimeout(logger, 30*time.Second, "schtasks.exe", args...)
@@ -193,16 +212,28 @@ func waitForTaskRunning(taskName string, timeout time.Duration) bool {
 }
 
 func startAgentRuntime(cfg BootstrapConfig, logger *BootstrapLogger) error {
-	logger.Tracef("Starting Agent runtime through scheduled task.")
-	if err := startScheduledTask(agentTaskName, logger); err != nil {
+	logger.Tracef("Starting Agent runtime through Windows service.")
+	if err := agentruntime.InstallService(filepath.Join(cfg.InstallDir, "Agent.exe")); err != nil {
 		return err
 	}
-	if !waitForTaskRunning(agentTaskName, 30*time.Second) {
-		logger.Warnf("Borealis Agent task did not report Running before timeout.")
+	if !waitForServiceRunning(agentruntime.WindowsServiceName, 30*time.Second) {
+		logger.Warnf("Borealis Agent service did not report RUNNING before timeout.")
 	} else {
-		logger.Tracef("Borealis Agent task reported Running.")
+		logger.Tracef("Borealis Agent service reported RUNNING.")
 	}
 	return nil
+}
+
+func waitForServiceRunning(serviceName string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		state, exists := queryServiceState(serviceName)
+		if exists && strings.EqualFold(state, "RUNNING") {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
 }
 
 func createOneShotServiceCommand(cfg BootstrapConfig) string {

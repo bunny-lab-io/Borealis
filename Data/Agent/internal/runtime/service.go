@@ -5,5 +5,5 @@ import (
 )
 
 func ConfigPathForExecutable(exePath string) string {
-	return filepath.Join(filepath.Dir(exePath), "config.json")
+	return filepath.Join(filepath.Dir(exePath), "agent.json")
 }

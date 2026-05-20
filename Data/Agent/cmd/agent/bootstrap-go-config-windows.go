@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
@@ -16,6 +17,7 @@ func agentConfigPath(installDir string) string {
 }
 
 func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	removeLegacyConfigJSON(cfg.InstallDir, logger)
 	path := agentConfigPath(cfg.InstallDir)
 	current, err := agentconfig.Load(path)
 	if err != nil {
@@ -26,13 +28,29 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
 	current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
 	current.ApplyDefaults()
-	if err := agentconfig.Save(path, &current); err != nil {
+	if err := agentconfig.SaveWithWriter(path, "bootstrap:config", &current); err != nil {
 		return err
 	}
 	if logger != nil {
 		logger.Tracef("Go Agent config written: path=%s server_url_present=%t enrollment_present=%t release_channel=%s branch=%s", path, current.ServerURL != "", current.EnrollmentCode != "", current.Agent.ReleaseChannel, current.Agent.Branch)
 	}
 	return nil
+}
+
+func removeLegacyConfigJSON(installDir string, logger *BootstrapLogger) {
+	legacyPath := filepath.Join(installDir, "config.json")
+	if _, err := os.Stat(legacyPath); err != nil {
+		return
+	}
+	if err := os.Remove(legacyPath); err != nil {
+		if logger != nil {
+			logger.Warnf("Failed to remove legacy config.json: path=%s error=%v", legacyPath, err)
+		}
+		return
+	}
+	if logger != nil {
+		logger.Tracef("Removed legacy config.json: path=%s", legacyPath)
+	}
 }
 
 func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
@@ -113,7 +131,7 @@ func writeConfigInstalledBuildID(cfg BootstrapConfig, value string) error {
 	if strings.TrimSpace(current.Agent.Branch) == "" {
 		current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
 	}
-	if err := agentconfig.Save(path, &current); err != nil {
+	if err := agentconfig.SaveWithWriter(path, "bootstrap:installed_build_id", &current); err != nil {
 		return err
 	}
 	return nil
@@ -129,22 +147,19 @@ func writeConfigReleaseTarget(cfg BootstrapConfig, releaseChannel string, branch
 	if strings.TrimSpace(branch) != "" {
 		current.Agent.Branch = agentconfig.NormalizeBranch(branch)
 	}
-	_ = agentconfig.Save(path, &current)
+	_ = agentconfig.SaveWithWriter(path, "bootstrap:release_target", &current)
 }
 
 func readConfigDependencyVersion(cfg BootstrapConfig, name string) string {
 	current, err := agentconfig.Load(agentConfigPath(cfg.InstallDir))
-	if err != nil || current.DependencyVersions == nil {
+	if err != nil || len(current.Agent.DependencyState) == 0 {
 		return ""
 	}
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "wireguard":
-		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.WireGuard)
-	case "ultravnc":
-		return agentconfig.NormalizeDependencyVersion(current.DependencyVersions.UltraVNC)
-	default:
+	state, ok := current.Agent.DependencyState[agentconfig.NormalizeDependencyName(name)]
+	if !ok {
 		return ""
 	}
+	return agentconfig.NormalizeDependencyVersion(state.InstalledVersion)
 }
 
 func writeConfigDependencyVersion(cfg BootstrapConfig, name string, version string) error {
@@ -157,17 +172,40 @@ func writeConfigDependencyVersion(cfg BootstrapConfig, name string, version stri
 	if err != nil {
 		return err
 	}
-	versions := current.EnsureDependencyVersions()
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "wireguard":
-		versions.WireGuard = normalizedVersion
-	case "ultravnc":
-		versions.UltraVNC = normalizedVersion
-	default:
+	if agentconfig.NormalizeDependencyName(name) == "" {
 		return nil
 	}
-	if err := agentconfig.Save(path, &current); err != nil {
+	current.UpdateDependencyState(name, func(state *agentconfig.DependencyStateSection) {
+		state.InstalledVersion = normalizedVersion
+	})
+	if err := agentconfig.SaveWithWriter(path, "bootstrap:dependency_version:"+agentconfig.NormalizeDependencyName(name), &current); err != nil {
 		return err
 	}
 	return nil
+}
+
+func writeConfigDependencyState(cfg BootstrapConfig, name string, phase string, status string, desiredVersion string, installedVersion string, detail string, lastError string) {
+	path := agentConfigPath(cfg.InstallDir)
+	now := time.Now().Unix()
+	_ = agentconfig.UpdateWithWriter(path, "bootstrap:dependency_state:"+strings.ToLower(strings.TrimSpace(name)), func(current *agentconfig.AgentConfig) {
+		current.UpdateDependencyState(name, func(state *agentconfig.DependencyStateSection) {
+			state.Phase = phase
+			state.Status = status
+			state.DesiredVersion = desiredVersion
+			if strings.TrimSpace(installedVersion) != "" {
+				state.InstalledVersion = installedVersion
+			}
+			state.Detail = detail
+			if status == "recovering" || phase == "installing" || phase == "install_needed" {
+				state.LastAttemptAt = now
+			}
+			if status == "healthy" {
+				state.LastSuccessAt = now
+				state.LastError = ""
+			}
+			if strings.TrimSpace(lastError) != "" {
+				state.LastError = strings.TrimSpace(lastError)
+			}
+		})
+	})
 }

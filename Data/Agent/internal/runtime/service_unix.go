@@ -8,9 +8,39 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
-const linuxInstallPath = "/opt/Borealis/Agent/Agent"
+const (
+	linuxInstallPath         = "/opt/Borealis/Agent/Agent"
+	linuxServiceName         = "borealis-agent.service"
+	linuxUpdaterServiceName  = "borealis-agent-updater.service"
+	linuxUpdaterTimerName    = "borealis-agent-updater.timer"
+	linuxWatchdogServiceName = "borealis-agent-watchdog.service"
+	linuxWatchdogTimerName   = "borealis-agent-watchdog.timer"
+)
+
+func ResetInstallForFreshDeploy(exePath string) error {
+	root := filepath.Clean("/opt/Borealis")
+	if isPathInside(filepath.Clean(exePath), root) {
+		return nil
+	}
+	_ = exec.Command("systemctl", "stop", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "stop", linuxUpdaterTimerName).Run()
+	_ = exec.Command("systemctl", "stop", linuxUpdaterServiceName).Run()
+	_ = exec.Command("systemctl", "stop", linuxWatchdogTimerName).Run()
+	_ = exec.Command("systemctl", "stop", linuxWatchdogServiceName).Run()
+	_ = exec.Command("systemctl", "disable", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "disable", linuxUpdaterTimerName).Run()
+	_ = exec.Command("systemctl", "disable", linuxWatchdogTimerName).Run()
+	_ = os.Remove("/etc/systemd/system/" + linuxServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterTimerName)
+	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogTimerName)
+	_ = exec.Command("systemctl", "daemon-reload").Run()
+	return os.RemoveAll(root)
+}
 
 func PrepareServiceExecutable(exePath string) (string, error) {
 	destination := linuxInstallPath
@@ -37,14 +67,14 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%s
-ExecStart=%s --system-service --config-path %s
+ExecStart=%s --service --config-path %s
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 `, filepath.Dir(exePath), shellQuote(exePath), shellQuote(configPath))
-	path := "/etc/systemd/system/borealis-agent.service"
+	path := "/etc/systemd/system/" + linuxServiceName
 	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
 		return err
 	}
@@ -58,7 +88,7 @@ Type=oneshot
 WorkingDirectory=%s
 ExecStart=%s --update-check --config-path %s
 `, filepath.Dir(exePath), shellQuote(exePath), shellQuote(configPath))
-	if err := os.WriteFile("/etc/systemd/system/borealis-agent-updater.service", []byte(updaterUnit), 0o644); err != nil {
+	if err := os.WriteFile("/etc/systemd/system/"+linuxUpdaterServiceName, []byte(updaterUnit), 0o644); err != nil {
 		return err
 	}
 	updaterTimer := `[Unit]
@@ -73,24 +103,59 @@ Unit=borealis-agent-updater.service
 [Install]
 WantedBy=timers.target
 `
-	if err := os.WriteFile("/etc/systemd/system/borealis-agent-updater.timer", []byte(updaterTimer), 0o644); err != nil {
+	if err := os.WriteFile("/etc/systemd/system/"+linuxUpdaterTimerName, []byte(updaterTimer), 0o644); err != nil {
+		return err
+	}
+	watchdogUnit := fmt.Sprintf(`[Unit]
+Description=Borealis Agent Watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%s
+ExecStart=%s --watchdog-check --config-path %s
+`, filepath.Dir(exePath), shellQuote(exePath), shellQuote(configPath))
+	if err := os.WriteFile("/etc/systemd/system/"+linuxWatchdogServiceName, []byte(watchdogUnit), 0o644); err != nil {
+		return err
+	}
+	watchdogTimer := `[Unit]
+Description=Borealis Agent Watchdog Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Persistent=true
+Unit=borealis-agent-watchdog.service
+
+[Install]
+WantedBy=timers.target
+`
+	if err := os.WriteFile("/etc/systemd/system/"+linuxWatchdogTimerName, []byte(watchdogTimer), 0o644); err != nil {
 		return err
 	}
 	_ = exec.Command("systemctl", "daemon-reload").Run()
-	_ = exec.Command("systemctl", "enable", "borealis-agent.service").Run()
-	_ = exec.Command("systemctl", "enable", "--now", "borealis-agent-updater.timer").Run()
-	return exec.Command("systemctl", "restart", "borealis-agent.service").Run()
+	_ = exec.Command("systemctl", "enable", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "enable", "--now", linuxUpdaterTimerName).Run()
+	_ = exec.Command("systemctl", "enable", "--now", linuxWatchdogTimerName).Run()
+	return exec.Command("systemctl", "restart", linuxServiceName).Run()
 }
 
 func UninstallService() error {
-	_ = exec.Command("systemctl", "stop", "borealis-agent.service").Run()
-	_ = exec.Command("systemctl", "stop", "borealis-agent-updater.timer").Run()
-	_ = exec.Command("systemctl", "stop", "borealis-agent-updater.service").Run()
-	_ = exec.Command("systemctl", "disable", "borealis-agent.service").Run()
-	_ = exec.Command("systemctl", "disable", "borealis-agent-updater.timer").Run()
-	_ = os.Remove("/etc/systemd/system/borealis-agent.service")
-	_ = os.Remove("/etc/systemd/system/borealis-agent-updater.service")
-	_ = os.Remove("/etc/systemd/system/borealis-agent-updater.timer")
+	_ = exec.Command("systemctl", "stop", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "stop", linuxUpdaterTimerName).Run()
+	_ = exec.Command("systemctl", "stop", linuxUpdaterServiceName).Run()
+	_ = exec.Command("systemctl", "stop", linuxWatchdogTimerName).Run()
+	_ = exec.Command("systemctl", "stop", linuxWatchdogServiceName).Run()
+	_ = exec.Command("systemctl", "disable", linuxServiceName).Run()
+	_ = exec.Command("systemctl", "disable", linuxUpdaterTimerName).Run()
+	_ = exec.Command("systemctl", "disable", linuxWatchdogTimerName).Run()
+	_ = os.Remove("/etc/systemd/system/" + linuxServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterTimerName)
+	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogServiceName)
+	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogTimerName)
 	return exec.Command("systemctl", "daemon-reload").Run()
 }
 
@@ -132,6 +197,22 @@ func samePath(left string, right string) bool {
 		right = rightAbs
 	}
 	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func isPathInside(path string, root string) bool {
+	pathAbs, pathErr := filepath.Abs(path)
+	rootAbs, rootErr := filepath.Abs(root)
+	if pathErr == nil {
+		path = pathAbs
+	}
+	if rootErr == nil {
+		root = rootAbs
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
 func shellQuote(value string) string {
