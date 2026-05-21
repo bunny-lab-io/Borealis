@@ -157,7 +157,7 @@ const TUNNEL_INFO_IDLE = Object.freeze({
 
 const WORKSPACES = [
   { key: "inventory", label: "Inventory", icon: AppsRoundedIcon },
-  { key: "remote_ops", label: "Remote Tools", icon: TerminalRoundedIcon },
+  { key: "remote_ops", label: "Backend Tools", icon: TerminalRoundedIcon },
   { key: "protection", label: "Protection", icon: PolicyIcon },
   { key: "history", label: "History", icon: ListAltRoundedIcon },
   { key: "config", label: "Metadata", icon: LabelRoundedIcon },
@@ -3396,7 +3396,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const tunnelConnection = useMemo(() => {
     const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
     if (tunnelStatus === "up") {
-      return { value: "Connected", tone: "ready", detail: "WireGuard tunnel ready for remote tools." };
+      return { value: "Connected", tone: "ready", detail: "WireGuard tunnel ready for backend tools." };
     }
     if (tunnelStatus === "down") {
       return { value: "Down", tone: "danger", detail: "WireGuard tunnel unavailable." };
@@ -3444,7 +3444,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               ? "Agent updater failed"
               : "Agent role degraded",
         detail: !statusIsOnline
-          ? "Recover control before running remote tools."
+          ? "Recover control before running backend tools."
           : tunnelBlocked
             ? "Agent management connection needs review."
             : updateFailed
@@ -3463,8 +3463,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     }
     return {
       tone: "ready",
-      headline: "Ready for remote tools",
-      detail: "Agent, inventory, and remote-control signals look usable.",
+      headline: "Ready for backend tools",
+      detail: "Agent, inventory, and background-control signals look usable.",
     };
   }, [
     hardwareOverview.storageCritical,
