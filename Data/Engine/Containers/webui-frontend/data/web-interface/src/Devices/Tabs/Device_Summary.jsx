@@ -37,7 +37,7 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
-import AgentHealthTab, { buildAgentHealthRows } from "./Agent_Health.jsx";
+import { buildAgentHealthRows } from "./Agent_Health.jsx";
 import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
 import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
@@ -152,13 +152,11 @@ const TUNNEL_INFO_IDLE = Object.freeze({
 });
 
 const WORKSPACES = [
-  { key: "command", label: "Command", icon: SpeedRoundedIcon },
-  { key: "health", label: "Health", icon: DeveloperBoardRoundedIcon },
-  { key: "remote_ops", label: "Remote Tools", icon: TerminalRoundedIcon },
   { key: "inventory", label: "Inventory", icon: AppsRoundedIcon },
+  { key: "remote_ops", label: "Remote Tools", icon: TerminalRoundedIcon },
   { key: "protection", label: "Protection", icon: PolicyIcon },
   { key: "history", label: "History", icon: ListAltRoundedIcon },
-  { key: "config", label: "Config", icon: LabelRoundedIcon },
+  { key: "config", label: "Metadata", icon: LabelRoundedIcon },
 ];
 const WORKSPACE_KEYS = new Set(WORKSPACES.map((workspace) => workspace.key));
 const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
@@ -172,8 +170,9 @@ const WORKSPACE_VIEW_OPTIONS = Object.freeze({
   config: ["metadata"],
 });
 const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
-  device_summary: { workspace: "command" },
-  summary: { workspace: "command" },
+  command: { workspace: "inventory", view: "summary" },
+  device_summary: { workspace: "inventory", view: "summary" },
+  summary: { workspace: "inventory", view: "summary" },
   file_management: { workspace: "remote_ops", view: "files" },
   installed_software: { workspace: "inventory", view: "software" },
   software: { workspace: "inventory", view: "software" },
@@ -187,11 +186,11 @@ const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
   activity: { workspace: "history" },
   remote_shell: { workspace: "remote_ops", view: "shell" },
   shell: { workspace: "remote_ops", view: "shell" },
-  agent_health: { workspace: "health" },
-  health: { workspace: "health" },
+  agent_health: { workspace: "inventory", view: "summary" },
+  health: { workspace: "inventory", view: "summary" },
 });
 
-const normalizeWorkspaceKey = (value, fallback = "command") => {
+const normalizeWorkspaceKey = (value, fallback = "inventory") => {
   const normalized = String(value || "").trim().toLowerCase();
   if (WORKSPACE_KEYS.has(normalized)) return normalized;
   const legacyTarget = LEGACY_TAB_TO_WORKSPACE[normalized];
@@ -1027,12 +1026,9 @@ export default function DeviceSummary() {
     [deviceSearchParams]
   );
   const legacyWorkspaceTarget = LEGACY_TAB_TO_WORKSPACE[rawTabParam] || null;
-  const hasExplicitWorkspaceTarget = Boolean(
-    rawTabParam && (WORKSPACE_KEYS.has(rawTabParam) || legacyWorkspaceTarget)
-  );
   const activeWorkspaceKey = normalizeWorkspaceKey(
     WORKSPACE_KEYS.has(rawTabParam) ? rawTabParam : legacyWorkspaceTarget?.workspace,
-    "command"
+    "inventory"
   );
   const activeWorkspaceView = normalizeWorkspaceView(
     activeWorkspaceKey,
@@ -1206,7 +1202,7 @@ export default function DeviceSummary() {
   const openQuickJobDialog = useCallback(() => {
     setQuickJobOpen(true);
   }, []);
-  const shouldPollTunnelStatus = ["command", "health", "remote_ops"].includes(activeWorkspaceKey);
+  const shouldPollTunnelStatus = Boolean(tunnelAgentId);
   useEffect(() => {
     setConnectionError("");
   }, [connectionDraft]);
@@ -3125,17 +3121,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [agentRoleHealthPayload, formatTimestamp]
   );
 
-  const renderAgentHealthTab = () => (
-    <AgentHealthTab
-      agentRoleHealth={agentRoleHealthPayload}
-      summaryDataReady={summaryDataReady}
-      formatTimestamp={formatTimestamp}
-      tunnelInfo={tunnelInfo}
-      hostname={activityHostname}
-      onRequestRefresh={reloadDeviceSummarySnapshot}
-    />
-  );
-
   const renderTopLevelFieldCell = useCallback((params) => {
     const row = params?.data && typeof params.data === "object" ? params.data : {};
     const label = String(row?.label || params?.value || "").trim() || "unknown";
@@ -3343,7 +3328,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;
     const topTabKey = activeWorkspaceKey || "";
-    if (topTabKey !== "inventory" && topTabKey !== "command") return;
+    if (topTabKey !== "inventory") return;
     summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
       topTabKey,
@@ -3401,14 +3386,17 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   }, [agentHealthRows]);
   const dataFreshnessLabel = useMemo(() => {
     const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
-    const lastSeenSeconds = Number(rawLastSeen || 0);
-    if (!lastSeenSeconds) return "No heartbeat";
-    const ageSeconds = Math.max(0, Math.round(Date.now() / 1000 - lastSeenSeconds));
-    if (ageSeconds < 120) return "Fresh heartbeat";
-    if (ageSeconds < 3600) return `${Math.round(ageSeconds / 60)} min since heartbeat`;
-    if (ageSeconds < 86400) return `${Math.round(ageSeconds / 3600)} hr since heartbeat`;
-    return `${Math.round(ageSeconds / 86400)} days since heartbeat`;
-  }, [agent?.last_seen, device?.last_seen, meta.lastSeen, summary.last_seen]);
+    return formatDateValue(rawLastSeen, "No heartbeat").replace(" AM", "AM").replace(" PM", "PM");
+  }, [agent?.last_seen, device?.last_seen, formatDateValue, meta.lastSeen, summary.last_seen]);
+  const engineConnection = useMemo(() => {
+    if (statusIsOnline && tunnelInfo?.agent_socket) {
+      return { value: "Connected", tone: "ready" };
+    }
+    if (statusIsOnline) {
+      return { value: "Degraded", tone: "warning" };
+    }
+    return { value: "Offline", tone: "danger" };
+  }, [statusIsOnline, tunnelInfo?.agent_socket]);
   const readiness = useMemo(() => {
     const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
     const updateState = String(meta.agentUpdateState || summary.agent_update_state || "").trim().toLowerCase();
@@ -3429,7 +3417,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               ? "Agent updater failed"
               : "Agent role degraded",
         detail: !statusIsOnline
-          ? "Recover control before running remote operations."
+          ? "Recover control before running remote tools."
           : tunnelBlocked
             ? "WireGuard or SYSTEM socket is unavailable."
             : updateFailed
@@ -3448,7 +3436,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     }
     return {
       tone: "ready",
-      headline: "Ready for remote ops",
+      headline: "Ready for remote tools",
       detail: "Agent, inventory, and remote-control signals look usable.",
     };
   }, [
@@ -3464,86 +3452,20 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     tunnelInfo?.agent_socket,
     tunnelInfo?.status,
   ]);
-  const recommendedWorkspaceKey = useMemo(() => {
-    if (!statusIsOnline || readiness.tone === "danger") return "health";
-    if (hardwareOverview.storageCritical > 0) return "inventory";
-    return "command";
-  }, [hardwareOverview.storageCritical, readiness.tone, statusIsOnline]);
-  const initialWorkspaceFocusRef = useRef(false);
-  useEffect(() => {
-    if (initialWorkspaceFocusRef.current || hasExplicitWorkspaceTarget || !summaryDataReady) {
-      return;
-    }
-    initialWorkspaceFocusRef.current = true;
-    setActiveWorkspace(recommendedWorkspaceKey);
-  }, [hasExplicitWorkspaceTarget, recommendedWorkspaceKey, setActiveWorkspace, summaryDataReady]);
-  const commandCards = useMemo(
-    () => [
-      {
-        id: "recover-control",
-        title: readiness.headline,
-        eyebrow: "Recover Control",
-        description: readiness.detail,
-        icon: DeveloperBoardRoundedIcon,
-        tone: readiness.tone,
-        actionLabel: "Open Health",
-        workspace: "health",
-      },
-      {
-        id: "remote-ops",
-        title: statusIsOnline ? "Operate device" : "Remote ops waiting",
-        eyebrow: "Remote Tools",
-        description: statusIsOnline
-          ? "Open shell, files, services, processes, or remote desktop."
-          : "Recover agent reachability before launching remote tools.",
-        icon: TerminalRoundedIcon,
-        tone: statusIsOnline ? "ready" : "muted",
-        actionLabel: "Open Remote Tools",
-        workspace: "remote_ops",
-        view: "shell",
-      },
-      {
-        id: "investigate-risk",
-        title:
-          hardwareOverview.storageCritical > 0
-            ? `${hardwareOverview.storageCritical} storage alert${hardwareOverview.storageCritical === 1 ? "" : "s"}`
-            : "Review device risk",
-        eyebrow: "Investigate",
-        description:
-          hardwareOverview.storageCritical > 0
-            ? `Storage usage exceeds ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% on one or more volumes.`
-            : "Open watchdogs and activity when behavior needs investigation.",
-        icon: PolicyIcon,
-        tone: hardwareOverview.storageCritical > 0 ? "warning" : "muted",
-        actionLabel: hardwareOverview.storageCritical > 0 ? "Open Inventory" : "Open Protection",
-        workspace: hardwareOverview.storageCritical > 0 ? "inventory" : "protection",
-        view: hardwareOverview.storageCritical > 0 ? "summary" : "",
-      },
-      {
-        id: "maintain-inventory",
-        title: "Maintain inventory",
-        eyebrow: "Maintain",
-        description: "Review hardware facts, installed software, metadata, and agent channel state.",
-        icon: AppsRoundedIcon,
-        tone: "muted",
-        actionLabel: "Open Inventory",
-        workspace: "inventory",
-        view: "summary",
-      },
-    ],
-    [hardwareOverview.storageCritical, readiness.detail, readiness.headline, readiness.tone, statusIsOnline]
-  );
+  const remoteToolsBadgeCount = [
+    !statusIsOnline,
+    tunnelInfo?.agent_socket === false,
+    ["down", "error"].includes(String(tunnelInfo?.status || "").trim().toLowerCase()),
+  ].filter(Boolean).length;
   const workspaceBadges = useMemo(
     () => ({
-      health: readiness.tone === "danger" ? "!" : "",
       inventory: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
       protection: "",
       history: "",
-      remote_ops: statusIsOnline ? "" : "!",
+      remote_ops: remoteToolsBadgeCount > 0 ? String(remoteToolsBadgeCount) : "",
       config: "",
-      command: readiness.tone === "ready" ? "" : "!",
     }),
-    [hardwareOverview.storageCritical, readiness.tone, statusIsOnline]
+    [hardwareOverview.storageCritical, remoteToolsBadgeCount]
   );
 
   const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
@@ -3715,23 +3637,23 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const readinessPills = [
     {
+      id: "engine-connection",
+      label: "Engine Connection",
+      value: engineConnection.value,
+      tone: engineConnection.tone,
+    },
+    {
       id: "tunnel",
       label: "WireGuard",
       value:
         tunnelInfo?.status === "up"
-          ? "Up"
+          ? "Connected"
           : tunnelInfo?.status === "down"
             ? "Down"
             : tunnelInfo?.status === "error"
               ? "Error"
               : "Idle",
       tone: tunnelInfo?.status === "up" ? "ready" : tunnelInfo?.status === "idle" ? "muted" : "danger",
-    },
-    {
-      id: "socket",
-      label: "Socket",
-      value: tunnelInfo?.agent_socket ? "Connected" : "No SYSTEM socket",
-      tone: tunnelInfo?.agent_socket ? "ready" : "warning",
     },
     {
       id: "roles",
@@ -3886,141 +3808,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Stack>
   );
 
-  const renderCommandHub = () => (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "1fr",
-          gap: 1.5,
-          minWidth: 0,
-        }}
-      >
-        <Box
-          sx={{
-            borderRadius: 3,
-            border: `1px solid ${getToneStyles(readiness.tone).border}`,
-            background: getToneStyles(readiness.tone).background,
-            p: { xs: 2, md: 2.4 },
-            minWidth: 0,
-          }}
-        >
-          <Typography
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontSize: "0.72rem",
-              fontWeight: 800,
-              letterSpacing: 0.45,
-              textTransform: "uppercase",
-              mb: 0.8,
-            }}
-          >
-            Current Blocker
-          </Typography>
-          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "1.25rem", fontWeight: 800, lineHeight: 1.15 }}>
-            {readiness.headline}
-          </Typography>
-          <Typography sx={{ color: MAGIC_UI.textMuted, mt: 0.8, fontSize: "0.9rem", lineHeight: 1.45 }}>
-            {readiness.detail}
-          </Typography>
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.8 }}>
-            <Button
-              variant="contained"
-              onClick={() => setActiveWorkspace(recommendedWorkspaceKey)}
-              sx={{
-                borderRadius: 999,
-                textTransform: "none",
-                background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
-                color: "#020617",
-                fontWeight: 800,
-              }}
-            >
-              Open Recommended Workspace
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={requestAgentUpdate}
-              disabled={!activityHostname || updateAgentBusy}
-              sx={{
-                borderRadius: 999,
-                textTransform: "none",
-                borderColor: MAGIC_UI.panelBorder,
-                color: MAGIC_UI.textBright,
-              }}
-            >
-              {updateAgentBusy ? "Updating..." : "Update Agent"}
-            </Button>
-          </Stack>
-        </Box>
-      </Box>
-      <Box
-        sx={{
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0,1fr))", xl: "repeat(4, minmax(0,1fr))" },
-          gap: 1.25,
-          minWidth: 0,
-        }}
-      >
-        {commandCards.map((card) => {
-          const CardIcon = card.icon;
-          const toneStyles = getToneStyles(card.tone);
-          return (
-            <Box
-              key={card.id}
-              sx={{
-                borderRadius: 3,
-                border: `1px solid ${toneStyles.border}`,
-                background: toneStyles.background,
-                p: 1.6,
-                minWidth: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 1,
-              }}
-            >
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
-                <Box sx={{ color: toneStyles.icon, display: "flex", flexShrink: 0 }}>
-                  <CardIcon sx={{ fontSize: 20 }} />
-                </Box>
-                <Typography
-                  sx={{
-                    color: toneStyles.accent,
-                    fontSize: "0.68rem",
-                    fontWeight: 800,
-                    letterSpacing: 0.42,
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {card.eyebrow}
-                </Typography>
-              </Stack>
-              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.95rem", fontWeight: 800, lineHeight: 1.25 }}>
-                {card.title}
-              </Typography>
-              <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem", lineHeight: 1.45, flexGrow: 1 }}>
-                {card.description}
-              </Typography>
-              <Button
-                size="small"
-                onClick={() => setActiveWorkspace(card.workspace, card.view || "")}
-                sx={{
-                  alignSelf: "flex-start",
-                  borderRadius: 999,
-                  textTransform: "none",
-                  color: MAGIC_UI.textBright,
-                  border: `1px solid ${toneStyles.border}`,
-                  px: 1.25,
-                }}
-              >
-                {card.actionLabel}
-              </Button>
-            </Box>
-          );
-        })}
-      </Box>
-    </Box>
-  );
-
   const renderRemoteOpsWorkspace = () => {
     const view = normalizeWorkspaceView("remote_ops", activeWorkspaceView);
     return (
@@ -4082,13 +3869,12 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   };
 
   const renderWorkspaceContent = () => {
-    if (activeWorkspaceKey === "health") return renderAgentHealthTab();
     if (activeWorkspaceKey === "remote_ops") return renderRemoteOpsWorkspace();
     if (activeWorkspaceKey === "inventory") return renderInventoryWorkspace();
     if (activeWorkspaceKey === "protection") return renderWatchdogsTab();
     if (activeWorkspaceKey === "history") return renderHistory();
     if (activeWorkspaceKey === "config") return renderMetadataTab();
-    return renderCommandHub();
+    return renderInventoryWorkspace();
   };
   const workspaceContent = renderWorkspaceContent();
 
