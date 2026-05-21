@@ -3378,10 +3378,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       unhealthyCount: unhealthyRoles.length,
       label:
         roles.length === 0
-          ? "No role report"
+          ? "No Role Report"
           : unhealthyRoles.length > 0
-            ? `${unhealthyRoles.length}/${roles.length} roles degraded`
-            : `${roles.length} roles healthy`,
+            ? `${unhealthyRoles.length}/${roles.length} Roles Degraded`
+            : `${roles.length} Roles Healthy`,
     };
   }, [agentHealthRows]);
   const dataFreshnessLabel = useMemo(() => {
