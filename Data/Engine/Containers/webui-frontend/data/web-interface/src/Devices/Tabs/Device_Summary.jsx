@@ -3665,7 +3665,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     },
     {
       id: "freshness",
-      label: "Freshness",
+      label: "Last Heartbeat",
       value: dataFreshnessLabel,
       tone: statusIsOnline ? "ready" : "warning",
     },
