@@ -94,7 +94,6 @@ const FILTER_OPTIONS = [
   { key: "completed", label: "Completed" },
 ];
 const AUTO_SIZE_COLUMNS = [
-  "name",
   "componentsMeta",
   "jobType",
   "target",
@@ -816,51 +815,82 @@ export default function ScheduledJobsList({ refreshToken }) {
 
   const columnDefs = useMemo(
     () => [
-      {
-        headerName: "Name",
-        field: "name",
-        cellRenderer: nameCellRenderer,
-        sort: "asc",
-        minWidth: 150,
-        cellClass: "auto-col-tight",
-      },
+      { headerName: "Name", field: "name", cellRenderer: nameCellRenderer, flex: 1, minWidth: 150, cellClass: "auto-col-tight" },
       {
         headerName: "Assembly(s)",
         colId: "componentsMeta",
         valueGetter: (params) => formatComponentsMetaValue(params?.data?.componentsMeta),
         minWidth: 180,
         cellRenderer: assembliesCellRenderer,
-        cellClass: "auto-col-tight",
+        cellClass: "auto-col-tight"
       },
-      { headerName: "Type", field: "jobType", minWidth: 150, cellClass: "auto-col-tight" },
-      { headerName: "Target", field: "target", minWidth: 140, cellClass: "auto-col-tight" },
-      { headerName: "Recurrence", field: "occurrence", minWidth: 150, cellClass: "auto-col-tight" },
-      { headerName: "Last Run", field: "lastRun", minWidth: 150, cellClass: "auto-col-tight" },
-      {
-        headerName: "Status",
-        field: "result",
-        minWidth: 150,
-        cellRenderer: statusCellRenderer,
-        cellClass: "auto-col-tight",
+      { 
+        headerName: "Type", 
+        field: "jobType", 
+        minWidth: 120, 
+        cellClass: "auto-col-tight" 
       },
-      { headerName: "Next Run", field: "nextRun", minWidth: 150, cellClass: "auto-col-tight" },
+      { 
+        headerName: "Target", 
+        field: "target", 
+        minWidth: 110, 
+        cellClass: "auto-col-tight" 
+      },
+      { headerName: "Recurrence", 
+        field: "occurrence", 
+        minWidth: 130, 
+        cellClass: "centered-cell",
+        cellStyle: {
+          justifyContent: "center",
+          textAlign: "center",
+        },
+      },
+      { 
+        headerName: "Last Run", 
+        field: "lastRun", 
+        minWidth: 150, 
+        cellClass: "auto-col-tight", 
+        sort: "dec" 
+      },
+      { 
+        headerName: "Status", 
+        field: "result", 
+        minWidth: 100, 
+        cellRenderer: statusCellRenderer, 
+        cellClass: "auto-col-tight" 
+      },
+      { 
+        headerName: "Next Run", 
+        field: "nextRun", 
+        minWidth: 150, 
+        cellClass: "auto-col-tight" 
+      },
       {
         headerName: "Results",
         colId: "resultsCounts",
         valueGetter: (params) => formatResultsCountsValue(params?.data?.resultsCounts),
-        minWidth: 280,
+        minWidth: 250,
         cellRenderer: resultsCellRenderer,
-        cellClass: "auto-col-tight",
+        cellClass: "centered-cell",
+        cellStyle: {
+          justifyContent: "center",
+          textAlign: "center",
+        },
         sortable: false,
-        filter: false
+        filter: false,
+        resizable: false
       },
       {
         headerName: "Enabled",
         field: "enabled",
-        minWidth: 140,
-        flex: 1,
+        minWidth: 90,
+        width: 90,
         cellRenderer: enabledCellRenderer,
-        cellClass: "auto-col-tight",
+        cellClass: "centered-cell",
+        cellStyle: {
+          justifyContent: "center",
+          textAlign: "center",
+        },
         sortable: false,
         filter: false,
         resizable: false,
