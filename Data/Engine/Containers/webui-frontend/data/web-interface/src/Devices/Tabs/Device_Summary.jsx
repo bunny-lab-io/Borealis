@@ -37,7 +37,8 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
-import AgentHealthTab from "./Agent_Health.jsx";
+import AgentHealthTab, { buildAgentHealthRows } from "./Agent_Health.jsx";
+import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
 import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
@@ -153,7 +154,7 @@ const TUNNEL_INFO_IDLE = Object.freeze({
 const WORKSPACES = [
   { key: "command", label: "Command", icon: SpeedRoundedIcon },
   { key: "health", label: "Health", icon: DeveloperBoardRoundedIcon },
-  { key: "remote_ops", label: "Remote Ops", icon: TerminalRoundedIcon },
+  { key: "remote_ops", label: "Remote Tools", icon: TerminalRoundedIcon },
   { key: "inventory", label: "Inventory", icon: AppsRoundedIcon },
   { key: "protection", label: "Protection", icon: PolicyIcon },
   { key: "history", label: "History", icon: ListAltRoundedIcon },
@@ -1125,6 +1126,7 @@ export default function DeviceSummary() {
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
   const [agentBranchDraft, setAgentBranchDraft] = useState("");
@@ -3118,6 +3120,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           : {},
     [meta.agentRoleHealth, summary.agent_role_health]
   );
+  const agentHealthRows = useMemo(
+    () => buildAgentHealthRows(Array.isArray(agentRoleHealthPayload?.roles) ? agentRoleHealthPayload.roles : [], formatTimestamp),
+    [agentRoleHealthPayload, formatTimestamp]
+  );
 
   const renderAgentHealthTab = () => (
     <AgentHealthTab
@@ -3376,11 +3382,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
   const statusIsOnline = String(status || "").trim().toLowerCase() === "online";
   const roleHealthSummary = useMemo(() => {
-    const roles = Array.isArray(agentRoleHealthPayload?.roles) ? agentRoleHealthPayload.roles : [];
+    const roles = Array.isArray(agentHealthRows) ? agentHealthRows : [];
     const unhealthyRoles = roles.filter((role) => {
-      const health = String(role?.health || role?.status || role?.state || "").trim().toLowerCase();
+      const health = String(role?.statusCode || role?.status || "").trim().toLowerCase();
       if (!health) return false;
-      return !["healthy", "ok", "online", "running", "ready", "complete", "completed"].includes(health);
+      return !["healthy", "loaded", "ok", "online", "running", "ready", "complete", "completed", "not_applicable", "unsupported"].includes(health);
     });
     return {
       count: roles.length,
@@ -3392,7 +3398,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             ? `${unhealthyRoles.length}/${roles.length} roles degraded`
             : `${roles.length} roles healthy`,
     };
-  }, [agentRoleHealthPayload]);
+  }, [agentHealthRows]);
   const dataFreshnessLabel = useMemo(() => {
     const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
     const lastSeenSeconds = Number(rawLastSeen || 0);
@@ -3425,7 +3431,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         detail: !statusIsOnline
           ? "Recover control before running remote operations."
           : tunnelBlocked
-            ? "Tunnel or SYSTEM socket is unavailable."
+            ? "WireGuard or SYSTEM socket is unavailable."
             : updateFailed
               ? "Review updater state and startup flow."
               : "Role health needs review.",
@@ -3486,13 +3492,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       {
         id: "remote-ops",
         title: statusIsOnline ? "Operate device" : "Remote ops waiting",
-        eyebrow: "Remote Ops",
+        eyebrow: "Remote Tools",
         description: statusIsOnline
           ? "Open shell, files, services, processes, or remote desktop."
           : "Recover agent reachability before launching remote tools.",
         icon: TerminalRoundedIcon,
         tone: statusIsOnline ? "ready" : "muted",
-        actionLabel: "Open Remote Ops",
+        actionLabel: "Open Remote Tools",
         workspace: "remote_ops",
         view: "shell",
       },
@@ -3551,7 +3557,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
-  const pageSubtitle = status ? `Status: ${status}` : "";
+  const pageSubtitle = `${readiness.headline} - Agent ${status || "Unknown"} - ${readiness.detail}`;
   const deviceOperatingSystem = readFirstNonEmptyValue(
     meta.operatingSystem,
     summary.operating_system,
@@ -3636,11 +3642,14 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     };
   };
 
-  const renderStatusPill = ({ id, label, value, tone = "muted" }) => {
+  const renderStatusPill = ({ id, label, value, tone = "muted", onClick = null, valueColor = "" }) => {
     const toneStyles = getToneStyles(tone);
     return (
       <Box
+        component={onClick ? "button" : "div"}
+        type={onClick ? "button" : undefined}
         key={id}
+        onClick={onClick || undefined}
         sx={{
           display: "inline-flex",
           alignItems: "center",
@@ -3651,6 +3660,21 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           border: `1px solid ${toneStyles.border}`,
           background: "rgba(2,6,23,0.44)",
           minWidth: 0,
+          cursor: onClick ? "pointer" : "default",
+          font: "inherit",
+          textDecoration: "none",
+          "&:hover": onClick
+            ? {
+                borderColor: "rgba(125,183,255,0.52)",
+                background: "rgba(125,211,252,0.07)",
+              }
+            : undefined,
+          "&:focus-visible": onClick
+            ? {
+                outline: `2px solid ${BOREALIS_LINK_COLOR}`,
+                outlineOffset: 2,
+              }
+            : undefined,
         }}
       >
         <Typography
@@ -3671,7 +3695,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           component="span"
           title={String(value || "")}
           sx={{
-            color: toneStyles.accent,
+            color: valueColor || toneStyles.accent,
             fontSize: "0.76rem",
             fontWeight: 700,
             lineHeight: 1.1,
@@ -3680,6 +3704,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            textDecoration: "none",
           }}
         >
           {value}
@@ -3690,14 +3715,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const readinessPills = [
     {
-      id: "status",
-      label: "Agent",
-      value: status || "Unknown",
-      tone: statusIsOnline ? "ready" : "danger",
-    },
-    {
       id: "tunnel",
-      label: "Tunnel",
+      label: "WireGuard",
       value:
         tunnelInfo?.status === "up"
           ? "Up"
@@ -3719,6 +3738,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       label: "Roles",
       value: roleHealthSummary.label,
       tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
+      valueColor: BOREALIS_LINK_COLOR,
+      onClick: (event) => setRoleHealthAnchor(event.currentTarget),
     },
     {
       id: "freshness",
@@ -3728,84 +3749,32 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     },
   ];
 
-  const renderReadinessHeader = () => {
-    const toneStyles = getToneStyles(readiness.tone);
-    return (
-      <Box
-        sx={{
-          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-          background:
-            "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
-            "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
-          px: { xs: 1.5, md: 2 },
-          py: 1.5,
-          display: "grid",
-          gridTemplateColumns: { xs: "1fr", xl: "minmax(280px, 0.7fr) minmax(0, 1.3fr)" },
-          gap: 1.4,
-          alignItems: "center",
-          minWidth: 0,
-        }}
+  const renderReadinessHeader = () => (
+    <Box
+      sx={{
+        borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+        background:
+          "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
+          "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
+        px: { xs: 1.5, md: 2 },
+        py: 1.15,
+        display: "flex",
+        alignItems: "center",
+        minWidth: 0,
+      }}
+    >
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        flexWrap="wrap"
+        justifyContent="flex-start"
+        sx={{ minWidth: 0 }}
       >
-        <Stack direction="row" spacing={1.15} alignItems="center" sx={{ minWidth: 0 }}>
-          <Box
-            sx={{
-              width: 38,
-              height: 38,
-              borderRadius: 2,
-              border: `1px solid ${toneStyles.border}`,
-              background: toneStyles.background,
-              color: toneStyles.icon,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-            }}
-          >
-            <DeveloperBoardRoundedIcon sx={{ fontSize: 21 }} />
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography
-              sx={{
-                color: MAGIC_UI.textBright,
-                fontWeight: 750,
-                fontSize: "0.95rem",
-                lineHeight: 1.2,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              title={readiness.headline}
-            >
-              {readiness.headline}
-            </Typography>
-            <Typography
-              sx={{
-                color: MAGIC_UI.textMuted,
-                fontSize: "0.78rem",
-                lineHeight: 1.35,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-              title={readiness.detail}
-            >
-              {readiness.detail}
-            </Typography>
-          </Box>
-        </Stack>
-        <Stack
-          direction="row"
-          spacing={0.75}
-          useFlexGap
-          flexWrap="wrap"
-          justifyContent={{ xs: "flex-start", xl: "flex-end" }}
-          sx={{ minWidth: 0 }}
-        >
-          {readinessPills.map(renderStatusPill)}
-        </Stack>
-      </Box>
-    );
-  };
+        {readinessPills.map(renderStatusPill)}
+      </Stack>
+    </Box>
+  );
 
   const renderWorkspaceRail = () => (
     <Box
@@ -3922,7 +3891,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1.1fr) minmax(280px, 0.9fr)" },
+          gridTemplateColumns: "1fr",
           gap: 1.5,
           minWidth: 0,
         }}
@@ -3982,67 +3951,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               {updateAgentBusy ? "Updating..." : "Update Agent"}
             </Button>
           </Stack>
-        </Box>
-        <Box
-          sx={{
-            borderRadius: 3,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: "rgba(7,11,24,0.58)",
-            p: { xs: 2, md: 2.4 },
-            minWidth: 0,
-          }}
-        >
-          <Typography
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontSize: "0.72rem",
-              fontWeight: 800,
-              letterSpacing: 0.45,
-              textTransform: "uppercase",
-              mb: 1.2,
-            }}
-          >
-            Fast Actions
-          </Typography>
-          <Box sx={{ display: "grid", gridTemplateColumns: "1fr", gap: 0.85 }}>
-            {[
-              { label: "Open Shell", workspace: "remote_ops", view: "shell", icon: TerminalRoundedIcon },
-              { label: "Manage Files", workspace: "remote_ops", view: "files", icon: FolderRoundedIcon },
-              { label: "Review Activity", workspace: "history", view: "", icon: ListAltRoundedIcon },
-              { label: "Remote Desktop", external: true, icon: DesktopWindowsRoundedIcon },
-            ].map((action) => {
-              const ActionIcon = action.icon;
-              return (
-                <Button
-                  key={action.label}
-                  onClick={() => {
-                    if (action.external) {
-                      if (!deviceId) return;
-                      navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
-                        state: { initialDevice: tunnelDevice },
-                      });
-                      return;
-                    }
-                    setActiveWorkspace(action.workspace, action.view);
-                  }}
-                  startIcon={<ActionIcon sx={{ fontSize: 17 }} />}
-                  sx={{
-                    justifyContent: "flex-start",
-                    minHeight: 34,
-                    borderRadius: 2,
-                    textTransform: "none",
-                    color: MAGIC_UI.textBright,
-                    background: "rgba(2,6,23,0.3)",
-                    border: `1px solid ${MAGIC_UI.panelBorder}`,
-                    "& .MuiButton-startIcon": { color: MAGIC_UI.accentA },
-                    "&:hover": { background: "rgba(125,211,252,0.08)" },
-                  }}
-                >
-                  {action.label}
-                </Button>
-              );
-            })}
-          </Box>
         </Box>
       </Box>
       <Box
@@ -4270,6 +4178,36 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         >
           Clear Device Activity
         </MenuItem>
+      </Menu>
+      <Menu
+        anchorEl={roleHealthAnchor}
+        open={Boolean(roleHealthAnchor)}
+        onClose={() => setRoleHealthAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 0.8,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <RuntimeRoleHealthBreakdown
+          runtimeRows={agentHealthRows}
+          sx={{
+            width: 430,
+            maxWidth: "calc(100vw - 40px)",
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+          }}
+        />
       </Menu>
       <Menu
         anchorReference="anchorPosition"

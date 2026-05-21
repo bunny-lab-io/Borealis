@@ -253,12 +253,121 @@ function TimelineIcon({ state }) {
   );
 }
 
-function RuntimeBranch({ runtimeRows }) {
+export function RuntimeRoleHealthBreakdown({ runtimeRows, sx = {} }) {
   const rows = Array.isArray(runtimeRows) ? runtimeRows : [];
   const groups = [
     { key: "role", label: "Roles", rows: rows.filter((entry) => String(entry?.healthKind || "role").toLowerCase() !== "service") },
     { key: "service", label: "Services", rows: rows.filter((entry) => String(entry?.healthKind || "").toLowerCase() === "service") },
   ].filter((group) => group.rows.length);
+  const state = resolveRuntimeGroupState(rows, rows.length ? "complete" : "active");
+  const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
+
+  return (
+    <Box
+      sx={{
+        borderRadius: 2,
+        border: `1px solid ${state === "pending" ? "rgba(148, 163, 184, 0.26)" : meta.color}`,
+        background: `linear-gradient(145deg, rgba(7,11,24,0.96), ${meta.bg})`,
+        boxShadow:
+          state === "active"
+            ? `0 0 0 1px ${meta.color}44, 0 18px 44px rgba(2,6,23,0.58), 0 0 28px ${meta.color}28`
+            : "0 16px 36px rgba(2,6,23,0.46)",
+        p: 1.1,
+        "@keyframes agentTimelineSpin": {
+          from: { transform: "rotate(0deg)" },
+          to: { transform: "rotate(360deg)" },
+        },
+        ...sx,
+      }}
+    >
+      <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
+        Runtime role health
+      </Typography>
+      <Typography sx={{ mt: 0.2, color: state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
+        {buildRuntimeGroupSummary(rows)}
+      </Typography>
+      <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
+        {groups.length ? (
+          groups.map((group, groupIndex) => (
+            <Box key={group.key} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
+              <Typography
+                sx={{
+                  mb: 0.35,
+                  color: MAGIC_UI.textMuted,
+                  fontSize: "0.58rem",
+                  fontWeight: 800,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                }}
+              >
+                {group.label}
+              </Typography>
+              <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+                {group.rows.map((entry, index) => {
+                  const rowState = normalizeRuntimeHealthState(entry?.statusCode);
+                  const rowColor = getRuntimeStatusColor(entry?.statusCode);
+                  const rowMeta = STARTUP_STATE_META[rowState] || STARTUP_STATE_META.pending;
+                  const RowIcon = rowMeta.Icon;
+                  return (
+                    <Tooltip key={entry?.id || `${group.key}-${index}`} title={buildRuntimeHealthTooltip(entry)} arrow placement="right">
+                      <Box
+                        sx={{
+                          width: "100%",
+                          minHeight: 31,
+                          px: 0.65,
+                          py: 0.4,
+                          borderRadius: 1.3,
+                          border: `1px solid ${colorWithAlpha(rowColor, 0.28)}`,
+                          background: colorWithAlpha(rowColor, 0.06),
+                          color: MAGIC_UI.textBright,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "flex-start",
+                          gap: 0.65,
+                          textAlign: "left",
+                          overflow: "hidden",
+                          cursor: "help",
+                          "&:hover": {
+                            borderColor: colorWithAlpha(rowColor, 0.68),
+                            background: colorWithAlpha(rowColor, 0.11),
+                          },
+                        }}
+                      >
+                        <RowIcon
+                          sx={{
+                            color: rowColor,
+                            fontSize: 15,
+                            flexShrink: 0,
+                            animation: rowState === "active" ? "agentTimelineSpin 1.15s linear infinite" : "none",
+                          }}
+                        />
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+                            {entry?.name || `Runtime ${index + 1}`}
+                          </Typography>
+                          <Typography sx={{ mt: 0.1, color: rowColor, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+                            {entry?.status || "Unknown"}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Tooltip>
+                  );
+                })}
+              </Box>
+            </Box>
+          ))
+        ) : (
+          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
+            Role telemetry has not reported yet.
+          </Typography>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function RuntimeBranch({ runtimeRows }) {
+  const rows = Array.isArray(runtimeRows) ? runtimeRows : [];
   const state = resolveRuntimeGroupState(rows, rows.length ? "complete" : "active");
   const meta = STARTUP_STATE_META[state] || STARTUP_STATE_META.pending;
 
@@ -283,101 +392,7 @@ function RuntimeBranch({ runtimeRows }) {
         },
       }}
     >
-      <Box
-        sx={{
-          borderRadius: 2,
-          border: `1px solid ${state === "pending" ? "rgba(148, 163, 184, 0.26)" : meta.color}`,
-          background: `linear-gradient(145deg, rgba(7,11,24,0.96), ${meta.bg})`,
-          boxShadow:
-            state === "active"
-              ? `0 0 0 1px ${meta.color}44, 0 18px 44px rgba(2,6,23,0.58), 0 0 28px ${meta.color}28`
-              : "0 16px 36px rgba(2,6,23,0.46)",
-          p: 1.1,
-        }}
-      >
-        <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
-          Runtime role health
-        </Typography>
-        <Typography sx={{ mt: 0.2, color: state === "active" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
-          {buildRuntimeGroupSummary(rows)}
-        </Typography>
-        <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
-          {groups.length ? (
-            groups.map((group, groupIndex) => (
-              <Box key={group.key} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
-                <Typography
-                  sx={{
-                    mb: 0.35,
-                    color: MAGIC_UI.textMuted,
-                    fontSize: "0.58rem",
-                    fontWeight: 800,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {group.label}
-                </Typography>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
-                  {group.rows.map((entry, index) => {
-                    const rowState = normalizeRuntimeHealthState(entry?.statusCode);
-                    const rowColor = getRuntimeStatusColor(entry?.statusCode);
-                    const rowMeta = STARTUP_STATE_META[rowState] || STARTUP_STATE_META.pending;
-                    const RowIcon = rowMeta.Icon;
-                    return (
-                      <Tooltip key={entry?.id || `${group.key}-${index}`} title={buildRuntimeHealthTooltip(entry)} arrow placement="right">
-                        <Box
-                          sx={{
-                            width: "100%",
-                            minHeight: 31,
-                            px: 0.65,
-                            py: 0.4,
-                            borderRadius: 1.3,
-                            border: `1px solid ${colorWithAlpha(rowColor, 0.28)}`,
-                            background: colorWithAlpha(rowColor, 0.06),
-                            color: MAGIC_UI.textBright,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "flex-start",
-                            gap: 0.65,
-                            textAlign: "left",
-                            overflow: "hidden",
-                            cursor: "help",
-                            "&:hover": {
-                              borderColor: colorWithAlpha(rowColor, 0.68),
-                              background: colorWithAlpha(rowColor, 0.11),
-                            },
-                          }}
-                        >
-                          <RowIcon
-                            sx={{
-                              color: rowColor,
-                              fontSize: 15,
-                              flexShrink: 0,
-                              animation: rowState === "active" ? "agentTimelineSpin 1.15s linear infinite" : "none",
-                            }}
-                          />
-                          <Box sx={{ minWidth: 0, flex: 1 }}>
-                            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
-                              {entry?.name || `Runtime ${index + 1}`}
-                            </Typography>
-                            <Typography sx={{ mt: 0.1, color: rowColor, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
-                              {entry?.status || "Unknown"}
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </Tooltip>
-                    );
-                  })}
-                </Box>
-              </Box>
-            ))
-          ) : (
-            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.68rem", lineHeight: 1.35 }}>
-              Role telemetry has not reported yet.
-            </Typography>
-          )}
-        </Box>
-      </Box>
+      <RuntimeRoleHealthBreakdown runtimeRows={rows} />
     </Box>
   );
 }

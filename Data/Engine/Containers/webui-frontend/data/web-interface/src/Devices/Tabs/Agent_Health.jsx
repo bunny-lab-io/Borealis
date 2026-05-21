@@ -111,6 +111,91 @@ function parseJsonArray(value) {
   }
 }
 
+export function buildAgentHealthRows(items, formatTimestamp = (value) => String(value || "")) {
+  const normalizedItems = (Array.isArray(items) ? items : []).map((item, index) => {
+    const rawRoleName = String(item?.role_name || item?.role || "").trim();
+    const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
+    const presentation = resolveAgentHealthPresentation(item, index);
+    const detailsMap = normalizeAgentHealthServiceDetails({
+      ...(item?.details && typeof item.details === "object" ? item.details : {}),
+      desired_state: item?.desired_state,
+      observed_state: item?.observed_state,
+      last_error: item?.last_error,
+      recovery_attempts: item?.recovery_attempts,
+    });
+    return {
+      id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
+      baseLabel: presentation.label,
+      presentationKey: compactAgentHealthKey(rawRoleName || rawRoleLabel || presentation.label),
+      healthKind: presentation.kind,
+      sourceRoleName: rawRoleName,
+      sourceRoleLabel: rawRoleLabel,
+      contextLabel: formatRoleHealthContext(item?.context),
+      status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
+      statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
+      lastCheckedAt: item?.last_checked_at ?? null,
+      lastCheckedText: formatTimestamp(item?.last_checked_at),
+      lastSuccessAt: item?.last_success_at ?? null,
+      lastSuccessText: formatTimestamp(item?.last_success_at),
+      desiredState: String(item?.desired_state || detailsMap?.desired_state || "").trim(),
+      observedState: String(item?.observed_state || detailsMap?.observed_state || "").trim(),
+      lastError: String(item?.last_error || "").trim(),
+      recoveryAttempts: Number(item?.recovery_attempts || 0),
+      detail: normalizeAgentHealthDetailText(item?.detail),
+      detailsMap,
+    };
+  });
+  const noDesktopEnvironmentActive = normalizedItems.some((item) => {
+    const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
+    return (
+      key === "contextcurrentuser" &&
+      (
+        item.statusCode === "not_applicable" ||
+        item.statusCode === "no_desktop_environment_active" ||
+        /no desktop environment active/i.test(item.detail)
+      )
+    );
+  });
+  const visibleItems = normalizedItems.filter(
+    (item) => !HIDDEN_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
+  );
+  const labelCounts = visibleItems.reduce((acc, item) => {
+    const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+    if (key !== `${item.healthKind}:`) {
+      acc[key] = (acc[key] || 0) + 1;
+    }
+    return acc;
+  }, {});
+  return visibleItems
+    .map((item) => {
+      const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
+      const name =
+        item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
+      const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
+      if (
+        noDesktopEnvironmentActive &&
+        ["vnc", "ultravnc", "ultravncservice"].includes(key) &&
+        (item.statusCode === "unsupported" || item.statusCode === "pending" || item.statusCode === "recovering")
+      ) {
+        return {
+          ...item,
+          name,
+          status: "No Desktop Environment Active",
+          statusCode: "not_applicable",
+          detail: "No Desktop Environment Active.",
+          detailsMap: {
+            ...item.detailsMap,
+            running_status: "No Desktop Environment Active.",
+            service_state: "Not Applicable",
+            listener_state: "Not Applicable",
+          },
+        };
+      }
+      return { ...item, name };
+    })
+    .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+}
+
 function Island({ title, icon = null, meta = "", children, sx = {} }) {
   return (
     <Box
@@ -151,90 +236,7 @@ export default function AgentHealthTab({
   const payload = agentRoleHealth && typeof agentRoleHealth === "object" ? agentRoleHealth : {};
   const items = Array.isArray(payload?.roles) ? payload.roles : [];
 
-  const agentHealthRows = useMemo(() => {
-    const normalizedItems = items.map((item, index) => {
-      const rawRoleName = String(item?.role_name || item?.role || "").trim();
-      const rawRoleLabel = String(item?.role_label || item?.label || "").trim();
-      const presentation = resolveAgentHealthPresentation(item, index);
-      const detailsMap = normalizeAgentHealthServiceDetails({
-        ...(item?.details && typeof item.details === "object" ? item.details : {}),
-        desired_state: item?.desired_state,
-        observed_state: item?.observed_state,
-        last_error: item?.last_error,
-        recovery_attempts: item?.recovery_attempts,
-      });
-      return {
-        id: item?.role_id || `${presentation.kind}-${presentation.label}-${index}`,
-        baseLabel: presentation.label,
-        presentationKey: compactAgentHealthKey(rawRoleName || rawRoleLabel || presentation.label),
-        healthKind: presentation.kind,
-        sourceRoleName: rawRoleName,
-        sourceRoleLabel: rawRoleLabel,
-        contextLabel: formatRoleHealthContext(item?.context),
-        status: normalizeRoleHealthStatusText(item?.status || item?.status_code || "Unknown"),
-        statusCode: String(item?.status_code || item?.status || "unknown").trim().toLowerCase(),
-        lastCheckedAt: item?.last_checked_at ?? null,
-        lastCheckedText: formatTimestamp(item?.last_checked_at),
-        lastSuccessAt: item?.last_success_at ?? null,
-        lastSuccessText: formatTimestamp(item?.last_success_at),
-        desiredState: String(item?.desired_state || detailsMap?.desired_state || "").trim(),
-        observedState: String(item?.observed_state || detailsMap?.observed_state || "").trim(),
-        lastError: String(item?.last_error || "").trim(),
-        recoveryAttempts: Number(item?.recovery_attempts || 0),
-        detail: normalizeAgentHealthDetailText(item?.detail),
-        detailsMap,
-      };
-    });
-    const noDesktopEnvironmentActive = normalizedItems.some((item) => {
-      const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
-      return (
-        key === "contextcurrentuser" &&
-        (
-          item.statusCode === "not_applicable" ||
-          item.statusCode === "no_desktop_environment_active" ||
-          /no desktop environment active/i.test(item.detail)
-        )
-      );
-    });
-    const visibleItems = normalizedItems.filter(
-      (item) => !HIDDEN_AGENT_HEALTH_KEYS.has(String(item.presentationKey || "").trim().toLowerCase())
-    );
-    const labelCounts = visibleItems.reduce((acc, item) => {
-      const key = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
-      if (key !== `${item.healthKind}:`) {
-        acc[key] = (acc[key] || 0) + 1;
-      }
-      return acc;
-    }, {});
-    return visibleItems
-      .map((item) => {
-        const labelKey = `${item.healthKind}:${String(item.baseLabel || "").trim().toLowerCase()}`;
-        const name =
-          item.contextLabel && labelCounts[labelKey] > 1 ? `${item.baseLabel} (${item.contextLabel})` : item.baseLabel;
-        const key = compactAgentHealthKey(item.sourceRoleName || item.sourceRoleLabel || item.baseLabel);
-        if (
-          noDesktopEnvironmentActive &&
-          ["vnc", "ultravnc", "ultravncservice"].includes(key) &&
-          (item.statusCode === "unsupported" || item.statusCode === "pending" || item.statusCode === "recovering")
-        ) {
-          return {
-            ...item,
-            name,
-            status: "No Desktop Environment Active",
-            statusCode: "not_applicable",
-            detail: "No Desktop Environment Active.",
-            detailsMap: {
-              ...item.detailsMap,
-              running_status: "No Desktop Environment Active.",
-              service_state: "Not Applicable",
-              listener_state: "Not Applicable",
-            },
-          };
-        }
-        return { ...item, name };
-      })
-      .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
-  }, [formatTimestamp, items]);
+  const agentHealthRows = useMemo(() => buildAgentHealthRows(items, formatTimestamp), [formatTimestamp, items]);
 
   const startupRole = useMemo(() => {
     for (const item of items) {
