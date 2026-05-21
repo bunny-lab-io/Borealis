@@ -171,6 +171,7 @@ export default function AppShell() {
       controls: pageChrome.controls?.length ? pageChrome.controls : defaultChrome.controls || [],
       breadcrumbLabel:
         pageChrome.breadcrumbLabel || pageChrome.title || defaultChrome.title || "",
+      navigationSidebar: pageChrome.navigationSidebar || null,
     }),
     [defaultChrome, pageChrome]
   );
@@ -707,7 +708,9 @@ export default function AppShell() {
             backgroundColor: "#040711",
           }}
         >
-          {hideNavigationSidebar ? null : (
+          {resolvedChrome.navigationSidebar ? (
+            resolvedChrome.navigationSidebar
+          ) : hideNavigationSidebar ? null : (
             <NavigationSidebar
               activeNavKey={activeNavKey}
               isAdmin={isAdmin}

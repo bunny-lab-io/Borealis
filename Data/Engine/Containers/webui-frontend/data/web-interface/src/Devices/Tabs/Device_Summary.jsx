@@ -148,12 +148,12 @@ const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
 const DEVICE_NAV_SIDEBAR_SX = {
   minWidth: 260,
   maxWidth: 260,
-  width: { xs: "100%", lg: 260 },
+  width: 260,
   borderTop: "1px solid rgba(125,183,255,0.14)",
   borderBottom: "1px solid rgba(125,183,255,0.14)",
   borderLeft: "1px solid rgba(125,183,255,0.14)",
-  borderRight: { xs: "1px solid rgba(125,183,255,0.14)", lg: "none" },
-  borderRadius: { xs: 2.5, lg: 0 },
+  borderRight: "none",
+  borderRadius: 0,
   background:
     "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), #0f141c",
   boxShadow: "none",
@@ -162,7 +162,7 @@ const DEVICE_NAV_SIDEBAR_SX = {
   flexDirection: "column",
   gap: 0.25,
   flexShrink: 0,
-  height: { xs: "auto", lg: "100%" },
+  height: "100%",
   overflow: "hidden",
 };
 const DEVICE_NAV_ACCORDION_SX = {
@@ -3723,13 +3723,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     [activityHostname]
   );
 
-  useRoutePageChrome({
-    title: displayHostname,
-    subtitle: pageSubtitle,
-    Icon: DeviceSummaryPageIcon,
-    actions: pageHeaderActions,
-  });
-
   const getToneStyles = (tone) => {
     if (tone === "danger") {
       return {
@@ -4238,6 +4231,27 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     return renderInventoryWorkspace();
   };
   const workspaceContent = renderWorkspaceContent();
+  const deviceNavigationSidebar = useMemo(
+    () => renderDeviceNavigationSidebar(),
+    [
+      activeWorkspaceKey,
+      activeWorkspaceView,
+      deviceId,
+      expandedDeviceNavSections,
+      navigate,
+      setActiveWorkspace,
+      tunnelDevice,
+      workspaceBadges,
+    ]
+  );
+
+  useRoutePageChrome({
+    title: displayHostname,
+    subtitle: pageSubtitle,
+    Icon: DeviceSummaryPageIcon,
+    actions: pageHeaderActions,
+    navigationSidebar: deviceNavigationSidebar,
+  });
 
   return (
     <Box
@@ -4553,12 +4567,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           minWidth: 0,
           width: "100%",
           display: "flex",
-          flexDirection: { xs: "column", lg: "row" },
+          flexDirection: "column",
           borderRadius: 3,
           overflow: "hidden",
         }}
       >
-        {renderDeviceNavigationSidebar()}
         <Box
           sx={{
             flexGrow: 1,
@@ -4568,10 +4581,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             display: "flex",
             flexDirection: "column",
             border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderTopLeftRadius: { xs: 12, lg: 0 },
-            borderBottomLeftRadius: { xs: 12, lg: 0 },
-            borderTopRightRadius: 12,
-            borderBottomRightRadius: 12,
+            borderRadius: 3,
             background:
               "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
               "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",

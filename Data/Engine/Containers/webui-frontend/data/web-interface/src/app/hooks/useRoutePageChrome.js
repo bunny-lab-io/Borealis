@@ -13,6 +13,7 @@ export function useRoutePageChrome(pageChrome) {
     typeof pageChrome?.breadcrumbLabel === "string" ? pageChrome.breadcrumbLabel : "";
   const actions = Array.isArray(pageChrome?.actions) ? pageChrome.actions : EMPTY_ITEMS;
   const controls = Array.isArray(pageChrome?.controls) ? pageChrome.controls : EMPTY_ITEMS;
+  const navigationSidebar = pageChrome?.navigationSidebar || null;
 
   useEffect(() => {
     if (hasPageChrome) {
@@ -23,6 +24,7 @@ export function useRoutePageChrome(pageChrome) {
         breadcrumbLabel,
         actions,
         controls,
+        navigationSidebar,
       });
     } else {
       resetPageChrome();
@@ -31,5 +33,5 @@ export function useRoutePageChrome(pageChrome) {
     return () => {
       resetPageChrome();
     };
-  }, [Icon, actions, breadcrumbLabel, controls, hasPageChrome, resetPageChrome, setPageChrome, subtitle, title]);
+  }, [Icon, actions, breadcrumbLabel, controls, hasPageChrome, navigationSidebar, resetPageChrome, setPageChrome, subtitle, title]);
 }
