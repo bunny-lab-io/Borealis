@@ -172,13 +172,13 @@ const DEVICE_NAV_ACCORDION_SX = {
 const DEVICE_NAV_ACCORDION_SUMMARY_SX = {
   minHeight: 38,
   px: 1.5,
-  background: "transparent",
-  backgroundColor: "transparent",
+  background: "none",
+  backgroundColor: "rgba(255,255,255,0.02)",
   borderTopRightRadius: 8,
   borderBottomRightRadius: 8,
   "&:hover": {
-    background: "transparent",
-    backgroundColor: "transparent",
+    background: "none",
+    backgroundColor: "rgba(255,255,255,0.02)",
   },
   "& .MuiAccordionSummary-content": {
     m: 0,
