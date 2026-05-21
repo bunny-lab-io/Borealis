@@ -3651,16 +3651,19 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           },
         }}
       >
-        {TOP_TABS.map((tabDef) => (
-          <Tab
-            key={tabDef.key || tabDef.label}
-            value={tabDef.key}
-            label={tabDef.label}
-            icon={<tabDef.icon sx={{ fontSize: 18 }} />}
-            iconPosition="start"
-            sx={tabDef.align === "right" ? { ml: "auto" } : undefined}
-          />
-        ))}
+        {TOP_TABS.map((tabDef, tabIndex) => {
+          const startsRightGroup = tabDef.align === "right" && TOP_TABS[tabIndex - 1]?.align !== "right";
+          return (
+            <Tab
+              key={tabDef.key || tabDef.label}
+              value={tabDef.key}
+              label={tabDef.label}
+              icon={<tabDef.icon sx={{ fontSize: 18 }} />}
+              iconPosition="start"
+              sx={startsRightGroup ? { ml: "auto" } : undefined}
+            />
+          );
+        })}
       </Tabs>
       <Box
         sx={{
