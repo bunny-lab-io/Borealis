@@ -1418,7 +1418,7 @@ export default function AssemblyList() {
         width: 110,
         flex: 0,
         sortable: true,
-        resizable: true,
+        resizable: false,
       },
       {
         colId: "name",
@@ -1455,7 +1455,7 @@ export default function AssemblyList() {
         width: 160,
         sortable: false,
         filter: false,
-        resizable: true,
+        resizable: false,
         cellRenderer: OfficialUpdateCellRenderer,
       },
     ],

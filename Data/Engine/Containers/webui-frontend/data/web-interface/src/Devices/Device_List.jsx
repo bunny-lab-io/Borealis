@@ -21,8 +21,6 @@ import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
 import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
-import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
-import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
@@ -40,11 +38,6 @@ import {
 } from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import QuickJobDialog from "../Assemblies/Quick_Job_Dialog.jsx";
-import AgentBranchChannelDialog, {
-  fetchAgentBranchRows,
-  normalizeAgentBranch,
-  normalizeAgentReleaseChannel,
-} from "../AgentBranchChannelDialog.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -88,7 +81,7 @@ const MAGIC_UI = {
 };
 
 const PAGE_ICON = DevicesOtherIcon;
-const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "os"];
+const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "internalIp", "os"];
 
 const getOsIconClass = (osName) => {
   const value = (osName || "").toString().toLowerCase();
@@ -463,14 +456,6 @@ function normalizeDeviceCollection(
     const connectionLabel =
       connectionType === "ssh" ? "SSH" : connectionType === "winrm" ? "WinRM" : "";
     const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || "").trim();
-    const agentReleaseChannel = normalizeAgentReleaseChannel(
-      device.agent_release_channel ||
-        summary.agent_release_channel_effective ||
-        summary.agent_release_channel ||
-        summary.agent_release_channel_override ||
-        ""
-    );
-    const agentBranch = normalizeAgentBranch(agentReleaseChannel, device.agent_branch || summary.agent_branch || "");
 
     const memoryList = Array.isArray(device.memory) ? device.memory : [];
     const networkList = Array.isArray(device.network) ? device.network : [];
@@ -529,8 +514,6 @@ function normalizeDeviceCollection(
       connectionType,
       connectionLabel,
       connectionEndpoint,
-      agentReleaseChannel,
-      agentBranch,
       isRemote: Boolean(connectionLabel),
     };
   });
@@ -621,15 +604,6 @@ export default function DeviceList({
   const [quickJobOpen, setQuickJobOpen] = useState(false);
   const [quickJobHostnames, setQuickJobHostnames] = useState([]);
   const [quickJobTargetRecords, setQuickJobTargetRecords] = useState([]);
-  const [agentBranchDialogOpen, setAgentBranchDialogOpen] = useState(false);
-  const [agentBranchRows, setAgentBranchRows] = useState([]);
-  const [agentBranchesLoading, setAgentBranchesLoading] = useState(false);
-  const [agentBranchLoadError, setAgentBranchLoadError] = useState("");
-  const [agentMaintenanceBusy, setAgentMaintenanceBusy] = useState(false);
-  const [agentUpdateBusy, setAgentUpdateBusy] = useState(false);
-  const [draftAgentChannel, setDraftAgentChannel] = useState("stable");
-  const [draftAgentBranch, setDraftAgentBranch] = useState("main");
-  const [draftAgentMixed, setDraftAgentMixed] = useState(false);
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
   const [addDeviceType, setAddDeviceType] = useState(null);
   const handleSelectDevice = useCallback(
@@ -1287,158 +1261,6 @@ export default function DeviceList({
     [rows, selectedIds]
   );
 
-  const fetchAgentBranches = useCallback(async () => {
-    setAgentBranchesLoading(true);
-    setAgentBranchLoadError("");
-    try {
-      const nextRows = await fetchAgentBranchRows();
-      setAgentBranchRows(nextRows);
-      if (!nextRows.length) {
-        setAgentBranchLoadError("No GitHub branches returned.");
-      }
-    } catch (error) {
-      setAgentBranchRows([]);
-      setAgentBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
-    } finally {
-      setAgentBranchesLoading(false);
-    }
-  }, []);
-
-  const openAgentBranchDialog = useCallback(() => {
-    if (!selectedDeviceRows.length) return;
-    const channels = new Set(
-      selectedDeviceRows
-        .map((row) => normalizeAgentReleaseChannel(row?.agentReleaseChannel || row?.summary?.agent_release_channel || ""))
-        .filter(Boolean)
-    );
-    const branches = new Set(
-      selectedDeviceRows
-        .map((row) => normalizeAgentBranch(row?.agentReleaseChannel || row?.summary?.agent_release_channel || "", row?.agentBranch || row?.summary?.agent_branch || ""))
-        .filter(Boolean)
-    );
-    const mixed = selectedDeviceRows.length > 1 && (channels.size !== 1 || branches.size !== 1);
-    const nextChannel = mixed ? "mixed" : (Array.from(channels)[0] || "stable");
-    const nextBranch = mixed ? "main" : (Array.from(branches)[0] || "main");
-    setDraftAgentMixed(mixed);
-    setDraftAgentChannel(nextChannel);
-    setDraftAgentBranch(nextBranch);
-    setAgentBranchDialogOpen(true);
-    void fetchAgentBranches();
-  }, [fetchAgentBranches, selectedDeviceRows]);
-
-  const closeAgentBranchDialog = useCallback(() => {
-    if (agentMaintenanceBusy) return;
-    setAgentBranchDialogOpen(false);
-    setDraftAgentMixed(false);
-  }, [agentMaintenanceBusy]);
-
-  const applyAgentBranchChannel = useCallback(async () => {
-    if (!isAdmin || agentMaintenanceBusy || !selectedDeviceRows.length) return;
-    const targetChannel = normalizeAgentReleaseChannel(draftAgentChannel);
-    if (!["stable", "unstable"].includes(targetChannel)) {
-      setAgentBranchLoadError("Choose stable or unstable before applying.");
-      return;
-    }
-    const targetBranch = normalizeAgentBranch(targetChannel, draftAgentBranch);
-    const guids = selectedDeviceRows.map(resolveDevicePurgeGuid).filter(Boolean);
-    if (!guids.length) {
-      setAgentBranchLoadError("Selected devices are missing agent GUIDs.");
-      return;
-    }
-    setAgentMaintenanceBusy(true);
-    setAgentBranchLoadError("");
-    try {
-      const resp = await fetch("/api/devices/agent-maintenance", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "switch_branch_channel",
-          guids,
-          release_channel: targetChannel,
-          branch: targetBranch,
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-      }
-      setAgentBranchDialogOpen(false);
-      setDraftAgentMixed(false);
-      await notifyOperator({
-        title: "Agent Branch/Channel Queued",
-        message: `Queued ${data?.queued?.length || guids.length} device(s) for <b>${targetChannel} - ${targetBranch}</b>.`,
-        icon: "update",
-        variant: "success",
-      });
-      await fetchDevices({ showLoading: false });
-    } catch (error) {
-      setAgentBranchLoadError(String(error?.message || error || "Agent branch/channel switch failed."));
-      await notifyOperator({
-        title: "Agent Branch/Channel Failed",
-        message: `Could not queue branch/channel switch: ${String(error?.message || error)}`,
-        icon: "error",
-        variant: "error",
-      });
-    } finally {
-      setAgentMaintenanceBusy(false);
-    }
-  }, [
-    agentMaintenanceBusy,
-    draftAgentBranch,
-    draftAgentChannel,
-    fetchDevices,
-    isAdmin,
-    notifyOperator,
-    selectedDeviceRows,
-  ]);
-
-  const requestSelectedAgentUpdate = useCallback(async () => {
-    if (!selectedDeviceRows.length || agentUpdateBusy) return;
-    const guids = selectedDeviceRows.map(resolveDevicePurgeGuid).filter(Boolean);
-    if (!guids.length) {
-      await notifyOperator({
-        title: "Agent Update Failed",
-        message: "Selected devices are missing agent GUIDs.",
-        icon: "error",
-        variant: "error",
-      });
-      return;
-    }
-    setAgentUpdateBusy(true);
-    try {
-      const resp = await fetch("/api/devices/agent-maintenance", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "update_now",
-          guids,
-        }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
-      }
-      await notifyOperator({
-        title: "Agent Update Queued",
-        message: `Queued ${data?.queued?.length || guids.length} device(s) for immediate agent update.`,
-        icon: "update",
-        variant: "success",
-      });
-      await fetchDevices({ showLoading: false });
-    } catch (error) {
-      await notifyOperator({
-        title: "Agent Update Failed",
-        message: `Could not queue agent update: ${String(error?.message || error)}`,
-        icon: "error",
-        variant: "error",
-      });
-    } finally {
-      setAgentUpdateBusy(false);
-    }
-  }, [agentUpdateBusy, fetchDevices, notifyOperator, selectedDeviceRows]);
-
   const deleteTargetRows = useMemo(
     () => rows.filter((row) => row?.id != null && deleteTargetIds.has(row.id)),
     [deleteTargetIds, rows]
@@ -1498,30 +1320,6 @@ export default function DeviceList({
         onClick: () => fetchDevices(),
       },
       {
-        id: "device-agent-branch-channel",
-        label: "Switch Agent Branch/Channel",
-        icon: <AltRouteRoundedIcon />,
-        tone: "secondary",
-        disabled: !isAdmin || !selectedDeviceRows.length || agentMaintenanceBusy,
-        loading: agentMaintenanceBusy,
-        tooltip: !isAdmin
-          ? "Only administrators can switch agent branch/channel"
-          : !selectedDeviceRows.length
-            ? "Select one or more devices"
-            : undefined,
-        onClick: openAgentBranchDialog,
-      },
-      {
-        id: "device-agent-update",
-        label: "Update Agent(s)",
-        icon: <SystemUpdateAltRoundedIcon />,
-        tone: "secondary",
-        disabled: !selectedDeviceRows.length || agentUpdateBusy,
-        loading: agentUpdateBusy,
-        tooltip: !selectedDeviceRows.length ? "Select one or more devices" : undefined,
-        onClick: requestSelectedAgentUpdate,
-      },
-      {
         id: "device-quick-job",
         label: "Quick Job",
         tone: "primary",
@@ -1570,11 +1368,7 @@ export default function DeviceList({
       handleQuickJobLaunch,
       isAdmin,
       deleteBusy,
-      agentMaintenanceBusy,
-      agentUpdateBusy,
       openSelectedPurgeDialog,
-      openAgentBranchDialog,
-      requestSelectedAgentUpdate,
       selectedDeviceRows,
     ]
   );
@@ -1927,8 +1721,8 @@ export default function DeviceList({
             headerName: col.label,
             valueGetter: (params) => getDeviceSiteSortValue(params.data),
             comparator: (left, right) => compareAlphaValues(left, right),
-            width: 150,
-            minWidth: 150,
+            width: 160,
+            minWidth: 160,
             flex: 0,
           };
         case "hostname":
@@ -1941,8 +1735,8 @@ export default function DeviceList({
                 getDeviceHostnameSortValue(nodeA?.data) || left,
                 getDeviceHostnameSortValue(nodeB?.data) || right
               ),
-            width: 200,
-            minWidth: 200,
+            width: 180,
+            minWidth: 180,
             flex: 0,
           };
         case "description":
@@ -1962,8 +1756,8 @@ export default function DeviceList({
           return {
             field: "lastUser",
             headerName: col.label,
-            width: 200,
-            minWidth: 200,
+            width: 210,
+            minWidth: 210,
             flex: 0,
           };
         case "type":
@@ -2623,28 +2417,6 @@ export default function DeviceList({
         busy={deleteBusy}
         errorText={deleteError}
         devices={deleteTargetRows}
-      />
-
-      <AgentBranchChannelDialog
-        open={agentBranchDialogOpen}
-        title="Switch Agent Branch/Channel"
-        subtitle={`${selectedDeviceRows.length} selected device${selectedDeviceRows.length === 1 ? "" : "s"}`}
-        rows={agentBranchRows}
-        loading={agentBranchesLoading}
-        error={agentBranchLoadError}
-        channel={draftAgentChannel}
-        branch={draftAgentBranch}
-        mixed={draftAgentMixed}
-        busy={agentMaintenanceBusy}
-        onChannelChange={(value) => {
-          setDraftAgentMixed(false);
-          setDraftAgentChannel(value);
-        }}
-        onBranchChange={setDraftAgentBranch}
-        onRefresh={() => void fetchAgentBranches()}
-        onCancel={closeAgentBranchDialog}
-        onApply={() => void applyAgentBranchChannel()}
-        gridTheme={myTheme}
       />
 
       {assignDialogOpen && (
