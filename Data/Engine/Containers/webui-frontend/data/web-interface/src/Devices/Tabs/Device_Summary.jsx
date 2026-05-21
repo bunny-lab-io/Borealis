@@ -141,6 +141,7 @@ const NAV_TAB_COLORS = {
 };
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
+const BOREALIS_PRIMARY_GRADIENT = "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)";
 const DEVICE_NAV_SIDEBAR_SX = {
   minWidth: 260,
   maxWidth: 260,
@@ -3933,9 +3934,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           height: 18,
           px: 0.5,
           borderRadius: 999,
-          background: BOREALIS_LINK_COLOR,
-          color: "#ffffff",
-          border: "1px solid rgba(168,212,255,0.78)",
+          background: BOREALIS_PRIMARY_GRADIENT,
+          color: "#06101d",
+          border: "1px solid transparent",
+          boxShadow: "0 8px 18px rgba(125, 211, 252, 0.16)",
           fontSize: "0.68rem",
           fontWeight: 800,
           lineHeight: "16px",
