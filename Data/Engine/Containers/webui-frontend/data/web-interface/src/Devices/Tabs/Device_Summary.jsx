@@ -29,6 +29,10 @@ import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
+import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import HelpOutlineRoundedIcon from "@mui/icons-material/HelpOutlineRounded";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
@@ -3478,48 +3482,56 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const agentManagementDetails = useMemo(
     () => [
       {
+        group: "Connection",
         label: "Agent Status",
         value: status || "Unknown",
         tone: statusIsOnline ? "ready" : "danger",
         detail: "Latest heartbeat-derived agent state.",
       },
       {
+        group: "Connection",
         label: "Agent Socket",
         value: agentSocketConnection.value,
         tone: agentSocketConnection.tone,
         detail: agentSocketConnection.detail,
       },
       {
+        group: "Connection",
         label: "WireGuard",
         value: tunnelConnection.value,
         tone: tunnelConnection.tone,
         detail: tunnelConnection.detail,
       },
       {
+        group: "Connection",
         label: "Last Heartbeat",
         value: dataFreshnessLabel,
         tone: statusIsOnline ? "ready" : "warning",
         detail: "Most recent agent heartbeat received by Engine.",
       },
       {
+        group: "Connection",
         label: "Tunnel Listener",
         value: tunnelInfo?.listener_healthy === false ? "Unhealthy" : "Healthy",
         tone: tunnelInfo?.listener_healthy === false ? "danger" : "ready",
         detail: "Engine-side tunnel listener health.",
       },
       {
+        group: "Identifiers",
         label: "Virtual IP",
         value: tunnelInfo?.virtual_ip || "No tunnel IP",
         tone: tunnelInfo?.virtual_ip ? "ready" : "muted",
         detail: "WireGuard address assigned to this agent tunnel.",
       },
       {
+        group: "Identifiers",
         label: "Tunnel ID",
         value: tunnelInfo?.tunnel_id || "No active tunnel",
         tone: tunnelInfo?.tunnel_id ? "ready" : "muted",
         detail: "Current Engine tunnel record identifier.",
       },
       {
+        group: "Identifiers",
         label: "Agent ID",
         value: tunnelAgentId || "Unavailable",
         tone: tunnelAgentId ? "ready" : "muted",
@@ -3541,6 +3553,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       tunnelInfo?.tunnel_id,
       tunnelInfo?.virtual_ip,
     ]
+  );
+  const agentManagementSummary = useMemo(() => {
+    if (!statusIsOnline) return "Agent heartbeat offline.";
+    if (engineConnection.value !== "Connected") return "Agent heartbeat online, management socket degraded.";
+    if (tunnelConnection.value !== "Connected") return "Management socket connected, tunnel not active.";
+    return "Management socket and WireGuard tunnel connected.";
+  }, [engineConnection.value, statusIsOnline, tunnelConnection.value]);
+  const agentManagementGroups = useMemo(
+    () =>
+      ["Connection", "Identifiers"]
+        .map((label) => ({
+          label,
+          rows: agentManagementDetails.filter((entry) => entry.group === label),
+        }))
+        .filter((group) => group.rows.length),
+    [agentManagementDetails]
   );
   const remoteToolsBadgeCount = [
     !statusIsOnline,
@@ -3725,62 +3753,99 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     );
   };
 
-  const renderConnectionDetailRow = (row) => {
-    const toneStyles = getToneStyles(row.tone);
+  const getConnectionRowMeta = (tone) => {
+    if (tone === "danger") {
+      return {
+        color: "#fca5a5",
+        border: "rgba(248,113,113,0.28)",
+        hoverBorder: "rgba(248,113,113,0.68)",
+        background: "rgba(248,113,113,0.06)",
+        hoverBackground: "rgba(248,113,113,0.11)",
+        Icon: ErrorOutlineRoundedIcon,
+      };
+    }
+    if (tone === "warning") {
+      return {
+        color: "#fde68a",
+        border: "rgba(250,204,21,0.28)",
+        hoverBorder: "rgba(250,204,21,0.68)",
+        background: "rgba(250,204,21,0.06)",
+        hoverBackground: "rgba(250,204,21,0.11)",
+        Icon: WarningAmberRoundedIcon,
+      };
+    }
+    if (tone === "ready") {
+      return {
+        color: MAGIC_UI.accentC,
+        border: "rgba(52,211,153,0.28)",
+        hoverBorder: "rgba(52,211,153,0.68)",
+        background: "rgba(52,211,153,0.06)",
+        hoverBackground: "rgba(52,211,153,0.11)",
+        Icon: CheckCircleRoundedIcon,
+      };
+    }
+    return {
+      color: MAGIC_UI.accentA,
+      border: "rgba(125,211,252,0.24)",
+      hoverBorder: "rgba(125,211,252,0.6)",
+      background: "rgba(125,211,252,0.05)",
+      hoverBackground: "rgba(125,211,252,0.1)",
+      Icon: HelpOutlineRoundedIcon,
+    };
+  };
+
+  const renderConnectionTooltip = (row) => (
+    <Box sx={{ maxWidth: 300 }}>
+      <Typography sx={{ color: "#fff", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.25 }}>
+        {row.label}: {row.value}
+      </Typography>
+      <Typography sx={{ color: "rgba(226,232,240,0.86)", fontSize: "0.68rem", lineHeight: 1.35, mt: 0.45 }}>
+        {row.detail}
+      </Typography>
+    </Box>
+  );
+
+  const renderConnectionDetailRow = (row, index) => {
+    const rowMeta = getConnectionRowMeta(row.tone);
+    const RowIcon = rowMeta.Icon;
     return (
-      <Box
-        key={row.label}
-        sx={{
-          display: "grid",
-          gridTemplateColumns: "130px minmax(0, 1fr)",
-          gap: 1.2,
-          alignItems: "start",
-          px: 1,
-          py: 0.85,
-          borderRadius: 1.5,
-          border: `1px solid ${MAGIC_UI.panelBorder}`,
-          background: "rgba(15,23,42,0.46)",
-        }}
-      >
-        <Typography
-          sx={{
-            color: MAGIC_UI.textMuted,
-            fontSize: "0.7rem",
-            fontWeight: 800,
-            letterSpacing: 0.4,
-            lineHeight: 1.25,
-            textTransform: "uppercase",
-          }}
-        >
-          {row.label}
-        </Typography>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography
-            title={String(row.value || "")}
+      <Tooltip key={`${row.group || "connection"}-${row.label}-${index}`} title={renderConnectionTooltip(row)} arrow placement="right">
+        <Box sx={{ minWidth: 0, width: "100%" }}>
+          <Box
             sx={{
-              color: toneStyles.accent,
-              fontSize: "0.82rem",
-              fontWeight: 800,
-              lineHeight: 1.25,
+              width: "100%",
+              minHeight: 31,
+              px: 0.65,
+              py: 0.4,
+              borderRadius: 1.3,
+              border: `1px solid ${rowMeta.border}`,
+              background: rowMeta.background,
+              color: MAGIC_UI.textBright,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 0.65,
+              textAlign: "left",
               overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
+              cursor: "help",
+              "&:hover": {
+                borderColor: rowMeta.hoverBorder,
+                background: rowMeta.hoverBackground,
+              },
             }}
           >
-            {row.value}
-          </Typography>
-          <Typography
-            sx={{
-              color: MAGIC_UI.textMuted,
-              fontSize: "0.72rem",
-              lineHeight: 1.35,
-              mt: 0.25,
-            }}
-          >
-            {row.detail}
-          </Typography>
+            <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+                {row.label}
+              </Typography>
+              <Typography sx={{ mt: 0.1, color: rowMeta.color, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+                {row.value}
+              </Typography>
+            </Box>
+          </Box>
         </Box>
-      </Box>
+      </Tooltip>
     );
   };
 
@@ -4110,7 +4175,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             border: `1px solid ${MAGIC_UI.panelBorder}`,
             borderRadius: 2,
             boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
-            p: 1,
+            p: 0.8,
             mt: 0.7,
             overflow: "visible",
           },
@@ -4118,22 +4183,41 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       >
         <Box
           sx={{
-            width: 460,
+            width: 430,
             maxWidth: "calc(100vw - 40px)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 0.75,
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+            p: 1.1,
           }}
         >
-          <Box sx={{ px: 0.4, pb: 0.4 }}>
-            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 800, lineHeight: 1.2 }}>
-              Agent Management
-            </Typography>
-            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.74rem", lineHeight: 1.35, mt: 0.3 }}>
-              Engine connection path, tunnel state, and latest heartbeat.
-            </Typography>
+          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
+            Agent management connection
+          </Typography>
+          <Typography sx={{ mt: 0.2, color: engineConnection.tone === "ready" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
+            {agentManagementSummary}
+          </Typography>
+          <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
+            {agentManagementGroups.map((group, groupIndex) => (
+              <Box key={group.label} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
+                <Typography
+                  sx={{
+                    mb: 0.35,
+                    color: MAGIC_UI.textMuted,
+                    fontSize: "0.58rem",
+                    fontWeight: 800,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {group.label}
+                </Typography>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+                  {group.rows.map(renderConnectionDetailRow)}
+                </Box>
+              </Box>
+            ))}
           </Box>
-          {agentManagementDetails.map(renderConnectionDetailRow)}
         </Box>
       </Menu>
       <Menu
