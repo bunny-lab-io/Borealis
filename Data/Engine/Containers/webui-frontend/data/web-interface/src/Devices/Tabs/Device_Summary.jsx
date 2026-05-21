@@ -1122,6 +1122,7 @@ export default function DeviceSummary() {
   const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
   const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
@@ -1581,7 +1582,7 @@ export default function DeviceSummary() {
       if (!resp.ok) {
         let message = String(data?.message || data?.error || `HTTP ${resp.status}`);
         if (String(data?.error || "").trim() === "agent_unavailable") {
-          message = "The agent SYSTEM socket is not connected, so Borealis could not start the local AutoUpdater.";
+          message = "The agent management socket is not connected, so Borealis could not start the local AutoUpdater.";
         }
         throw new Error(message);
       }
@@ -3388,6 +3389,28 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
     return formatDateValue(rawLastSeen, "No heartbeat").replace(" AM", "AM").replace(" PM", "PM");
   }, [agent?.last_seen, device?.last_seen, formatDateValue, meta.lastSeen, summary.last_seen]);
+  const tunnelConnection = useMemo(() => {
+    const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
+    if (tunnelStatus === "up") {
+      return { value: "Connected", tone: "ready", detail: "WireGuard tunnel ready for remote tools." };
+    }
+    if (tunnelStatus === "down") {
+      return { value: "Down", tone: "danger", detail: "WireGuard tunnel unavailable." };
+    }
+    if (tunnelStatus === "error") {
+      return { value: "Error", tone: "danger", detail: "WireGuard tunnel status endpoint returned error." };
+    }
+    return { value: "Idle", tone: "muted", detail: "No active WireGuard tunnel reported." };
+  }, [tunnelInfo?.status]);
+  const agentSocketConnection = useMemo(() => {
+    if (tunnelInfo?.agent_socket === true) {
+      return { value: "Connected", tone: "ready", detail: "Engine can reach agent management socket." };
+    }
+    if (statusIsOnline) {
+      return { value: "Disconnected", tone: "warning", detail: "Agent heartbeat is present, but management socket is unavailable." };
+    }
+    return { value: "Unavailable", tone: "danger", detail: "Agent must heartbeat before management socket can be confirmed." };
+  }, [statusIsOnline, tunnelInfo?.agent_socket]);
   const engineConnection = useMemo(() => {
     if (statusIsOnline && tunnelInfo?.agent_socket) {
       return { value: "Connected", tone: "ready" };
@@ -3419,7 +3442,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         detail: !statusIsOnline
           ? "Recover control before running remote tools."
           : tunnelBlocked
-            ? "WireGuard or SYSTEM socket is unavailable."
+            ? "Agent management connection needs review."
             : updateFailed
               ? "Review updater state and startup flow."
               : "Role health needs review.",
@@ -3452,6 +3475,73 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     tunnelInfo?.agent_socket,
     tunnelInfo?.status,
   ]);
+  const agentManagementDetails = useMemo(
+    () => [
+      {
+        label: "Agent Status",
+        value: status || "Unknown",
+        tone: statusIsOnline ? "ready" : "danger",
+        detail: "Latest heartbeat-derived agent state.",
+      },
+      {
+        label: "Agent Socket",
+        value: agentSocketConnection.value,
+        tone: agentSocketConnection.tone,
+        detail: agentSocketConnection.detail,
+      },
+      {
+        label: "WireGuard",
+        value: tunnelConnection.value,
+        tone: tunnelConnection.tone,
+        detail: tunnelConnection.detail,
+      },
+      {
+        label: "Last Heartbeat",
+        value: dataFreshnessLabel,
+        tone: statusIsOnline ? "ready" : "warning",
+        detail: "Most recent agent heartbeat received by Engine.",
+      },
+      {
+        label: "Tunnel Listener",
+        value: tunnelInfo?.listener_healthy === false ? "Unhealthy" : "Healthy",
+        tone: tunnelInfo?.listener_healthy === false ? "danger" : "ready",
+        detail: "Engine-side tunnel listener health.",
+      },
+      {
+        label: "Virtual IP",
+        value: tunnelInfo?.virtual_ip || "No tunnel IP",
+        tone: tunnelInfo?.virtual_ip ? "ready" : "muted",
+        detail: "WireGuard address assigned to this agent tunnel.",
+      },
+      {
+        label: "Tunnel ID",
+        value: tunnelInfo?.tunnel_id || "No active tunnel",
+        tone: tunnelInfo?.tunnel_id ? "ready" : "muted",
+        detail: "Current Engine tunnel record identifier.",
+      },
+      {
+        label: "Agent ID",
+        value: tunnelAgentId || "Unavailable",
+        tone: tunnelAgentId ? "ready" : "muted",
+        detail: "Identifier used for tunnel status lookup.",
+      },
+    ],
+    [
+      agentSocketConnection.detail,
+      agentSocketConnection.tone,
+      agentSocketConnection.value,
+      dataFreshnessLabel,
+      status,
+      statusIsOnline,
+      tunnelAgentId,
+      tunnelConnection.detail,
+      tunnelConnection.tone,
+      tunnelConnection.value,
+      tunnelInfo?.listener_healthy,
+      tunnelInfo?.tunnel_id,
+      tunnelInfo?.virtual_ip,
+    ]
+  );
   const remoteToolsBadgeCount = [
     !statusIsOnline,
     tunnelInfo?.agent_socket === false,
@@ -3635,25 +3725,73 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     );
   };
 
+  const renderConnectionDetailRow = (row) => {
+    const toneStyles = getToneStyles(row.tone);
+    return (
+      <Box
+        key={row.label}
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "130px minmax(0, 1fr)",
+          gap: 1.2,
+          alignItems: "start",
+          px: 1,
+          py: 0.85,
+          borderRadius: 1.5,
+          border: `1px solid ${MAGIC_UI.panelBorder}`,
+          background: "rgba(15,23,42,0.46)",
+        }}
+      >
+        <Typography
+          sx={{
+            color: MAGIC_UI.textMuted,
+            fontSize: "0.7rem",
+            fontWeight: 800,
+            letterSpacing: 0.4,
+            lineHeight: 1.25,
+            textTransform: "uppercase",
+          }}
+        >
+          {row.label}
+        </Typography>
+        <Box sx={{ minWidth: 0 }}>
+          <Typography
+            title={String(row.value || "")}
+            sx={{
+              color: toneStyles.accent,
+              fontSize: "0.82rem",
+              fontWeight: 800,
+              lineHeight: 1.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {row.value}
+          </Typography>
+          <Typography
+            sx={{
+              color: MAGIC_UI.textMuted,
+              fontSize: "0.72rem",
+              lineHeight: 1.35,
+              mt: 0.25,
+            }}
+          >
+            {row.detail}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  };
+
   const readinessPills = [
     {
       id: "engine-connection",
-      label: "Engine Connection",
+      label: "Agent Management",
       value: engineConnection.value,
       tone: engineConnection.tone,
-    },
-    {
-      id: "tunnel",
-      label: "WireGuard",
-      value:
-        tunnelInfo?.status === "up"
-          ? "Connected"
-          : tunnelInfo?.status === "down"
-            ? "Down"
-            : tunnelInfo?.status === "error"
-              ? "Error"
-              : "Idle",
-      tone: tunnelInfo?.status === "up" ? "ready" : tunnelInfo?.status === "idle" ? "muted" : "danger",
+      valueColor: BOREALIS_LINK_COLOR,
+      onClick: (event) => setAgentManagementAnchor(event.currentTarget),
     },
     {
       id: "roles",
@@ -3662,12 +3800,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
       valueColor: BOREALIS_LINK_COLOR,
       onClick: (event) => setRoleHealthAnchor(event.currentTarget),
-    },
-    {
-      id: "freshness",
-      label: "Last Heartbeat",
-      value: dataFreshnessLabel,
-      tone: statusIsOnline ? "ready" : "warning",
     },
   ];
 
@@ -3964,6 +4096,45 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         >
           Clear Device Activity
         </MenuItem>
+      </Menu>
+      <Menu
+        anchorEl={agentManagementAnchor}
+        open={Boolean(agentManagementAnchor)}
+        onClose={() => setAgentManagementAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 1,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: 460,
+            maxWidth: "calc(100vw - 40px)",
+            display: "flex",
+            flexDirection: "column",
+            gap: 0.75,
+          }}
+        >
+          <Box sx={{ px: 0.4, pb: 0.4 }}>
+            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 800, lineHeight: 1.2 }}>
+              Agent Management
+            </Typography>
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.74rem", lineHeight: 1.35, mt: 0.3 }}>
+              Engine connection path, tunnel state, and latest heartbeat.
+            </Typography>
+          </Box>
+          {agentManagementDetails.map(renderConnectionDetailRow)}
+        </Box>
       </Menu>
       <Menu
         anchorEl={roleHealthAnchor}
