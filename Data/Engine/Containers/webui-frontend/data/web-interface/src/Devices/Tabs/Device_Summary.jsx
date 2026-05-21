@@ -8,7 +8,6 @@ import {
   AccordionSummary,
   Alert,
   Box,
-  Divider,
   Stack,
   Tooltip,
   Typography,
@@ -139,7 +138,7 @@ const NAV_TAB_COLORS = {
   iconActive: "#7db7ff",
   hover: "rgba(255,255,255,0.05)",
   activeBg:
-    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+    "linear-gradient(90deg, rgba(125,183,255,0.22) 0%, rgba(125,183,255,0.1) 55%, rgba(125,183,255,0.00) 100%)",
 };
 const SUMMARY_SECTION_ACTIVE_BG =
   "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
@@ -3671,10 +3670,10 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   ].filter(Boolean).length;
   const workspaceBadges = useMemo(
     () => ({
-      inventory: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
+      hardwareSummary: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
       protection: "",
       history: "",
-      remote_ops: remoteToolsBadgeCount > 0 ? String(remoteToolsBadgeCount) : "",
+      shell: remoteToolsBadgeCount > 0 ? String(remoteToolsBadgeCount) : "",
       config: "",
     }),
     [hardwareOverview.storageCritical, remoteToolsBadgeCount]
@@ -3979,9 +3978,9 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           height: 18,
           px: 0.5,
           borderRadius: 999,
-          background: "#facc15",
-          color: "#020617",
-          border: "1px solid rgba(250,204,21,0.82)",
+          background: BOREALIS_LINK_COLOR,
+          color: "#ffffff",
+          border: "1px solid rgba(168,212,255,0.78)",
           fontSize: "0.68rem",
           fontWeight: 800,
           lineHeight: "16px",
@@ -3992,7 +3991,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       </Box>
     ) : null;
 
-  const SidebarSection = ({ sectionId, title, badge = "", children }) => (
+  const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
       expanded={expandedDeviceNavSections[sectionId] ?? true}
       onChange={(_, expanded) => {
@@ -4016,13 +4015,12 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         >
           {title}
         </Typography>
-        {renderDeviceNavBadge(badge)}
       </AccordionSummary>
       <AccordionDetails sx={DEVICE_NAV_ACCORDION_DETAILS_SX}>{children}</AccordionDetails>
     </Accordion>
   );
 
-  const SidebarNavRow = ({ icon, label, active = false, disabled = false, onClick }) => (
+  const SidebarNavRow = ({ icon, label, active = false, disabled = false, onClick, badge = "" }) => (
     <ListItemButton
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
@@ -4053,6 +4051,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             </Typography>
           }
         />
+        {renderDeviceNavBadge(badge)}
       </Box>
     </ListItemButton>
   );
@@ -4070,12 +4069,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     return (
       <Box sx={DEVICE_NAV_SIDEBAR_SX}>
         <Box sx={{ flex: 1, overflowY: "auto" }}>
-          <SidebarSection sectionId="inventory" title="Inventory" badge={workspaceBadges.inventory}>
+          <SidebarSection sectionId="inventory" title="Inventory">
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
               label="Hardware Summary"
               active={activeView("inventory", "summary")}
               onClick={() => setActiveWorkspace("inventory", "summary")}
+              badge={workspaceBadges.hardwareSummary}
             />
             <SidebarNavRow
               icon={<AppsRoundedIcon fontSize="small" />}
@@ -4085,7 +4085,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </SidebarSection>
 
-          <SidebarSection sectionId="backend" title="Backend Tools" badge={workspaceBadges.remote_ops}>
+          <SidebarSection sectionId="backend" title="Backend Tools">
             <SidebarNavRow
               icon={<DesktopWindowsRoundedIcon fontSize="small" />}
               label="Remote Desktop"
@@ -4097,6 +4097,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               label="Shell"
               active={activeView("remote_ops", "shell")}
               onClick={() => setActiveWorkspace("remote_ops", "shell")}
+              badge={workspaceBadges.shell}
             />
             <SidebarNavRow
               icon={<FolderRoundedIcon fontSize="small" />}
@@ -4118,7 +4119,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </SidebarSection>
 
-          <SidebarSection sectionId="protection" title="Protection" badge={workspaceBadges.protection}>
+          <SidebarSection sectionId="protection" title="Protection">
             <SidebarNavRow
               icon={<PolicyIcon fontSize="small" />}
               label="Watchdogs"
@@ -4127,7 +4128,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </SidebarSection>
 
-          <SidebarSection sectionId="history" title="History" badge={workspaceBadges.history}>
+          <SidebarSection sectionId="history" title="History">
             <SidebarNavRow
               icon={<ListAltRoundedIcon fontSize="small" />}
               label="Activity History"
@@ -4136,7 +4137,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </SidebarSection>
 
-          <SidebarSection sectionId="metadata" title="Metadata" badge={workspaceBadges.config}>
+          <SidebarSection sectionId="metadata" title="Metadata">
             <SidebarNavRow
               icon={<LabelRoundedIcon fontSize="small" />}
               label="Metadata"
@@ -4145,8 +4146,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
           </SidebarSection>
         </Box>
-
-        <Divider sx={{ borderColor: "rgba(125,183,255,0.14)" }} />
         <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
           <Box
             component="button"
