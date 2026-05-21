@@ -1978,58 +1978,35 @@ export default function DeviceSummary() {
     if (!target) return;
 
     const docScroller = document.scrollingElement || document.documentElement;
-    let scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
-    let node = target.parentElement;
-    if (scrollHost === docScroller) {
-      while (node && node !== document.body) {
-        const styles = window.getComputedStyle(node);
-        const overflowY = String(styles.overflowY || "").toLowerCase();
-        const overflow = String(styles.overflow || "").toLowerCase();
-        const canScroll = node.scrollHeight > node.clientHeight + 1;
-        const allowsScroll =
-          /(auto|scroll|overlay)/.test(overflowY) ||
-          /(auto|scroll|overlay)/.test(overflow) ||
-          overflowY === "hidden";
-        if (canScroll && allowsScroll) {
-          scrollHost = node;
-          break;
-        }
-        node = node.parentElement;
-      }
-    }
-
-    const targetRect = target.getBoundingClientRect();
-    const hostRect =
-      scrollHost === docScroller
-        ? { top: 0, height: window.innerHeight || document.documentElement.clientHeight || 0 }
-        : scrollHost.getBoundingClientRect();
+    const scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
     const scrollTopOffset = 0;
     const hostViewportHeight =
       scrollHost === docScroller
         ? window.innerHeight || document.documentElement.clientHeight || 0
-        : scrollHost.clientHeight || hostRect.height || 0;
+        : scrollHost.clientHeight ||
+          scrollHost.getBoundingClientRect?.().height ||
+          window.innerHeight ||
+          document.documentElement.clientHeight ||
+          0;
     const spacer = Math.max(0, Math.round(hostViewportHeight + 28));
-    const delta = targetRect.top - hostRect.top - scrollTopOffset;
 
     summaryGridDebugLog("scrollToSection", {
       sectionKey,
       scrollHostTag: scrollHost?.tagName || "document",
       scrollTopOffset,
       spacer,
-      delta: Math.round(delta),
     });
 
     setActiveSummarySectionKey(sectionKey);
     setSummaryScrollOffset((prev) => (prev === scrollTopOffset ? prev : scrollTopOffset));
     setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
 
-    if (scrollHost === docScroller) {
-      const current = window.scrollY || docScroller.scrollTop || 0;
-      window.scrollTo({ top: Math.max(0, Math.round(current + delta)), behavior: "smooth" });
-      return;
-    }
-    const current = scrollHost.scrollTop || 0;
-    scrollHost.scrollTo({ top: Math.max(0, Math.round(current + delta)), behavior: "smooth" });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const nextTarget = document.getElementById(`device-summary-${sectionKey}`);
+        nextTarget?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
+      });
+    });
   }, []);
 
   const scrollHardwareSummaryToTop = useCallback(() => {
@@ -2039,16 +2016,27 @@ export default function DeviceSummary() {
     const hostViewportHeight =
       scrollHost === docScroller
         ? window.innerHeight || document.documentElement.clientHeight || 0
-        : scrollHost.clientHeight || 0;
+        : scrollHost.clientHeight ||
+          scrollHost.getBoundingClientRect?.().height ||
+          window.innerHeight ||
+          document.documentElement.clientHeight ||
+          0;
     const spacer = Math.max(0, Math.round(hostViewportHeight + 28));
     setActiveSummarySectionKey("top-level");
     setSummaryScrollOffset((prev) => (prev === 0 ? prev : 0));
     setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
-    if (scrollHost === docScroller) {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-      return;
-    }
-    scrollHost.scrollTo({ top: 0, behavior: "smooth" });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (scrollHost === docScroller) {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          scrollHost.scrollTo?.({ top: 0, behavior: "smooth" });
+        }
+        document
+          .getElementById("device-summary-top-level")
+          ?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
+      });
+    });
   }, []);
 
   const requestSummarySectionScroll = useCallback(
@@ -2093,8 +2081,6 @@ export default function DeviceSummary() {
       .map((section) => document.getElementById(`device-summary-${section.key}`))
       .filter(Boolean);
     if (!sectionElements.length) return undefined;
-    const scrollRoot = document.getElementById("device-summary-workspace-scrollhost") || null;
-
     summaryGridDebugLog("sidebarSummaryObserverStart", {
       sections: sectionElements.map((el) => el.id),
     });
@@ -2120,7 +2106,7 @@ export default function DeviceSummary() {
         });
       },
       {
-        root: scrollRoot,
+        root: null,
         rootMargin: "-16px 0px -60% 0px",
         threshold: [0.15, 0.35, 0.6],
       }
