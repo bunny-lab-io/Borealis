@@ -6,8 +6,6 @@ import {
   Alert,
   Box,
   Stack,
-  Tabs,
-  Tab,
   Tooltip,
   Typography,
   Button,
@@ -46,7 +44,6 @@ import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../../app/providers/AuthContext.jsx";
-import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import QuickJobDialog from "../../Assemblies/Quick_Job_Dialog.jsx";
 import {
@@ -153,49 +150,76 @@ const TUNNEL_INFO_IDLE = Object.freeze({
   last_recovery_attempt_at_iso: "",
 });
 
-const TOP_TABS = [
-  { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
-  { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
-  { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
-  { key: "services", label: "Services", icon: SettingsRoundedIcon },
-  { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
-  { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
-  { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
-  { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
-  { key: "metadata", label: "Metadata Fields", icon: LabelRoundedIcon, align: "right" },
-  { key: "agent_health", label: "Agent Health", icon: DeveloperBoardRoundedIcon, align: "right" },
+const WORKSPACES = [
+  { key: "command", label: "Command", icon: SpeedRoundedIcon },
+  { key: "health", label: "Health", icon: DeveloperBoardRoundedIcon },
+  { key: "remote_ops", label: "Remote Ops", icon: TerminalRoundedIcon },
+  { key: "inventory", label: "Inventory", icon: AppsRoundedIcon },
+  { key: "protection", label: "Protection", icon: PolicyIcon },
+  { key: "history", label: "History", icon: ListAltRoundedIcon },
+  { key: "config", label: "Config", icon: LabelRoundedIcon },
 ];
-const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
-  summary: "device_summary",
-  file_management: "file_management",
-  software: "installed_software",
-  metadata: "metadata_fields",
-  services: "services",
-  process_management: "process_management",
-  watchdogs: "watchdogs",
-  activity: "activity_history",
-  shell: "remote_shell",
-  agent_health: "agent_health",
+const WORKSPACE_KEYS = new Set(WORKSPACES.map((workspace) => workspace.key));
+const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
+  remote_ops: "shell",
+  inventory: "summary",
+  config: "metadata",
 });
-const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
-  device_summary: "summary",
-  summary: "summary",
-  file_management: "file_management",
-  installed_software: "software",
-  software: "software",
-  metadata_fields: "metadata",
-  metadata: "metadata",
-  services: "services",
-  process_management: "process_management",
-  processes: "process_management",
-  watchdogs: "watchdogs",
-  activity_history: "activity",
-  activity: "activity",
-  remote_shell: "shell",
-  shell: "shell",
-  agent_health: "agent_health",
-  health: "agent_health",
+const WORKSPACE_VIEW_OPTIONS = Object.freeze({
+  remote_ops: ["shell", "files", "processes", "services"],
+  inventory: ["summary", "software"],
+  config: ["metadata"],
 });
+const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
+  device_summary: { workspace: "command" },
+  summary: { workspace: "command" },
+  file_management: { workspace: "remote_ops", view: "files" },
+  installed_software: { workspace: "inventory", view: "software" },
+  software: { workspace: "inventory", view: "software" },
+  metadata_fields: { workspace: "config", view: "metadata" },
+  metadata: { workspace: "config", view: "metadata" },
+  services: { workspace: "remote_ops", view: "services" },
+  process_management: { workspace: "remote_ops", view: "processes" },
+  processes: { workspace: "remote_ops", view: "processes" },
+  watchdogs: { workspace: "protection" },
+  activity_history: { workspace: "history" },
+  activity: { workspace: "history" },
+  remote_shell: { workspace: "remote_ops", view: "shell" },
+  shell: { workspace: "remote_ops", view: "shell" },
+  agent_health: { workspace: "health" },
+  health: { workspace: "health" },
+});
+
+const normalizeWorkspaceKey = (value, fallback = "command") => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (WORKSPACE_KEYS.has(normalized)) return normalized;
+  const legacyTarget = LEGACY_TAB_TO_WORKSPACE[normalized];
+  if (legacyTarget?.workspace && WORKSPACE_KEYS.has(legacyTarget.workspace)) {
+    return legacyTarget.workspace;
+  }
+  return fallback;
+};
+
+const normalizeWorkspaceView = (workspaceKey, value) => {
+  const allowedViews = WORKSPACE_VIEW_OPTIONS[workspaceKey] || [];
+  const fallback = WORKSPACE_VIEW_DEFAULTS[workspaceKey] || "";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (allowedViews.includes(normalized)) return normalized;
+  return fallback;
+};
+
+const createDeviceWorkspaceSearch = (currentSearch, workspaceKey, viewKey = "") => {
+  const params = new URLSearchParams(currentSearch || "");
+  const normalizedWorkspace = normalizeWorkspaceKey(workspaceKey);
+  const normalizedView = normalizeWorkspaceView(normalizedWorkspace, viewKey);
+  params.set("tab", normalizedWorkspace);
+  if (normalizedView) {
+    params.set("view", normalizedView);
+  } else {
+    params.delete("view");
+  }
+  return params.toString() ? `?${params.toString()}` : "";
+};
 
 const resolveDeviceId = (device) =>
   device?.agent_guid ||
@@ -989,28 +1013,85 @@ export default function DeviceSummary() {
     [deviceId, initialDevice]
   );
   const notifyOperator = useAppNotifications();
-  const { activeKey: activeTabKey, setActiveKey: setActiveTabKey } = useUrlTabState({
-    param: "tab",
-    defaultKey: TOP_TABS[0]?.key || "summary",
-    allowedKeys: TOP_TABS.map((tabDef) => tabDef.key),
-    keyByUrl: DEVICE_DETAILS_TAB_KEY_BY_URL,
-    urlByKey: DEVICE_DETAILS_TAB_URL_BY_KEY,
-  });
+  const deviceSearchParams = useMemo(
+    () => new URLSearchParams(location.search || ""),
+    [location.search]
+  );
+  const rawTabParam = useMemo(
+    () => String(deviceSearchParams.get("tab") || "").trim().toLowerCase(),
+    [deviceSearchParams]
+  );
+  const rawViewParam = useMemo(
+    () => String(deviceSearchParams.get("view") || "").trim().toLowerCase(),
+    [deviceSearchParams]
+  );
+  const legacyWorkspaceTarget = LEGACY_TAB_TO_WORKSPACE[rawTabParam] || null;
+  const hasExplicitWorkspaceTarget = Boolean(
+    rawTabParam && (WORKSPACE_KEYS.has(rawTabParam) || legacyWorkspaceTarget)
+  );
+  const activeWorkspaceKey = normalizeWorkspaceKey(
+    WORKSPACE_KEYS.has(rawTabParam) ? rawTabParam : legacyWorkspaceTarget?.workspace,
+    "command"
+  );
+  const activeWorkspaceView = normalizeWorkspaceView(
+    activeWorkspaceKey,
+    rawViewParam || legacyWorkspaceTarget?.view || ""
+  );
+  const setActiveWorkspace = useCallback(
+    (workspaceKey, viewKey = "") => {
+      const search = createDeviceWorkspaceSearch(location.search, workspaceKey, viewKey);
+      navigate(
+        {
+          pathname: location.pathname,
+          search,
+        },
+        { replace: false, state: location.state }
+      );
+    },
+    [location.pathname, location.search, location.state, navigate]
+  );
+  const setActiveWorkspaceView = useCallback(
+    (viewKey) => {
+      setActiveWorkspace(activeWorkspaceKey, viewKey);
+    },
+    [activeWorkspaceKey, setActiveWorkspace]
+  );
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
-    if (!deviceId || (legacyTab !== "remote_desktop" && legacyTab !== "vnc")) {
+    if (!deviceId) {
       return;
     }
-    params.delete("tab");
+    if (legacyTab === "remote_desktop" || legacyTab === "vnc") {
+      params.delete("tab");
+      navigate(
+        {
+          pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
+          search: params.toString() ? `?${params.toString()}` : "",
+        },
+        { replace: true, state: location.state }
+      );
+      return;
+    }
+    if (!legacyTab || WORKSPACE_KEYS.has(legacyTab)) {
+      return;
+    }
+    const target = LEGACY_TAB_TO_WORKSPACE[legacyTab];
+    if (!target?.workspace) {
+      return;
+    }
+    params.set("tab", target.workspace);
+    if (target.view && !String(params.get("view") || "").trim()) {
+      params.set("view", target.view);
+    }
     navigate(
       {
-        pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
+        pathname: location.pathname,
         search: params.toString() ? `?${params.toString()}` : "",
       },
       { replace: true, state: location.state }
     );
-  }, [deviceId, location.search, location.state, navigate]);
+  }, [deviceId, location.pathname, location.search, location.state, navigate]);
 
   const loaderSnapshot = useMemo(() => {
     const snapshot = loaderData?.snapshot;
@@ -1123,7 +1204,7 @@ export default function DeviceSummary() {
   const openQuickJobDialog = useCallback(() => {
     setQuickJobOpen(true);
   }, []);
-  const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc" || activeTabKey === "agent_health";
+  const shouldPollTunnelStatus = ["command", "health", "remote_ops"].includes(activeWorkspaceKey);
   useEffect(() => {
     setConnectionError("");
   }, [connectionDraft]);
@@ -3255,8 +3336,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;
-    const topTabKey = activeTabKey || "";
-    if (topTabKey !== "summary") return;
+    const topTabKey = activeWorkspaceKey || "";
+    if (topTabKey !== "inventory" && topTabKey !== "command") return;
     summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
       topTabKey,
@@ -3269,7 +3350,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       networkRows: networkRows.length,
     });
   }, [
-    activeTabKey,
+    activeWorkspaceKey,
     summaryScrollOffset,
     summaryBottomSpacer,
     overviewInfoRows.length,
@@ -3293,6 +3374,171 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   );
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
+  const statusIsOnline = String(status || "").trim().toLowerCase() === "online";
+  const roleHealthSummary = useMemo(() => {
+    const roles = Array.isArray(agentRoleHealthPayload?.roles) ? agentRoleHealthPayload.roles : [];
+    const unhealthyRoles = roles.filter((role) => {
+      const health = String(role?.health || role?.status || role?.state || "").trim().toLowerCase();
+      if (!health) return false;
+      return !["healthy", "ok", "online", "running", "ready", "complete", "completed"].includes(health);
+    });
+    return {
+      count: roles.length,
+      unhealthyCount: unhealthyRoles.length,
+      label:
+        roles.length === 0
+          ? "No role report"
+          : unhealthyRoles.length > 0
+            ? `${unhealthyRoles.length}/${roles.length} roles degraded`
+            : `${roles.length} roles healthy`,
+    };
+  }, [agentRoleHealthPayload]);
+  const dataFreshnessLabel = useMemo(() => {
+    const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
+    const lastSeenSeconds = Number(rawLastSeen || 0);
+    if (!lastSeenSeconds) return "No heartbeat";
+    const ageSeconds = Math.max(0, Math.round(Date.now() / 1000 - lastSeenSeconds));
+    if (ageSeconds < 120) return "Fresh heartbeat";
+    if (ageSeconds < 3600) return `${Math.round(ageSeconds / 60)} min since heartbeat`;
+    if (ageSeconds < 86400) return `${Math.round(ageSeconds / 3600)} hr since heartbeat`;
+    return `${Math.round(ageSeconds / 86400)} days since heartbeat`;
+  }, [agent?.last_seen, device?.last_seen, meta.lastSeen, summary.last_seen]);
+  const readiness = useMemo(() => {
+    const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
+    const updateState = String(meta.agentUpdateState || summary.agent_update_state || "").trim().toLowerCase();
+    const versionState = String(meta.agentVersionStatus || summary.agent_version_status || "").trim().toLowerCase();
+    const tunnelBlocked = ["down", "error"].includes(tunnelStatus) || tunnelInfo?.agent_socket === false;
+    const updateFailed = updateState === "failed" || Boolean(meta.agentUpdateError || summary.agent_update_error);
+    const needsUpdate = versionState.includes("need") || versionState.includes("outdated");
+    const healthBlocked = !statusIsOnline || tunnelBlocked || updateFailed || roleHealthSummary.unhealthyCount > 0;
+    const storageBlocked = hardwareOverview.storageCritical > 0;
+    if (healthBlocked) {
+      return {
+        tone: "danger",
+        headline: !statusIsOnline
+          ? "Agent unreachable"
+          : tunnelBlocked
+            ? "Remote control degraded"
+            : updateFailed
+              ? "Agent updater failed"
+              : "Agent role degraded",
+        detail: !statusIsOnline
+          ? "Recover control before running remote operations."
+          : tunnelBlocked
+            ? "Tunnel or SYSTEM socket is unavailable."
+            : updateFailed
+              ? "Review updater state and startup flow."
+              : "Role health needs review.",
+      };
+    }
+    if (storageBlocked || needsUpdate) {
+      return {
+        tone: "warning",
+        headline: storageBlocked ? "Device needs attention" : "Agent update recommended",
+        detail: storageBlocked
+          ? `${hardwareOverview.storageCritical} storage volume exceeds ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% usage.`
+          : "Installed agent build does not match desired state.",
+      };
+    }
+    return {
+      tone: "ready",
+      headline: "Ready for remote ops",
+      detail: "Agent, inventory, and remote-control signals look usable.",
+    };
+  }, [
+    hardwareOverview.storageCritical,
+    meta.agentUpdateError,
+    meta.agentUpdateState,
+    meta.agentVersionStatus,
+    roleHealthSummary.unhealthyCount,
+    statusIsOnline,
+    summary.agent_update_error,
+    summary.agent_update_state,
+    summary.agent_version_status,
+    tunnelInfo?.agent_socket,
+    tunnelInfo?.status,
+  ]);
+  const recommendedWorkspaceKey = useMemo(() => {
+    if (!statusIsOnline || readiness.tone === "danger") return "health";
+    if (hardwareOverview.storageCritical > 0) return "inventory";
+    return "command";
+  }, [hardwareOverview.storageCritical, readiness.tone, statusIsOnline]);
+  const initialWorkspaceFocusRef = useRef(false);
+  useEffect(() => {
+    if (initialWorkspaceFocusRef.current || hasExplicitWorkspaceTarget || !summaryDataReady) {
+      return;
+    }
+    initialWorkspaceFocusRef.current = true;
+    setActiveWorkspace(recommendedWorkspaceKey);
+  }, [hasExplicitWorkspaceTarget, recommendedWorkspaceKey, setActiveWorkspace, summaryDataReady]);
+  const commandCards = useMemo(
+    () => [
+      {
+        id: "recover-control",
+        title: readiness.headline,
+        eyebrow: "Recover Control",
+        description: readiness.detail,
+        icon: DeveloperBoardRoundedIcon,
+        tone: readiness.tone,
+        actionLabel: "Open Health",
+        workspace: "health",
+      },
+      {
+        id: "remote-ops",
+        title: statusIsOnline ? "Operate device" : "Remote ops waiting",
+        eyebrow: "Remote Ops",
+        description: statusIsOnline
+          ? "Open shell, files, services, processes, or remote desktop."
+          : "Recover agent reachability before launching remote tools.",
+        icon: TerminalRoundedIcon,
+        tone: statusIsOnline ? "ready" : "muted",
+        actionLabel: "Open Remote Ops",
+        workspace: "remote_ops",
+        view: "shell",
+      },
+      {
+        id: "investigate-risk",
+        title:
+          hardwareOverview.storageCritical > 0
+            ? `${hardwareOverview.storageCritical} storage alert${hardwareOverview.storageCritical === 1 ? "" : "s"}`
+            : "Review device risk",
+        eyebrow: "Investigate",
+        description:
+          hardwareOverview.storageCritical > 0
+            ? `Storage usage exceeds ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% on one or more volumes.`
+            : "Open watchdogs and activity when behavior needs investigation.",
+        icon: PolicyIcon,
+        tone: hardwareOverview.storageCritical > 0 ? "warning" : "muted",
+        actionLabel: hardwareOverview.storageCritical > 0 ? "Open Inventory" : "Open Protection",
+        workspace: hardwareOverview.storageCritical > 0 ? "inventory" : "protection",
+        view: hardwareOverview.storageCritical > 0 ? "summary" : "",
+      },
+      {
+        id: "maintain-inventory",
+        title: "Maintain inventory",
+        eyebrow: "Maintain",
+        description: "Review hardware facts, installed software, metadata, and agent channel state.",
+        icon: AppsRoundedIcon,
+        tone: "muted",
+        actionLabel: "Open Inventory",
+        workspace: "inventory",
+        view: "summary",
+      },
+    ],
+    [hardwareOverview.storageCritical, readiness.detail, readiness.headline, readiness.tone, statusIsOnline]
+  );
+  const workspaceBadges = useMemo(
+    () => ({
+      health: readiness.tone === "danger" ? "!" : "",
+      inventory: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
+      protection: "",
+      history: "",
+      remote_ops: statusIsOnline ? "" : "!",
+      config: "",
+      command: readiness.tone === "ready" ? "" : "!",
+    }),
+    [hardwareOverview.storageCritical, readiness.tone, statusIsOnline]
+  );
 
   const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
   const renderMetadataTab = () => (
@@ -3357,19 +3603,586 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     actions: pageHeaderActions,
   });
 
-  const topTabRenderers = {
-    summary: renderDeviceSummaryTab,
-    file_management: renderFileManagementTab,
-    software: renderSoftware,
-    metadata: renderMetadataTab,
-    services: renderServicesTab,
-    process_management: renderProcessManagementTab,
-    watchdogs: renderWatchdogsTab,
-    activity: renderHistory,
-    shell: renderRemoteShellTab,
-    agent_health: renderAgentHealthTab,
+  const getToneStyles = (tone) => {
+    if (tone === "danger") {
+      return {
+        border: "rgba(248,113,113,0.42)",
+        background: "linear-gradient(135deg, rgba(127,29,29,0.42), rgba(15,23,42,0.74))",
+        icon: "#fca5a5",
+        accent: "#fca5a5",
+      };
+    }
+    if (tone === "warning") {
+      return {
+        border: "rgba(250,204,21,0.42)",
+        background: "linear-gradient(135deg, rgba(113,63,18,0.42), rgba(15,23,42,0.74))",
+        icon: "#fde68a",
+        accent: "#fde68a",
+      };
+    }
+    if (tone === "ready") {
+      return {
+        border: "rgba(52,211,153,0.38)",
+        background: "linear-gradient(135deg, rgba(6,78,59,0.38), rgba(15,23,42,0.74))",
+        icon: MAGIC_UI.accentC,
+        accent: MAGIC_UI.accentC,
+      };
+    }
+    return {
+      border: MAGIC_UI.panelBorder,
+      background: "linear-gradient(135deg, rgba(15,23,42,0.82), rgba(7,11,24,0.72))",
+      icon: MAGIC_UI.accentA,
+      accent: MAGIC_UI.accentA,
+    };
   };
-  const tabContent = (topTabRenderers[activeTabKey] || renderDeviceSummaryTab)();
+
+  const renderStatusPill = ({ id, label, value, tone = "muted" }) => {
+    const toneStyles = getToneStyles(tone);
+    return (
+      <Box
+        key={id}
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.8,
+          minHeight: 30,
+          px: 1.15,
+          borderRadius: 999,
+          border: `1px solid ${toneStyles.border}`,
+          background: "rgba(2,6,23,0.44)",
+          minWidth: 0,
+        }}
+      >
+        <Typography
+          component="span"
+          sx={{
+            color: MAGIC_UI.textMuted,
+            fontSize: "0.68rem",
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            fontWeight: 700,
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </Typography>
+        <Typography
+          component="span"
+          title={String(value || "")}
+          sx={{
+            color: toneStyles.accent,
+            fontSize: "0.76rem",
+            fontWeight: 700,
+            lineHeight: 1.1,
+            minWidth: 0,
+            maxWidth: { xs: 180, md: 260 },
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {value}
+        </Typography>
+      </Box>
+    );
+  };
+
+  const readinessPills = [
+    {
+      id: "status",
+      label: "Agent",
+      value: status || "Unknown",
+      tone: statusIsOnline ? "ready" : "danger",
+    },
+    {
+      id: "tunnel",
+      label: "Tunnel",
+      value:
+        tunnelInfo?.status === "up"
+          ? "Up"
+          : tunnelInfo?.status === "down"
+            ? "Down"
+            : tunnelInfo?.status === "error"
+              ? "Error"
+              : "Idle",
+      tone: tunnelInfo?.status === "up" ? "ready" : tunnelInfo?.status === "idle" ? "muted" : "danger",
+    },
+    {
+      id: "socket",
+      label: "Socket",
+      value: tunnelInfo?.agent_socket ? "Connected" : "No SYSTEM socket",
+      tone: tunnelInfo?.agent_socket ? "ready" : "warning",
+    },
+    {
+      id: "roles",
+      label: "Roles",
+      value: roleHealthSummary.label,
+      tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
+    },
+    {
+      id: "freshness",
+      label: "Freshness",
+      value: dataFreshnessLabel,
+      tone: statusIsOnline ? "ready" : "warning",
+    },
+  ];
+
+  const renderReadinessHeader = () => {
+    const toneStyles = getToneStyles(readiness.tone);
+    return (
+      <Box
+        sx={{
+          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+          background:
+            "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
+            "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
+          px: { xs: 1.5, md: 2 },
+          py: 1.5,
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", xl: "minmax(280px, 0.7fr) minmax(0, 1.3fr)" },
+          gap: 1.4,
+          alignItems: "center",
+          minWidth: 0,
+        }}
+      >
+        <Stack direction="row" spacing={1.15} alignItems="center" sx={{ minWidth: 0 }}>
+          <Box
+            sx={{
+              width: 38,
+              height: 38,
+              borderRadius: 2,
+              border: `1px solid ${toneStyles.border}`,
+              background: toneStyles.background,
+              color: toneStyles.icon,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
+            <DeveloperBoardRoundedIcon sx={{ fontSize: 21 }} />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography
+              sx={{
+                color: MAGIC_UI.textBright,
+                fontWeight: 750,
+                fontSize: "0.95rem",
+                lineHeight: 1.2,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={readiness.headline}
+            >
+              {readiness.headline}
+            </Typography>
+            <Typography
+              sx={{
+                color: MAGIC_UI.textMuted,
+                fontSize: "0.78rem",
+                lineHeight: 1.35,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={readiness.detail}
+            >
+              {readiness.detail}
+            </Typography>
+          </Box>
+        </Stack>
+        <Stack
+          direction="row"
+          spacing={0.75}
+          useFlexGap
+          flexWrap="wrap"
+          justifyContent={{ xs: "flex-start", xl: "flex-end" }}
+          sx={{ minWidth: 0 }}
+        >
+          {readinessPills.map(renderStatusPill)}
+        </Stack>
+      </Box>
+    );
+  };
+
+  const renderWorkspaceRail = () => (
+    <Box
+      sx={{
+        borderRight: { xs: "none", lg: `1px solid ${MAGIC_UI.panelBorder}` },
+        borderBottom: { xs: `1px solid ${MAGIC_UI.panelBorder}`, lg: "none" },
+        background: "rgba(2,6,23,0.34)",
+        p: { xs: 1, lg: 1.15 },
+        display: "flex",
+        flexDirection: { xs: "row", lg: "column" },
+        gap: 0.7,
+        overflowX: { xs: "auto", lg: "visible" },
+        minWidth: 0,
+      }}
+    >
+      {WORKSPACES.map((workspace) => {
+        const active = activeWorkspaceKey === workspace.key;
+        const WorkspaceIcon = workspace.icon;
+        const badge = workspaceBadges[workspace.key] || "";
+        return (
+          <Button
+            key={workspace.key}
+            onClick={() => setActiveWorkspace(workspace.key, WORKSPACE_VIEW_DEFAULTS[workspace.key] || "")}
+            startIcon={<WorkspaceIcon sx={{ fontSize: 18 }} />}
+            sx={{
+              justifyContent: "flex-start",
+              textTransform: "none",
+              borderRadius: 2,
+              minHeight: 38,
+              minWidth: { xs: 138, lg: 0 },
+              width: { xs: "auto", lg: "100%" },
+              px: 1.2,
+              color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
+              background: active ? NAV_TAB_COLORS.activeBg : "transparent",
+              border: active ? "1px solid rgba(125,183,255,0.22)" : "1px solid transparent",
+              fontSize: "0.8rem",
+              fontWeight: active ? 700 : 500,
+              "& .MuiButton-startIcon": {
+                color: active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
+                mr: 0.9,
+              },
+              "&:hover": {
+                background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
+              },
+            }}
+          >
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
+              <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {workspace.label}
+              </Box>
+              {badge ? (
+                <Box
+                  component="span"
+                  sx={{
+                    ml: "auto",
+                    minWidth: 18,
+                    height: 18,
+                    px: 0.5,
+                    borderRadius: 999,
+                    background: "rgba(248,113,113,0.22)",
+                    color: "#fecaca",
+                    border: "1px solid rgba(248,113,113,0.32)",
+                    fontSize: "0.68rem",
+                    fontWeight: 800,
+                    lineHeight: "16px",
+                    textAlign: "center",
+                  }}
+                >
+                  {badge}
+                </Box>
+              ) : null}
+            </Box>
+          </Button>
+        );
+      })}
+    </Box>
+  );
+
+  const renderViewSwitcher = (options) => (
+    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
+      {options.map((option) => {
+        const active = activeWorkspaceView === option.key;
+        const OptionIcon = option.icon;
+        return (
+          <Button
+            key={option.key}
+            size="small"
+            onClick={() => setActiveWorkspaceView(option.key)}
+            startIcon={OptionIcon ? <OptionIcon sx={{ fontSize: 16 }} /> : null}
+            sx={{
+              minHeight: 30,
+              borderRadius: 999,
+              textTransform: "none",
+              px: 1.35,
+              color: active ? MAGIC_UI.textBright : NAV_TAB_COLORS.text,
+              border: `1px solid ${active ? "rgba(125,211,252,0.48)" : MAGIC_UI.panelBorder}`,
+              background: active
+                ? "linear-gradient(90deg, rgba(125,211,252,0.18), rgba(192,132,252,0.12))"
+                : "rgba(2,6,23,0.32)",
+              "& .MuiButton-startIcon": {
+                color: active ? MAGIC_UI.accentA : NAV_TAB_COLORS.icon,
+              },
+            }}
+          >
+            {option.label}
+          </Button>
+        );
+      })}
+    </Stack>
+  );
+
+  const renderCommandHub = () => (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", xl: "minmax(0, 1.1fr) minmax(280px, 0.9fr)" },
+          gap: 1.5,
+          minWidth: 0,
+        }}
+      >
+        <Box
+          sx={{
+            borderRadius: 3,
+            border: `1px solid ${getToneStyles(readiness.tone).border}`,
+            background: getToneStyles(readiness.tone).background,
+            p: { xs: 2, md: 2.4 },
+            minWidth: 0,
+          }}
+        >
+          <Typography
+            sx={{
+              color: MAGIC_UI.accentA,
+              fontSize: "0.72rem",
+              fontWeight: 800,
+              letterSpacing: 0.45,
+              textTransform: "uppercase",
+              mb: 0.8,
+            }}
+          >
+            Current Blocker
+          </Typography>
+          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "1.25rem", fontWeight: 800, lineHeight: 1.15 }}>
+            {readiness.headline}
+          </Typography>
+          <Typography sx={{ color: MAGIC_UI.textMuted, mt: 0.8, fontSize: "0.9rem", lineHeight: 1.45 }}>
+            {readiness.detail}
+          </Typography>
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.8 }}>
+            <Button
+              variant="contained"
+              onClick={() => setActiveWorkspace(recommendedWorkspaceKey)}
+              sx={{
+                borderRadius: 999,
+                textTransform: "none",
+                background: "linear-gradient(90deg, #7dd3fc, #c084fc)",
+                color: "#020617",
+                fontWeight: 800,
+              }}
+            >
+              Open Recommended Workspace
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={requestAgentUpdate}
+              disabled={!activityHostname || updateAgentBusy}
+              sx={{
+                borderRadius: 999,
+                textTransform: "none",
+                borderColor: MAGIC_UI.panelBorder,
+                color: MAGIC_UI.textBright,
+              }}
+            >
+              {updateAgentBusy ? "Updating..." : "Update Agent"}
+            </Button>
+          </Stack>
+        </Box>
+        <Box
+          sx={{
+            borderRadius: 3,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: "rgba(7,11,24,0.58)",
+            p: { xs: 2, md: 2.4 },
+            minWidth: 0,
+          }}
+        >
+          <Typography
+            sx={{
+              color: MAGIC_UI.accentA,
+              fontSize: "0.72rem",
+              fontWeight: 800,
+              letterSpacing: 0.45,
+              textTransform: "uppercase",
+              mb: 1.2,
+            }}
+          >
+            Fast Actions
+          </Typography>
+          <Box sx={{ display: "grid", gridTemplateColumns: "1fr", gap: 0.85 }}>
+            {[
+              { label: "Open Shell", workspace: "remote_ops", view: "shell", icon: TerminalRoundedIcon },
+              { label: "Manage Files", workspace: "remote_ops", view: "files", icon: FolderRoundedIcon },
+              { label: "Review Activity", workspace: "history", view: "", icon: ListAltRoundedIcon },
+              { label: "Remote Desktop", external: true, icon: DesktopWindowsRoundedIcon },
+            ].map((action) => {
+              const ActionIcon = action.icon;
+              return (
+                <Button
+                  key={action.label}
+                  onClick={() => {
+                    if (action.external) {
+                      if (!deviceId) return;
+                      navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
+                        state: { initialDevice: tunnelDevice },
+                      });
+                      return;
+                    }
+                    setActiveWorkspace(action.workspace, action.view);
+                  }}
+                  startIcon={<ActionIcon sx={{ fontSize: 17 }} />}
+                  sx={{
+                    justifyContent: "flex-start",
+                    minHeight: 34,
+                    borderRadius: 2,
+                    textTransform: "none",
+                    color: MAGIC_UI.textBright,
+                    background: "rgba(2,6,23,0.3)",
+                    border: `1px solid ${MAGIC_UI.panelBorder}`,
+                    "& .MuiButton-startIcon": { color: MAGIC_UI.accentA },
+                    "&:hover": { background: "rgba(125,211,252,0.08)" },
+                  }}
+                >
+                  {action.label}
+                </Button>
+              );
+            })}
+          </Box>
+        </Box>
+      </Box>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0,1fr))", xl: "repeat(4, minmax(0,1fr))" },
+          gap: 1.25,
+          minWidth: 0,
+        }}
+      >
+        {commandCards.map((card) => {
+          const CardIcon = card.icon;
+          const toneStyles = getToneStyles(card.tone);
+          return (
+            <Box
+              key={card.id}
+              sx={{
+                borderRadius: 3,
+                border: `1px solid ${toneStyles.border}`,
+                background: toneStyles.background,
+                p: 1.6,
+                minWidth: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 1,
+              }}
+            >
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                <Box sx={{ color: toneStyles.icon, display: "flex", flexShrink: 0 }}>
+                  <CardIcon sx={{ fontSize: 20 }} />
+                </Box>
+                <Typography
+                  sx={{
+                    color: toneStyles.accent,
+                    fontSize: "0.68rem",
+                    fontWeight: 800,
+                    letterSpacing: 0.42,
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {card.eyebrow}
+                </Typography>
+              </Stack>
+              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.95rem", fontWeight: 800, lineHeight: 1.25 }}>
+                {card.title}
+              </Typography>
+              <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem", lineHeight: 1.45, flexGrow: 1 }}>
+                {card.description}
+              </Typography>
+              <Button
+                size="small"
+                onClick={() => setActiveWorkspace(card.workspace, card.view || "")}
+                sx={{
+                  alignSelf: "flex-start",
+                  borderRadius: 999,
+                  textTransform: "none",
+                  color: MAGIC_UI.textBright,
+                  border: `1px solid ${toneStyles.border}`,
+                  px: 1.25,
+                }}
+              >
+                {card.actionLabel}
+              </Button>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+
+  const renderRemoteOpsWorkspace = () => {
+    const view = normalizeWorkspaceView("remote_ops", activeWorkspaceView);
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
+        <Stack direction="row" spacing={1} justifyContent="space-between" useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
+          {renderViewSwitcher([
+            { key: "shell", label: "Shell", icon: TerminalRoundedIcon },
+            { key: "files", label: "Files", icon: FolderRoundedIcon },
+            { key: "processes", label: "Processes", icon: AccountTreeRoundedIcon },
+            { key: "services", label: "Services", icon: SettingsRoundedIcon },
+          ])}
+          <Button
+            size="small"
+            startIcon={<DesktopWindowsRoundedIcon sx={{ fontSize: 16 }} />}
+            onClick={() => {
+              if (!deviceId) return;
+              navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
+                state: { initialDevice: tunnelDevice },
+              });
+            }}
+            sx={{
+              minHeight: 30,
+              borderRadius: 999,
+              textTransform: "none",
+              color: MAGIC_UI.textBright,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(2,6,23,0.32)",
+            }}
+          >
+            Remote Desktop
+          </Button>
+        </Stack>
+        <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {view === "files"
+            ? renderFileManagementTab()
+            : view === "processes"
+              ? renderProcessManagementTab()
+              : view === "services"
+                ? renderServicesTab()
+                : renderRemoteShellTab()}
+        </Box>
+      </Box>
+    );
+  };
+
+  const renderInventoryWorkspace = () => {
+    const view = normalizeWorkspaceView("inventory", activeWorkspaceView);
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
+        {renderViewSwitcher([
+          { key: "summary", label: "Hardware Summary", icon: InfoOutlinedIcon },
+          { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
+        ])}
+        <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {view === "software" ? renderSoftware() : renderDeviceSummaryTab()}
+        </Box>
+      </Box>
+    );
+  };
+
+  const renderWorkspaceContent = () => {
+    if (activeWorkspaceKey === "health") return renderAgentHealthTab();
+    if (activeWorkspaceKey === "remote_ops") return renderRemoteOpsWorkspace();
+    if (activeWorkspaceKey === "inventory") return renderInventoryWorkspace();
+    if (activeWorkspaceKey === "protection") return renderWatchdogsTab();
+    if (activeWorkspaceKey === "history") return renderHistory();
+    if (activeWorkspaceKey === "config") return renderMetadataTab();
+    return renderCommandHub();
+  };
+  const workspaceContent = renderWorkspaceContent();
 
   return (
     <Box
@@ -3590,84 +4403,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           {loadError}
         </Alert>
       ) : null}
-      <Tabs
-        value={activeTabKey}
-        onChange={(e, v) => setActiveTabKey(v || TOP_TABS[0]?.key || "summary")}
-        variant="scrollable"
-        scrollButtons="auto"
-        TabIndicatorProps={{
-          style: {
-            height: 3,
-            borderRadius: 3,
-            background: NAV_TAB_COLORS.iconActive,
-          },
-        }}
-        sx={{
-          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-          mb: 2,
-          minHeight: NAV_TAB_HEIGHT,
-          height: NAV_TAB_HEIGHT,
-          minWidth: 0,
-          maxWidth: "100%",
-          "& .MuiTabs-flexContainer": {
-            minHeight: NAV_TAB_HEIGHT,
-            height: NAV_TAB_HEIGHT,
-            alignItems: "stretch",
-            width: "100%",
-          },
-          "& .MuiTab-root": {
-            color: NAV_TAB_COLORS.text,
-            textTransform: "none",
-            fontWeight: 400,
-            fontFamily: "inherit",
-            fontSize: "0.8rem",
-            minHeight: NAV_TAB_HEIGHT,
-            height: NAV_TAB_HEIGHT,
-            opacity: 1,
-            borderRadius: 1,
-            py: 0.35,
-            transition:
-              "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
-            "& .MuiTab-iconWrapper": {
-              color: NAV_TAB_COLORS.icon,
-            },
-            "&:hover": {
-              background: NAV_TAB_COLORS.hover,
-            },
-            "&:active": {
-              transform: "translateY(0.5px)",
-            },
-          },
-          "& .MuiTab-root.Mui-selected": {
-            color: NAV_TAB_COLORS.textActive,
-            fontWeight: 600,
-            background: NAV_TAB_COLORS.activeBg,
-            "& .MuiTab-iconWrapper": {
-              color: NAV_TAB_COLORS.iconActive,
-            },
-            "&:hover": {
-              background: NAV_TAB_COLORS.activeBg,
-            },
-          },
-        }}
-      >
-        {TOP_TABS.map((tabDef, tabIndex) => {
-          const startsRightGroup = tabDef.align === "right" && TOP_TABS[tabIndex - 1]?.align !== "right";
-          return (
-            <Tab
-              key={tabDef.key || tabDef.label}
-              value={tabDef.key}
-              label={tabDef.label}
-              icon={<tabDef.icon sx={{ fontSize: 18 }} />}
-              iconPosition="start"
-              sx={startsRightGroup ? { ml: "auto" } : undefined}
-            />
-          );
-        })}
-      </Tabs>
       <Box
         sx={{
-          mt: 1,
           flexGrow: 1,
           minHeight: 0,
           minWidth: 0,
@@ -3675,9 +4412,39 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           overflowX: "hidden",
           display: "flex",
           flexDirection: "column",
+          borderRadius: 3,
+          border: `1px solid ${MAGIC_UI.panelBorder}`,
+          background:
+            "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
+            "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
+          boxShadow: MAGIC_UI.glow,
         }}
       >
-        {tabContent}
+        {renderReadinessHeader()}
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr", lg: "178px minmax(0, 1fr)" },
+            flexGrow: 1,
+            minHeight: 0,
+            minWidth: 0,
+          }}
+        >
+          {renderWorkspaceRail()}
+          <Box
+            sx={{
+              p: { xs: 1.5, md: 2 },
+              minHeight: 0,
+              minWidth: 0,
+              overflowX: "hidden",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {workspaceContent}
+          </Box>
+        </Box>
       </Box>
 
       <ClearDeviceActivityDialog
