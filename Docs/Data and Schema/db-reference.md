@@ -466,6 +466,35 @@ finally:
 - Active site membership is stored in `device_filter_sites`.
 - Archived filters are excluded from scheduler pickers and runtime resolution.
 
+#### `metadata_field_definitions`
+- Status: Active.
+- Purpose: Global Agent Metadata Field descriptions for fixed fields `Field 001` through `Field 500`.
+- Columns: `field_number`, `description`, `updated_at`, `updated_by`.
+- Constraints and indexes:
+- `field_number` primary key.
+- `idx_metadata_field_definitions_updated` on `updated_at`.
+- Used by:
+- `/api/metadata_fields` list/update endpoints.
+- Device Summary Metadata Fields tab labels.
+- Device Filter metadata-field picker.
+- Notes:
+- Empty descriptions fall back to default labels such as `Field 001`.
+
+#### `device_metadata_fields`
+- Status: Active.
+- Purpose: Sparse per-device Agent Metadata Field values with timestamp conflict metadata.
+- Columns: `device_guid`, `field_number`, `field_key`, `value`, `modified_at`, `source`, `actor`, `created_at`, `updated_at`.
+- Constraints and indexes:
+- `(device_guid, field_number)` primary key.
+- `idx_device_metadata_fields_guid` on `device_guid`.
+- `idx_device_metadata_fields_number_value` on `(field_number, value)`.
+- Used by:
+- `/api/devices/<device_id>/metadata_fields*` endpoints.
+- `/api/agent/heartbeat` metadata sync.
+- `DeviceFilterMatcher` metadata-field criteria.
+- Notes:
+- Values are base64-encoded at rest, capped at 1024 decoded characters, and omitted from agent payloads after blank clears are acknowledged.
+
 #### `device_filter_sites`
 - Status: Active.
 - Purpose: Normalized site membership for saved device filters.

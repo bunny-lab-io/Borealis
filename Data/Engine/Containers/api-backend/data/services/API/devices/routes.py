@@ -4,6 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
+# - GET /api/agent/metadata/<field_number> (Device Authenticated) - Reads one decoded metadata field for local Agent CLI.
 # - POST /api/agent/status (Device Authenticated) - Updates startup status timeline telemetry.
 # - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
 # - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
@@ -28,6 +29,14 @@ from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from ...activity_history import update_activity_history_row
+from ...metadata_fields import (
+    decode_metadata_value,
+    fetch_device_metadata_values,
+    metadata_field_key,
+    metadata_field_label,
+    normalize_field_number,
+    process_agent_metadata_sync,
+)
 from .software_icons import load_software_icon_overrides
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
@@ -76,6 +85,38 @@ def _json_dict(value: Any) -> Dict[str, Any]:
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _display_bounds_from_topology(topology: list[Any]) -> Dict[str, Any]:
+    displays = [item for item in topology if isinstance(item, dict)]
+    if not displays:
+        return {}
+    bounds = []
+    for item in displays:
+        try:
+            left = int(item.get("left") or 0)
+            top = int(item.get("top") or 0)
+            right = int(item.get("right") or (left + int(item.get("width") or 0)))
+            bottom = int(item.get("bottom") or (top + int(item.get("height") or 0)))
+        except (TypeError, ValueError):
+            continue
+        if right <= left or bottom <= top:
+            continue
+        bounds.append((left, top, right, bottom))
+    if not bounds:
+        return {}
+    left = min(item[0] for item in bounds)
+    top = min(item[1] for item in bounds)
+    right = max(item[2] for item in bounds)
+    bottom = max(item[3] for item in bounds)
+    return {
+        "left": left,
+        "top": top,
+        "right": right,
+        "bottom": bottom,
+        "width": right - left,
+        "height": bottom - top,
+    }
 
 
 def _normalize_status_code(value: Any) -> str:
@@ -492,6 +533,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     updates[key] = encoded
 
         metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        incoming_metadata_fields = payload.get("metadata_fields") if "metadata_fields" in payload else None
         incoming_role_health = payload.get("agent_role_health")
         incoming_service_mode = (
             payload.get("service_mode")
@@ -553,10 +595,13 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             updates["agent_update_source"] = str(update_source).strip()
 
         conn = db_conn_factory()
+        metadata_sync_response: Dict[str, Any] = {"updates": {}, "acks": []}
+        target_guid_for_sync: Optional[str] = None
         try:
             cur = conn.cursor()
 
             def _apply_updates() -> int:
+                nonlocal target_guid_for_sync
                 if not updates and incoming_role_health is None:
                     return 0
                 pending_updates = dict(updates)
@@ -575,6 +620,7 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                     if not selected_guid and rows:
                         selected_guid = rows[0][0]
                 target_guid = selected_guid or ctx.guid
+                target_guid_for_sync = target_guid
                 if incoming_role_health is not None:
                     existing_role_health = None
                     try:
@@ -650,6 +696,16 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             if rowcount == 0:
                 log("agents", f"heartbeat missing device record guid={ctx.guid}", context_label, level="ERROR")
                 return jsonify({"error": "device_not_registered"}), 404
+            if incoming_metadata_fields is not None:
+                try:
+                    metadata_sync_response = process_agent_metadata_sync(
+                        conn,
+                        target_guid_for_sync or ctx.guid,
+                        incoming_metadata_fields,
+                        now_ts=now_ts,
+                    )
+                except Exception:
+                    log("agents", f"metadata field sync failed guid={ctx.guid}", context_label, level="WARNING")
             if guid_lookup:
                 try:
                     cur.execute(
@@ -699,6 +755,50 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "poll_after_ms": 15000,
                 "site_id": site_id,
                 "site_name": site_name,
+                "metadata_fields": metadata_sync_response.get("updates") or {},
+                "metadata_field_acks": metadata_sync_response.get("acks") or [],
+            }
+        )
+
+    @blueprint.route("/api/agent/metadata/<int:field_number>", methods=["GET"])
+    @require_device_auth(auth_manager)
+    def agent_metadata_get(field_number: int):
+        ctx = _auth_context()
+        if ctx is None:
+            return jsonify({"error": "auth_context_missing"}), 500
+        parsed = normalize_field_number(field_number)
+        if parsed is None:
+            return jsonify({"error": "invalid_field", "message": "Field number must be between 1 and 500."}), 400
+        normalized_guid = normalize_guid(ctx.guid)
+        if not normalized_guid:
+            return jsonify({"error": "device_not_registered"}), 404
+        conn = db_conn_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT guid FROM devices WHERE UPPER(guid) = ? LIMIT 1",
+                (normalized_guid,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return jsonify({"error": "device_not_registered"}), 404
+            device_guid = str(row[0] or ctx.guid)
+            record = fetch_device_metadata_values(conn, device_guid).get(parsed) or {}
+        finally:
+            conn.close()
+        encoded_value = record.get("value", "")
+        return jsonify(
+            {
+                "field": {
+                    "field_number": parsed,
+                    "field_key": metadata_field_key(parsed),
+                    "label": metadata_field_label(parsed),
+                    "value": decode_metadata_value(encoded_value),
+                    "modified_at": int(record.get("modified_at") or 0),
+                    "source": str(record.get("source") or ""),
+                    "actor": str(record.get("actor") or ""),
+                    "has_value": bool(decode_metadata_value(encoded_value)),
+                }
             }
         )
 
@@ -746,10 +846,10 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify(cached_response)
 
         role = {
-            "role_id": "startup:system_heartbeat",
+            "role_id": "system:system_heartbeat",
             "role_name": "system_heartbeat",
             "role_label": "Startup Timeline",
-            "context": "startup",
+            "context": "system",
             "status_code": status_code,
             "status": status_code,
             "detail": message or phase or "Startup status updated.",
@@ -1185,12 +1285,14 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             active_session_payload = dict(active_session)
         else:
             active_session_payload = {}
-        display_topology = []
+        display_topology = list(advertised_display_topology or []) if isinstance(advertised_display_topology, list) else []
         display_virtual_bounds: Dict[str, Any] = {}
         if not display_topology:
             display_topology = list(role_health.get("display_topology") or [])
         if not display_virtual_bounds:
             display_virtual_bounds = dict(role_health.get("display_virtual_bounds") or {})
+        if not display_virtual_bounds:
+            display_virtual_bounds = _display_bounds_from_topology(display_topology)
         _vnc_trace(
             "R04",
             context_hint,

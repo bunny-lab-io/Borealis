@@ -68,6 +68,10 @@ type Agent struct {
 	socketStateAt int64
 }
 
+type heartbeatResponse struct {
+	MetadataFieldAcks []string `json:"metadata_field_acks"`
+}
+
 func New(options Options, logger *log.Logger) (*Agent, error) {
 	configPath := strings.TrimSpace(options.ConfigPath)
 	if configPath == "" {
@@ -553,8 +557,16 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		payload["device_type"] = auditSnapshot.DeviceType
 	}
 	cfg := a.authClient.Config()
+	if diskCfg, err := agentconfig.Load(a.configPath); err == nil {
+		cfg = diskCfg
+	}
 	if cfg.Agent.AgentID != "" {
 		payload["agent_id"] = cfg.Agent.AgentID
+	}
+	if queuedMetadataFields, queueErr := agentconfig.LoadQueuedMetadataFields(a.configPath); queueErr != nil {
+		a.logger.Printf("metadata queue load failed: %v", queueErr)
+	} else if len(queuedMetadataFields) > 0 {
+		payload["metadata_fields"] = queuedMetadataFields
 	}
 	installedBuildID := agentconfig.NormalizeBuildID(cfg.Agent.InstalledBuildID)
 	if installedBuildID == "" {
@@ -581,7 +593,13 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	}
 	a.updateUIHeartbeat(payload)
 	a.recordHeartbeatAttempt()
-	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, nil)
+	var response heartbeatResponse
+	_, err := a.authClient.PostJSON(ctx, "/api/agent/heartbeat", payload, &response)
+	if err == nil {
+		if syncErr := agentconfig.AckQueuedMetadataFields(a.configPath, response.MetadataFieldAcks); syncErr != nil {
+			a.logger.Printf("metadata queue ack failed: %v", syncErr)
+		}
+	}
 	a.recordHeartbeatResult(err)
 	return err
 }

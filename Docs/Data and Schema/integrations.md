@@ -43,8 +43,10 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - `main` keeps install commands on the default raw URL without `--repo-branch`; any selected non-main branch changes the raw URL and adds `--repo-branch <branch>` to Linux/macOS/Windows agent commands.
 
 ### `GET /api/repo/current_hash`
-- This endpoint uses the cached GitHub integration to return a hash.
+- This endpoint uses the cached GitHub integration to return a hash for `repo`, `branch`, and `ttl` query parameters.
+- Branch refs with slashes are resolved through GitHub's commit endpoint with URL-encoded refs, so feature branches such as `feature/agent-metadata-fields` work.
 - It supports device-auth and operator-auth contexts.
+- Device/operator bearer tokens authenticate the Borealis request only. GitHub calls use stored Engine token, `X-GitHub-Token`, or environment token.
 - Useful for agent update checks and diagnostics.
 
 ### Debug checklist

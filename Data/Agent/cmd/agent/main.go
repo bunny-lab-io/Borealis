@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
@@ -39,6 +40,7 @@ func run() int {
 	var service bool
 	var watchdogCheck bool
 	var validateConfig bool
+	var metadataCommand bool
 	var finalizeBuildID string
 	var finalizeExpectedSHA256 string
 	var repoRef string
@@ -59,6 +61,7 @@ func run() int {
 	flag.BoolVar(&watchdogCheck, "watchdog-check", false, "Run one local Agent watchdog check.")
 	flag.BoolVar(&finalizeUpdate, "finalize-update", false, "Finalize a deferred Agent binary replacement.")
 	flag.BoolVar(&validateConfig, "validate-config", false, "Validate agent.json compatibility and exit.")
+	flag.BoolVar(&metadataCommand, "metadata", false, "Get or queue one Agent metadata field: --metadata get <field> or --metadata set <field> <value>.")
 	flag.StringVar(&finalizeBuildID, "build-id", "", "Installed build ID for deferred update finalization.")
 	flag.StringVar(&finalizeExpectedSHA256, "expected-sha256", "", "Expected Agent binary SHA-256 for deferred update finalization.")
 	flag.BoolVar(&printVersion, "version", false, "Print version.")
@@ -75,14 +78,10 @@ func run() int {
 		return 0
 	}
 	if validateConfig {
-		configPath := options.ConfigPath
-		if configPath == "" {
-			var err error
-			configPath, err = agentconfig.PathFromBinary()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
-				return 1
-			}
+		configPath, err := resolveAgentConfigPath(options.ConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
+			return 1
 		}
 		if err := validateAgentConfig(configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "validate config: %v\n", err)
@@ -90,6 +89,9 @@ func run() int {
 		}
 		fmt.Println("agent config ok")
 		return 0
+	}
+	if metadataCommand {
+		return runMetadataCommand(options.ConfigPath, flag.Args())
 	}
 
 	exePath, err := os.Executable()
@@ -228,6 +230,90 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+func resolveAgentConfigPath(configPath string) (string, error) {
+	cleanPath := strings.TrimSpace(configPath)
+	if cleanPath != "" {
+		return cleanPath, nil
+	}
+	return agentconfig.PathFromBinary()
+}
+
+func runMetadataCommand(configPath string, args []string) int {
+	resolvedPath, err := resolveAgentConfigPath(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve config path: %v\n", err)
+		return 1
+	}
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: Agent --metadata get <fieldnumber> | Agent --metadata set <fieldnumber> \"Value\"")
+		return 2
+	}
+	action := strings.ToLower(strings.TrimSpace(args[0]))
+	fieldNumber, ok := agentconfig.ParseMetadataFieldNumber(args[1])
+	if !ok {
+		fmt.Fprintf(os.Stderr, "metadata field must be between 1 and %d\n", agentconfig.MetadataFieldCount)
+		return 2
+	}
+	switch action {
+	case "set":
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "metadata set requires value")
+			return 2
+		}
+		value := strings.Join(args[2:], " ")
+		if err := agentconfig.QueueMetadataField(resolvedPath, fieldNumber, value, "agent"); err != nil {
+			fmt.Fprintf(os.Stderr, "metadata set: %v\n", err)
+			return 1
+		}
+		fmt.Printf("%s queued\n", agentconfig.MetadataFieldKey(fieldNumber))
+		return 0
+	case "get":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "metadata get accepts only fieldnumber")
+			return 2
+		}
+		if value, ok, err := agentconfig.QueuedMetadataFieldValue(resolvedPath, fieldNumber); err != nil {
+			fmt.Fprintf(os.Stderr, "metadata queue read: %v\n", err)
+			return 1
+		} else if ok {
+			fmt.Println(value)
+			return 0
+		}
+		value, err := fetchMetadataFieldValue(resolvedPath, fieldNumber)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "metadata get: %v\n", err)
+			return 1
+		}
+		fmt.Println(value)
+		return 0
+	default:
+		fmt.Fprintln(os.Stderr, "usage: Agent --metadata get <fieldnumber> | Agent --metadata set <fieldnumber> \"Value\"")
+		return 2
+	}
+}
+
+func fetchMetadataFieldValue(configPath string, fieldNumber int) (string, error) {
+	cfg, err := agentconfig.LoadOrCreate(configPath)
+	if err != nil {
+		return "", err
+	}
+	client, err := auth.NewClient(configPath, &cfg, "system")
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var response struct {
+		Field struct {
+			Value string `json:"value"`
+		} `json:"field"`
+	}
+	if _, err := client.GetJSON(ctx, fmt.Sprintf("/api/agent/metadata/%d", fieldNumber), &response); err != nil {
+		return "", err
+	}
+	return response.Field.Value, nil
 }
 
 func isFreshDeployInstall(options agentruntime.Options) bool {

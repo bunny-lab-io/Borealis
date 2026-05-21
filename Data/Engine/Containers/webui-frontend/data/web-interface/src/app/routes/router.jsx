@@ -548,6 +548,19 @@ export function buildAppRoutes() {
                   element: <Navigate to={APP_PATHS.engineStatus} replace />,
                 },
                 {
+                  path: "metadata-fields",
+                  handle: {
+                    title: "Metadata Fields",
+                    breadcrumb: "Metadata Fields",
+                    navKey: "metadata-fields",
+                    pageKey: "metadata-fields",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/adminRoutes.jsx"),
+                    "MetadataFieldsRoute"
+                  ),
+                },
+                {
                   path: "logs",
                   handle: {
                     title: "Log Management",

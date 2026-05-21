@@ -30,6 +30,16 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - The Engine computes match counts using `DeviceFilterMatcher` against the inventory snapshot.
 - Filters can be `Global`, `Specific Sites`, or `Global w/ Exclusions`.
 - Operator visibility is based on the filter's effective included site scope, not the subset of matching devices the operator can see.
+- Filter criteria include a grouped `Metadata Field` selector. Each criterion stores `metadata_field_number`, so global field-description changes do not break saved filters.
+
+## Agent Metadata Fields
+- Borealis exposes 500 fixed text metadata fields per device, keyed as `field_001` through `field_500` and displayed as `Field 001` through `Field 500` unless an admin sets a global description.
+- Global descriptions live in Admin Settings > Metadata Fields. Values live per device and are editable from Device Summary > Metadata Fields.
+- Values have a 1024-character decoded limit and are base64-encoded at rest in Engine storage and in the Agent's transient `metadata-queue.json`.
+- Device values are sparse. The Agent does not store metadata fields in `agent.json`; local CLI changes live only in `metadata-queue.json` until Engine acknowledges them.
+- The Engine stores encoded values in `device_metadata_fields` and decodes them only for device-field API/UI reads, filter matching, and device-auth CLI reads.
+- Newest `modified_at` wins. Agent-provided timestamps more than five minutes in the future are clamped to Engine time before conflict resolution.
+- Scripts and automations should write through the Agent CLI: `Agent.exe --metadata set 1 "text"` or `Agent --metadata set 1 "text"`. `Agent.exe --metadata get 1` returns a pending local queue value first, otherwise Engine value. Passing a blank value queues a clear until the next heartbeat acknowledgement.
 
 ## Device Watchdogs and Alerts
 - Device Summary now exposes a `Watchdogs` tab for incident-first per-device monitoring.
@@ -101,7 +111,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - After the purge transaction commits, the Engine best-effort disconnects active VPN transport and revokes cached VNC sessions for the purged agent ID.
 
 ## API Endpoints
-- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
+- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
 - `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for the Agent Health tab.
 - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
 - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed icon override rules used by the agent software-management inventory path.
@@ -109,6 +119,11 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/devices` (Token Authenticated) - device summary list.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
+- `GET /api/metadata_fields` (Token Authenticated) - list global metadata field definitions.
+- `PUT /api/metadata_fields/<field_number>` (Admin) - update a global metadata field description.
+- `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all metadata fields for an in-scope device.
+- `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one metadata field value for an in-scope device.
+- `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
 - `POST /api/devices/<guid>/purge` (Admin) - holistically purge a device, its trust records, and scheduled-job references.
 - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
 - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
@@ -154,7 +169,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `POST /api/user_site_assignments/selection` (Admin) - load selected-operator site assignments.
 - `POST /api/user_site_assignments/assign` (Admin) - replace selected-operator site assignments.
 - `GET /api/device_filters` (Token Authenticated) - list filters.
-- `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata.
+- `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata, including metadata-field definitions for the field picker.
 - `POST /api/device_filters/preview` (Token Authenticated) - preview filter matches.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
 - `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - list scheduled jobs referencing a filter.
@@ -197,11 +212,12 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
 
 ### Inventory ingestion behavior
-- `/api/agent/heartbeat` updates `last_seen` and key metrics (last_user, OS/build, last reboot, uptime).
+- `/api/agent/heartbeat` updates `last_seen`, key metrics (last_user, OS/build, last reboot, uptime), and sparse Agent Metadata Field changes.
 - `/api/agent/status` updates `last_seen`, upserts only the `system:system_heartbeat` role-health row, and emits `agent_status_changed` after commit.
 - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
 - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
 - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
+- Agent Metadata Field heartbeat sync is timestamp-based. Queued Agent updates are accepted when newer, superseded when Engine has the same/newer timestamp, and returned in `metadata_field_acks` so the Agent can remove them from `metadata-queue.json`.
 - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
 - Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/Containers/api-backend/data/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
 - The Installed Software tab also exposes a `Query Software Changes` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.
@@ -238,6 +254,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/Containers/api-backend/data/services/filters/matcher.py`.
 - `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
 - It also joins normalized software rows from `device_software_inventory`.
+- It also joins sparse metadata rows from `device_metadata_fields` so criteria can match text values or empty fields by `metadata_field_number`.
 - `count_filter_devices` computes match counts for UI summaries and scheduler previews.
 
 ### Approval flow detail
@@ -249,7 +266,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 
 ### WebUI deep links
 - Device Details route: `/devices/<agent_guid_or_hostname>`.
-- Tab query keys: `device_summary`, `installed_software`, `services`, `process_management`, `activity_history`, `remote_shell`, `remote_desktop`.
+- Tab query keys: `device_summary`, `metadata_fields`, `installed_software`, `services`, `process_management`, `activity_history`, `remote_shell`, `remote_desktop`.
 - Device Details also exposes the `file_management` tab query key for the File Management view.
 - File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
 - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
@@ -258,4 +275,4 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ### Debug checklist
 - Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.
 - Online status wrong: check `last_seen` timestamps in `devices` table.
-- Filter counts zero: validate the active criteria payload and `device_software_inventory` rows when software criteria are involved.
+- Filter counts zero: validate the active criteria payload plus `device_software_inventory` or `device_metadata_fields` rows when software or metadata criteria are involved.

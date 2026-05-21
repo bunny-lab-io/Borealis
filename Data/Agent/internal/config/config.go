@@ -2,11 +2,13 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +17,13 @@ import (
 const (
 	SchemaVersion           = 1
 	FileName                = "agent.json"
+	MetadataQueueFileName   = "metadata-queue.json"
 	DefaultBranch           = "main"
 	ReleaseChannelStable    = "stable"
 	ReleaseChannelUnstable  = "unstable"
 	DefaultLogRetentionDays = 1
+	MetadataFieldCount      = 500
+	MetadataValueMaxLength  = 1024
 )
 
 var fileMu sync.Mutex
@@ -107,6 +112,18 @@ type DependencyStateSection struct {
 	LastAttemptAt    int64  `json:"last_attempt_at,omitempty"`
 	LastSuccessAt    int64  `json:"last_success_at,omitempty"`
 	LastError        string `json:"last_error,omitempty"`
+}
+
+type MetadataFieldSection struct {
+	Value      string `json:"value"`
+	ModifiedAt int64  `json:"modified_at"`
+	Source     string `json:"source,omitempty"`
+	Actor      string `json:"actor,omitempty"`
+}
+
+type MetadataQueue struct {
+	Version int                             `json:"version"`
+	Fields  map[string]MetadataFieldSection `json:"fields,omitempty"`
 }
 
 func Default() AgentConfig {
@@ -454,6 +471,270 @@ func (c *AgentConfig) ApplyDefaults() {
 		}
 		c.Agent.DependencyState = normalized
 	}
+}
+
+func MetadataFieldKey(fieldNumber int) string {
+	return fmt.Sprintf("field_%03d", fieldNumber)
+}
+
+func ParseMetadataFieldNumber(value string) (int, bool) {
+	text := strings.ToLower(strings.TrimSpace(value))
+	if text == "" {
+		return 0, false
+	}
+	text = strings.TrimPrefix(text, "metadata")
+	text = strings.TrimSpace(text)
+	text = strings.TrimPrefix(text, "field")
+	text = strings.Trim(text, " _-")
+	if text == "" {
+		return 0, false
+	}
+	number, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, false
+	}
+	if number < 1 || number > MetadataFieldCount {
+		return 0, false
+	}
+	return number, true
+}
+
+func NormalizeMetadataFieldValue(value string) string {
+	runes := []rune(value)
+	if len(runes) > MetadataValueMaxLength {
+		return string(runes[:MetadataValueMaxLength])
+	}
+	return value
+}
+
+func EncodeMetadataFieldValue(value string) string {
+	clean := NormalizeMetadataFieldValue(value)
+	if clean == "" {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(clean))
+}
+
+func DecodeMetadataFieldValue(value string) string {
+	clean := strings.TrimSpace(value)
+	if clean == "" {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(clean)
+	if err != nil {
+		return NormalizeMetadataFieldValue(value)
+	}
+	return NormalizeMetadataFieldValue(string(decoded))
+}
+
+func NormalizeEncodedMetadataFieldValue(value string) string {
+	return EncodeMetadataFieldValue(DecodeMetadataFieldValue(value))
+}
+
+func NormalizeMetadataFields(fields map[string]MetadataFieldSection) map[string]MetadataFieldSection {
+	if len(fields) == 0 {
+		return nil
+	}
+	normalized := map[string]MetadataFieldSection{}
+	for rawKey, field := range fields {
+		number, ok := ParseMetadataFieldNumber(rawKey)
+		if !ok {
+			continue
+		}
+		normalizeMetadataField(&field)
+		normalized[MetadataFieldKey(number)] = field
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func normalizeMetadataField(field *MetadataFieldSection) {
+	if field == nil {
+		return
+	}
+	field.Value = NormalizeEncodedMetadataFieldValue(field.Value)
+	field.Source = strings.TrimSpace(field.Source)
+	field.Actor = strings.TrimSpace(field.Actor)
+	if field.ModifiedAt < 0 {
+		field.ModifiedAt = 0
+	}
+}
+
+func MetadataQueuePath(configPath string) (string, error) {
+	cleanPath := strings.TrimSpace(configPath)
+	if cleanPath == "" {
+		return "", errors.New("config path missing")
+	}
+	return filepath.Join(filepath.Dir(cleanPath), MetadataQueueFileName), nil
+}
+
+func LoadQueuedMetadataFields(configPath string) (map[string]MetadataFieldSection, error) {
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]MetadataFieldSection{}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	err = withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
+		}
+		fields = NormalizeMetadataFields(queue.Fields)
+		if fields == nil {
+			fields = map[string]MetadataFieldSection{}
+		}
+		return nil
+	})
+	return fields, err
+}
+
+func QueuedMetadataFieldValue(configPath string, fieldNumber int) (string, bool, error) {
+	if fieldNumber < 1 || fieldNumber > MetadataFieldCount {
+		return "", false, fmt.Errorf("field must be between 1 and %d", MetadataFieldCount)
+	}
+	fields, err := LoadQueuedMetadataFields(configPath)
+	if err != nil {
+		return "", false, err
+	}
+	field, ok := fields[MetadataFieldKey(fieldNumber)]
+	if !ok {
+		return "", false, nil
+	}
+	normalizeMetadataField(&field)
+	return DecodeMetadataFieldValue(field.Value), true, nil
+}
+
+func QueueMetadataField(configPath string, fieldNumber int, value string, source string) error {
+	if fieldNumber < 1 || fieldNumber > MetadataFieldCount {
+		return fmt.Errorf("field must be between 1 and %d", MetadataFieldCount)
+	}
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return err
+	}
+	key := MetadataFieldKey(fieldNumber)
+	now := time.Now().Unix()
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	return withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
+		}
+		if queue.Fields == nil {
+			queue.Fields = map[string]MetadataFieldSection{}
+		}
+		queue.Fields[key] = MetadataFieldSection{
+			Value:      EncodeMetadataFieldValue(value),
+			ModifiedAt: now,
+			Source:     strings.TrimSpace(source),
+		}
+		return saveMetadataQueueUnlocked(queuePath, queue)
+	})
+}
+
+func AckQueuedMetadataFields(configPath string, acks []string) error {
+	if len(acks) == 0 {
+		return nil
+	}
+	queuePath, err := MetadataQueuePath(configPath)
+	if err != nil {
+		return err
+	}
+	fileMu.Lock()
+	defer fileMu.Unlock()
+	return withProcessFileLock(queuePath, func() error {
+		queue, loadErr := loadMetadataQueueUnlocked(queuePath)
+		if loadErr != nil {
+			return loadErr
+		}
+		if len(queue.Fields) == 0 {
+			return nil
+		}
+		for _, rawKey := range acks {
+			number, ok := ParseMetadataFieldNumber(rawKey)
+			if !ok {
+				continue
+			}
+			key := MetadataFieldKey(number)
+			delete(queue.Fields, key)
+		}
+		return saveMetadataQueueUnlocked(queuePath, queue)
+	})
+}
+
+func loadMetadataQueueUnlocked(path string) (MetadataQueue, error) {
+	queue := MetadataQueue{Version: 1}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return queue, nil
+		}
+		return queue, err
+	}
+	if len(data) == 0 {
+		return queue, nil
+	}
+	if err := json.Unmarshal(data, &queue); err != nil {
+		return queue, fmt.Errorf("parse metadata queue: %w", err)
+	}
+	queue.Version = 1
+	queue.Fields = NormalizeMetadataFields(queue.Fields)
+	return queue, nil
+}
+
+func saveMetadataQueueUnlocked(path string, queue MetadataQueue) error {
+	queue.Version = 1
+	queue.Fields = NormalizeMetadataFields(queue.Fields)
+	if len(queue.Fields) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return err
+	}
+	if err := RestrictParent(parent); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(queue, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	tmp, err := os.CreateTemp(parent, ".metadata-queue-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+	if _, err := tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return RestrictFile(path)
 }
 
 func normalizeUpdateSection(update AgentUpdateSection) AgentUpdateSection {

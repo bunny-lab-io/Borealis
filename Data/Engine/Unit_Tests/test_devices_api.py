@@ -77,6 +77,8 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
 
     def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
         calls["count"] += 1
+        calls.setdefault("urls", []).append(url)
+        calls.setdefault("headers", []).append(dict(headers or {}))
         if calls["count"] == 1:
             return DummyResponse(200, {"commit": {"sha": "abc123"}})
         raise request_exception("network error")
@@ -2105,6 +2107,165 @@ def test_agent_heartbeat_persists_go_device_audit_fields(engine_harness: EngineT
     assert network[0]["link_speed"] == "1 Gbps"
 
 
+def test_metadata_field_definition_and_device_value_api(engine_harness: EngineTestHarness) -> None:
+    client = admin_client(engine_harness)
+
+    definition_response = client.put(
+        "/api/metadata_fields/1",
+        json={"description": "Asset Tag"},
+    )
+    assert definition_response.status_code == 200
+    assert definition_response.get_json()["field"]["label"] == "Asset Tag"
+
+    value_response = client.put(
+        "/api/devices/GUID-TEST-0001/metadata_fields/1",
+        json={"value": "AT-12345"},
+    )
+    assert value_response.status_code == 200
+    value_body = value_response.get_json()["field"]
+    assert value_body["field_key"] == "field_001"
+    assert value_body["value"] == "AT-12345"
+    assert value_body["label"] == "Asset Tag"
+
+    list_response = client.get("/api/devices/GUID-TEST-0001/metadata_fields")
+    assert list_response.status_code == 200
+    body = list_response.get_json()
+    assert body["count"] == 500
+    first = body["fields"][0]
+    assert first["default_label"] == "Field 001"
+    assert first["label"] == "Asset Tag"
+    assert first["value"] == "AT-12345"
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        row = conn.execute(
+            """
+            SELECT value, source, actor
+              FROM device_metadata_fields
+             WHERE device_guid = ? AND field_number = ?
+            """,
+            ("GUID-TEST-0001", 1),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row == (base64.b64encode(b"AT-12345").decode("ascii"), "engine", "admin")
+
+
+def test_agent_heartbeat_syncs_metadata_newest_wins_and_acks_clear(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_metadata_fields(
+                device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-TEST-0001",
+                1,
+                "field_001",
+                base64.b64encode(b"engine-new").decode("ascii"),
+                200,
+                "engine",
+                "admin",
+                200,
+                200,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    before = int(time.time())
+    client = engine_harness.app.test_client()
+    response = client.post(
+        "/api/agent/heartbeat",
+        headers=_device_headers(),
+        json={
+            "hostname": "test-device",
+            "service_mode": "system",
+            "metrics": {},
+            "metadata_fields": {
+                "field_001": {
+                    "value": base64.b64encode(b"agent-old").decode("ascii"),
+                    "modified_at": 100,
+                    "source": "cli",
+                },
+                "field_002": {"value": "", "modified_at": 300, "source": "cli"},
+                "field_003": {
+                    "value": base64.b64encode(b"future").decode("ascii"),
+                    "modified_at": before + 10_000,
+                    "source": "cli",
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["metadata_fields"] == {}
+    assert set(body["metadata_field_acks"]) == {"field_001", "field_002", "field_003"}
+
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        rows = {
+            row[0]: row
+            for row in conn.execute(
+                """
+                SELECT field_number, value, modified_at, source
+                  FROM device_metadata_fields
+                 WHERE device_guid = ?
+                """,
+                ("GUID-TEST-0001",),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+
+    assert rows[1][1] == base64.b64encode(b"engine-new").decode("ascii")
+    assert rows[2][1] == ""
+    assert rows[2][2] == 300
+    assert rows[3][1] == base64.b64encode(b"future").decode("ascii")
+    assert rows[3][3] == "agent"
+    assert before <= int(rows[3][2]) <= int(time.time()) + 5
+
+
+def test_agent_metadata_get_returns_decoded_device_field(engine_harness: EngineTestHarness) -> None:
+    conn = sqlite3.connect(str(engine_harness.db_path))
+    try:
+        conn.execute(
+            """
+            INSERT INTO device_metadata_fields(
+                device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "GUID-TEST-0001",
+                9,
+                "field_009",
+                base64.b64encode(b"rack-a-42").decode("ascii"),
+                1234,
+                "engine",
+                "admin",
+                1234,
+                1234,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    client = engine_harness.app.test_client()
+    response = client.get("/api/agent/metadata/9", headers=_device_headers())
+
+    assert response.status_code == 200
+    field = response.get_json()["field"]
+    assert field["field_key"] == "field_009"
+    assert field["value"] == "rack-a-42"
+    assert field["modified_at"] == 1234
+
+
 def test_agent_heartbeat_closes_agent_maintenance_job_success(engine_harness: EngineTestHarness) -> None:
     operation_id = "op-switch-123"
     now = 1_779_230_000
@@ -3272,6 +3433,8 @@ def test_repo_current_hash_uses_cache(engine_harness: EngineTestHarness, monkeyp
 
 def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
+    monkeypatch.delenv("BOREALIS_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     _patch_repo_call(monkeypatch, calls)
 
     client = engine_harness.app.test_client()
@@ -3283,6 +3446,34 @@ def test_repo_current_hash_allows_device_token(engine_harness: EngineTestHarness
     payload = response.get_json()
     assert payload["sha"] == "abc123"
     assert calls["count"] == 1
+    assert "Authorization" not in calls["headers"][0]
+
+
+def test_repo_current_hash_encodes_branch_refs(engine_harness: EngineTestHarness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from Data.Engine.integrations import github as github_integration
+
+    calls: dict[str, Any] = {"count": 0}
+
+    class DummyResponse:
+        status_code = 200
+
+        def json(self) -> dict[str, str]:
+            return {"sha": "def456"}
+
+    def fake_get(url: str, headers: Any, timeout: int) -> DummyResponse:
+        calls["count"] += 1
+        calls["url"] = url
+        return DummyResponse()
+
+    monkeypatch.setattr(github_integration.requests, "get", fake_get)
+
+    client = admin_client(engine_harness)
+    response = client.get("/api/repo/current_hash?repo=test/test&branch=feature/agent-metadata-fields&refresh=1")
+
+    assert response.status_code == 200
+    assert response.get_json()["sha"] == "def456"
+    assert calls["count"] == 1
+    assert calls["url"] == "https://api.github.com/repos/test/test/commits/feature%2Fagent-metadata-fields"
 
 
 def test_agent_hash_list_permissions(engine_harness: EngineTestHarness) -> None:

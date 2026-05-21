@@ -263,6 +263,95 @@ func TestSavePreservesNewerDependencyStateFromDisk(t *testing.T) {
 	}
 }
 
+func TestMetadataQueueNormalizesPersistsOutsideAgentJSONAndAcks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+
+	if err := QueueMetadataField(path, 1, "asset-tag-123", "cli"); err != nil {
+		t.Fatalf("QueueMetadataField failed: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("metadata queue write should not create agent.json, stat err=%v", err)
+	}
+	fields, err := LoadQueuedMetadataFields(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	field, ok := fields["field_001"]
+	if !ok {
+		t.Fatalf("metadata field missing: %#v", fields)
+	}
+	if field.Value != "YXNzZXQtdGFnLTEyMw==" || DecodeMetadataFieldValue(field.Value) != "asset-tag-123" || field.ModifiedAt <= 0 || field.Source != "cli" {
+		t.Fatalf("metadata field not normalized: %#v", field)
+	}
+
+	if err := QueueMetadataField(path, 1, "", "cli"); err != nil {
+		t.Fatalf("clear QueueMetadataField failed: %v", err)
+	}
+	fields, err = LoadQueuedMetadataFields(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fields["field_001"]; !ok {
+		t.Fatalf("blank clear marker should remain until ack: %#v", fields)
+	}
+	if fields["field_001"].Value != "" {
+		t.Fatalf("clear marker value = %q", fields["field_001"].Value)
+	}
+
+	if err := AckQueuedMetadataFields(path, []string{"field_001"}); err != nil {
+		t.Fatalf("AckQueuedMetadataFields failed: %v", err)
+	}
+	fields, err = LoadQueuedMetadataFields(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 0 {
+		t.Fatalf("acked metadata field survived: %#v", fields)
+	}
+	queuePath, err := MetadataQueuePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(queuePath); !os.IsNotExist(err) {
+		t.Fatalf("empty metadata queue should be removed, stat err=%v", err)
+	}
+}
+
+func TestSaveDropsLegacyAgentJSONMetadataFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	raw := `{
+  "schema_version": 1,
+  "server_url": "https://borealis.example.com",
+  "agent": {
+    "metadata_fields": {
+      "field_001": {"value":"b2xk","modified_at":10,"source":"legacy"}
+    }
+  },
+  "identity": {},
+  "tokens": {},
+  "trust": {}
+}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	rewritten, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(rewritten), "metadata_fields") {
+		t.Fatalf("legacy metadata_fields survived rewrite: %s", string(rewritten))
+	}
+}
+
 func TestDefaultBranch(t *testing.T) {
 	cfg := Default()
 	cfg.ApplyDefaults()

@@ -54,7 +54,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/token/refresh` (Refresh Token) - mint new access token; returns `401 device_purged` when a GUID is blocked by a purge barrier.
 
 ### Devices and Inventory
-- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat + metrics.
+- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
 - `POST /api/agent/status` (Device Authenticated) - update `devices.last_seen`, upsert the `system:system_heartbeat` startup timeline row in `agent_role_health`, and emit `agent_status_changed` for Device Summary Agent Health refresh.
 - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
 - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
@@ -65,10 +65,15 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
 - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
 - `POST /api/agent/vpn/ready` (Device Authenticated) - report active WireGuard tunnel, local service, and firewall readiness for scheduled SSH/WinRM dispatch.
+- `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
 - `GET /api/agents` (Token Authenticated) - list online collectors, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record via `helper_contexts`.
 - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
 - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
+- `GET /api/metadata_fields` (Token Authenticated) - list 500 global Agent Metadata Field definitions, default labels, descriptions, and value limits.
+- `PUT /api/metadata_fields/<field_number>` (Admin) - update one global Agent Metadata Field description.
+- `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all 500 metadata field rows for an in-scope device, including decoded sparse values and modification metadata.
+- `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one in-scope device metadata field. Blank value clears the field.
 - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
 - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO.
 - `POST /api/devices/agent-maintenance` (Token Authenticated) - queue on-demand Agent updates or Agent branch/channel switches for selected devices. Requests create `agent_maintenance` scheduled-job history and site-worker `agent_maintenance_run` work items; site workers fan out to agents through the internal socket bridge.
@@ -112,7 +117,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 - `POST /api/sites/assign` (Admin) - assign devices to site.
 - `POST /api/sites/rename` (Admin) - rename site.
 - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
-- `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash.
+- `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash for optional `repo`, `branch`, and `ttl` query parameters; feature branch refs with slashes are supported.
 - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
 - `POST /api/agent/hash` (Device Authenticated) - update agent hash.
 - `GET /api/agent/hash_list` (Admin + Loopback) - list agent hashes (local diagnostics).
@@ -127,7 +132,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
 ### Device Filters
 - `GET /api/device_filters` (Token Authenticated) - list filters.
-- `GET /api/device_filters/metadata` (Token Authenticated) - filter field/operator metadata.
+- `GET /api/device_filters/metadata` (Token Authenticated) - filter field/operator metadata, including the searchable `Metadata Field` picker definitions.
 - `POST /api/device_filters/preview` (Token Authenticated) - manual filter preview against current inventory, restricted to the current operator's site scope.
 - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
 - `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - scheduled-job usage summary.

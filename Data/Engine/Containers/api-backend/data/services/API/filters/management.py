@@ -473,7 +473,7 @@ def register_filters(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if requirement:
             payload, status = requirement
             return jsonify(payload), status
-        return jsonify(filter_metadata())
+        return jsonify(filter_metadata(db_conn_factory=adapters.db_conn_factory))
 
     @blueprint.route("/search", methods=["GET"])
     def search_filters() -> Any:

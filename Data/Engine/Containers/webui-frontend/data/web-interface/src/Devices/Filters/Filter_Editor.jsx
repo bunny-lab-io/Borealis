@@ -229,6 +229,7 @@ const makeBasicCriterion = () => ({
   software_source: "",
   version_operator: "",
   version_value: "",
+  metadata_field_number: "",
 });
 
 const makeAdvancedCondition = (joinWith = "") => ({
@@ -241,6 +242,7 @@ const makeAdvancedCondition = (joinWith = "") => ({
   software_source: "",
   version_operator: "",
   version_value: "",
+  metadata_field_number: "",
 });
 
 const makeAdvancedGroup = (joinWith = "") => ({
@@ -267,6 +269,12 @@ const normalizeCriterion = (criterion, factory) => {
     normalized.version_operator || normalized.versionOperator || ""
   ).trim();
   normalized.version_value = String(normalized.version_value || normalized.versionValue || "").trim();
+  normalized.metadata_field_number =
+    normalized.metadata_field_number ||
+    normalized.metadataFieldNumber ||
+    normalized.field_number ||
+    normalized.fieldNumber ||
+    "";
   normalized.value = normalized.value ?? "";
   return normalized;
 };
@@ -332,6 +340,7 @@ const buildCriteriaGroupsPayload = (advancedCriteria) =>
       software_source: condition.software_source || "",
       version_operator: condition.version_operator || "",
       version_value: condition.version_value || "",
+      metadata_field_number: condition.field === "metadata_field" ? condition.metadata_field_number || "" : "",
     })),
   }));
 
@@ -378,6 +387,7 @@ function FilterCriterionRow({
   operatorOptions,
   softwareVersionOperators,
   softwareSources,
+  metadataFieldOptions = [],
   showJoin = false,
   joinValue = "",
   onJoinChange,
@@ -387,6 +397,11 @@ function FilterCriterionRow({
   const operators = kind === "number" ? operatorOptions.number : kind === "enum" ? operatorOptions.enum : operatorOptions.text;
   const supportsRegex = Boolean(field?.supports_regex);
   const isSoftware = field?.value === "installed_software";
+  const isMetadataField = field?.value === "metadata_field";
+  const selectedMetadataField = useMemo(() => {
+    const selectedNumber = Number(criterion.metadata_field_number || 0);
+    return metadataFieldOptions.find((option) => Number(option.field_number) === selectedNumber) || null;
+  }, [criterion.metadata_field_number, metadataFieldOptions]);
   const resolveDefaultOperator = useCallback(
     (fieldId) => {
       const nextField = fieldById[fieldId];
@@ -428,15 +443,20 @@ function FilterCriterionRow({
           size="small"
           value={criterion.field}
           onChange={(event) =>
-            onChange({
-              field: event.target.value,
-              operator: resolveDefaultOperator(event.target.value),
-              value: "",
-              software_source: "",
-              version_operator: "",
-              version_value: "",
-              use_regex: false,
-            })
+            {
+              const nextFieldId = event.target.value;
+              const firstMetadataField = metadataFieldOptions[0]?.field_number || 1;
+              onChange({
+                field: nextFieldId,
+                operator: resolveDefaultOperator(nextFieldId),
+                value: "",
+                software_source: "",
+                version_operator: "",
+                version_value: "",
+                metadata_field_number: nextFieldId === "metadata_field" ? firstMetadataField : "",
+                use_regex: false,
+              });
+            }
           }
           sx={{ minWidth: 210 }}
         >
@@ -446,6 +466,18 @@ function FilterCriterionRow({
             </MenuItem>
           ))}
         </Select>
+        {isMetadataField ? (
+          <Autocomplete
+            size="small"
+            options={metadataFieldOptions}
+            value={selectedMetadataField}
+            getOptionLabel={(option) => option?.picker_label || option?.label || ""}
+            isOptionEqualToValue={(option, value) => Number(option.field_number) === Number(value?.field_number)}
+            onChange={(_, option) => onChange({ metadata_field_number: option?.field_number || "" })}
+            renderInput={(params) => <TextField {...params} placeholder="Field" />}
+            sx={{ minWidth: 260 }}
+          />
+        ) : null}
         <Select
           size="small"
           value={criterion.operator}
@@ -477,7 +509,7 @@ function FilterCriterionRow({
             type={kind === "number" ? "number" : "text"}
             value={criterion.value}
             onChange={(event) => onChange({ value: event.target.value })}
-            placeholder={isSoftware ? "Software name" : "Value"}
+            placeholder={isSoftware ? "Software name" : isMetadataField ? "Metadata value" : "Value"}
             sx={{ minWidth: 180, flexGrow: 1 }}
           />
         )}
@@ -624,6 +656,16 @@ export default function DeviceFilterEditor() {
   const softwareVersionOperators = useMemo(
     () => operatorOptions.software_version || [],
     [operatorOptions]
+  );
+  const metadataFieldOptions = useMemo(
+    () =>
+      ensureArray(metadata?.metadata_fields).map((field) => ({
+        ...field,
+        picker_label: field?.description
+          ? `${field.default_label || field.label} - ${field.description}`
+          : field?.default_label || field?.label || "",
+      })),
+    [metadata]
   );
 
   const hydrateFromRecord = useCallback((record) => {
@@ -998,6 +1040,7 @@ export default function DeviceFilterEditor() {
                   operatorOptions={operatorOptions}
                   softwareVersionOperators={softwareVersionOperators}
                   softwareSources={softwareSources}
+                  metadataFieldOptions={metadataFieldOptions}
                 />
               ))}
               <Button

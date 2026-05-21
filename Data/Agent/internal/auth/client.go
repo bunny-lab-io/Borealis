@@ -247,17 +247,30 @@ func (c *Client) PostJSON(ctx context.Context, path string, requestPayload any, 
 	return c.doJSON(ctx, http.MethodPost, path, requestPayload, responsePayload, true)
 }
 
-func (c *Client) doJSON(ctx context.Context, method string, path string, requestPayload any, responsePayload any, authenticated bool) (*http.Response, error) {
-	payloadBytes, err := json.Marshal(requestPayload)
-	if err != nil {
+func (c *Client) GetJSON(ctx context.Context, path string, responsePayload any) (*http.Response, error) {
+	if err := c.EnsureAuthenticated(ctx); err != nil {
 		return nil, err
+	}
+	return c.doJSON(ctx, http.MethodGet, path, nil, responsePayload, true)
+}
+
+func (c *Client) doJSON(ctx context.Context, method string, path string, requestPayload any, responsePayload any, authenticated bool) (*http.Response, error) {
+	var requestBody io.Reader
+	if requestPayload != nil {
+		payloadBytes, err := json.Marshal(requestPayload)
+		if err != nil {
+			return nil, err
+		}
+		requestBody = bytes.NewReader(payloadBytes)
 	}
 	baseURL := c.BaseURL()
-	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(payloadBytes))
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, requestBody)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	if requestPayload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "Borealis-Agent-Go/1")
 	req.Header.Set(AgentContextHeader, ContextLabel(c.serviceMode))

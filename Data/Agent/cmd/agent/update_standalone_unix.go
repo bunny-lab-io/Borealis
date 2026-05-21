@@ -75,7 +75,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	}
 	branch := agentconfig.NormalizeBranch(cfg.Agent.Branch)
 	if agentconfig.UsesUnstableReleaseChannel(cfg.Agent.ReleaseChannel) {
-		return runLinuxRepoRefUpdateCheck(ctx, configPath, &cfg, branch, installed)
+		return runLinuxRepoRefUpdateCheck(ctx, client, configPath, &cfg, branch, installed)
 	}
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
@@ -169,11 +169,15 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 	return manifest, nil
 }
 
-func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
-	target, err := resolveGithubRefSHA(ctx, branch)
+func runLinuxRepoRefUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, branch string, installed string) error {
+	target, err := resolveEngineRepoRefSHA(ctx, client, branch)
 	if err != nil {
-		removeLinuxUpdateStatus(configPath)
-		return err
+		engineErr := err
+		target, err = resolveGithubRefSHA(ctx, branch)
+		if err != nil {
+			removeLinuxUpdateStatus(configPath)
+			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", branch, engineErr, err)
+		}
 	}
 	target = strings.TrimSpace(strings.ToLower(target))
 	if target == "" {
@@ -202,6 +206,48 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, configPath string, cfg *age
 	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
+}
+
+func resolveEngineRepoRefSHA(ctx context.Context, client *auth.Client, branch string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("auth client missing")
+	}
+	params := url.Values{}
+	params.Set("branch", strings.TrimSpace(branch))
+	params.Set("ttl", "300")
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		strings.TrimRight(client.BaseURL(), "/")+"/api/repo/current_hash?"+params.Encode(),
+		nil,
+	)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	for key, value := range client.AuthHeaders() {
+		req.Header.Set(key, value)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("Engine repo hash API HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		SHA string `json:"sha"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(payload.SHA)
+	if sha == "" {
+		return "", fmt.Errorf("Engine repo hash API returned empty sha")
+	}
+	return sha, nil
 }
 
 func resolveGithubRefSHA(ctx context.Context, branch string) (string, error) {
