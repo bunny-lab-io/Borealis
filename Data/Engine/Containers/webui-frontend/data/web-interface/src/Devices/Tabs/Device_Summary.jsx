@@ -3,12 +3,18 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLoaderData, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
+  Divider,
   Stack,
   Tooltip,
   Typography,
   Button,
+  ListItemButton,
+  ListItemText,
   Menu,
   MenuItem,
   TextField,
@@ -29,6 +35,8 @@ import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
@@ -137,6 +145,91 @@ const SUMMARY_SECTION_ACTIVE_BG =
   "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
+const DEVICE_NAV_SIDEBAR_SX = {
+  minWidth: 260,
+  maxWidth: 260,
+  width: { xs: "100%", lg: 260 },
+  borderTop: "1px solid rgba(125,183,255,0.14)",
+  borderBottom: "1px solid rgba(125,183,255,0.14)",
+  borderLeft: "1px solid rgba(125,183,255,0.14)",
+  borderRight: { xs: "1px solid rgba(125,183,255,0.14)", lg: "none" },
+  borderRadius: { xs: 2.5, lg: 0 },
+  background:
+    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), #0f141c",
+  boxShadow: "none",
+  p: 0.25,
+  display: "flex",
+  flexDirection: "column",
+  gap: 0.25,
+  flexShrink: 0,
+  height: { xs: "auto", lg: "100%" },
+  overflow: "hidden",
+};
+const DEVICE_NAV_ACCORDION_SX = {
+  "&:before": { display: "none" },
+  m: 0,
+  bgcolor: "transparent",
+  border: 0,
+  boxShadow: "none",
+};
+const DEVICE_NAV_ACCORDION_SUMMARY_SX = {
+  minHeight: 38,
+  px: 1.5,
+  backgroundColor: "rgba(255,255,255,0.02)",
+  borderTopRightRadius: 8,
+  borderBottomRightRadius: 8,
+  "& .MuiAccordionSummary-content": {
+    m: 0,
+    py: 0.5,
+    display: "flex",
+    alignItems: "center",
+    minWidth: 0,
+  },
+  "&.Mui-expanded": {
+    minHeight: 38,
+  },
+  "& .MuiAccordionSummary-content.Mui-expanded": {
+    my: 0,
+  },
+};
+const DEVICE_NAV_ACCORDION_DETAILS_SX = {
+  p: 0,
+};
+
+function deviceSidebarNavRowSx(active, disabled = false) {
+  return {
+    pl: 2,
+    pr: 2,
+    py: 1,
+    color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
+    position: "relative",
+    background: active ? NAV_TAB_COLORS.activeBg : "transparent",
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    justifyContent: "space-between",
+    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "&:hover": {
+      background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
+    },
+    "&:active": {
+      transform: "translateY(0.5px)",
+    },
+    "&.Mui-disabled": {
+      color: "rgba(203,213,225,0.38)",
+    },
+    ...(disabled ? { cursor: "not-allowed" } : null),
+  };
+}
+
+function deviceSidebarNavIconSx(active, disabled = false) {
+  return {
+    mr: 1,
+    display: "flex",
+    alignItems: "center",
+    color: disabled ? "rgba(143,191,255,0.35)" : active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
+    transition: "color 160ms ease",
+  };
+}
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
@@ -1051,12 +1144,6 @@ export default function DeviceSummary() {
     },
     [location.pathname, location.search, location.state, navigate]
   );
-  const setActiveWorkspaceView = useCallback(
-    (viewKey) => {
-      setActiveWorkspace(activeWorkspaceKey, viewKey);
-    },
-    [activeWorkspaceKey, setActiveWorkspace]
-  );
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
@@ -1128,6 +1215,13 @@ export default function DeviceSummary() {
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
   const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
+  const [expandedDeviceNavSections, setExpandedDeviceNavSections] = useState({
+    inventory: true,
+    backend: true,
+    protection: true,
+    history: true,
+    metadata: true,
+  });
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
   const [agentBranchDraft, setAgentBranchDraft] = useState("");
@@ -3618,19 +3712,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "device-summary-remote-desktop",
-        label: "Remote Desktop",
-        icon: <DesktopWindowsRoundedIcon />,
-        tone: "secondary",
-        disabled: !deviceId,
-        onClick: () => {
-          if (!deviceId) return;
-          navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
-            state: { initialDevice: tunnelDevice },
-          });
-        },
-      },
-      {
         id: "device-summary-actions",
         label: "Actions",
         icon: <MoreHorizIcon />,
@@ -3639,7 +3720,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         onClick: (event) => setMenuAnchor(event.currentTarget),
       },
     ],
-    [activityHostname, deviceId, navigate, tunnelDevice]
+    [activityHostname]
   );
 
   useRoutePageChrome({
@@ -3895,126 +3976,235 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
-  const renderWorkspaceRail = () => (
-    <Box
-      sx={{
-        borderRight: { xs: "none", lg: `1px solid ${MAGIC_UI.panelBorder}` },
-        borderBottom: { xs: `1px solid ${MAGIC_UI.panelBorder}`, lg: "none" },
-        background: "rgba(2,6,23,0.34)",
-        p: { xs: 1, lg: 1.15 },
-        display: "flex",
-        flexDirection: { xs: "row", lg: "column" },
-        gap: 0.7,
-        overflowX: { xs: "auto", lg: "visible" },
-        minWidth: 0,
+  const renderDeviceNavBadge = (badge) =>
+    badge ? (
+      <Box
+        component="span"
+        sx={{
+          ml: "auto",
+          minWidth: 18,
+          height: 18,
+          px: 0.5,
+          borderRadius: 999,
+          background: "#facc15",
+          color: "#020617",
+          border: "1px solid rgba(250,204,21,0.82)",
+          fontSize: "0.68rem",
+          fontWeight: 800,
+          lineHeight: "16px",
+          textAlign: "center",
+        }}
+      >
+        {badge}
+      </Box>
+    ) : null;
+
+  const SidebarSection = ({ sectionId, title, badge = "", children }) => (
+    <Accordion
+      expanded={expandedDeviceNavSections[sectionId] ?? true}
+      onChange={(_, expanded) => {
+        setExpandedDeviceNavSections((previous) => ({ ...previous, [sectionId]: expanded }));
       }}
+      square
+      disableGutters
+      sx={DEVICE_NAV_ACCORDION_SX}
     >
-      {WORKSPACES.map((workspace) => {
-        const active = activeWorkspaceKey === workspace.key;
-        const WorkspaceIcon = workspace.icon;
-        const badge = workspaceBadges[workspace.key] || "";
-        return (
-          <Button
-            key={workspace.key}
-            onClick={() => setActiveWorkspace(workspace.key, WORKSPACE_VIEW_DEFAULTS[workspace.key] || "")}
-            startIcon={<WorkspaceIcon sx={{ fontSize: 18 }} />}
-            sx={{
-              justifyContent: "flex-start",
-              textTransform: "none",
-              borderRadius: 2,
-              minHeight: 38,
-              minWidth: { xs: 138, lg: 0 },
-              width: { xs: "auto", lg: "100%" },
-              px: 1.2,
-              color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
-              background: active ? NAV_TAB_COLORS.activeBg : "transparent",
-              border: active ? "1px solid rgba(125,183,255,0.22)" : "1px solid transparent",
-              fontSize: "0.8rem",
-              fontWeight: active ? 700 : 500,
-              "& .MuiButton-startIcon": {
-                color: active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
-                mr: 0.9,
-              },
-              "&:hover": {
-                background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
-              },
-            }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
-              <Box component="span" sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {workspace.label}
-              </Box>
-              {badge ? (
-                <Box
-                  component="span"
-                  sx={{
-                    ml: "auto",
-                    minWidth: 18,
-                    height: 18,
-                    px: 0.5,
-                    borderRadius: 999,
-                    background: "#facc15",
-                    color: "#020617",
-                    border: "1px solid rgba(250,204,21,0.82)",
-                    fontSize: "0.68rem",
-                    fontWeight: 800,
-                    lineHeight: "16px",
-                    textAlign: "center",
-                  }}
-                >
-                  {badge}
-                </Box>
-              ) : null}
-            </Box>
-          </Button>
-        );
-      })}
-    </Box>
+      <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: NAV_TAB_COLORS.iconActive }} />} sx={DEVICE_NAV_ACCORDION_SUMMARY_SX}>
+        <Typography
+          sx={{
+            fontSize: "0.85rem",
+            color: NAV_TAB_COLORS.iconActive,
+            fontWeight: 700,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {title}
+        </Typography>
+        {renderDeviceNavBadge(badge)}
+      </AccordionSummary>
+      <AccordionDetails sx={DEVICE_NAV_ACCORDION_DETAILS_SX}>{children}</AccordionDetails>
+    </Accordion>
   );
 
-  const renderViewSwitcher = (options) => (
-    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
-      {options.map((option) => {
-        const active = activeWorkspaceView === option.key;
-        const OptionIcon = option.icon;
-        return (
-          <Button
-            key={option.key}
-            size="small"
-            onClick={() => setActiveWorkspaceView(option.key)}
-            startIcon={OptionIcon ? <OptionIcon sx={{ fontSize: 16 }} /> : null}
+  const SidebarNavRow = ({ icon, label, active = false, disabled = false, onClick }) => (
+    <ListItemButton
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      selected={active}
+      aria-label={label}
+      sx={deviceSidebarNavRowSx(active, disabled)}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto" }}>
+        <Box sx={deviceSidebarNavIconSx(active, disabled)}>{icon}</Box>
+        <ListItemText
+          disableTypography
+          primary={
+            <Typography
+              component="span"
+              sx={{
+                display: "block",
+                color: "inherit",
+                fontSize: "0.8rem",
+                fontWeight: active ? 600 : 400,
+                lineHeight: 1.45,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </Typography>
+          }
+        />
+      </Box>
+    </ListItemButton>
+  );
+
+  const renderDeviceNavigationSidebar = () => {
+    const openRemoteDesktop = () => {
+      if (!deviceId) return;
+      navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
+        state: { initialDevice: tunnelDevice },
+      });
+    };
+    const activeView = (workspaceKey, viewKey = "") =>
+      activeWorkspaceKey === workspaceKey &&
+      (!viewKey || normalizeWorkspaceView(workspaceKey, activeWorkspaceView) === viewKey);
+    return (
+      <Box sx={DEVICE_NAV_SIDEBAR_SX}>
+        <Box sx={{ flex: 1, overflowY: "auto" }}>
+          <SidebarSection sectionId="inventory" title="Inventory" badge={workspaceBadges.inventory}>
+            <SidebarNavRow
+              icon={<InfoOutlinedIcon fontSize="small" />}
+              label="Hardware Summary"
+              active={activeView("inventory", "summary")}
+              onClick={() => setActiveWorkspace("inventory", "summary")}
+            />
+            <SidebarNavRow
+              icon={<AppsRoundedIcon fontSize="small" />}
+              label="Installed Software"
+              active={activeView("inventory", "software")}
+              onClick={() => setActiveWorkspace("inventory", "software")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="backend" title="Backend Tools" badge={workspaceBadges.remote_ops}>
+            <SidebarNavRow
+              icon={<DesktopWindowsRoundedIcon fontSize="small" />}
+              label="Remote Desktop"
+              disabled={!deviceId}
+              onClick={openRemoteDesktop}
+            />
+            <SidebarNavRow
+              icon={<TerminalRoundedIcon fontSize="small" />}
+              label="Shell"
+              active={activeView("remote_ops", "shell")}
+              onClick={() => setActiveWorkspace("remote_ops", "shell")}
+            />
+            <SidebarNavRow
+              icon={<FolderRoundedIcon fontSize="small" />}
+              label="Files"
+              active={activeView("remote_ops", "files")}
+              onClick={() => setActiveWorkspace("remote_ops", "files")}
+            />
+            <SidebarNavRow
+              icon={<AccountTreeRoundedIcon fontSize="small" />}
+              label="Processes"
+              active={activeView("remote_ops", "processes")}
+              onClick={() => setActiveWorkspace("remote_ops", "processes")}
+            />
+            <SidebarNavRow
+              icon={<SettingsRoundedIcon fontSize="small" />}
+              label="Services"
+              active={activeView("remote_ops", "services")}
+              onClick={() => setActiveWorkspace("remote_ops", "services")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="protection" title="Protection" badge={workspaceBadges.protection}>
+            <SidebarNavRow
+              icon={<PolicyIcon fontSize="small" />}
+              label="Watchdogs"
+              active={activeView("protection")}
+              onClick={() => setActiveWorkspace("protection")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="history" title="History" badge={workspaceBadges.history}>
+            <SidebarNavRow
+              icon={<ListAltRoundedIcon fontSize="small" />}
+              label="Activity History"
+              active={activeView("history")}
+              onClick={() => setActiveWorkspace("history")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="metadata" title="Metadata" badge={workspaceBadges.config}>
+            <SidebarNavRow
+              icon={<LabelRoundedIcon fontSize="small" />}
+              label="Metadata"
+              active={activeView("config", "metadata")}
+              onClick={() => setActiveWorkspace("config", "metadata")}
+            />
+          </SidebarSection>
+        </Box>
+
+        <Divider sx={{ borderColor: "rgba(125,183,255,0.14)" }} />
+        <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
+          <Box
+            component="button"
+            type="button"
+            onClick={() => navigate(APP_PATHS.devices)}
             sx={{
-              minHeight: 30,
-              borderRadius: 999,
-              textTransform: "none",
-              px: 1.35,
-              color: active ? MAGIC_UI.textBright : NAV_TAB_COLORS.text,
-              border: `1px solid ${active ? "rgba(125,211,252,0.48)" : MAGIC_UI.panelBorder}`,
-              background: active
-                ? "linear-gradient(90deg, rgba(125,211,252,0.18), rgba(192,132,252,0.12))"
-                : "rgba(2,6,23,0.32)",
-              "& .MuiButton-startIcon": {
-                color: active ? MAGIC_UI.accentA : NAV_TAB_COLORS.icon,
+              width: "100%",
+              height: 28,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 0.75,
+              px: 1,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(125,183,255,0.14)",
+              borderRadius: 6,
+              color: NAV_TAB_COLORS.iconActive,
+              cursor: "pointer",
+              transition: "background 160ms ease, transform 120ms ease",
+              "&:hover": {
+                background: "rgba(255,255,255,0.08)",
+              },
+              "&:active": {
+                transform: "translateY(1px)",
               },
             }}
           >
-            {option.label}
-          </Button>
-        );
-      })}
-    </Stack>
-  );
+            <ChevronLeftIcon fontSize="small" />
+            <Typography
+              sx={{
+                color: NAV_TAB_COLORS.iconActive,
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                lineHeight: 1.1,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              Devices List
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+    );
+  };
 
   const renderRemoteOpsWorkspace = () => {
     const view = normalizeWorkspaceView("remote_ops", activeWorkspaceView);
     return (
       <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-        {renderViewSwitcher([
-          { key: "shell", label: "Shell", icon: TerminalRoundedIcon },
-          { key: "files", label: "Files", icon: FolderRoundedIcon },
-          { key: "processes", label: "Processes", icon: AccountTreeRoundedIcon },
-          { key: "services", label: "Services", icon: SettingsRoundedIcon },
-        ])}
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {view === "files"
             ? renderFileManagementTab()
@@ -4032,10 +4222,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     const view = normalizeWorkspaceView("inventory", activeWorkspaceView);
     return (
       <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-        {renderViewSwitcher([
-          { key: "summary", label: "Hardware Summary", icon: InfoOutlinedIcon },
-          { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
-        ])}
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {view === "software" ? renderSoftware() : renderDeviceSummaryTab()}
         </Box>
@@ -4366,30 +4552,36 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           minHeight: 0,
           minWidth: 0,
           width: "100%",
-          overflowX: "hidden",
           display: "flex",
-          flexDirection: "column",
+          flexDirection: { xs: "column", lg: "row" },
           borderRadius: 3,
-          border: `1px solid ${MAGIC_UI.panelBorder}`,
-          background:
-            "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
-            "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
-          boxShadow: MAGIC_UI.glow,
+          overflow: "hidden",
         }}
       >
-        {renderReadinessHeader()}
+        {renderDeviceNavigationSidebar()}
         <Box
           sx={{
-            display: "grid",
-            gridTemplateColumns: { xs: "1fr", lg: "178px minmax(0, 1fr)" },
             flexGrow: 1,
             minHeight: 0,
             minWidth: 0,
+            overflowX: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderTopLeftRadius: { xs: 12, lg: 0 },
+            borderBottomLeftRadius: { xs: 12, lg: 0 },
+            borderTopRightRadius: 12,
+            borderBottomRightRadius: 12,
+            background:
+              "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
+              "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
+            boxShadow: MAGIC_UI.glow,
           }}
         >
-          {renderWorkspaceRail()}
+          {renderReadinessHeader()}
           <Box
             sx={{
+              flexGrow: 1,
               p: { xs: 1.5, md: 2 },
               minHeight: 0,
               minWidth: 0,

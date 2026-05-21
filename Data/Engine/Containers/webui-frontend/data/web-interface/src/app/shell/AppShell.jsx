@@ -160,7 +160,7 @@ export default function AppShell() {
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
   const currentPageKey = useMemo(() => resolveCurrentPageKey(matches), [matches]);
-  const hideNavigationSidebar = currentPageKey === "device-remote-desktop";
+  const hideNavigationSidebar = currentPageKey === "device" || currentPageKey === "device-remote-desktop";
 
   const resolvedChrome = useMemo(
     () => ({
