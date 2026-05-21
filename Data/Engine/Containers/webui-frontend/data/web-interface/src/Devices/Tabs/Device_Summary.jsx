@@ -4009,34 +4009,12 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     const view = normalizeWorkspaceView("remote_ops", activeWorkspaceView);
     return (
       <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
-        <Stack direction="row" spacing={1} justifyContent="space-between" useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
-          {renderViewSwitcher([
-            { key: "shell", label: "Shell", icon: TerminalRoundedIcon },
-            { key: "files", label: "Files", icon: FolderRoundedIcon },
-            { key: "processes", label: "Processes", icon: AccountTreeRoundedIcon },
-            { key: "services", label: "Services", icon: SettingsRoundedIcon },
-          ])}
-          <Button
-            size="small"
-            startIcon={<DesktopWindowsRoundedIcon sx={{ fontSize: 16 }} />}
-            onClick={() => {
-              if (!deviceId) return;
-              navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
-                state: { initialDevice: tunnelDevice },
-              });
-            }}
-            sx={{
-              minHeight: 30,
-              borderRadius: 999,
-              textTransform: "none",
-              color: MAGIC_UI.textBright,
-              border: `1px solid ${MAGIC_UI.panelBorder}`,
-              background: "rgba(2,6,23,0.32)",
-            }}
-          >
-            Remote Desktop
-          </Button>
-        </Stack>
+        {renderViewSwitcher([
+          { key: "shell", label: "Shell", icon: TerminalRoundedIcon },
+          { key: "files", label: "Files", icon: FolderRoundedIcon },
+          { key: "processes", label: "Processes", icon: AccountTreeRoundedIcon },
+          { key: "services", label: "Services", icon: SettingsRoundedIcon },
+        ])}
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {view === "files"
             ? renderFileManagementTab()
