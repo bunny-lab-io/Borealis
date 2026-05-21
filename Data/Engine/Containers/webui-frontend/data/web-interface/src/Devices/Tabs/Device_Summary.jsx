@@ -148,21 +148,19 @@ const DEVICE_NAV_SIDEBAR_SX = {
   minWidth: 260,
   maxWidth: 260,
   width: 260,
-  borderTop: "1px solid rgba(125,183,255,0.14)",
-  borderBottom: "1px solid rgba(125,183,255,0.14)",
-  borderLeft: "1px solid rgba(125,183,255,0.14)",
-  borderRight: "none",
+  position: "relative",
+  zIndex: 2,
+  borderRight: "1px solid rgba(125,183,255,0.14)",
   borderRadius: 0,
   background:
     "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), #0f141c",
   boxShadow: "none",
-  p: 0.25,
   display: "flex",
   flexDirection: "column",
-  gap: 0.25,
   flexShrink: 0,
   height: "100%",
   overflow: "hidden",
+  backdropFilter: "blur(8px) saturate(130%)",
 };
 const DEVICE_NAV_ACCORDION_SX = {
   "&:before": { display: "none" },
@@ -4073,7 +4071,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       (!viewKey || normalizeWorkspaceView(workspaceKey, activeWorkspaceView) === viewKey);
     return (
       <Box sx={DEVICE_NAV_SIDEBAR_SX}>
-        <Box sx={{ flex: 1, overflowY: "auto" }}>
+        <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
           <SidebarSection sectionId="inventory" title="Inventory">
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
