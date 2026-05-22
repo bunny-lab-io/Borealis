@@ -335,7 +335,7 @@ const resolveDeviceId = (device) =>
   null;
 
 const SUMMARY_SECTIONS = [
-  { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
+  { key: "top-level", label: "Overview", icon: InfoOutlinedIcon },
   { key: "storage", label: "Storage", icon: StorageRoundedIcon },
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
@@ -2241,7 +2241,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     </Box>
   );
 
-  const Island = ({ title, icon = null, meta = "", children, sx }) => (
+  const Island = ({ title = "", icon = null, meta = "", children, sx }) => (
     <Box
       sx={{
         p: 2,
@@ -2256,45 +2256,49 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         ...(sx || {}),
       }}
     >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1,
-          mb: 1.4,
-          flexWrap: "wrap",
-        }}
-      >
-        <Stack direction="row" spacing={0.75} alignItems="center">
-          {icon ? (
-            <Box sx={{ color: MAGIC_UI.accentA, display: "inline-flex", alignItems: "center" }}>
-              {icon}
-            </Box>
+      {title || icon || meta ? (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1,
+            mb: 1.4,
+            flexWrap: "wrap",
+          }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            {icon ? (
+              <Box sx={{ color: MAGIC_UI.accentA, display: "inline-flex", alignItems: "center" }}>
+                {icon}
+              </Box>
+            ) : null}
+            {title ? (
+              <Typography
+                variant="caption"
+                sx={{
+                  color: MAGIC_UI.accentA,
+                  fontWeight: 600,
+                  fontSize: "0.82rem",
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  display: "block",
+                }}
+              >
+                {title}
+              </Typography>
+            ) : null}
+          </Stack>
+          {meta ? (
+            <Typography
+              variant="caption"
+              sx={{ color: "rgba(226,232,240,0.72)", fontSize: "0.74rem", letterSpacing: 0.15 }}
+            >
+              {meta}
+            </Typography>
           ) : null}
-          <Typography
-            variant="caption"
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontWeight: 600,
-              fontSize: "0.82rem",
-              letterSpacing: 0.3,
-              textTransform: "uppercase",
-              display: "block",
-            }}
-          >
-            {title}
-          </Typography>
-        </Stack>
-        {meta ? (
-          <Typography
-            variant="caption"
-            sx={{ color: "rgba(226,232,240,0.72)", fontSize: "0.74rem", letterSpacing: 0.15 }}
-          >
-            {meta}
-          </Typography>
-        ) : null}
-      </Box>
+        </Box>
+      ) : null}
       <Box sx={{ flexGrow: 1, minHeight: 0 }}>{children}</Box>
     </Box>
   );
@@ -2393,11 +2397,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           <Box sx={{ display: "flex", flexDirection: "column", gap: 1.4, mt: 0.4 }}>
             <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, md: 4 }, minWidth: 0, width: "100%" }}>
               <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                <Island
-                  title="Top-Level Information"
-                  icon={<InfoOutlinedIcon sx={{ fontSize: 18 }} />}
-                  sx={HARDWARE_SUMMARY_SECTION_SX}
-                >
+                <Island sx={HARDWARE_SUMMARY_SECTION_SX}>
                     <Box
                       sx={{
                         display: "grid",
@@ -4015,7 +4015,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             />
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
-              label="Top-Level"
+              label="Overview"
               active={activeView("inventory", "summary") && activeSummarySectionKey === "top-level"}
               onClick={() => requestSummarySectionScroll("top-level")}
               indent={1}
