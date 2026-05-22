@@ -2404,7 +2404,7 @@ export default function DeviceSummary() {
                             columnDefs={topLevelSplitColumnDefs}
                             defaultColDef={defaultGridColDef}
                             height={topLevelSplitGridHeight}
-                            rowHeight={44}
+                            rowHeight={36}
                           />
                         ) : (
                           <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
@@ -3177,11 +3177,13 @@ export default function DeviceSummary() {
         <Box
           sx={{
             display: "flex",
-            flexDirection: row?.detail ? "column" : "row",
+            flexDirection: "row",
             justifyContent: "flex-start",
-            alignItems: row?.detail ? "flex-start" : "center",
+            alignItems: "center",
+            gap: row?.detail ? 0.75 : 0,
             width: "100%",
             minHeight: "100%",
+            minWidth: 0,
           }}
         >
           <Typography
@@ -3189,8 +3191,10 @@ export default function DeviceSummary() {
               color: MAGIC_UI.textBright,
               fontSize: "0.88rem",
               lineHeight: 1.45,
-              whiteSpace: "normal",
-              wordBreak: "break-word",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
             }}
           >
             {value}
@@ -3198,11 +3202,13 @@ export default function DeviceSummary() {
             {row?.detail ? (
               <Typography
                 sx={{
-                  color: MAGIC_UI.textMuted,
-                  fontSize: "0.8rem",
-                  lineHeight: 1.35,
-                  whiteSpace: "normal",
-                  wordBreak: "break-word",
+                  color: "rgba(148,163,184,0.72)",
+                  fontSize: "0.72rem",
+                  lineHeight: 1.25,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minWidth: 0,
                 }}
               >
                 {String(row.detail)}
@@ -3254,7 +3260,7 @@ export default function DeviceSummary() {
     const baseHeight = resolveGridHeight(Math.max(overviewInfoRows.length, borealisAgentRows.length), {
       minHeight: BASE_GRID_HEIGHTS.topLevel,
       maxHeight: 520,
-      rowHeight: 44,
+      rowHeight: 36,
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
