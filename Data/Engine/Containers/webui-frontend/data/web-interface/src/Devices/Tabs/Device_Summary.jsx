@@ -218,6 +218,19 @@ function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
     "&:hover": {
       background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
     },
+    '&[data-summary-active="true"]': {
+      color: NAV_TAB_COLORS.textActive,
+      background: NAV_TAB_COLORS.activeBg,
+    },
+    '&[data-summary-active="true"]:hover': {
+      background: NAV_TAB_COLORS.activeBg,
+    },
+    '&[data-summary-active="true"] .device-summary-nav-icon': {
+      color: NAV_TAB_COLORS.iconActive,
+    },
+    '&[data-summary-active="true"] .device-summary-nav-label': {
+      fontWeight: 600,
+    },
     "&:active": {
       transform: "translateY(0.5px)",
     },
@@ -339,6 +352,9 @@ const SUMMARY_SECTIONS = [
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
 ];
+const DEFAULT_SUMMARY_SECTION_KEY = SUMMARY_SECTIONS[0]?.key || "top-level";
+const normalizeSummarySectionKey = (sectionKey) =>
+  SUMMARY_SECTIONS.some((section) => section.key === sectionKey) ? sectionKey : DEFAULT_SUMMARY_SECTION_KEY;
 
 function normalizeTunnelInfoState(data = {}) {
   return {
@@ -1086,10 +1102,6 @@ export default function DeviceSummary() {
   const [connectionError, setConnectionError] = useState("");
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [summaryDataReady, setSummaryDataReady] = useState(() => Boolean(loaderSnapshot));
-  const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
-  const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
-  const [activeSummarySectionKey, setActiveSummarySectionKey] = useState(SUMMARY_SECTIONS[0]?.key || "top-level");
-  const [pendingSummaryScrollSection, setPendingSummaryScrollSection] = useState("");
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
@@ -1134,6 +1146,7 @@ export default function DeviceSummary() {
   const loadedConnectionEndpointRef = useRef(String(loaderSnapshot?.connectionEndpoint || ""));
   const pageRenderCountRef = useRef(0);
   const summaryObserverEventCountRef = useRef(0);
+  const pendingSummaryScrollSectionRef = useRef("");
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
 
@@ -1986,59 +1999,45 @@ export default function DeviceSummary() {
     return rawText;
   }, []);
 
+  const markActiveSummaryNavSection = useCallback((sectionKey) => {
+    if (typeof document === "undefined") return;
+    const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+    document.querySelectorAll("[data-summary-nav-section]").forEach((node) => {
+      if (!(node instanceof HTMLElement)) return;
+      node.dataset.summaryActive =
+        node.dataset.summaryNavSection === normalizedSectionKey ? "true" : "false";
+    });
+  }, []);
+
   const scrollToSummarySection = useCallback((sectionKey) => {
     if (typeof document === "undefined" || typeof window === "undefined") return;
-    const target = document.getElementById(`device-summary-${sectionKey}`);
+    const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+    const target = document.getElementById(`device-summary-${normalizedSectionKey}`);
     if (!target) return;
 
     const docScroller = document.scrollingElement || document.documentElement;
     const scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
-    const scrollTopOffset = 0;
-    const hostViewportHeight =
-      scrollHost === docScroller
-        ? window.innerHeight || document.documentElement.clientHeight || 0
-        : scrollHost.clientHeight ||
-          scrollHost.getBoundingClientRect?.().height ||
-          window.innerHeight ||
-          document.documentElement.clientHeight ||
-          0;
-    const spacer = Math.max(0, Math.round(hostViewportHeight + 28));
 
     summaryGridDebugLog("scrollToSection", {
-      sectionKey,
+      sectionKey: normalizedSectionKey,
       scrollHostTag: scrollHost?.tagName || "document",
-      scrollTopOffset,
-      spacer,
     });
 
-    setActiveSummarySectionKey(sectionKey);
-    setSummaryScrollOffset((prev) => (prev === scrollTopOffset ? prev : scrollTopOffset));
-    setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
+    markActiveSummaryNavSection(normalizedSectionKey);
 
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
-        const nextTarget = document.getElementById(`device-summary-${sectionKey}`);
+        const nextTarget = document.getElementById(`device-summary-${normalizedSectionKey}`);
         nextTarget?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
       });
     });
-  }, []);
+  }, [markActiveSummaryNavSection]);
 
   const scrollHardwareSummaryToTop = useCallback(() => {
     if (typeof document === "undefined" || typeof window === "undefined") return;
     const docScroller = document.scrollingElement || document.documentElement;
     const scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
-    const hostViewportHeight =
-      scrollHost === docScroller
-        ? window.innerHeight || document.documentElement.clientHeight || 0
-        : scrollHost.clientHeight ||
-          scrollHost.getBoundingClientRect?.().height ||
-          window.innerHeight ||
-          document.documentElement.clientHeight ||
-          0;
-    const spacer = Math.max(0, Math.round(hostViewportHeight + 28));
-    setActiveSummarySectionKey("top-level");
-    setSummaryScrollOffset((prev) => (prev === 0 ? prev : 0));
-    setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
+    markActiveSummaryNavSection(DEFAULT_SUMMARY_SECTION_KEY);
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         if (scrollHost === docScroller) {
@@ -2051,37 +2050,51 @@ export default function DeviceSummary() {
           ?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
       });
     });
-  }, []);
+  }, [markActiveSummaryNavSection]);
 
   const requestSummarySectionScroll = useCallback(
     (sectionKey = "top-level") => {
-      const normalizedSectionKey =
-        SUMMARY_SECTIONS.some((section) => section.key === sectionKey) ? sectionKey : "top-level";
+      const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
       summaryGridDebugLog("sidebarSummarySectionClick", { sectionKey: normalizedSectionKey });
-      setActiveSummarySectionKey(normalizedSectionKey);
-      setPendingSummaryScrollSection(normalizedSectionKey);
+      markActiveSummaryNavSection(normalizedSectionKey);
+      if (activeWorkspaceKey === "inventory" && activeWorkspaceView === "summary") {
+        if (normalizedSectionKey === DEFAULT_SUMMARY_SECTION_KEY) {
+          scrollHardwareSummaryToTop();
+        } else {
+          scrollToSummarySection(normalizedSectionKey);
+        }
+        return;
+      }
+      pendingSummaryScrollSectionRef.current = normalizedSectionKey;
       setActiveWorkspace("inventory", "summary");
     },
-    [setActiveWorkspace]
+    [
+      activeWorkspaceKey,
+      activeWorkspaceView,
+      markActiveSummaryNavSection,
+      scrollHardwareSummaryToTop,
+      scrollToSummarySection,
+      setActiveWorkspace,
+    ]
   );
 
   useEffect(() => {
+    const pendingSummaryScrollSection = pendingSummaryScrollSectionRef.current;
     if (!pendingSummaryScrollSection) return undefined;
     if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") return undefined;
     if (typeof window === "undefined") return undefined;
     const frame = window.requestAnimationFrame(() => {
+      pendingSummaryScrollSectionRef.current = "";
       if (pendingSummaryScrollSection === "top-level") {
         scrollHardwareSummaryToTop();
       } else {
         scrollToSummarySection(pendingSummaryScrollSection);
       }
-      setPendingSummaryScrollSection("");
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
     activeWorkspaceKey,
     activeWorkspaceView,
-    pendingSummaryScrollSection,
     scrollHardwareSummaryToTop,
     scrollToSummarySection,
   ]);
@@ -2108,16 +2121,12 @@ export default function DeviceSummary() {
         if (!visible.length) return;
         const nextKey = String(visible[0].target.id || "").replace("device-summary-", "");
         if (!nextKey) return;
-        setActiveSummarySectionKey((prev) => {
-          if (prev === nextKey) return prev;
-          summaryGridDebugLog("sidebarSummaryObserverSectionChange", {
-            from: prev,
-            to: nextKey,
-            eventCount: summaryObserverEventCountRef.current,
-            ratio: Number(visible[0].intersectionRatio || 0).toFixed(3),
-          });
-          return nextKey;
+        summaryGridDebugLog("sidebarSummaryObserverSectionChange", {
+          to: nextKey,
+          eventCount: summaryObserverEventCountRef.current,
+          ratio: Number(visible[0].intersectionRatio || 0).toFixed(3),
         });
+        markActiveSummaryNavSection(nextKey);
       },
       {
         root: null,
@@ -2131,7 +2140,7 @@ export default function DeviceSummary() {
       summaryGridDebugLog("sidebarSummaryObserverStop");
       observer.disconnect();
     };
-  }, [activeWorkspaceKey, activeWorkspaceView]);
+  }, [activeWorkspaceKey, activeWorkspaceView, markActiveSummaryNavSection]);
 
   const softwareRows = useMemo(() => details.software || [], [details.software]);
 
@@ -2319,7 +2328,7 @@ export default function DeviceSummary() {
         >
           <Box sx={{ display: "flex", flexDirection: "column", gap: 1.4, mt: 0.4 }}>
             <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, md: 4 }, minWidth: 0, width: "100%" }}>
-              <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+              <Box id="device-summary-top-level" sx={{ scrollMarginTop: 0 }}>
                 <Island sx={HARDWARE_SUMMARY_SECTION_SX}>
                     {connectionType === "ssh" && (
                       <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.1, alignItems: "center", mb: 1.9 }}>
@@ -2445,7 +2454,7 @@ export default function DeviceSummary() {
                 </Island>
               </Box>
 
-              <Box id="device-summary-storage" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+              <Box id="device-summary-storage" sx={{ scrollMarginTop: 0 }}>
                 <Island
                   title="Storage"
                   icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
@@ -2465,7 +2474,7 @@ export default function DeviceSummary() {
                 </Island>
               </Box>
 
-              <Box id="device-summary-memory" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+              <Box id="device-summary-memory" sx={{ scrollMarginTop: 0 }}>
                 <Island
                   title="Memory"
                   icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
@@ -2485,7 +2494,7 @@ export default function DeviceSummary() {
                 </Island>
               </Box>
 
-              <Box id="device-summary-network" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
+              <Box id="device-summary-network" sx={{ scrollMarginTop: 0 }}>
                 <Island
                   title="Network"
                   icon={<LanRoundedIcon sx={{ fontSize: 18 }} />}
@@ -2504,7 +2513,7 @@ export default function DeviceSummary() {
                   )}
                 </Island>
               </Box>
-              <Box sx={{ width: "100%", height: `${summaryBottomSpacer}px`, flexShrink: 0 }} />
+              <Box sx={{ width: "100%", height: "65vh", flexShrink: 0 }} />
             </Box>
           </Box>
         </Box>
@@ -3296,8 +3305,6 @@ export default function DeviceSummary() {
     summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
       topTabKey,
-      summaryScrollOffset,
-      summaryBottomSpacer,
       overviewRows: overviewInfoRows.length,
       agentRows: borealisAgentRows.length,
       storageRows: storageRows.length,
@@ -3306,8 +3313,6 @@ export default function DeviceSummary() {
     });
   }, [
     activeWorkspaceKey,
-    summaryScrollOffset,
-    summaryBottomSpacer,
     overviewInfoRows.length,
     borealisAgentRows.length,
     storageRows.length,
@@ -3887,20 +3892,32 @@ export default function DeviceSummary() {
     </Accordion>
   );
 
-  const SidebarNavRow = ({ icon, label, active = false, disabled = false, onClick, badge = "", indent = 0 }) => (
+  const SidebarNavRow = ({
+    icon,
+    label,
+    active = false,
+    disabled = false,
+    onClick,
+    badge = "",
+    indent = 0,
+    summarySectionKey = "",
+  }) => (
     <ListItemButton
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
       selected={active}
       aria-label={label}
+      data-summary-nav-section={summarySectionKey || undefined}
+      data-summary-active={summarySectionKey === DEFAULT_SUMMARY_SECTION_KEY ? "true" : undefined}
       sx={deviceSidebarNavRowSx(active, disabled, indent)}
     >
       <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto" }}>
-        <Box sx={deviceSidebarNavIconSx(active, disabled)}>{icon}</Box>
+        <Box className="device-summary-nav-icon" sx={deviceSidebarNavIconSx(active, disabled)}>{icon}</Box>
         <ListItemText
           disableTypography
           primary={
             <Typography
+              className="device-summary-nav-label"
               component="span"
               sx={{
                 display: "block",
@@ -3945,30 +3962,30 @@ export default function DeviceSummary() {
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
               label="Overview"
-              active={activeView("inventory", "summary") && activeSummarySectionKey === "top-level"}
               onClick={() => requestSummarySectionScroll("top-level")}
+              summarySectionKey="top-level"
               indent={1}
             />
             <SidebarNavRow
               icon={<StorageRoundedIcon fontSize="small" />}
               label="Storage"
-              active={activeView("inventory", "summary") && activeSummarySectionKey === "storage"}
               onClick={() => requestSummarySectionScroll("storage")}
               badge={workspaceBadges.storage}
+              summarySectionKey="storage"
               indent={1}
             />
             <SidebarNavRow
               icon={<MemoryRoundedIcon fontSize="small" />}
               label="Memory"
-              active={activeView("inventory", "summary") && activeSummarySectionKey === "memory"}
               onClick={() => requestSummarySectionScroll("memory")}
+              summarySectionKey="memory"
               indent={1}
             />
             <SidebarNavRow
               icon={<LanRoundedIcon fontSize="small" />}
               label="Network"
-              active={activeView("inventory", "summary") && activeSummarySectionKey === "network"}
               onClick={() => requestSummarySectionScroll("network")}
+              summarySectionKey="network"
               indent={1}
             />
             <SidebarNavRow
@@ -4129,7 +4146,6 @@ export default function DeviceSummary() {
     [
       activeWorkspaceKey,
       activeWorkspaceView,
-      activeSummarySectionKey,
       deviceId,
       expandedDeviceNavSections,
       navigate,
