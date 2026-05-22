@@ -2391,7 +2391,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           }}
         >
           <Box sx={{ display: "flex", flexDirection: "column", gap: 1.4, mt: 0.4 }}>
-            <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minWidth: 0, width: "100%" }}>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, md: 4 }, minWidth: 0, width: "100%" }}>
               <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
                 <Island
                   title="Top-Level Information"
