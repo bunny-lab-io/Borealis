@@ -218,17 +218,17 @@ function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
     "&:hover": {
       background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
     },
-    '&[data-summary-active="true"]': {
+    '&.Mui-selected, &[data-summary-active="true"]': {
       color: NAV_TAB_COLORS.textActive,
       background: NAV_TAB_COLORS.activeBg,
     },
-    '&[data-summary-active="true"]:hover': {
+    '&.Mui-selected:hover, &[data-summary-active="true"]:hover': {
       background: NAV_TAB_COLORS.activeBg,
     },
-    '&[data-summary-active="true"] .device-summary-nav-icon': {
+    '&.Mui-selected .device-summary-nav-icon, &[data-summary-active="true"] .device-summary-nav-icon': {
       color: NAV_TAB_COLORS.iconActive,
     },
-    '&[data-summary-active="true"] .device-summary-nav-label': {
+    '&.Mui-selected .device-summary-nav-label, &[data-summary-active="true"] .device-summary-nav-label': {
       fontWeight: 600,
     },
     "&:active": {
@@ -1147,6 +1147,7 @@ export default function DeviceSummary() {
   const pageRenderCountRef = useRef(0);
   const summaryObserverEventCountRef = useRef(0);
   const pendingSummaryScrollSectionRef = useRef("");
+  const activeSummaryNavSectionRef = useRef(DEFAULT_SUMMARY_SECTION_KEY);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
 
@@ -2001,11 +2002,13 @@ export default function DeviceSummary() {
 
   const markActiveSummaryNavSection = useCallback((sectionKey) => {
     if (typeof document === "undefined") return;
-    const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+    const normalizedSectionKey = sectionKey ? normalizeSummarySectionKey(sectionKey) : "";
+    activeSummaryNavSectionRef.current = normalizedSectionKey;
     document.querySelectorAll("[data-summary-nav-section]").forEach((node) => {
       if (!(node instanceof HTMLElement)) return;
-      node.dataset.summaryActive =
-        node.dataset.summaryNavSection === normalizedSectionKey ? "true" : "false";
+      const isActive = Boolean(normalizedSectionKey) && node.dataset.summaryNavSection === normalizedSectionKey;
+      node.dataset.summaryActive = isActive ? "true" : "false";
+      node.classList.toggle("Mui-selected", isActive);
     });
   }, []);
 
@@ -2077,6 +2080,14 @@ export default function DeviceSummary() {
       setActiveWorkspace,
     ]
   );
+
+  useEffect(() => {
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") {
+      markActiveSummaryNavSection("");
+      return;
+    }
+    markActiveSummaryNavSection(activeSummaryNavSectionRef.current || DEFAULT_SUMMARY_SECTION_KEY);
+  }, [activeWorkspaceKey, activeWorkspaceView, markActiveSummaryNavSection]);
 
   useEffect(() => {
     const pendingSummaryScrollSection = pendingSummaryScrollSectionRef.current;
@@ -3908,7 +3919,6 @@ export default function DeviceSummary() {
       selected={active}
       aria-label={label}
       data-summary-nav-section={summarySectionKey || undefined}
-      data-summary-active={summarySectionKey === DEFAULT_SUMMARY_SECTION_KEY ? "true" : undefined}
       sx={deviceSidebarNavRowSx(active, disabled, indent)}
     >
       <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto" }}>
