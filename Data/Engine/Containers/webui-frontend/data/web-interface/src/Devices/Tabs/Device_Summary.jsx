@@ -142,6 +142,14 @@ const NAV_TAB_COLORS = {
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
 const BOREALIS_PRIMARY_GRADIENT = "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)";
+const HARDWARE_SUMMARY_SECTION_SX = {
+  p: 0,
+  border: "none",
+  borderRadius: 0,
+  background: "transparent",
+  boxShadow: "none",
+  mb: 0,
+};
 const DEVICE_NAV_SIDEBAR_SX = {
   minWidth: 260,
   maxWidth: 260,
@@ -2388,8 +2396,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 <Island
                   title="Top-Level Information"
                   icon={<InfoOutlinedIcon sx={{ fontSize: 18 }} />}
-                  meta="Identity and lifecycle"
-                  sx={{ mb: 0 }}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
                 >
                     <Box
                       sx={{
@@ -2608,16 +2615,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 <Island
                   title="Storage"
                   icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
-                  meta={
-                    hardwareOverview.storageCount
-                      ? `${hardwareOverview.storageCount} volumes${
-                          hardwareOverview.storageCritical > 0
-                            ? ` • ${hardwareOverview.storageCritical} exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% usage`
-                            : ""
-                        }`
-                      : "No storage telemetry"
-                  }
-                  sx={{ mb: 0 }}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
                 >
                   {summaryDataReady ? (
                     <SummarySectionGrid
@@ -2637,12 +2635,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 <Island
                   title="Memory"
                   icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
-                  meta={
-                    hardwareOverview.memoryCount
-                      ? `${hardwareOverview.installedMemory}/${hardwareOverview.memoryCount} populated slots`
-                      : "No memory telemetry"
-                  }
-                  sx={{ mb: 0 }}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
                 >
                   {summaryDataReady ? (
                     <SummarySectionGrid
@@ -2662,8 +2655,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                 <Island
                   title="Network"
                   icon={<LanRoundedIcon sx={{ fontSize: 18 }} />}
-                  meta={`Internal ${hardwareOverview.internalIp} • External ${hardwareOverview.externalIp}`}
-                  sx={{ mb: 0 }}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
                 >
                   {summaryDataReady ? (
                     <SummarySectionGrid
