@@ -3956,15 +3956,9 @@ export default function DeviceSummary() {
           <SidebarSection sectionId="inventory" title="Inventory">
             <SidebarNavRow
               icon={<InfoOutlinedIcon fontSize="small" />}
-              label="Hardware Summary"
-              onClick={() => requestSummarySectionScroll("top-level")}
-            />
-            <SidebarNavRow
-              icon={<InfoOutlinedIcon fontSize="small" />}
               label="Overview"
               onClick={() => requestSummarySectionScroll("top-level")}
               summarySectionKey="top-level"
-              indent={1}
             />
             <SidebarNavRow
               icon={<StorageRoundedIcon fontSize="small" />}
@@ -3972,21 +3966,18 @@ export default function DeviceSummary() {
               onClick={() => requestSummarySectionScroll("storage")}
               badge={workspaceBadges.storage}
               summarySectionKey="storage"
-              indent={1}
             />
             <SidebarNavRow
               icon={<MemoryRoundedIcon fontSize="small" />}
               label="Memory"
               onClick={() => requestSummarySectionScroll("memory")}
               summarySectionKey="memory"
-              indent={1}
             />
             <SidebarNavRow
               icon={<LanRoundedIcon fontSize="small" />}
               label="Network"
               onClick={() => requestSummarySectionScroll("network")}
               summarySectionKey="network"
-              indent={1}
             />
             <SidebarNavRow
               icon={<AppsRoundedIcon fontSize="small" />}
