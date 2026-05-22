@@ -136,7 +136,7 @@ const NAV_TAB_COLORS = {
   iconActive: "#7db7ff",
   hover: "rgba(255,255,255,0.05)",
   activeBg:
-    "linear-gradient(90deg, rgba(125,183,255,0.22) 0%, rgba(125,183,255,0.1) 55%, rgba(125,183,255,0.00) 100%)",
+    "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
@@ -218,17 +218,17 @@ function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
     "&:hover": {
       background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
     },
-    '&.Mui-selected, &[data-summary-active="true"]': {
+    '&[data-summary-active="true"]': {
       color: NAV_TAB_COLORS.textActive,
-      background: `${NAV_TAB_COLORS.activeBg} !important`,
+      background: NAV_TAB_COLORS.activeBg,
     },
-    '&.Mui-selected:hover, &[data-summary-active="true"]:hover': {
-      background: `${NAV_TAB_COLORS.activeBg} !important`,
+    '&[data-summary-active="true"]:hover': {
+      background: NAV_TAB_COLORS.activeBg,
     },
-    '&.Mui-selected .device-summary-nav-icon, &[data-summary-active="true"] .device-summary-nav-icon': {
+    '&[data-summary-active="true"] .device-summary-nav-icon': {
       color: NAV_TAB_COLORS.iconActive,
     },
-    '&.Mui-selected .device-summary-nav-label, &[data-summary-active="true"] .device-summary-nav-label': {
+    '&[data-summary-active="true"] .device-summary-nav-label': {
       fontWeight: 600,
     },
     "&:active": {
