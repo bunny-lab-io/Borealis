@@ -1152,6 +1152,8 @@ export default function DeviceSummary() {
   const summaryObserverEventCountRef = useRef(0);
   const pendingSummaryScrollSectionRef = useRef("");
   const activeSummaryNavSectionRef = useRef(DEFAULT_SUMMARY_SECTION_KEY);
+  const summaryNavScrollLockRef = useRef("");
+  const summaryNavScrollLockTimerRef = useRef(null);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
 
@@ -2016,6 +2018,37 @@ export default function DeviceSummary() {
     });
   }, []);
 
+  const clearSummaryNavScrollLock = useCallback(() => {
+    summaryNavScrollLockRef.current = "";
+    if (typeof window === "undefined" || !summaryNavScrollLockTimerRef.current) return;
+    window.clearTimeout(summaryNavScrollLockTimerRef.current);
+    summaryNavScrollLockTimerRef.current = null;
+  }, []);
+
+  const scheduleSummaryNavScrollLockRelease = useCallback((delayMs = 220) => {
+    if (typeof window === "undefined") {
+      summaryNavScrollLockRef.current = "";
+      return;
+    }
+    if (summaryNavScrollLockTimerRef.current) {
+      window.clearTimeout(summaryNavScrollLockTimerRef.current);
+    }
+    summaryNavScrollLockTimerRef.current = window.setTimeout(() => {
+      summaryNavScrollLockRef.current = "";
+      summaryNavScrollLockTimerRef.current = null;
+    }, delayMs);
+  }, []);
+
+  const lockSummaryNavSection = useCallback(
+    (sectionKey) => {
+      const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+      summaryNavScrollLockRef.current = normalizedSectionKey;
+      markActiveSummaryNavSection(normalizedSectionKey);
+      scheduleSummaryNavScrollLockRelease(1800);
+    },
+    [markActiveSummaryNavSection, scheduleSummaryNavScrollLockRelease]
+  );
+
   const scrollToSummarySection = useCallback((sectionKey) => {
     if (typeof document === "undefined" || typeof window === "undefined") return;
     const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
@@ -2063,7 +2096,7 @@ export default function DeviceSummary() {
     (sectionKey = "top-level") => {
       const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
       summaryGridDebugLog("sidebarSummarySectionClick", { sectionKey: normalizedSectionKey });
-      markActiveSummaryNavSection(normalizedSectionKey);
+      lockSummaryNavSection(normalizedSectionKey);
       if (activeWorkspaceKey === "inventory" && activeWorkspaceView === "summary") {
         if (normalizedSectionKey === DEFAULT_SUMMARY_SECTION_KEY) {
           scrollHardwareSummaryToTop();
@@ -2078,7 +2111,7 @@ export default function DeviceSummary() {
     [
       activeWorkspaceKey,
       activeWorkspaceView,
-      markActiveSummaryNavSection,
+      lockSummaryNavSection,
       scrollHardwareSummaryToTop,
       scrollToSummarySection,
       setActiveWorkspace,
@@ -2087,11 +2120,12 @@ export default function DeviceSummary() {
 
   useEffect(() => {
     if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") {
+      clearSummaryNavScrollLock();
       markActiveSummaryNavSection("");
       return;
     }
     markActiveSummaryNavSection(activeSummaryNavSectionRef.current || DEFAULT_SUMMARY_SECTION_KEY);
-  }, [activeWorkspaceKey, activeWorkspaceView, markActiveSummaryNavSection]);
+  }, [activeWorkspaceKey, activeWorkspaceView, clearSummaryNavScrollLock, markActiveSummaryNavSection]);
 
   useEffect(() => {
     const pendingSummaryScrollSection = pendingSummaryScrollSectionRef.current;
@@ -2115,6 +2149,22 @@ export default function DeviceSummary() {
   ]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") return undefined;
+    const releaseLockAfterScroll = () => {
+      if (!summaryNavScrollLockRef.current) return;
+      scheduleSummaryNavScrollLockRelease(220);
+    };
+    const scrollHost = document.getElementById("device-summary-workspace-scrollhost");
+    window.addEventListener("scroll", releaseLockAfterScroll, { passive: true });
+    scrollHost?.addEventListener?.("scroll", releaseLockAfterScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", releaseLockAfterScroll);
+      scrollHost?.removeEventListener?.("scroll", releaseLockAfterScroll);
+    };
+  }, [activeWorkspaceKey, activeWorkspaceView, scheduleSummaryNavScrollLockRelease]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined" || typeof IntersectionObserver === "undefined") {
       return undefined;
     }
@@ -2129,6 +2179,7 @@ export default function DeviceSummary() {
 
     const observer = new IntersectionObserver(
       (entries) => {
+        if (summaryNavScrollLockRef.current) return;
         summaryObserverEventCountRef.current += 1;
         const visible = entries
           .filter((entry) => entry.isIntersecting)
