@@ -7,6 +7,7 @@ export const EMPTY_PAGE_CHROME = {
   actions: [],
   controls: [],
   breadcrumbLabel: "",
+  navigationSidebar: null,
 };
 
 function normalizePageChrome(meta) {
@@ -22,6 +23,7 @@ function normalizePageChrome(meta) {
     controls: Array.isArray(meta.controls) ? meta.controls.filter(Boolean) : [],
     breadcrumbLabel:
       typeof meta.breadcrumbLabel === "string" ? meta.breadcrumbLabel : typeof meta.title === "string" ? meta.title : "",
+    navigationSidebar: meta.navigationSidebar || null,
   };
 }
 

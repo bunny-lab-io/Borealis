@@ -3,14 +3,17 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useLoaderData, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   Box,
   Stack,
-  Tabs,
-  Tab,
   Tooltip,
   Typography,
   Button,
+  ListItemButton,
+  ListItemText,
   Menu,
   MenuItem,
   TextField,
@@ -26,11 +29,16 @@ import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
 import PolicyIcon from "@mui/icons-material/Policy";
-import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
+import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
+import ErrorOutlineRoundedIcon from "@mui/icons-material/ErrorOutlineRounded";
+import HelpOutlineRoundedIcon from "@mui/icons-material/HelpOutlineRounded";
 import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
@@ -39,14 +47,14 @@ import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
-import AgentHealthTab from "./Agent_Health.jsx";
+import { buildAgentHealthRows } from "./Agent_Health.jsx";
+import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
 import DeviceMetadataTab from "./Device_Metadata.jsx";
 import { DEVICE_DETAILS_GRID_THEME, GridShell, MAGIC_UI, gridFontFamily } from "./Shared.jsx";
 import ServiceList from "./Service_List.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../../app/providers/AuthContext.jsx";
-import { useUrlTabState } from "../../app/hooks/useUrlTabState.js";
 import { APP_PATHS } from "../../app/routes/paths.js";
 import QuickJobDialog from "../../Assemblies/Quick_Job_Dialog.jsx";
 import {
@@ -121,7 +129,6 @@ function OperatingSystemPageIcon({ osName, sx }) {
   );
 }
 
-const NAV_TAB_HEIGHT = 32;
 const NAV_TAB_COLORS = {
   text: "#cbd5e1",
   textActive: "#e6f2ff",
@@ -129,12 +136,124 @@ const NAV_TAB_COLORS = {
   iconActive: "#7db7ff",
   hover: "rgba(255,255,255,0.05)",
   activeBg:
-    "linear-gradient(to top, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
+    "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)",
 };
-const SUMMARY_SECTION_ACTIVE_BG =
-  "linear-gradient(90deg, rgba(125,183,255,0.14) 0%, rgba(125,183,255,0.06) 55%, rgba(125,183,255,0.00) 100%)";
 const BOREALIS_LINK_COLOR = "#7db7ff";
 const BOREALIS_LINK_HOVER_COLOR = "#a8d4ff";
+const BOREALIS_PRIMARY_GRADIENT = "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)";
+const HARDWARE_SUMMARY_SECTION_SX = {
+  p: 0,
+  border: "none",
+  borderRadius: 0,
+  background: "transparent",
+  boxShadow: "none",
+  mb: 0,
+};
+const DEVICE_NAV_SIDEBAR_SX = {
+  minWidth: 260,
+  maxWidth: 260,
+  width: 260,
+  position: "relative",
+  zIndex: 2,
+  borderRight: "1px solid rgba(125,183,255,0.14)",
+  borderRadius: 0,
+  background:
+    "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), #0f141c",
+  boxShadow: "none",
+  display: "flex",
+  flexDirection: "column",
+  flexShrink: 0,
+  height: "100%",
+  overflow: "hidden",
+  backdropFilter: "blur(8px) saturate(130%)",
+};
+const DEVICE_NAV_ACCORDION_SX = {
+  "&:before": { display: "none" },
+  m: 0,
+  bgcolor: "transparent",
+  border: 0,
+  boxShadow: "none",
+};
+const DEVICE_NAV_ACCORDION_SUMMARY_SX = {
+  minHeight: 38,
+  px: 1.5,
+  background: "none",
+  backgroundColor: "rgba(255,255,255,0.02)",
+  borderTopRightRadius: 8,
+  borderBottomRightRadius: 8,
+  "&:hover": {
+    background: "none",
+    backgroundColor: "rgba(255,255,255,0.02)",
+  },
+  "& .MuiAccordionSummary-content": {
+    m: 0,
+    py: 0.5,
+    display: "flex",
+    alignItems: "center",
+    minWidth: 0,
+  },
+  "&.Mui-expanded": {
+    minHeight: 38,
+  },
+  "& .MuiAccordionSummary-content.Mui-expanded": {
+    my: 0,
+  },
+};
+const DEVICE_NAV_ACCORDION_DETAILS_SX = {
+  p: 0,
+};
+
+function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
+  return {
+    pl: indent ? 4 : 2,
+    pr: 2,
+    py: 1,
+    color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
+    position: "relative",
+    backgroundColor: "transparent",
+    backgroundImage: active ? NAV_TAB_COLORS.activeBg : "none",
+    backgroundRepeat: "no-repeat",
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    justifyContent: "space-between",
+    transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
+    "&:hover": {
+      backgroundColor: active ? undefined : NAV_TAB_COLORS.hover,
+      backgroundImage: active ? NAV_TAB_COLORS.activeBg : "none",
+    },
+    '&.Mui-selected, &[data-summary-active="true"]': {
+      color: NAV_TAB_COLORS.textActive,
+      backgroundImage: NAV_TAB_COLORS.activeBg,
+      backgroundRepeat: "no-repeat",
+    },
+    '&.Mui-selected:hover, &[data-summary-active="true"]:hover': {
+      backgroundImage: NAV_TAB_COLORS.activeBg,
+    },
+    '&.Mui-selected .device-summary-nav-icon, &[data-summary-active="true"] .device-summary-nav-icon': {
+      color: NAV_TAB_COLORS.iconActive,
+    },
+    '&.Mui-selected .device-summary-nav-label, &[data-summary-active="true"] .device-summary-nav-label': {
+      fontWeight: 600,
+    },
+    "&:active": {
+      transform: "translateY(0.5px)",
+    },
+    "&.Mui-disabled": {
+      color: "rgba(203,213,225,0.38)",
+    },
+    ...(disabled ? { cursor: "not-allowed" } : null),
+  };
+}
+
+function deviceSidebarNavIconSx(active, disabled = false) {
+  return {
+    mr: 1,
+    display: "flex",
+    alignItems: "center",
+    color: disabled ? "rgba(143,191,255,0.35)" : active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
+    transition: "color 160ms ease",
+  };
+}
 
 const BASE_GRID_HEIGHTS = {
   topLevel: 300,
@@ -153,49 +272,75 @@ const TUNNEL_INFO_IDLE = Object.freeze({
   last_recovery_attempt_at_iso: "",
 });
 
-const TOP_TABS = [
-  { key: "summary", label: "Device Summary", icon: InfoOutlinedIcon },
-  { key: "file_management", label: "File Management", icon: FolderRoundedIcon },
-  { key: "software", label: "Installed Software", icon: AppsRoundedIcon },
-  { key: "services", label: "Services", icon: SettingsRoundedIcon },
-  { key: "process_management", label: "Processes", icon: AccountTreeRoundedIcon },
-  { key: "watchdogs", label: "Watchdogs", icon: PolicyIcon },
-  { key: "activity", label: "Activity History", icon: ListAltRoundedIcon },
-  { key: "shell", label: "Remote Shell", icon: TerminalRoundedIcon },
-  { key: "metadata", label: "Metadata Fields", icon: LabelRoundedIcon, align: "right" },
-  { key: "agent_health", label: "Agent Health", icon: DeveloperBoardRoundedIcon, align: "right" },
+const WORKSPACES = [
+  { key: "inventory", label: "Inventory", icon: AppsRoundedIcon },
+  { key: "remote_ops", label: "Backend Tools", icon: TerminalRoundedIcon },
+  { key: "protection", label: "Protection", icon: PolicyIcon },
+  { key: "history", label: "History", icon: ListAltRoundedIcon },
+  { key: "config", label: "Metadata", icon: LabelRoundedIcon },
 ];
-const DEVICE_DETAILS_TAB_URL_BY_KEY = Object.freeze({
-  summary: "device_summary",
-  file_management: "file_management",
-  software: "installed_software",
-  metadata: "metadata_fields",
-  services: "services",
-  process_management: "process_management",
-  watchdogs: "watchdogs",
-  activity: "activity_history",
-  shell: "remote_shell",
-  agent_health: "agent_health",
+const WORKSPACE_KEYS = new Set(WORKSPACES.map((workspace) => workspace.key));
+const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
+  remote_ops: "shell",
+  inventory: "summary",
+  config: "metadata",
 });
-const DEVICE_DETAILS_TAB_KEY_BY_URL = Object.freeze({
-  device_summary: "summary",
-  summary: "summary",
-  file_management: "file_management",
-  installed_software: "software",
-  software: "software",
-  metadata_fields: "metadata",
-  metadata: "metadata",
-  services: "services",
-  process_management: "process_management",
-  processes: "process_management",
-  watchdogs: "watchdogs",
-  activity_history: "activity",
-  activity: "activity",
-  remote_shell: "shell",
-  shell: "shell",
-  agent_health: "agent_health",
-  health: "agent_health",
+const WORKSPACE_VIEW_OPTIONS = Object.freeze({
+  remote_ops: ["shell", "files", "processes", "services"],
+  inventory: ["summary", "software"],
+  config: ["metadata"],
 });
+const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
+  command: { workspace: "inventory", view: "summary" },
+  device_summary: { workspace: "inventory", view: "summary" },
+  summary: { workspace: "inventory", view: "summary" },
+  file_management: { workspace: "remote_ops", view: "files" },
+  installed_software: { workspace: "inventory", view: "software" },
+  software: { workspace: "inventory", view: "software" },
+  metadata_fields: { workspace: "config", view: "metadata" },
+  metadata: { workspace: "config", view: "metadata" },
+  services: { workspace: "remote_ops", view: "services" },
+  process_management: { workspace: "remote_ops", view: "processes" },
+  processes: { workspace: "remote_ops", view: "processes" },
+  watchdogs: { workspace: "protection" },
+  activity_history: { workspace: "history" },
+  activity: { workspace: "history" },
+  remote_shell: { workspace: "remote_ops", view: "shell" },
+  shell: { workspace: "remote_ops", view: "shell" },
+  agent_health: { workspace: "inventory", view: "summary" },
+  health: { workspace: "inventory", view: "summary" },
+});
+
+const normalizeWorkspaceKey = (value, fallback = "inventory") => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (WORKSPACE_KEYS.has(normalized)) return normalized;
+  const legacyTarget = LEGACY_TAB_TO_WORKSPACE[normalized];
+  if (legacyTarget?.workspace && WORKSPACE_KEYS.has(legacyTarget.workspace)) {
+    return legacyTarget.workspace;
+  }
+  return fallback;
+};
+
+const normalizeWorkspaceView = (workspaceKey, value) => {
+  const allowedViews = WORKSPACE_VIEW_OPTIONS[workspaceKey] || [];
+  const fallback = WORKSPACE_VIEW_DEFAULTS[workspaceKey] || "";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (allowedViews.includes(normalized)) return normalized;
+  return fallback;
+};
+
+const createDeviceWorkspaceSearch = (currentSearch, workspaceKey, viewKey = "") => {
+  const params = new URLSearchParams(currentSearch || "");
+  const normalizedWorkspace = normalizeWorkspaceKey(workspaceKey);
+  const normalizedView = normalizeWorkspaceView(normalizedWorkspace, viewKey);
+  params.set("tab", normalizedWorkspace);
+  if (normalizedView) {
+    params.set("view", normalizedView);
+  } else {
+    params.delete("view");
+  }
+  return params.toString() ? `?${params.toString()}` : "";
+};
 
 const resolveDeviceId = (device) =>
   device?.agent_guid ||
@@ -206,11 +351,14 @@ const resolveDeviceId = (device) =>
   null;
 
 const SUMMARY_SECTIONS = [
-  { key: "top-level", label: "Top-Level", icon: InfoOutlinedIcon },
+  { key: "top-level", label: "Overview", icon: InfoOutlinedIcon },
   { key: "storage", label: "Storage", icon: StorageRoundedIcon },
   { key: "memory", label: "Memory", icon: MemoryRoundedIcon },
   { key: "network", label: "Network", icon: LanRoundedIcon },
 ];
+const DEFAULT_SUMMARY_SECTION_KEY = SUMMARY_SECTIONS[0]?.key || "top-level";
+const normalizeSummarySectionKey = (sectionKey) =>
+  SUMMARY_SECTIONS.some((section) => section.key === sectionKey) ? sectionKey : DEFAULT_SUMMARY_SECTION_KEY;
 
 function normalizeTunnelInfoState(data = {}) {
   return {
@@ -690,6 +838,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
   columnDefs,
   defaultColDef,
   height,
+  rowHeight = 36,
 }) {
   const renderCountRef = useRef(0);
   const modelUpdateCountRef = useRef(0);
@@ -782,18 +931,23 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
         "& .ag-cell": {
           display: "flex",
           alignItems: "center",
+          justifyContent: "flex-start",
+          textAlign: "left",
           paddingTop: 0,
           paddingBottom: 0,
         },
         "& .ag-cell-wrapper": {
           display: "flex",
           alignItems: "center",
+          justifyContent: "flex-start",
           width: "100%",
           minHeight: "100%",
         },
         "& .ag-cell-value": {
           display: "flex",
           alignItems: "center",
+          justifyContent: "flex-start",
+          textAlign: "left",
           width: "100%",
           minHeight: "100%",
         },
@@ -806,6 +960,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
         pagination={false}
         animateRows={false}
         suppressCellFocus
+        rowHeight={rowHeight}
         onGridReady={handleGridReady}
         onFirstDataRendered={handleFirstDataRendered}
         onRowDataUpdated={handleRowDataUpdated}
@@ -835,143 +990,6 @@ const SummaryGridPlaceholder = React.memo(function SummaryGridPlaceholder({ heig
   );
 });
 
-const SummarySectionsNav = React.memo(function SummarySectionsNav({ onSelectSection }) {
-  const [activeSectionKey, setActiveSectionKey] = useState(SUMMARY_SECTIONS[0]?.key || "top-level");
-  const observerEventCountRef = useRef(0);
-
-  const handleSelect = useCallback(
-    (sectionKey) => {
-      summaryGridDebugLog("navClick", { sectionKey });
-      setActiveSectionKey(sectionKey);
-      onSelectSection?.(sectionKey);
-    },
-    [onSelectSection]
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof IntersectionObserver === "undefined") return undefined;
-    const sectionElements = SUMMARY_SECTIONS
-      .map((section) => document.getElementById(`device-summary-${section.key}`))
-      .filter(Boolean);
-    if (!sectionElements.length) return undefined;
-
-    summaryGridDebugLog("navObserverStart", {
-      sections: sectionElements.map((el) => el.id),
-    });
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        observerEventCountRef.current += 1;
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-        if (!visible.length) return;
-        const nextKey = String(visible[0].target.id || "").replace("device-summary-", "");
-        if (!nextKey) return;
-        setActiveSectionKey((prev) => {
-          if (prev === nextKey) return prev;
-          summaryGridDebugLog("navObserverSectionChange", {
-            from: prev,
-            to: nextKey,
-            eventCount: observerEventCountRef.current,
-            ratio: Number(visible[0].intersectionRatio || 0).toFixed(3),
-          });
-          return nextKey;
-        });
-      },
-      {
-        root: null,
-        rootMargin: "-120px 0px -46% 0px",
-        threshold: [0.15, 0.35, 0.6],
-      }
-    );
-
-    sectionElements.forEach((el) => observer.observe(el));
-    return () => {
-      summaryGridDebugLog("navObserverStop");
-      observer.disconnect();
-    };
-  }, []);
-
-  return (
-    <Box
-      id="device-summary-sections-nav"
-      sx={{
-        position: { xs: "static", lg: "sticky" },
-        top: { lg: 0 },
-        mt: { lg: 0 },
-        alignSelf: "start",
-        borderRadius: 3,
-        border: `1px solid ${MAGIC_UI.panelBorder}`,
-        background:
-          "linear-gradient(180deg, rgba(64,164,255,0.05) 0%, rgba(192,132,252,0.04) 100%), rgba(15,20,28,0.92)",
-        backdropFilter: "blur(8px) saturate(130%)",
-        overflow: "hidden",
-        width: 220,
-        minWidth: 220,
-        flexShrink: 0,
-      }}
-    >
-      <Box sx={{ px: 1.4, py: 1 }}>
-        <Typography
-          sx={{
-            fontSize: "0.72rem",
-            color: "#7db7ff",
-            fontWeight: 700,
-            letterSpacing: 0.35,
-            textTransform: "uppercase",
-          }}
-        >
-          Summary Sections
-        </Typography>
-      </Box>
-      <Box sx={{ py: 0.25 }}>
-        {SUMMARY_SECTIONS.map((section) => {
-          const active = activeSectionKey === section.key;
-          const SectionIcon = section.icon;
-          return (
-            <Button
-              key={section.key}
-              onClick={() => handleSelect(section.key)}
-              startIcon={<SectionIcon sx={{ fontSize: 18 }} />}
-              sx={{
-                width: "100%",
-                justifyContent: "flex-start",
-                textTransform: "none",
-                minHeight: NAV_TAB_HEIGHT,
-                height: NAV_TAB_HEIGHT,
-                py: 0.35,
-                px: 1.6,
-                borderRadius: 0,
-                fontFamily: "inherit",
-                fontSize: "0.8rem",
-                fontWeight: active ? 600 : 400,
-                color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
-                position: "relative",
-                background: active ? SUMMARY_SECTION_ACTIVE_BG : "transparent",
-                transition: "background 160ms ease, color 160ms ease, transform 120ms ease",
-                "& .MuiButton-startIcon": {
-                  color: active ? NAV_TAB_COLORS.iconActive : NAV_TAB_COLORS.icon,
-                  mr: 0.9,
-                  transition: "color 160ms ease",
-                },
-                "&:hover": {
-                  background: active ? SUMMARY_SECTION_ACTIVE_BG : NAV_TAB_COLORS.hover,
-                },
-                "&:active": {
-                  transform: "translateY(0.5px)",
-                },
-              }}
-            >
-              {section.label}
-            </Button>
-          );
-        })}
-      </Box>
-    </Box>
-  );
-});
-
 export default function DeviceSummary() {
   const loaderData = useLoaderData();
   const location = useLocation();
@@ -989,28 +1007,76 @@ export default function DeviceSummary() {
     [deviceId, initialDevice]
   );
   const notifyOperator = useAppNotifications();
-  const { activeKey: activeTabKey, setActiveKey: setActiveTabKey } = useUrlTabState({
-    param: "tab",
-    defaultKey: TOP_TABS[0]?.key || "summary",
-    allowedKeys: TOP_TABS.map((tabDef) => tabDef.key),
-    keyByUrl: DEVICE_DETAILS_TAB_KEY_BY_URL,
-    urlByKey: DEVICE_DETAILS_TAB_URL_BY_KEY,
-  });
+  const deviceSearchParams = useMemo(
+    () => new URLSearchParams(location.search || ""),
+    [location.search]
+  );
+  const rawTabParam = useMemo(
+    () => String(deviceSearchParams.get("tab") || "").trim().toLowerCase(),
+    [deviceSearchParams]
+  );
+  const rawViewParam = useMemo(
+    () => String(deviceSearchParams.get("view") || "").trim().toLowerCase(),
+    [deviceSearchParams]
+  );
+  const legacyWorkspaceTarget = LEGACY_TAB_TO_WORKSPACE[rawTabParam] || null;
+  const activeWorkspaceKey = normalizeWorkspaceKey(
+    WORKSPACE_KEYS.has(rawTabParam) ? rawTabParam : legacyWorkspaceTarget?.workspace,
+    "inventory"
+  );
+  const activeWorkspaceView = normalizeWorkspaceView(
+    activeWorkspaceKey,
+    rawViewParam || legacyWorkspaceTarget?.view || ""
+  );
+  const setActiveWorkspace = useCallback(
+    (workspaceKey, viewKey = "") => {
+      const search = createDeviceWorkspaceSearch(location.search, workspaceKey, viewKey);
+      navigate(
+        {
+          pathname: location.pathname,
+          search,
+        },
+        { replace: false, state: location.state }
+      );
+    },
+    [location.pathname, location.search, location.state, navigate]
+  );
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
-    if (!deviceId || (legacyTab !== "remote_desktop" && legacyTab !== "vnc")) {
+    if (!deviceId) {
       return;
     }
-    params.delete("tab");
+    if (legacyTab === "remote_desktop" || legacyTab === "vnc") {
+      params.delete("tab");
+      navigate(
+        {
+          pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
+          search: params.toString() ? `?${params.toString()}` : "",
+        },
+        { replace: true, state: location.state }
+      );
+      return;
+    }
+    if (!legacyTab || WORKSPACE_KEYS.has(legacyTab)) {
+      return;
+    }
+    const target = LEGACY_TAB_TO_WORKSPACE[legacyTab];
+    if (!target?.workspace) {
+      return;
+    }
+    params.set("tab", target.workspace);
+    if (target.view && !String(params.get("view") || "").trim()) {
+      params.set("view", target.view);
+    }
     navigate(
       {
-        pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
+        pathname: location.pathname,
         search: params.toString() ? `?${params.toString()}` : "",
       },
       { replace: true, state: location.state }
     );
-  }, [deviceId, location.search, location.state, navigate]);
+  }, [deviceId, location.pathname, location.search, location.state, navigate]);
 
   const loaderSnapshot = useMemo(() => {
     const snapshot = loaderData?.snapshot;
@@ -1040,10 +1106,17 @@ export default function DeviceSummary() {
   const [connectionError, setConnectionError] = useState("");
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [summaryDataReady, setSummaryDataReady] = useState(() => Boolean(loaderSnapshot));
-  const [summaryScrollOffset, setSummaryScrollOffset] = useState(0);
-  const [summaryBottomSpacer, setSummaryBottomSpacer] = useState(0);
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
+  const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
+  const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
+  const [expandedDeviceNavSections, setExpandedDeviceNavSections] = useState({
+    inventory: true,
+    backend: true,
+    protection: true,
+    history: true,
+    metadata: true,
+  });
   const [releaseChannelMenuPosition, setReleaseChannelMenuPosition] = useState(null);
   const [agentBranchMenuPosition, setAgentBranchMenuPosition] = useState(null);
   const [agentBranchDraft, setAgentBranchDraft] = useState("");
@@ -1076,6 +1149,11 @@ export default function DeviceSummary() {
   const connectionDraftRef = useRef(String(loaderSnapshot?.connectionEndpoint || ""));
   const loadedConnectionEndpointRef = useRef(String(loaderSnapshot?.connectionEndpoint || ""));
   const pageRenderCountRef = useRef(0);
+  const summaryObserverEventCountRef = useRef(0);
+  const pendingSummaryScrollSectionRef = useRef("");
+  const activeSummaryNavSectionRef = useRef(DEFAULT_SUMMARY_SECTION_KEY);
+  const summaryNavScrollLockRef = useRef("");
+  const summaryNavScrollLockTimerRef = useRef(null);
   pageRenderCountRef.current += 1;
   const summary = details.summary || {};
 
@@ -1123,7 +1201,7 @@ export default function DeviceSummary() {
   const openQuickJobDialog = useCallback(() => {
     setQuickJobOpen(true);
   }, []);
-  const shouldPollTunnelStatus = activeTabKey === "shell" || activeTabKey === "vnc" || activeTabKey === "agent_health";
+  const shouldPollTunnelStatus = Boolean(tunnelAgentId);
   useEffect(() => {
     setConnectionError("");
   }, [connectionDraft]);
@@ -1502,7 +1580,7 @@ export default function DeviceSummary() {
       if (!resp.ok) {
         let message = String(data?.message || data?.error || `HTTP ${resp.status}`);
         if (String(data?.error || "").trim() === "agent_unavailable") {
-          message = "The agent SYSTEM socket is not connected, so Borealis could not start the local AutoUpdater.";
+          message = "The agent management socket is not connected, so Borealis could not start the local AutoUpdater.";
         }
         throw new Error(message);
       }
@@ -1928,65 +2006,207 @@ export default function DeviceSummary() {
     return rawText;
   }, []);
 
-  const scrollToSummarySection = useCallback((sectionKey) => {
-    if (typeof document === "undefined" || typeof window === "undefined") return;
-    const target = document.getElementById(`device-summary-${sectionKey}`);
-    if (!target) return;
-    const nav = document.getElementById("device-summary-sections-nav");
-    if (!nav) return;
-
-    const docScroller = document.scrollingElement || document.documentElement;
-    let scrollHost = docScroller;
-    let node = target.parentElement;
-    while (node && node !== document.body) {
-      const styles = window.getComputedStyle(node);
-      const overflowY = String(styles.overflowY || "").toLowerCase();
-      const overflow = String(styles.overflow || "").toLowerCase();
-      const canScroll = node.scrollHeight > node.clientHeight + 1;
-      const allowsScroll =
-        /(auto|scroll|overlay)/.test(overflowY) ||
-        /(auto|scroll|overlay)/.test(overflow) ||
-        overflowY === "hidden";
-      if (canScroll && allowsScroll) {
-        scrollHost = node;
-        break;
-      }
-      node = node.parentElement;
-    }
-
-    const navRect = nav.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const hostRect =
-      scrollHost === docScroller
-        ? { top: 0, height: window.innerHeight || document.documentElement.clientHeight || 0 }
-        : scrollHost.getBoundingClientRect();
-    const navTopInHost = Math.max(0, Math.round(navRect.top - hostRect.top));
-    const hostViewportHeight =
-      scrollHost === docScroller
-        ? window.innerHeight || document.documentElement.clientHeight || 0
-        : scrollHost.clientHeight || hostRect.height || 0;
-    const spacer = Math.max(0, Math.round(hostViewportHeight - navTopInHost + 28));
-    const delta = targetRect.top - navRect.top;
-
-    summaryGridDebugLog("scrollToSection", {
-      sectionKey,
-      scrollHostTag: scrollHost?.tagName || "document",
-      navTopInHost,
-      spacer,
-      delta: Math.round(delta),
+  const markActiveSummaryNavSection = useCallback((sectionKey) => {
+    if (typeof document === "undefined") return;
+    const normalizedSectionKey = sectionKey ? normalizeSummarySectionKey(sectionKey) : "";
+    activeSummaryNavSectionRef.current = normalizedSectionKey;
+    document.querySelectorAll("[data-summary-nav-section]").forEach((node) => {
+      if (!(node instanceof HTMLElement)) return;
+      const isActive = Boolean(normalizedSectionKey) && node.dataset.summaryNavSection === normalizedSectionKey;
+      node.dataset.summaryActive = isActive ? "true" : "false";
+      node.classList.toggle("Mui-selected", isActive);
     });
+  }, []);
 
-    setSummaryScrollOffset((prev) => (prev === navTopInHost ? prev : navTopInHost));
-    setSummaryBottomSpacer((prev) => (prev === spacer ? prev : spacer));
+  const clearSummaryNavScrollLock = useCallback(() => {
+    summaryNavScrollLockRef.current = "";
+    if (typeof window === "undefined" || !summaryNavScrollLockTimerRef.current) return;
+    window.clearTimeout(summaryNavScrollLockTimerRef.current);
+    summaryNavScrollLockTimerRef.current = null;
+  }, []);
 
-    if (scrollHost === docScroller) {
-      const current = window.scrollY || docScroller.scrollTop || 0;
-      window.scrollTo({ top: Math.max(0, Math.round(current + delta)), behavior: "smooth" });
+  const scheduleSummaryNavScrollLockRelease = useCallback((delayMs = 220) => {
+    if (typeof window === "undefined") {
+      summaryNavScrollLockRef.current = "";
       return;
     }
-    const current = scrollHost.scrollTop || 0;
-    scrollHost.scrollTo({ top: Math.max(0, Math.round(current + delta)), behavior: "smooth" });
+    if (summaryNavScrollLockTimerRef.current) {
+      window.clearTimeout(summaryNavScrollLockTimerRef.current);
+    }
+    summaryNavScrollLockTimerRef.current = window.setTimeout(() => {
+      summaryNavScrollLockRef.current = "";
+      summaryNavScrollLockTimerRef.current = null;
+    }, delayMs);
   }, []);
+
+  const lockSummaryNavSection = useCallback(
+    (sectionKey) => {
+      const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+      summaryNavScrollLockRef.current = normalizedSectionKey;
+      markActiveSummaryNavSection(normalizedSectionKey);
+      scheduleSummaryNavScrollLockRelease(1800);
+    },
+    [markActiveSummaryNavSection, scheduleSummaryNavScrollLockRelease]
+  );
+
+  const scrollToSummarySection = useCallback((sectionKey) => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+    const target = document.getElementById(`device-summary-${normalizedSectionKey}`);
+    if (!target) return;
+
+    const docScroller = document.scrollingElement || document.documentElement;
+    const scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
+
+    summaryGridDebugLog("scrollToSection", {
+      sectionKey: normalizedSectionKey,
+      scrollHostTag: scrollHost?.tagName || "document",
+    });
+
+    markActiveSummaryNavSection(normalizedSectionKey);
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const nextTarget = document.getElementById(`device-summary-${normalizedSectionKey}`);
+        nextTarget?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
+      });
+    });
+  }, [markActiveSummaryNavSection]);
+
+  const scrollHardwareSummaryToTop = useCallback(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const docScroller = document.scrollingElement || document.documentElement;
+    const scrollHost = document.getElementById("device-summary-workspace-scrollhost") || docScroller;
+    markActiveSummaryNavSection(DEFAULT_SUMMARY_SECTION_KEY);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (scrollHost === docScroller) {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          scrollHost.scrollTo?.({ top: 0, behavior: "smooth" });
+        }
+        document
+          .getElementById("device-summary-top-level")
+          ?.scrollIntoView?.({ behavior: "smooth", block: "start", inline: "nearest" });
+      });
+    });
+  }, [markActiveSummaryNavSection]);
+
+  const requestSummarySectionScroll = useCallback(
+    (sectionKey = "top-level") => {
+      const normalizedSectionKey = normalizeSummarySectionKey(sectionKey);
+      summaryGridDebugLog("sidebarSummarySectionClick", { sectionKey: normalizedSectionKey });
+      lockSummaryNavSection(normalizedSectionKey);
+      if (activeWorkspaceKey === "inventory" && activeWorkspaceView === "summary") {
+        if (normalizedSectionKey === DEFAULT_SUMMARY_SECTION_KEY) {
+          scrollHardwareSummaryToTop();
+        } else {
+          scrollToSummarySection(normalizedSectionKey);
+        }
+        return;
+      }
+      pendingSummaryScrollSectionRef.current = normalizedSectionKey;
+      setActiveWorkspace("inventory", "summary");
+    },
+    [
+      activeWorkspaceKey,
+      activeWorkspaceView,
+      lockSummaryNavSection,
+      scrollHardwareSummaryToTop,
+      scrollToSummarySection,
+      setActiveWorkspace,
+    ]
+  );
+
+  useEffect(() => {
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") {
+      clearSummaryNavScrollLock();
+      markActiveSummaryNavSection("");
+      return;
+    }
+    markActiveSummaryNavSection(activeSummaryNavSectionRef.current || DEFAULT_SUMMARY_SECTION_KEY);
+  }, [activeWorkspaceKey, activeWorkspaceView, clearSummaryNavScrollLock, markActiveSummaryNavSection]);
+
+  useEffect(() => {
+    const pendingSummaryScrollSection = pendingSummaryScrollSectionRef.current;
+    if (!pendingSummaryScrollSection) return undefined;
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") return undefined;
+    if (typeof window === "undefined") return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      pendingSummaryScrollSectionRef.current = "";
+      if (pendingSummaryScrollSection === "top-level") {
+        scrollHardwareSummaryToTop();
+      } else {
+        scrollToSummarySection(pendingSummaryScrollSection);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activeWorkspaceKey,
+    activeWorkspaceView,
+    scrollHardwareSummaryToTop,
+    scrollToSummarySection,
+  ]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") return undefined;
+    const releaseLockAfterScroll = () => {
+      if (!summaryNavScrollLockRef.current) return;
+      scheduleSummaryNavScrollLockRelease(220);
+    };
+    const scrollHost = document.getElementById("device-summary-workspace-scrollhost");
+    window.addEventListener("scroll", releaseLockAfterScroll, { passive: true });
+    scrollHost?.addEventListener?.("scroll", releaseLockAfterScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", releaseLockAfterScroll);
+      scrollHost?.removeEventListener?.("scroll", releaseLockAfterScroll);
+    };
+  }, [activeWorkspaceKey, activeWorkspaceView, scheduleSummaryNavScrollLockRelease]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined" || typeof IntersectionObserver === "undefined") {
+      return undefined;
+    }
+    if (activeWorkspaceKey !== "inventory" || activeWorkspaceView !== "summary") return undefined;
+    const sectionElements = SUMMARY_SECTIONS
+      .map((section) => document.getElementById(`device-summary-${section.key}`))
+      .filter(Boolean);
+    if (!sectionElements.length) return undefined;
+    summaryGridDebugLog("sidebarSummaryObserverStart", {
+      sections: sectionElements.map((el) => el.id),
+    });
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (summaryNavScrollLockRef.current) return;
+        summaryObserverEventCountRef.current += 1;
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (!visible.length) return;
+        const nextKey = String(visible[0].target.id || "").replace("device-summary-", "");
+        if (!nextKey) return;
+        summaryGridDebugLog("sidebarSummaryObserverSectionChange", {
+          to: nextKey,
+          eventCount: summaryObserverEventCountRef.current,
+          ratio: Number(visible[0].intersectionRatio || 0).toFixed(3),
+        });
+        markActiveSummaryNavSection(nextKey);
+      },
+      {
+        root: null,
+        rootMargin: "-16px 0px -60% 0px",
+        threshold: [0.15, 0.35, 0.6],
+      }
+    );
+
+    sectionElements.forEach((el) => observer.observe(el));
+    return () => {
+      summaryGridDebugLog("sidebarSummaryObserverStop");
+      observer.disconnect();
+    };
+  }, [activeWorkspaceKey, activeWorkspaceView, markActiveSummaryNavSection]);
 
   const softwareRows = useMemo(() => details.software || [], [details.software]);
 
@@ -2019,90 +2239,7 @@ export default function DeviceSummary() {
     []
   );
 
-const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
-    <Box
-      sx={{
-        px: compact ? 1.5 : 2.4,
-        py: compact ? 1.4 : 2,
-        borderRadius: compact ? 2 : 3,
-        border: 'none',
-        background: 'transparent',
-        boxShadow: 'none',
-        minWidth: compact ? 0 : 220,
-        width: compact ? "100%" : "auto",
-        minHeight: compact ? 110 : 140,
-        display: "flex",
-        flexDirection: "column",
-        gap: 0.75,
-        ...(sx || {}),
-      }}
-    >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Box
-          sx={{
-            width: compact ? 22 : 36,
-            height: compact ? 22 : 36,
-            borderRadius: 2,
-            background: "transparent",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: NAV_TAB_COLORS.icon,
-          }}
-        >
-          {icon}
-        </Box>
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : "0.75rem",
-            letterSpacing: compact ? 0 : 0.6,
-            textTransform: compact ? "none" : "uppercase",
-            color: compact ? NAV_TAB_COLORS.text : "rgba(255,255,255,0.72)",
-            fontWeight: compact ? 400 : 600,
-          }}
-        >
-          {title}
-        </Typography>
-      </Box>
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : { xs: "1.4rem", md: "1.6rem" },
-            fontWeight: compact ? 600 : 700,
-            color: compact ? NAV_TAB_COLORS.textActive : "#f8fafc",
-            lineHeight: compact ? 1.15 : 1.1,
-            ...(compact
-              ? {
-                  whiteSpace: "normal",
-                  overflowWrap: "anywhere",
-                  wordBreak: "break-word",
-                }
-              : {}),
-          }}
-        >
-          {main}
-        </Typography>
-      {sub ? (
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : "0.9rem",
-            color: compact ? NAV_TAB_COLORS.text : "rgba(226,232,240,0.78)",
-            fontWeight: compact ? 400 : 400,
-            ...(compact
-              ? {
-                  whiteSpace: "normal",
-                  overflowWrap: "anywhere",
-                  wordBreak: "break-word",
-                }
-              : {}),
-          }}
-        >
-          {sub}
-        </Typography>
-      ) : null}
-    </Box>
-  );
-
-  const Island = ({ title, icon = null, meta = "", children, sx }) => (
+  const Island = ({ title = "", icon = null, meta = "", children, sx }) => (
     <Box
       sx={{
         p: 2,
@@ -2117,45 +2254,49 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         ...(sx || {}),
       }}
     >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 1,
-          mb: 1.4,
-          flexWrap: "wrap",
-        }}
-      >
-        <Stack direction="row" spacing={0.75} alignItems="center">
-          {icon ? (
-            <Box sx={{ color: MAGIC_UI.accentA, display: "inline-flex", alignItems: "center" }}>
-              {icon}
-            </Box>
+      {title || icon || meta ? (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1,
+            mb: 1.4,
+            flexWrap: "wrap",
+          }}
+        >
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            {icon ? (
+              <Box sx={{ color: MAGIC_UI.accentA, display: "inline-flex", alignItems: "center" }}>
+                {icon}
+              </Box>
+            ) : null}
+            {title ? (
+              <Typography
+                variant="caption"
+                sx={{
+                  color: MAGIC_UI.accentA,
+                  fontWeight: 600,
+                  fontSize: "0.82rem",
+                  letterSpacing: 0.3,
+                  textTransform: "uppercase",
+                  display: "block",
+                }}
+              >
+                {title}
+              </Typography>
+            ) : null}
+          </Stack>
+          {meta ? (
+            <Typography
+              variant="caption"
+              sx={{ color: "rgba(226,232,240,0.72)", fontSize: "0.74rem", letterSpacing: 0.15 }}
+            >
+              {meta}
+            </Typography>
           ) : null}
-          <Typography
-            variant="caption"
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontWeight: 600,
-              fontSize: "0.82rem",
-              letterSpacing: 0.3,
-              textTransform: "uppercase",
-              display: "block",
-            }}
-          >
-            {title}
-          </Typography>
-        </Stack>
-        {meta ? (
-          <Typography
-            variant="caption"
-            sx={{ color: "rgba(226,232,240,0.72)", fontSize: "0.74rem", letterSpacing: 0.15 }}
-          >
-            {meta}
-          </Typography>
-        ) : null}
-      </Box>
+        </Box>
+      ) : null}
       <Box sx={{ flexGrow: 1, minHeight: 0 }}>{children}</Box>
     </Box>
   );
@@ -2252,167 +2393,58 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           }}
         >
           <Box sx={{ display: "flex", flexDirection: "column", gap: 1.4, mt: 0.4 }}>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr", lg: "220px minmax(0,1fr)" },
-                gap: 1.5,
-                alignItems: "start",
-                minWidth: 0,
-              }}
-            >
-              <SummarySectionsNav onSelectSection={scrollToSummarySection} />
-
-              <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, minWidth: 0, width: "100%" }}>
-                <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                  <Island
-                    title="Top-Level Information"
-                    icon={<InfoOutlinedIcon sx={{ fontSize: 18 }} />}
-                    meta="Identity and lifecycle"
-                    sx={{ mb: 0 }}
-                  >
-                    <Box
-                      sx={{
-                        display: "grid",
-                        gridTemplateColumns: { xs: "1fr", xl: "minmax(260px,0.72fr) minmax(0,1.6fr)" },
-                        alignItems: { xs: "start", xl: "end" },
-                        gap: { xs: 1.1, md: 1.5 },
-                        mb: 1.9,
-                        minWidth: 0,
-                      }}
-                    >
-                      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.1, minWidth: 0 }}>
-                        <Box sx={{ width: "100%", maxWidth: { xs: "100%", xl: 440 } }}>
-                          <TextField
-                            size="small"
-                            label="Description"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                            onBlur={saveDescription}
-                            placeholder="Add a friendly label"
-                            sx={{
-                              width: "100%",
-                              input: { color: "#fff" },
-                              "& .MuiOutlinedInput-root": {
-                                backgroundColor: "rgba(4,7,17,0.65)",
-                                borderRadius: 3,
-                                "& fieldset": {
-                                  borderColor: "rgba(148,163,184,0.45)",
-                                  borderRadius: 3,
-                                },
-                                "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                              },
-                              label: { color: MAGIC_UI.textMuted },
-                            }}
-                          />
+            <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, md: 4 }, minWidth: 0, width: "100%" }}>
+              <Box id="device-summary-top-level" sx={{ scrollMarginTop: 0 }}>
+                <Island sx={HARDWARE_SUMMARY_SECTION_SX}>
+                    {connectionType === "ssh" && (
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.1, alignItems: "center", mb: 1.9 }}>
+                        <TextField
+                          size="small"
+                          label="SSH Endpoint"
+                          value={connectionDraft}
+                          onChange={(e) => setConnectionDraft(e.target.value)}
+                          placeholder="user@host or host"
+                          sx={{
+                            minWidth: 250,
+                            maxWidth: 360,
+                            input: { color: "#fff" },
+                            "& .MuiOutlinedInput-root": {
+                              backgroundColor: "rgba(4,7,17,0.65)",
+                              "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+                              "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                            },
+                            label: { color: MAGIC_UI.textMuted },
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={saveConnectionEndpoint}
+                          disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
+                          sx={{
+                            textTransform: "none",
+                            borderColor: MAGIC_UI.accentA,
+                            color: MAGIC_UI.accentA,
+                            borderRadius: 999,
+                            px: 2,
+                          }}
+                        >
+                          {connectionSaving ? "Saving..." : "Save"}
+                        </Button>
+                        <Box sx={{ display: "flex", flexDirection: "column" }}>
+                          {connectionMessage && (
+                            <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
+                              {connectionMessage}
+                            </Typography>
+                          )}
+                          {connectionError && (
+                            <Typography variant="caption" sx={{ color: "#ff7b89" }}>
+                              {connectionError}
+                            </Typography>
+                          )}
                         </Box>
-                        {connectionType === "ssh" && (
-                          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.1, alignItems: "center" }}>
-                            <TextField
-                              size="small"
-                              label="SSH Endpoint"
-                              value={connectionDraft}
-                              onChange={(e) => setConnectionDraft(e.target.value)}
-                              placeholder="user@host or host"
-                              sx={{
-                                minWidth: 250,
-                                maxWidth: 360,
-                                input: { color: "#fff" },
-                                "& .MuiOutlinedInput-root": {
-                                  backgroundColor: "rgba(4,7,17,0.65)",
-                                  "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-                                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                                },
-                                label: { color: MAGIC_UI.textMuted },
-                              }}
-                            />
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={saveConnectionEndpoint}
-                              disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
-                              sx={{
-                                textTransform: "none",
-                                borderColor: MAGIC_UI.accentA,
-                                color: MAGIC_UI.accentA,
-                                borderRadius: 999,
-                                px: 2,
-                              }}
-                            >
-                              {connectionSaving ? "Saving..." : "Save"}
-                            </Button>
-                            <Box sx={{ display: "flex", flexDirection: "column" }}>
-                              {connectionMessage && (
-                                <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
-                                  {connectionMessage}
-                                </Typography>
-                              )}
-                              {connectionError && (
-                                <Typography variant="caption" sx={{ color: "#ff7b89" }}>
-                                  {connectionError}
-                                </Typography>
-                              )}
-                            </Box>
-                          </Box>
-                        )}
                       </Box>
-
-                      <Box
-                        sx={{
-                          display: "grid",
-                          minWidth: 0,
-                          gridTemplateColumns: {
-                            xs: "1fr",
-                            sm: "repeat(2, minmax(0,1fr))",
-                            xl: "minmax(0,1.5fr) repeat(3, minmax(0,1fr))",
-                          },
-                          gap: 1.1,
-                          width: "100%",
-                          mt: { xs: 0.4, xl: 0 },
-                          pt: { xs: 0, xl: 0 },
-                          alignSelf: { xs: "start", xl: "end" },
-                          "& > *": {
-                            background: "transparent !important",
-                            border: "none !important",
-                            boxShadow: "none !important",
-                            borderRadius: 0,
-                          },
-                        }}
-                      >
-                        <MetricCard
-                          compact
-                          icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Processor"
-                          main={deviceMetricData.cpuMain}
-                          sub={deviceMetricData.cpuSub}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="RAM"
-                          main={deviceMetricData.memVal}
-                          sub={deviceMetricData.memSpeed || " "}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Storage"
-                          main={deviceMetricData.storageMain}
-                          sub={deviceMetricData.storageSub || " "}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<SpeedRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Network"
-                          main={deviceMetricData.netVal}
-                          sub={deviceMetricData.nicLabel}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                      </Box>
-                    </Box>
+                    )}
 
                     <Box
                       sx={{
@@ -2424,19 +2456,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                       }}
                     >
                       <Box sx={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 0.7 }}>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: MAGIC_UI.accentA,
-                            fontWeight: 600,
-                            fontSize: "0.82rem",
-                            letterSpacing: 0.3,
-                            textTransform: "none",
-                            display: "block",
-                          }}
-                        >
-                          Overview
-                        </Typography>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          <InfoOutlinedIcon sx={{ color: MAGIC_UI.accentA, fontSize: 16 }} />
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: MAGIC_UI.accentA,
+                              fontWeight: 600,
+                              fontSize: "0.82rem",
+                              letterSpacing: 0.3,
+                              textTransform: "none",
+                              display: "block",
+                            }}
+                          >
+                            OVERVIEW
+                          </Typography>
+                        </Stack>
                         {summaryDataReady ? (
                           <SummarySectionGrid
                             sectionKey="top-level-overview"
@@ -2444,6 +2479,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                             columnDefs={topLevelSplitColumnDefs}
                             defaultColDef={defaultGridColDef}
                             height={topLevelSplitGridHeight}
+                            rowHeight={36}
                           />
                         ) : (
                           <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
@@ -2481,85 +2517,69 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                         ) : null}
                       </Box>
                     </Box>
-                  </Island>
-                </Box>
-
-                <Box id="device-summary-storage" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                  <Island
-                    title="Storage"
-                    icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
-                    meta={
-                      hardwareOverview.storageCount
-                        ? `${hardwareOverview.storageCount} volumes${
-                            hardwareOverview.storageCritical > 0
-                              ? ` • ${hardwareOverview.storageCritical} exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% usage`
-                              : ""
-                          }`
-                        : "No storage telemetry"
-                    }
-                    sx={{ mb: 0 }}
-                  >
-                    {summaryDataReady ? (
-                      <SummarySectionGrid
-                        sectionKey="storage"
-                        rowData={storageRows}
-                        columnDefs={storageColumnDefs}
-                        defaultColDef={defaultGridColDef}
-                        height={storageGridHeight}
-                      />
-                    ) : (
-                      <SummaryGridPlaceholder height={storageGridHeight} />
-                    )}
-                  </Island>
-                </Box>
-
-                <Box id="device-summary-memory" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                  <Island
-                    title="Memory"
-                    icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
-                    meta={
-                      hardwareOverview.memoryCount
-                        ? `${hardwareOverview.installedMemory}/${hardwareOverview.memoryCount} populated slots`
-                        : "No memory telemetry"
-                    }
-                    sx={{ mb: 0 }}
-                  >
-                    {summaryDataReady ? (
-                      <SummarySectionGrid
-                        sectionKey="memory"
-                        rowData={memoryRows}
-                        columnDefs={memoryColumnDefs}
-                        defaultColDef={defaultGridColDef}
-                        height={memoryGridHeight}
-                      />
-                    ) : (
-                      <SummaryGridPlaceholder height={memoryGridHeight} />
-                    )}
-                  </Island>
-                </Box>
-
-                <Box id="device-summary-network" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
-                  <Island
-                    title="Network"
-                    icon={<LanRoundedIcon sx={{ fontSize: 18 }} />}
-                    meta={`Internal ${hardwareOverview.internalIp} • External ${hardwareOverview.externalIp}`}
-                    sx={{ mb: 0 }}
-                  >
-                    {summaryDataReady ? (
-                      <SummarySectionGrid
-                        sectionKey="network"
-                        rowData={networkRows}
-                        columnDefs={networkColumnDefs}
-                        defaultColDef={defaultGridColDef}
-                        height={networkGridHeight}
-                      />
-                    ) : (
-                      <SummaryGridPlaceholder height={networkGridHeight} />
-                    )}
-                  </Island>
-                </Box>
-                <Box sx={{ width: "100%", height: `${summaryBottomSpacer}px`, flexShrink: 0 }} />
+                </Island>
               </Box>
+
+              <Box id="device-summary-storage" sx={{ scrollMarginTop: 0 }}>
+                <Island
+                  title="Storage"
+                  icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
+                >
+                  {summaryDataReady ? (
+                    <SummarySectionGrid
+                      sectionKey="storage"
+                      rowData={storageRows}
+                      columnDefs={storageColumnDefs}
+                      defaultColDef={defaultGridColDef}
+                      height={storageGridHeight}
+                    />
+                  ) : (
+                    <SummaryGridPlaceholder height={storageGridHeight} />
+                  )}
+                </Island>
+              </Box>
+
+              <Box id="device-summary-memory" sx={{ scrollMarginTop: 0 }}>
+                <Island
+                  title="Memory"
+                  icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
+                >
+                  {summaryDataReady ? (
+                    <SummarySectionGrid
+                      sectionKey="memory"
+                      rowData={memoryRows}
+                      columnDefs={memoryColumnDefs}
+                      defaultColDef={defaultGridColDef}
+                      height={memoryGridHeight}
+                    />
+                  ) : (
+                    <SummaryGridPlaceholder height={memoryGridHeight} />
+                  )}
+                </Island>
+              </Box>
+
+              <Box id="device-summary-network" sx={{ scrollMarginTop: 0 }}>
+                <Island
+                  title="Network"
+                  icon={<LanRoundedIcon sx={{ fontSize: 18 }} />}
+                  sx={HARDWARE_SUMMARY_SECTION_SX}
+                >
+                  {summaryDataReady ? (
+                    <SummarySectionGrid
+                      sectionKey="network"
+                      rowData={networkRows}
+                      columnDefs={networkColumnDefs}
+                      defaultColDef={defaultGridColDef}
+                      height={networkGridHeight}
+                    />
+                  ) : (
+                    <SummaryGridPlaceholder height={networkGridHeight} />
+                  )}
+                </Island>
+              </Box>
+              <Box sx={{ width: "100%", height: "65vh", flexShrink: 0 }} />
             </Box>
           </Box>
         </Box>
@@ -2838,6 +2858,36 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         ).trim() || UNABLE_TO_RETRIEVE_SN;
       return [
         {
+          id: "description",
+          label: "Description",
+          value: description,
+          editableDescription: true,
+        },
+        {
+          id: "processor",
+          label: "Processor",
+          value: deviceMetricData.cpuMain,
+          detail: deviceMetricData.cpuSub,
+        },
+        {
+          id: "ram",
+          label: "RAM",
+          value: deviceMetricData.memVal,
+          detail: deviceMetricData.memSpeed,
+        },
+        {
+          id: "storage-summary",
+          label: "Storage",
+          value: deviceMetricData.storageMain,
+          detail: deviceMetricData.storageSub,
+        },
+        {
+          id: "network-summary",
+          label: "Network",
+          value: deviceMetricData.netVal,
+          detail: deviceMetricData.nicLabel,
+        },
+        {
           id: "site",
           label: "Site",
           value: meta.siteName || summary.site_name || summary.site || device?.site_name || "placeholder",
@@ -2885,6 +2935,15 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       meta.serialNumber,
       meta.lastReboot,
       details.cpu,
+      description,
+      deviceMetricData.cpuMain,
+      deviceMetricData.cpuSub,
+      deviceMetricData.memVal,
+      deviceMetricData.memSpeed,
+      deviceMetricData.storageMain,
+      deviceMetricData.storageSub,
+      deviceMetricData.netVal,
+      deviceMetricData.nicLabel,
       summary.site_name,
       summary.site,
       summary.device_type,
@@ -3037,16 +3096,9 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           : {},
     [meta.agentRoleHealth, summary.agent_role_health]
   );
-
-  const renderAgentHealthTab = () => (
-    <AgentHealthTab
-      agentRoleHealth={agentRoleHealthPayload}
-      summaryDataReady={summaryDataReady}
-      formatTimestamp={formatTimestamp}
-      tunnelInfo={tunnelInfo}
-      hostname={activityHostname}
-      onRequestRefresh={reloadDeviceSummarySnapshot}
-    />
+  const agentHealthRows = useMemo(
+    () => buildAgentHealthRows(Array.isArray(agentRoleHealthPayload?.roles) ? agentRoleHealthPayload.roles : [], formatTimestamp),
+    [agentRoleHealthPayload, formatTimestamp]
   );
 
   const renderTopLevelFieldCell = useCallback((params) => {
@@ -3097,6 +3149,42 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     (params) => {
       const row = params?.data && typeof params.data === "object" ? params.data : {};
       const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
+      if (row?.editableDescription) {
+        return (
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              minHeight: "100%",
+              py: 0.4,
+            }}
+          >
+            <TextField
+              size="small"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              onBlur={saveDescription}
+              placeholder="Add a friendly label"
+              variant="outlined"
+              sx={{
+                width: "100%",
+                maxWidth: 520,
+                input: { color: MAGIC_UI.textBright, fontSize: "0.84rem", py: 0.7 },
+                "& .MuiOutlinedInput-root": {
+                  backgroundColor: "rgba(4,7,17,0.65)",
+                  borderRadius: 2,
+                  "& fieldset": {
+                    borderColor: "rgba(148,163,184,0.45)",
+                  },
+                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                  "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
+                },
+              }}
+            />
+          </Box>
+        );
+      }
       if (row?.id === "agent-branch-channel") {
         const actionBusy = agentBranchChannelSaving;
         const actionHandler = openAgentBranchChannelDialog;
@@ -3164,9 +3252,13 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         <Box
           sx={{
             display: "flex",
+            flexDirection: "row",
+            justifyContent: "flex-start",
             alignItems: "center",
+            gap: row?.detail ? 0.75 : 0,
             width: "100%",
             minHeight: "100%",
+            minWidth: 0,
           }}
         >
           <Typography
@@ -3174,16 +3266,33 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
               color: MAGIC_UI.textBright,
               fontSize: "0.88rem",
               lineHeight: 1.45,
-              whiteSpace: "normal",
-              wordBreak: "break-word",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              minWidth: 0,
             }}
           >
             {value}
           </Typography>
-        </Box>
-      );
-    },
-    [agentBranchChannelSaving, openAgentBranchChannelDialog]
+            {row?.detail ? (
+              <Typography
+                sx={{
+                  color: "rgba(148,163,184,0.72)",
+                  fontSize: "0.72rem",
+                  lineHeight: 1.25,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  minWidth: 0,
+                }}
+              >
+                {String(row.detail)}
+              </Typography>
+            ) : null}
+          </Box>
+        );
+      },
+    [agentBranchChannelSaving, description, openAgentBranchChannelDialog, saveDescription]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -3205,6 +3314,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         minWidth: 220,
         sortable: false,
         filter: false,
+        cellStyle: { textAlign: "left" },
         cellRenderer: renderTopLevelValueCell,
       },
     ],
@@ -3224,7 +3334,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const topLevelSplitGridHeight = useMemo(() => {
     const baseHeight = resolveGridHeight(Math.max(overviewInfoRows.length, borealisAgentRows.length), {
       minHeight: BASE_GRID_HEIGHTS.topLevel,
-      maxHeight: 420,
+      maxHeight: 520,
+      rowHeight: 36,
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
@@ -3255,13 +3366,11 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   useEffect(() => {
     if (!isSummaryGridDebugEnabled()) return;
-    const topTabKey = activeTabKey || "";
-    if (topTabKey !== "summary") return;
+    const topTabKey = activeWorkspaceKey || "";
+    if (topTabKey !== "inventory") return;
     summaryGridDebugLog("deviceSummaryRender", {
       renderCount: pageRenderCountRef.current,
       topTabKey,
-      summaryScrollOffset,
-      summaryBottomSpacer,
       overviewRows: overviewInfoRows.length,
       agentRows: borealisAgentRows.length,
       storageRows: storageRows.length,
@@ -3269,9 +3378,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       networkRows: networkRows.length,
     });
   }, [
-    activeTabKey,
-    summaryScrollOffset,
-    summaryBottomSpacer,
+    activeWorkspaceKey,
     overviewInfoRows.length,
     borealisAgentRows.length,
     storageRows.length,
@@ -3293,6 +3400,221 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   );
 
   const status = lockedStatus || statusFromHeartbeat(agent.last_seen || device?.lastSeen);
+  const statusIsOnline = String(status || "").trim().toLowerCase() === "online";
+  const roleHealthSummary = useMemo(() => {
+    const roles = Array.isArray(agentHealthRows) ? agentHealthRows : [];
+    const unhealthyRoles = roles.filter((role) => {
+      const health = String(role?.statusCode || role?.status || "").trim().toLowerCase();
+      if (!health) return false;
+      return !["healthy", "loaded", "ok", "online", "running", "ready", "complete", "completed", "not_applicable", "unsupported"].includes(health);
+    });
+    return {
+      count: roles.length,
+      unhealthyCount: unhealthyRoles.length,
+      label:
+        roles.length === 0
+          ? "No Role Report"
+          : unhealthyRoles.length > 0
+            ? `${unhealthyRoles.length}/${roles.length} Roles Degraded`
+            : `${roles.length} Roles Healthy`,
+    };
+  }, [agentHealthRows]);
+  const dataFreshnessLabel = useMemo(() => {
+    const rawLastSeen = meta.lastSeen || summary.last_seen || device?.last_seen || agent?.last_seen || 0;
+    return formatDateValue(rawLastSeen, "No heartbeat").replace(" AM", "AM").replace(" PM", "PM");
+  }, [agent?.last_seen, device?.last_seen, formatDateValue, meta.lastSeen, summary.last_seen]);
+  const tunnelConnection = useMemo(() => {
+    const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
+    if (tunnelStatus === "up") {
+      return { value: "Connected", tone: "ready", detail: "WireGuard tunnel ready for backend tools." };
+    }
+    if (tunnelStatus === "down") {
+      return { value: "Down", tone: "danger", detail: "WireGuard tunnel unavailable." };
+    }
+    if (tunnelStatus === "error") {
+      return { value: "Error", tone: "danger", detail: "WireGuard tunnel status endpoint returned error." };
+    }
+    return { value: "Idle", tone: "muted", detail: "No active WireGuard tunnel reported." };
+  }, [tunnelInfo?.status]);
+  const agentSocketConnection = useMemo(() => {
+    if (tunnelInfo?.agent_socket === true) {
+      return { value: "Connected", tone: "ready", detail: "Engine can reach agent management socket." };
+    }
+    if (statusIsOnline) {
+      return { value: "Disconnected", tone: "warning", detail: "Agent heartbeat is present, but management socket is unavailable." };
+    }
+    return { value: "Unavailable", tone: "danger", detail: "Agent must heartbeat before management socket can be confirmed." };
+  }, [statusIsOnline, tunnelInfo?.agent_socket]);
+  const engineConnection = useMemo(() => {
+    if (statusIsOnline && tunnelInfo?.agent_socket) {
+      return { value: "Connected", tone: "ready" };
+    }
+    if (statusIsOnline) {
+      return { value: "Degraded", tone: "warning" };
+    }
+    return { value: "Offline", tone: "danger" };
+  }, [statusIsOnline, tunnelInfo?.agent_socket]);
+  const readiness = useMemo(() => {
+    const tunnelStatus = String(tunnelInfo?.status || "idle").trim().toLowerCase();
+    const updateState = String(meta.agentUpdateState || summary.agent_update_state || "").trim().toLowerCase();
+    const versionState = String(meta.agentVersionStatus || summary.agent_version_status || "").trim().toLowerCase();
+    const tunnelBlocked = ["down", "error"].includes(tunnelStatus) || tunnelInfo?.agent_socket === false;
+    const updateFailed = updateState === "failed" || Boolean(meta.agentUpdateError || summary.agent_update_error);
+    const needsUpdate = versionState.includes("need") || versionState.includes("outdated");
+    const healthBlocked = !statusIsOnline || tunnelBlocked || updateFailed || roleHealthSummary.unhealthyCount > 0;
+    const storageBlocked = hardwareOverview.storageCritical > 0;
+    if (healthBlocked) {
+      return {
+        tone: "danger",
+        headline: !statusIsOnline
+          ? "Agent unreachable"
+          : tunnelBlocked
+            ? "Remote control degraded"
+            : updateFailed
+              ? "Agent updater failed"
+              : "Agent role degraded",
+        detail: !statusIsOnline
+          ? "Recover control before running backend tools."
+          : tunnelBlocked
+            ? "Agent management connection needs review."
+            : updateFailed
+              ? "Review updater state and startup flow."
+              : "Role health needs review.",
+      };
+    }
+    if (storageBlocked || needsUpdate) {
+      return {
+        tone: "warning",
+        headline: storageBlocked ? "Device needs attention" : "Agent update recommended",
+        detail: storageBlocked
+          ? `${hardwareOverview.storageCritical} storage volume exceeds ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}% usage.`
+          : "Installed agent build does not match desired state.",
+      };
+    }
+    return {
+      tone: "ready",
+      headline: "Ready for backend tools",
+      detail: "Agent, inventory, and background-control signals look usable.",
+    };
+  }, [
+    hardwareOverview.storageCritical,
+    meta.agentUpdateError,
+    meta.agentUpdateState,
+    meta.agentVersionStatus,
+    roleHealthSummary.unhealthyCount,
+    statusIsOnline,
+    summary.agent_update_error,
+    summary.agent_update_state,
+    summary.agent_version_status,
+    tunnelInfo?.agent_socket,
+    tunnelInfo?.status,
+  ]);
+  const agentManagementDetails = useMemo(
+    () => [
+      {
+        group: "Connection",
+        label: "Agent Status",
+        value: status || "Unknown",
+        tone: statusIsOnline ? "ready" : "danger",
+        detail: "Latest heartbeat-derived agent state.",
+      },
+      {
+        group: "Connection",
+        label: "Agent Socket",
+        value: agentSocketConnection.value,
+        tone: agentSocketConnection.tone,
+        detail: agentSocketConnection.detail,
+      },
+      {
+        group: "Connection",
+        label: "WireGuard",
+        value: tunnelConnection.value,
+        tone: tunnelConnection.tone,
+        detail: tunnelConnection.detail,
+      },
+      {
+        group: "Connection",
+        label: "Last Heartbeat",
+        value: dataFreshnessLabel,
+        tone: statusIsOnline ? "ready" : "warning",
+        detail: "Most recent agent heartbeat received by Engine.",
+      },
+      {
+        group: "Connection",
+        label: "Tunnel Listener",
+        value: tunnelInfo?.listener_healthy === false ? "Unhealthy" : "Healthy",
+        tone: tunnelInfo?.listener_healthy === false ? "danger" : "ready",
+        detail: "Engine-side tunnel listener health.",
+      },
+      {
+        group: "Identifiers",
+        label: "Virtual IP",
+        value: tunnelInfo?.virtual_ip || "No tunnel IP",
+        tone: tunnelInfo?.virtual_ip ? "ready" : "muted",
+        detail: "WireGuard address assigned to this agent tunnel.",
+      },
+      {
+        group: "Identifiers",
+        label: "Tunnel ID",
+        value: tunnelInfo?.tunnel_id || "No active tunnel",
+        tone: tunnelInfo?.tunnel_id ? "ready" : "muted",
+        detail: "Current Engine tunnel record identifier.",
+      },
+      {
+        group: "Identifiers",
+        label: "Agent ID",
+        value: tunnelAgentId || "Unavailable",
+        tone: tunnelAgentId ? "ready" : "muted",
+        detail: "Identifier used for tunnel status lookup.",
+      },
+    ],
+    [
+      agentSocketConnection.detail,
+      agentSocketConnection.tone,
+      agentSocketConnection.value,
+      dataFreshnessLabel,
+      status,
+      statusIsOnline,
+      tunnelAgentId,
+      tunnelConnection.detail,
+      tunnelConnection.tone,
+      tunnelConnection.value,
+      tunnelInfo?.listener_healthy,
+      tunnelInfo?.tunnel_id,
+      tunnelInfo?.virtual_ip,
+    ]
+  );
+  const agentManagementSummary = useMemo(() => {
+    if (!statusIsOnline) return "Agent heartbeat offline.";
+    if (engineConnection.value !== "Connected") return "Agent heartbeat online, management socket degraded.";
+    if (tunnelConnection.value !== "Connected") return "Management socket connected, tunnel not active.";
+    return "Management socket and WireGuard tunnel connected.";
+  }, [engineConnection.value, statusIsOnline, tunnelConnection.value]);
+  const agentManagementGroups = useMemo(
+    () =>
+      ["Connection", "Identifiers"]
+        .map((label) => ({
+          label,
+          rows: agentManagementDetails.filter((entry) => entry.group === label),
+        }))
+        .filter((group) => group.rows.length),
+    [agentManagementDetails]
+  );
+  const remoteToolsBadgeCount = [
+    !statusIsOnline,
+    tunnelInfo?.agent_socket === false,
+    ["down", "error"].includes(String(tunnelInfo?.status || "").trim().toLowerCase()),
+  ].filter(Boolean).length;
+  const workspaceBadges = useMemo(
+    () => ({
+      storage: hardwareOverview.storageCritical > 0 ? String(hardwareOverview.storageCritical) : "",
+      protection: "",
+      history: "",
+      shell: remoteToolsBadgeCount > 0 ? String(remoteToolsBadgeCount) : "",
+      config: "",
+    }),
+    [hardwareOverview.storageCritical, remoteToolsBadgeCount]
+  );
 
   const renderFileManagementTab = () => <RemoteFileManagementTab device={tunnelDevice} />;
   const renderMetadataTab = () => (
@@ -3305,7 +3627,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
 
   const rawDisplayHostname = meta.hostname || summary.hostname || agent.hostname || device?.hostname || "";
   const displayHostname = formatHostnameForDisplay(rawDisplayHostname) || "Device Summary";
-  const pageSubtitle = status ? `Status: ${status}` : "";
+  const pageSubtitle = `${readiness.headline} - Agent ${status || "Unknown"} - ${readiness.detail}`;
   const deviceOperatingSystem = readFirstNonEmptyValue(
     meta.operatingSystem,
     summary.operating_system,
@@ -3326,19 +3648,6 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const pageHeaderActions = useMemo(
     () => [
       {
-        id: "device-summary-remote-desktop",
-        label: "Remote Desktop",
-        icon: <DesktopWindowsRoundedIcon />,
-        tone: "secondary",
-        disabled: !deviceId,
-        onClick: () => {
-          if (!deviceId) return;
-          navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
-            state: { initialDevice: tunnelDevice },
-          });
-        },
-      },
-      {
         id: "device-summary-actions",
         label: "Actions",
         icon: <MoreHorizIcon />,
@@ -3347,7 +3656,560 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         onClick: (event) => setMenuAnchor(event.currentTarget),
       },
     ],
-    [activityHostname, deviceId, navigate, tunnelDevice]
+    [activityHostname]
+  );
+
+  const getToneStyles = (tone) => {
+    if (tone === "danger") {
+      return {
+        border: "rgba(248,113,113,0.42)",
+        background: "linear-gradient(135deg, rgba(127,29,29,0.42), rgba(15,23,42,0.74))",
+        icon: "#fca5a5",
+        accent: "#fca5a5",
+      };
+    }
+    if (tone === "warning") {
+      return {
+        border: "rgba(250,204,21,0.42)",
+        background: "linear-gradient(135deg, rgba(113,63,18,0.42), rgba(15,23,42,0.74))",
+        icon: "#fde68a",
+        accent: "#fde68a",
+      };
+    }
+    if (tone === "ready") {
+      return {
+        border: "rgba(52,211,153,0.38)",
+        background: "linear-gradient(135deg, rgba(6,78,59,0.38), rgba(15,23,42,0.74))",
+        icon: MAGIC_UI.accentC,
+        accent: MAGIC_UI.accentC,
+      };
+    }
+    return {
+      border: MAGIC_UI.panelBorder,
+      background: "linear-gradient(135deg, rgba(15,23,42,0.82), rgba(7,11,24,0.72))",
+      icon: MAGIC_UI.accentA,
+      accent: MAGIC_UI.accentA,
+    };
+  };
+
+  const renderStatusPill = ({ id, label, value, tone = "muted", onClick = null, valueColor = "" }) => {
+    const toneStyles = getToneStyles(tone);
+    return (
+      <Box
+        component={onClick ? "button" : "div"}
+        type={onClick ? "button" : undefined}
+        key={id}
+        onClick={onClick || undefined}
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.8,
+          minHeight: 30,
+          px: 1.15,
+          borderRadius: 999,
+          border: `1px solid ${toneStyles.border}`,
+          background: "rgba(2,6,23,0.44)",
+          minWidth: 0,
+          cursor: onClick ? "pointer" : "default",
+          font: "inherit",
+          textDecoration: "none",
+          "&:hover": onClick
+            ? {
+                borderColor: "rgba(125,183,255,0.52)",
+                background: "rgba(125,211,252,0.07)",
+              }
+            : undefined,
+          "&:focus-visible": onClick
+            ? {
+                outline: `2px solid ${BOREALIS_LINK_COLOR}`,
+                outlineOffset: 2,
+              }
+            : undefined,
+        }}
+      >
+        <Typography
+          component="span"
+          sx={{
+            color: MAGIC_UI.textMuted,
+            fontSize: "0.68rem",
+            letterSpacing: 0.4,
+            textTransform: "uppercase",
+            fontWeight: 700,
+            lineHeight: 1,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </Typography>
+        <Typography
+          component="span"
+          title={String(value || "")}
+          sx={{
+            color: valueColor || toneStyles.accent,
+            fontSize: "0.76rem",
+            fontWeight: 700,
+            lineHeight: 1.1,
+            minWidth: 0,
+            maxWidth: { xs: 180, md: 260 },
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textDecoration: "none",
+          }}
+        >
+          {value}
+        </Typography>
+      </Box>
+    );
+  };
+
+  const getConnectionRowMeta = (tone) => {
+    if (tone === "danger") {
+      return {
+        color: "#fca5a5",
+        border: "rgba(248,113,113,0.28)",
+        hoverBorder: "rgba(248,113,113,0.68)",
+        background: "rgba(248,113,113,0.06)",
+        hoverBackground: "rgba(248,113,113,0.11)",
+        Icon: ErrorOutlineRoundedIcon,
+      };
+    }
+    if (tone === "warning") {
+      return {
+        color: "#fde68a",
+        border: "rgba(250,204,21,0.28)",
+        hoverBorder: "rgba(250,204,21,0.68)",
+        background: "rgba(250,204,21,0.06)",
+        hoverBackground: "rgba(250,204,21,0.11)",
+        Icon: WarningAmberRoundedIcon,
+      };
+    }
+    if (tone === "ready") {
+      return {
+        color: MAGIC_UI.accentC,
+        border: "rgba(52,211,153,0.28)",
+        hoverBorder: "rgba(52,211,153,0.68)",
+        background: "rgba(52,211,153,0.06)",
+        hoverBackground: "rgba(52,211,153,0.11)",
+        Icon: CheckCircleRoundedIcon,
+      };
+    }
+    return {
+      color: MAGIC_UI.accentA,
+      border: "rgba(125,211,252,0.24)",
+      hoverBorder: "rgba(125,211,252,0.6)",
+      background: "rgba(125,211,252,0.05)",
+      hoverBackground: "rgba(125,211,252,0.1)",
+      Icon: HelpOutlineRoundedIcon,
+    };
+  };
+
+  const renderConnectionTooltip = (row) => (
+    <Box sx={{ maxWidth: 300 }}>
+      <Typography sx={{ color: "#fff", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.25 }}>
+        {row.label}: {row.value}
+      </Typography>
+      <Typography sx={{ color: "rgba(226,232,240,0.86)", fontSize: "0.68rem", lineHeight: 1.35, mt: 0.45 }}>
+        {row.detail}
+      </Typography>
+    </Box>
+  );
+
+  const renderConnectionDetailRow = (row, index) => {
+    const rowMeta = getConnectionRowMeta(row.tone);
+    const RowIcon = rowMeta.Icon;
+    return (
+      <Tooltip key={`${row.group || "connection"}-${row.label}-${index}`} title={renderConnectionTooltip(row)} arrow placement="right">
+        <Box sx={{ minWidth: 0, width: "100%" }}>
+          <Box
+            sx={{
+              width: "100%",
+              minHeight: 31,
+              px: 0.65,
+              py: 0.4,
+              borderRadius: 1.3,
+              border: `1px solid ${rowMeta.border}`,
+              background: rowMeta.background,
+              color: MAGIC_UI.textBright,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              gap: 0.65,
+              textAlign: "left",
+              overflow: "hidden",
+              cursor: "help",
+              "&:hover": {
+                borderColor: rowMeta.hoverBorder,
+                background: rowMeta.hoverBackground,
+              },
+            }}
+          >
+            <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
+            <Box sx={{ minWidth: 0, flex: 1 }}>
+              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+                {row.label}
+              </Typography>
+              <Typography sx={{ mt: 0.1, color: rowMeta.color, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+                {row.value}
+              </Typography>
+            </Box>
+          </Box>
+        </Box>
+      </Tooltip>
+    );
+  };
+
+  const readinessPills = [
+    {
+      id: "engine-connection",
+      label: "Agent Management",
+      value: engineConnection.value,
+      tone: engineConnection.tone,
+      valueColor: BOREALIS_LINK_COLOR,
+      onClick: (event) => setAgentManagementAnchor(event.currentTarget),
+    },
+    {
+      id: "roles",
+      label: "Roles",
+      value: roleHealthSummary.label,
+      tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
+      valueColor: BOREALIS_LINK_COLOR,
+      onClick: (event) => setRoleHealthAnchor(event.currentTarget),
+    },
+  ];
+
+  const renderReadinessHeader = () => (
+    <Box
+      sx={{
+        borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+        background:
+          "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
+          "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
+        px: { xs: 1.5, md: 2 },
+        py: 1.15,
+        display: "flex",
+        alignItems: "center",
+        minWidth: 0,
+      }}
+    >
+      <Stack
+        direction="row"
+        spacing={0.75}
+        useFlexGap
+        flexWrap="wrap"
+        justifyContent="flex-start"
+        sx={{ minWidth: 0 }}
+      >
+        {readinessPills.map(renderStatusPill)}
+      </Stack>
+    </Box>
+  );
+
+  const renderDeviceNavBadge = (badge) =>
+    badge ? (
+      <Box
+        component="span"
+        sx={{
+          ml: "auto",
+          minWidth: 18,
+          height: 18,
+          px: 0.5,
+          borderRadius: 999,
+          background: BOREALIS_PRIMARY_GRADIENT,
+          color: "#06101d",
+          border: "1px solid transparent",
+          boxShadow: "none",
+          fontSize: "0.68rem",
+          fontWeight: 800,
+          lineHeight: "16px",
+          textAlign: "center",
+        }}
+      >
+        {badge}
+      </Box>
+    ) : null;
+
+  const SidebarSection = ({ sectionId, title, children }) => (
+    <Accordion
+      expanded={expandedDeviceNavSections[sectionId] ?? true}
+      onChange={(_, expanded) => {
+        setExpandedDeviceNavSections((previous) => ({ ...previous, [sectionId]: expanded }));
+      }}
+      square
+      disableGutters
+      sx={DEVICE_NAV_ACCORDION_SX}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ color: NAV_TAB_COLORS.iconActive }} />} sx={DEVICE_NAV_ACCORDION_SUMMARY_SX}>
+        <Typography
+          sx={{
+            fontSize: "0.85rem",
+            color: NAV_TAB_COLORS.iconActive,
+            fontWeight: 700,
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {title}
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails sx={DEVICE_NAV_ACCORDION_DETAILS_SX}>{children}</AccordionDetails>
+    </Accordion>
+  );
+
+  const SidebarNavRow = ({
+    icon,
+    label,
+    active = false,
+    disabled = false,
+    onClick,
+    badge = "",
+    indent = 0,
+    summarySectionKey = "",
+  }) => (
+    <ListItemButton
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      selected={active}
+      aria-label={label}
+      data-summary-nav-section={summarySectionKey || undefined}
+      sx={deviceSidebarNavRowSx(active, disabled, indent)}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: "1 1 auto" }}>
+        <Box className="device-summary-nav-icon" sx={deviceSidebarNavIconSx(active, disabled)}>{icon}</Box>
+        <ListItemText
+          disableTypography
+          primary={
+            <Typography
+              className="device-summary-nav-label"
+              component="span"
+              sx={{
+                display: "block",
+                color: "inherit",
+                fontSize: "0.8rem",
+                fontWeight: active ? 600 : 400,
+                lineHeight: 1.45,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {label}
+            </Typography>
+          }
+        />
+        {renderDeviceNavBadge(badge)}
+      </Box>
+    </ListItemButton>
+  );
+
+  const renderDeviceNavigationSidebar = () => {
+    const openRemoteDesktop = () => {
+      if (!deviceId) return;
+      navigate(APP_PATHS.deviceRemoteDesktop(deviceId), {
+        state: { initialDevice: tunnelDevice },
+      });
+    };
+    const activeView = (workspaceKey, viewKey = "") =>
+      activeWorkspaceKey === workspaceKey &&
+      (!viewKey || normalizeWorkspaceView(workspaceKey, activeWorkspaceView) === viewKey);
+    return (
+      <Box sx={DEVICE_NAV_SIDEBAR_SX}>
+        <Box sx={{ flex: 1, overflowY: "auto", p: 0.25 }}>
+          <SidebarSection sectionId="inventory" title="Inventory">
+            <SidebarNavRow
+              icon={<InfoOutlinedIcon fontSize="small" />}
+              label="Overview"
+              onClick={() => requestSummarySectionScroll("top-level")}
+              summarySectionKey="top-level"
+            />
+            <SidebarNavRow
+              icon={<StorageRoundedIcon fontSize="small" />}
+              label="Storage"
+              onClick={() => requestSummarySectionScroll("storage")}
+              badge={workspaceBadges.storage}
+              summarySectionKey="storage"
+            />
+            <SidebarNavRow
+              icon={<MemoryRoundedIcon fontSize="small" />}
+              label="Memory"
+              onClick={() => requestSummarySectionScroll("memory")}
+              summarySectionKey="memory"
+            />
+            <SidebarNavRow
+              icon={<LanRoundedIcon fontSize="small" />}
+              label="Network"
+              onClick={() => requestSummarySectionScroll("network")}
+              summarySectionKey="network"
+            />
+            <SidebarNavRow
+              icon={<AppsRoundedIcon fontSize="small" />}
+              label="Installed Software"
+              active={activeView("inventory", "software")}
+              onClick={() => setActiveWorkspace("inventory", "software")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="backend" title="Backend Tools">
+            <SidebarNavRow
+              icon={<DesktopWindowsRoundedIcon fontSize="small" />}
+              label="Remote Desktop"
+              disabled={!deviceId}
+              onClick={openRemoteDesktop}
+            />
+            <SidebarNavRow
+              icon={<TerminalRoundedIcon fontSize="small" />}
+              label="Shell"
+              active={activeView("remote_ops", "shell")}
+              onClick={() => setActiveWorkspace("remote_ops", "shell")}
+              badge={workspaceBadges.shell}
+            />
+            <SidebarNavRow
+              icon={<FolderRoundedIcon fontSize="small" />}
+              label="Files"
+              active={activeView("remote_ops", "files")}
+              onClick={() => setActiveWorkspace("remote_ops", "files")}
+            />
+            <SidebarNavRow
+              icon={<AccountTreeRoundedIcon fontSize="small" />}
+              label="Processes"
+              active={activeView("remote_ops", "processes")}
+              onClick={() => setActiveWorkspace("remote_ops", "processes")}
+            />
+            <SidebarNavRow
+              icon={<SettingsRoundedIcon fontSize="small" />}
+              label="Services"
+              active={activeView("remote_ops", "services")}
+              onClick={() => setActiveWorkspace("remote_ops", "services")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="protection" title="Protection">
+            <SidebarNavRow
+              icon={<PolicyIcon fontSize="small" />}
+              label="Watchdogs"
+              active={activeView("protection")}
+              onClick={() => setActiveWorkspace("protection")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="history" title="History">
+            <SidebarNavRow
+              icon={<ListAltRoundedIcon fontSize="small" />}
+              label="Activity History"
+              active={activeView("history")}
+              onClick={() => setActiveWorkspace("history")}
+            />
+          </SidebarSection>
+
+          <SidebarSection sectionId="metadata" title="Metadata">
+            <SidebarNavRow
+              icon={<LabelRoundedIcon fontSize="small" />}
+              label="Metadata"
+              active={activeView("config", "metadata")}
+              onClick={() => setActiveWorkspace("config", "metadata")}
+            />
+          </SidebarSection>
+        </Box>
+        <Box sx={{ px: 1, pb: 1, pt: 0.5 }}>
+          <Box
+            component="button"
+            type="button"
+            onClick={() => navigate(APP_PATHS.devices)}
+            sx={{
+              width: "100%",
+              height: 28,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 0.75,
+              px: 1,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(125,183,255,0.14)",
+              borderRadius: 6,
+              color: NAV_TAB_COLORS.iconActive,
+              cursor: "pointer",
+              transition: "background 160ms ease, transform 120ms ease",
+              "&:hover": {
+                background: "rgba(255,255,255,0.08)",
+              },
+              "&:active": {
+                transform: "translateY(1px)",
+              },
+            }}
+          >
+            <ChevronLeftIcon fontSize="small" />
+            <Typography
+              sx={{
+                color: NAV_TAB_COLORS.iconActive,
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                lineHeight: 1.1,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              Devices List
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+    );
+  };
+
+  const renderRemoteOpsWorkspace = () => {
+    const view = normalizeWorkspaceView("remote_ops", activeWorkspaceView);
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
+        <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {view === "files"
+            ? renderFileManagementTab()
+            : view === "processes"
+              ? renderProcessManagementTab()
+              : view === "services"
+                ? renderServicesTab()
+                : renderRemoteShellTab()}
+        </Box>
+      </Box>
+    );
+  };
+
+  const renderInventoryWorkspace = () => {
+    const view = normalizeWorkspaceView("inventory", activeWorkspaceView);
+    return (
+      <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
+        <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {view === "software" ? renderSoftware() : renderDeviceSummaryTab()}
+        </Box>
+      </Box>
+    );
+  };
+
+  const renderWorkspaceContent = () => {
+    if (activeWorkspaceKey === "remote_ops") return renderRemoteOpsWorkspace();
+    if (activeWorkspaceKey === "inventory") return renderInventoryWorkspace();
+    if (activeWorkspaceKey === "protection") return renderWatchdogsTab();
+    if (activeWorkspaceKey === "history") return renderHistory();
+    if (activeWorkspaceKey === "config") return renderMetadataTab();
+    return renderInventoryWorkspace();
+  };
+  const workspaceContent = renderWorkspaceContent();
+  const deviceNavigationSidebar = useMemo(
+    () => renderDeviceNavigationSidebar(),
+    [
+      activeWorkspaceKey,
+      activeWorkspaceView,
+      deviceId,
+      expandedDeviceNavSections,
+      navigate,
+      requestSummarySectionScroll,
+      setActiveWorkspace,
+      tunnelDevice,
+      workspaceBadges,
+    ]
   );
 
   useRoutePageChrome({
@@ -3355,21 +4217,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     subtitle: pageSubtitle,
     Icon: DeviceSummaryPageIcon,
     actions: pageHeaderActions,
+    navigationSidebar: deviceNavigationSidebar,
   });
-
-  const topTabRenderers = {
-    summary: renderDeviceSummaryTab,
-    file_management: renderFileManagementTab,
-    software: renderSoftware,
-    metadata: renderMetadataTab,
-    services: renderServicesTab,
-    process_management: renderProcessManagementTab,
-    watchdogs: renderWatchdogsTab,
-    activity: renderHistory,
-    shell: renderRemoteShellTab,
-    agent_health: renderAgentHealthTab,
-  };
-  const tabContent = (topTabRenderers[activeTabKey] || renderDeviceSummaryTab)();
 
   return (
     <Box
@@ -3457,6 +4306,94 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         >
           Clear Device Activity
         </MenuItem>
+      </Menu>
+      <Menu
+        anchorEl={agentManagementAnchor}
+        open={Boolean(agentManagementAnchor)}
+        onClose={() => setAgentManagementAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 0.8,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: 430,
+            maxWidth: "calc(100vw - 40px)",
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+            p: 1.1,
+          }}
+        >
+          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
+            Agent management connection
+          </Typography>
+          <Typography sx={{ mt: 0.2, color: engineConnection.tone === "ready" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
+            {agentManagementSummary}
+          </Typography>
+          <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
+            {agentManagementGroups.map((group, groupIndex) => (
+              <Box key={group.label} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
+                <Typography
+                  sx={{
+                    mb: 0.35,
+                    color: MAGIC_UI.textMuted,
+                    fontSize: "0.58rem",
+                    fontWeight: 800,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {group.label}
+                </Typography>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+                  {group.rows.map(renderConnectionDetailRow)}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      </Menu>
+      <Menu
+        anchorEl={roleHealthAnchor}
+        open={Boolean(roleHealthAnchor)}
+        onClose={() => setRoleHealthAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 0.8,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <RuntimeRoleHealthBreakdown
+          runtimeRows={agentHealthRows}
+          sx={{
+            width: 430,
+            maxWidth: "calc(100vw - 40px)",
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+          }}
+        />
       </Menu>
       <Menu
         anchorReference="anchorPosition"
@@ -3590,94 +4527,51 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           {loadError}
         </Alert>
       ) : null}
-      <Tabs
-        value={activeTabKey}
-        onChange={(e, v) => setActiveTabKey(v || TOP_TABS[0]?.key || "summary")}
-        variant="scrollable"
-        scrollButtons="auto"
-        TabIndicatorProps={{
-          style: {
-            height: 3,
-            borderRadius: 3,
-            background: NAV_TAB_COLORS.iconActive,
-          },
-        }}
-        sx={{
-          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-          mb: 2,
-          minHeight: NAV_TAB_HEIGHT,
-          height: NAV_TAB_HEIGHT,
-          minWidth: 0,
-          maxWidth: "100%",
-          "& .MuiTabs-flexContainer": {
-            minHeight: NAV_TAB_HEIGHT,
-            height: NAV_TAB_HEIGHT,
-            alignItems: "stretch",
-            width: "100%",
-          },
-          "& .MuiTab-root": {
-            color: NAV_TAB_COLORS.text,
-            textTransform: "none",
-            fontWeight: 400,
-            fontFamily: "inherit",
-            fontSize: "0.8rem",
-            minHeight: NAV_TAB_HEIGHT,
-            height: NAV_TAB_HEIGHT,
-            opacity: 1,
-            borderRadius: 1,
-            py: 0.35,
-            transition:
-              "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
-            "& .MuiTab-iconWrapper": {
-              color: NAV_TAB_COLORS.icon,
-            },
-            "&:hover": {
-              background: NAV_TAB_COLORS.hover,
-            },
-            "&:active": {
-              transform: "translateY(0.5px)",
-            },
-          },
-          "& .MuiTab-root.Mui-selected": {
-            color: NAV_TAB_COLORS.textActive,
-            fontWeight: 600,
-            background: NAV_TAB_COLORS.activeBg,
-            "& .MuiTab-iconWrapper": {
-              color: NAV_TAB_COLORS.iconActive,
-            },
-            "&:hover": {
-              background: NAV_TAB_COLORS.activeBg,
-            },
-          },
-        }}
-      >
-        {TOP_TABS.map((tabDef, tabIndex) => {
-          const startsRightGroup = tabDef.align === "right" && TOP_TABS[tabIndex - 1]?.align !== "right";
-          return (
-            <Tab
-              key={tabDef.key || tabDef.label}
-              value={tabDef.key}
-              label={tabDef.label}
-              icon={<tabDef.icon sx={{ fontSize: 18 }} />}
-              iconPosition="start"
-              sx={startsRightGroup ? { ml: "auto" } : undefined}
-            />
-          );
-        })}
-      </Tabs>
       <Box
         sx={{
-          mt: 1,
           flexGrow: 1,
           minHeight: 0,
           minWidth: 0,
           width: "100%",
-          overflowX: "hidden",
           display: "flex",
           flexDirection: "column",
+          borderRadius: 3,
+          overflow: "hidden",
         }}
       >
-        {tabContent}
+        <Box
+          sx={{
+            flexGrow: 1,
+            minHeight: 0,
+            minWidth: 0,
+            overflowX: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 3,
+            background:
+              "linear-gradient(165deg, rgba(2,6,23,0.9), rgba(8,12,32,0.84)), " +
+              "radial-gradient(120% 120% at 100% 0%, rgba(192,132,252,0.08), transparent 60%)",
+            boxShadow: MAGIC_UI.glow,
+          }}
+        >
+          {renderReadinessHeader()}
+          <Box
+            id="device-summary-workspace-scrollhost"
+            sx={{
+              flexGrow: 1,
+              p: { xs: 1.5, md: 2 },
+              minHeight: 0,
+              minWidth: 0,
+              overflowX: "hidden",
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {workspaceContent}
+          </Box>
+        </Box>
       </Box>
 
       <ClearDeviceActivityDialog
