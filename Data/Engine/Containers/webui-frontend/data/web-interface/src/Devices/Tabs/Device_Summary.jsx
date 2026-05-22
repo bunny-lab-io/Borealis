@@ -3918,7 +3918,7 @@ export default function DeviceSummary() {
           background: BOREALIS_PRIMARY_GRADIENT,
           color: "#06101d",
           border: "1px solid transparent",
-          boxShadow: "0 8px 18px rgba(125, 211, 252, 0.16)",
+          boxShadow: "none",
           fontSize: "0.68rem",
           fontWeight: 800,
           lineHeight: "16px",
