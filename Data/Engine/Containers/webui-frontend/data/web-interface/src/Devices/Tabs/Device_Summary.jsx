@@ -210,20 +210,24 @@ function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
     py: 1,
     color: active ? NAV_TAB_COLORS.textActive : NAV_TAB_COLORS.text,
     position: "relative",
-    background: active ? NAV_TAB_COLORS.activeBg : "transparent",
+    backgroundColor: "transparent",
+    backgroundImage: active ? NAV_TAB_COLORS.activeBg : "none",
+    backgroundRepeat: "no-repeat",
     borderTopRightRadius: 0,
     borderBottomRightRadius: 0,
     justifyContent: "space-between",
     transition: "background 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 120ms ease",
     "&:hover": {
-      background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
+      backgroundColor: active ? undefined : NAV_TAB_COLORS.hover,
+      backgroundImage: active ? NAV_TAB_COLORS.activeBg : "none",
     },
     '&.Mui-selected, &[data-summary-active="true"]': {
       color: NAV_TAB_COLORS.textActive,
-      background: NAV_TAB_COLORS.activeBg,
+      backgroundImage: NAV_TAB_COLORS.activeBg,
+      backgroundRepeat: "no-repeat",
     },
     '&.Mui-selected:hover, &[data-summary-active="true"]:hover': {
-      background: NAV_TAB_COLORS.activeBg,
+      backgroundImage: NAV_TAB_COLORS.activeBg,
     },
     '&.Mui-selected .device-summary-nav-icon, &[data-summary-active="true"] .device-summary-nav-icon': {
       color: NAV_TAB_COLORS.iconActive,
