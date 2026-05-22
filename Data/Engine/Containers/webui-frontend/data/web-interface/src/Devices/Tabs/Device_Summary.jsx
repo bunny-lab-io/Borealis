@@ -2551,19 +2551,22 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                       }}
                     >
                       <Box sx={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 0.7 }}>
-                        <Typography
-                          variant="caption"
-                          sx={{
-                            color: MAGIC_UI.accentA,
-                            fontWeight: 600,
-                            fontSize: "0.82rem",
-                            letterSpacing: 0.3,
-                            textTransform: "none",
-                            display: "block",
-                          }}
-                        >
-                          Overview
-                        </Typography>
+                        <Stack direction="row" spacing={0.75} alignItems="center">
+                          <InfoOutlinedIcon sx={{ color: MAGIC_UI.accentA, fontSize: 16 }} />
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: MAGIC_UI.accentA,
+                              fontWeight: 600,
+                              fontSize: "0.82rem",
+                              letterSpacing: 0.3,
+                              textTransform: "none",
+                              display: "block",
+                            }}
+                          >
+                            Overview
+                          </Typography>
+                        </Stack>
                         {summaryDataReady ? (
                           <SummarySectionGrid
                             sectionKey="top-level-overview"
