@@ -218,17 +218,17 @@ function deviceSidebarNavRowSx(active, disabled = false, indent = 0) {
     "&:hover": {
       background: active ? NAV_TAB_COLORS.activeBg : NAV_TAB_COLORS.hover,
     },
-    '&[data-summary-active="true"]': {
+    '&.Mui-selected, &[data-summary-active="true"]': {
       color: NAV_TAB_COLORS.textActive,
-      background: NAV_TAB_COLORS.activeBg,
+      background: `${NAV_TAB_COLORS.activeBg} !important`,
     },
-    '&[data-summary-active="true"]:hover': {
-      background: NAV_TAB_COLORS.activeBg,
+    '&.Mui-selected:hover, &[data-summary-active="true"]:hover': {
+      background: `${NAV_TAB_COLORS.activeBg} !important`,
     },
-    '&[data-summary-active="true"] .device-summary-nav-icon': {
+    '&.Mui-selected .device-summary-nav-icon, &[data-summary-active="true"] .device-summary-nav-icon': {
       color: NAV_TAB_COLORS.iconActive,
     },
-    '&[data-summary-active="true"] .device-summary-nav-label': {
+    '&.Mui-selected .device-summary-nav-label, &[data-summary-active="true"] .device-summary-nav-label': {
       fontWeight: 600,
     },
     "&:active": {
