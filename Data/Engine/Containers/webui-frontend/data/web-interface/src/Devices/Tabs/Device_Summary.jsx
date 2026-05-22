@@ -29,7 +29,6 @@ import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import DesktopWindowsRoundedIcon from "@mui/icons-material/DesktopWindowsRounded";
 import PolicyIcon from "@mui/icons-material/Policy";
-import SpeedRoundedIcon from "@mui/icons-material/SpeedRounded";
 import DeveloperBoardRoundedIcon from "@mui/icons-material/DeveloperBoardRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
@@ -819,6 +818,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
   columnDefs,
   defaultColDef,
   height,
+  rowHeight = 36,
 }) {
   const renderCountRef = useRef(0);
   const modelUpdateCountRef = useRef(0);
@@ -935,6 +935,7 @@ const SummarySectionGrid = React.memo(function SummarySectionGrid({
         pagination={false}
         animateRows={false}
         suppressCellFocus
+        rowHeight={rowHeight}
         onGridReady={handleGridReady}
         onFirstDataRendered={handleFirstDataRendered}
         onRowDataUpdated={handleRowDataUpdated}
@@ -2158,89 +2159,6 @@ export default function DeviceSummary() {
     []
   );
 
-const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
-    <Box
-      sx={{
-        px: compact ? 1.5 : 2.4,
-        py: compact ? 1.4 : 2,
-        borderRadius: compact ? 2 : 3,
-        border: 'none',
-        background: 'transparent',
-        boxShadow: 'none',
-        minWidth: compact ? 0 : 220,
-        width: compact ? "100%" : "auto",
-        minHeight: compact ? 110 : 140,
-        display: "flex",
-        flexDirection: "column",
-        gap: 0.75,
-        ...(sx || {}),
-      }}
-    >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Box
-          sx={{
-            width: compact ? 22 : 36,
-            height: compact ? 22 : 36,
-            borderRadius: 2,
-            background: "transparent",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: NAV_TAB_COLORS.icon,
-          }}
-        >
-          {icon}
-        </Box>
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : "0.75rem",
-            letterSpacing: compact ? 0 : 0.6,
-            textTransform: compact ? "none" : "uppercase",
-            color: compact ? NAV_TAB_COLORS.text : "rgba(255,255,255,0.72)",
-            fontWeight: compact ? 400 : 600,
-          }}
-        >
-          {title}
-        </Typography>
-      </Box>
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : { xs: "1.4rem", md: "1.6rem" },
-            fontWeight: compact ? 600 : 700,
-            color: compact ? NAV_TAB_COLORS.textActive : "#f8fafc",
-            lineHeight: compact ? 1.15 : 1.1,
-            ...(compact
-              ? {
-                  whiteSpace: "normal",
-                  overflowWrap: "anywhere",
-                  wordBreak: "break-word",
-                }
-              : {}),
-          }}
-        >
-          {main}
-        </Typography>
-      {sub ? (
-        <Typography
-          sx={{
-            fontSize: compact ? "0.8rem" : "0.9rem",
-            color: compact ? NAV_TAB_COLORS.text : "rgba(226,232,240,0.78)",
-            fontWeight: compact ? 400 : 400,
-            ...(compact
-              ? {
-                  whiteSpace: "normal",
-                  overflowWrap: "anywhere",
-                  wordBreak: "break-word",
-                }
-              : {}),
-          }}
-        >
-          {sub}
-        </Typography>
-      ) : null}
-    </Box>
-  );
-
   const Island = ({ title = "", icon = null, meta = "", children, sx }) => (
     <Box
       sx={{
@@ -2398,148 +2316,55 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
             <Box sx={{ display: "flex", flexDirection: "column", gap: { xs: 3, md: 4 }, minWidth: 0, width: "100%" }}>
               <Box id="device-summary-top-level" sx={{ scrollMarginTop: `${summaryScrollOffset}px` }}>
                 <Island sx={HARDWARE_SUMMARY_SECTION_SX}>
-                    <Box
-                      sx={{
-                        display: "grid",
-                        gridTemplateColumns: { xs: "1fr", xl: "minmax(260px,0.72fr) minmax(0,1.6fr)" },
-                        alignItems: { xs: "start", xl: "end" },
-                        gap: { xs: 1.1, md: 1.5 },
-                        mb: 1.9,
-                        minWidth: 0,
-                      }}
-                    >
-                      <Box sx={{ display: "flex", flexDirection: "column", gap: 1.1, minWidth: 0 }}>
-                        <Box sx={{ width: "100%", maxWidth: { xs: "100%", xl: 440 } }}>
-                          <TextField
-                            size="small"
-                            label="Description"
-                            value={description}
-                            onChange={(e) => setDescription(e.target.value)}
-                            onBlur={saveDescription}
-                            placeholder="Add a friendly label"
-                            sx={{
-                              width: "100%",
-                              input: { color: "#fff" },
-                              "& .MuiOutlinedInput-root": {
-                                backgroundColor: "rgba(4,7,17,0.65)",
-                                borderRadius: 3,
-                                "& fieldset": {
-                                  borderColor: "rgba(148,163,184,0.45)",
-                                  borderRadius: 3,
-                                },
-                                "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                              },
-                              label: { color: MAGIC_UI.textMuted },
-                            }}
-                          />
+                    {connectionType === "ssh" && (
+                      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.1, alignItems: "center", mb: 1.9 }}>
+                        <TextField
+                          size="small"
+                          label="SSH Endpoint"
+                          value={connectionDraft}
+                          onChange={(e) => setConnectionDraft(e.target.value)}
+                          placeholder="user@host or host"
+                          sx={{
+                            minWidth: 250,
+                            maxWidth: 360,
+                            input: { color: "#fff" },
+                            "& .MuiOutlinedInput-root": {
+                              backgroundColor: "rgba(4,7,17,0.65)",
+                              "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
+                              "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                            },
+                            label: { color: MAGIC_UI.textMuted },
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={saveConnectionEndpoint}
+                          disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
+                          sx={{
+                            textTransform: "none",
+                            borderColor: MAGIC_UI.accentA,
+                            color: MAGIC_UI.accentA,
+                            borderRadius: 999,
+                            px: 2,
+                          }}
+                        >
+                          {connectionSaving ? "Saving..." : "Save"}
+                        </Button>
+                        <Box sx={{ display: "flex", flexDirection: "column" }}>
+                          {connectionMessage && (
+                            <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
+                              {connectionMessage}
+                            </Typography>
+                          )}
+                          {connectionError && (
+                            <Typography variant="caption" sx={{ color: "#ff7b89" }}>
+                              {connectionError}
+                            </Typography>
+                          )}
                         </Box>
-                        {connectionType === "ssh" && (
-                          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1.1, alignItems: "center" }}>
-                            <TextField
-                              size="small"
-                              label="SSH Endpoint"
-                              value={connectionDraft}
-                              onChange={(e) => setConnectionDraft(e.target.value)}
-                              placeholder="user@host or host"
-                              sx={{
-                                minWidth: 250,
-                                maxWidth: 360,
-                                input: { color: "#fff" },
-                                "& .MuiOutlinedInput-root": {
-                                  backgroundColor: "rgba(4,7,17,0.65)",
-                                  "& fieldset": { borderColor: "rgba(148,163,184,0.45)" },
-                                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                                },
-                                label: { color: MAGIC_UI.textMuted },
-                              }}
-                            />
-                            <Button
-                              size="small"
-                              variant="outlined"
-                              onClick={saveConnectionEndpoint}
-                              disabled={connectionSaving || connectionDraft.trim() === connectionEndpoint.trim()}
-                              sx={{
-                                textTransform: "none",
-                                borderColor: MAGIC_UI.accentA,
-                                color: MAGIC_UI.accentA,
-                                borderRadius: 999,
-                                px: 2,
-                              }}
-                            >
-                              {connectionSaving ? "Saving..." : "Save"}
-                            </Button>
-                            <Box sx={{ display: "flex", flexDirection: "column" }}>
-                              {connectionMessage && (
-                                <Typography variant="caption" sx={{ color: MAGIC_UI.accentA }}>
-                                  {connectionMessage}
-                                </Typography>
-                              )}
-                              {connectionError && (
-                                <Typography variant="caption" sx={{ color: "#ff7b89" }}>
-                                  {connectionError}
-                                </Typography>
-                              )}
-                            </Box>
-                          </Box>
-                        )}
                       </Box>
-
-                      <Box
-                        sx={{
-                          display: "grid",
-                          minWidth: 0,
-                          gridTemplateColumns: {
-                            xs: "1fr",
-                            sm: "repeat(2, minmax(0,1fr))",
-                            xl: "minmax(0,1.5fr) repeat(3, minmax(0,1fr))",
-                          },
-                          gap: 1.1,
-                          width: "100%",
-                          mt: { xs: 0.4, xl: 0 },
-                          pt: { xs: 0, xl: 0 },
-                          alignSelf: { xs: "start", xl: "end" },
-                          "& > *": {
-                            background: "transparent !important",
-                            border: "none !important",
-                            boxShadow: "none !important",
-                            borderRadius: 0,
-                          },
-                        }}
-                      >
-                        <MetricCard
-                          compact
-                          icon={<DeveloperBoardRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Processor"
-                          main={deviceMetricData.cpuMain}
-                          sub={deviceMetricData.cpuSub}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<MemoryRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="RAM"
-                          main={deviceMetricData.memVal}
-                          sub={deviceMetricData.memSpeed || " "}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<StorageRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Storage"
-                          main={deviceMetricData.storageMain}
-                          sub={deviceMetricData.storageSub || " "}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                        <MetricCard
-                          compact
-                          icon={<SpeedRoundedIcon sx={{ fontSize: 18 }} />}
-                          title="Network"
-                          main={deviceMetricData.netVal}
-                          sub={deviceMetricData.nicLabel}
-                          sx={{ minWidth: 0, width: "100%" }}
-                        />
-                      </Box>
-                    </Box>
+                    )}
 
                     <Box
                       sx={{
@@ -2574,6 +2399,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                             columnDefs={topLevelSplitColumnDefs}
                             defaultColDef={defaultGridColDef}
                             height={topLevelSplitGridHeight}
+                            rowHeight={44}
                           />
                         ) : (
                           <SummaryGridPlaceholder height={topLevelSplitGridHeight} />
@@ -2952,6 +2778,36 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         ).trim() || UNABLE_TO_RETRIEVE_SN;
       return [
         {
+          id: "description",
+          label: "Description",
+          value: description,
+          editableDescription: true,
+        },
+        {
+          id: "processor",
+          label: "Processor",
+          value: deviceMetricData.cpuMain,
+          detail: deviceMetricData.cpuSub,
+        },
+        {
+          id: "ram",
+          label: "RAM",
+          value: deviceMetricData.memVal,
+          detail: deviceMetricData.memSpeed,
+        },
+        {
+          id: "storage-summary",
+          label: "Storage",
+          value: deviceMetricData.storageMain,
+          detail: deviceMetricData.storageSub,
+        },
+        {
+          id: "network-summary",
+          label: "Network",
+          value: deviceMetricData.netVal,
+          detail: deviceMetricData.nicLabel,
+        },
+        {
           id: "site",
           label: "Site",
           value: meta.siteName || summary.site_name || summary.site || device?.site_name || "placeholder",
@@ -2999,6 +2855,15 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
       meta.serialNumber,
       meta.lastReboot,
       details.cpu,
+      description,
+      deviceMetricData.cpuMain,
+      deviceMetricData.cpuSub,
+      deviceMetricData.memVal,
+      deviceMetricData.memSpeed,
+      deviceMetricData.storageMain,
+      deviceMetricData.storageSub,
+      deviceMetricData.netVal,
+      deviceMetricData.nicLabel,
       summary.site_name,
       summary.site,
       summary.device_type,
@@ -3204,6 +3069,42 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
     (params) => {
       const row = params?.data && typeof params.data === "object" ? params.data : {};
       const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
+      if (row?.editableDescription) {
+        return (
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              width: "100%",
+              minHeight: "100%",
+              py: 0.4,
+            }}
+          >
+            <TextField
+              size="small"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              onBlur={saveDescription}
+              placeholder="Add a friendly label"
+              variant="outlined"
+              sx={{
+                width: "100%",
+                maxWidth: 520,
+                input: { color: MAGIC_UI.textBright, fontSize: "0.84rem", py: 0.7 },
+                "& .MuiOutlinedInput-root": {
+                  backgroundColor: "rgba(4,7,17,0.65)",
+                  borderRadius: 2,
+                  "& fieldset": {
+                    borderColor: "rgba(148,163,184,0.45)",
+                  },
+                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+                  "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
+                },
+              }}
+            />
+          </Box>
+        );
+      }
       if (row?.id === "agent-branch-channel") {
         const actionBusy = agentBranchChannelSaving;
         const actionHandler = openAgentBranchChannelDialog;
@@ -3271,7 +3172,9 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
         <Box
           sx={{
             display: "flex",
-            alignItems: "center",
+            flexDirection: row?.detail ? "column" : "row",
+            justifyContent: "center",
+            alignItems: row?.detail ? "flex-start" : "center",
             width: "100%",
             minHeight: "100%",
           }}
@@ -3287,10 +3190,23 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
           >
             {value}
           </Typography>
-        </Box>
-      );
-    },
-    [agentBranchChannelSaving, openAgentBranchChannelDialog]
+            {row?.detail ? (
+              <Typography
+                sx={{
+                  color: MAGIC_UI.textMuted,
+                  fontSize: "0.8rem",
+                  lineHeight: 1.35,
+                  whiteSpace: "normal",
+                  wordBreak: "break-word",
+                }}
+              >
+                {String(row.detail)}
+              </Typography>
+            ) : null}
+          </Box>
+        );
+      },
+    [agentBranchChannelSaving, description, openAgentBranchChannelDialog, saveDescription]
   );
 
   const topLevelSplitColumnDefs = useMemo(
@@ -3331,7 +3247,8 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
   const topLevelSplitGridHeight = useMemo(() => {
     const baseHeight = resolveGridHeight(Math.max(overviewInfoRows.length, borealisAgentRows.length), {
       minHeight: BASE_GRID_HEIGHTS.topLevel,
-      maxHeight: 420,
+      maxHeight: 520,
+      rowHeight: 44,
     });
     return Math.round(baseHeight * 1.2);
   }, [overviewInfoRows.length, borealisAgentRows.length, resolveGridHeight]);
