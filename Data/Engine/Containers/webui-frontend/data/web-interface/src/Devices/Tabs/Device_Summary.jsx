@@ -2564,7 +2564,7 @@ const MetricCard = ({ icon, title, main, sub, compact = false, sx }) => (
                               display: "block",
                             }}
                           >
-                            Overview
+                            OVERVIEW
                           </Typography>
                         </Stack>
                         {summaryDataReady ? (
