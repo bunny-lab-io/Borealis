@@ -67,6 +67,16 @@ func RunHelper(ctx context.Context, options HelperOptions) error {
 	if sessionID <= 0 || uint32(sessionID) == 0xffffffff {
 		sessionID = 0
 	}
+	releaseSingleton, acquired, err := acquireHelperSingleton(sessionID)
+	if err != nil {
+		appendHelperEvent(stateDir, sessionID, "helper singleton acquisition failed: "+err.Error())
+		return err
+	}
+	if !acquired {
+		appendHelperEvent(stateDir, sessionID, "duplicate helper launch prevented")
+		return nil
+	}
+	defer releaseSingleton()
 	pid := os.Getpid()
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()

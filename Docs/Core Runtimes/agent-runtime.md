@@ -92,6 +92,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
   - `connect_agent` registration (agent socket registry).
 - The SYSTEM socket advertises `helper_contexts=["currentuser"]` when the session broker is running so the Engine can route logical current-user work through the same socket.
 - Helper processes never enroll, never refresh tokens, never open Socket.IO, and never talk to the Engine directly. Tray UI reads redacted role-health status from a local state file and writes file-based `agent.restart` / `agent.update_check` action requests that the SYSTEM runtime polls; no local web server or listener is created for the tray UI.
+- Windows CURRENTUSER helper processes take a per-session singleton mutex before starting the tray heartbeat. Duplicate helper launches exit cleanly and write `helper-events.log` under the local tray state directory so sleep/wake duplicate-prevention events are visible.
 - Current Go Windows CURRENTUSER support uses same-binary helper sentinels for session readiness, direct `CreateProcessAsUser` session launch from SYSTEM for signed quick jobs, and the Windows tray/status UI. Real-host PowerShell Desktop canary validation passed, including denial when the user context attempted to write to root `C:\`; tray UI real-host acceptance remains pending.
 - WireGuard tunnels are ensured via `POST /api/agent/vpn/ensure` on boot and refreshed periodically.
 - The ensure loop re-establishes the tunnel automatically after network hiccups.
