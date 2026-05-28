@@ -3,6 +3,13 @@
 ## Purpose
 Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.
 
+## Visual Tour
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Alert_List.png" alt="Borealis alert list" loading="lazy">
+  <figcaption>Alerts queue shows open, suppressed, and resolved incidents from watchdog evaluation.</figcaption>
+</figure>
+
 ## Alerts Queue
 - Alerts lives under `Alerting & Reporting` in the sidebar.
 - The queue is the operational surface for incidents opened by Watchdogs.
@@ -61,26 +68,27 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - [Logging and Operations](logging-and-operations.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 
-## Codex Agent (Detailed)
-### Main implementation files
-- Alerts page: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`
-- Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
-- Device Summary integration: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
-- Incident runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
+??? example "Detailed Codex Breakdown"
 
-### Incident payload shape
-- Incident rows include:
-  - watchdog id and name
-  - hostname and device GUID
-  - site id and site name
-  - severity and state
-  - title and message
-  - sampled rule data
-  - acknowledgement metadata
-  - opened, updated, and resolved timestamps
-- Offline-only incidents that auto-clear are deleted, so they disappear from the queue instead of moving into the resolved dataset.
+    ### Main implementation files
+    - Alerts page: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`
+    - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
+    - Device Summary integration: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
+    - Incident runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
 
-### Suppression behavior
-- Queue-level suppression is an incident-state transition, not just a visual filter.
-- Suppressed incidents remain distinct from resolved history so operators can re-open them later without manufacturing a brand-new record.
-- Device-level suppressions still exist separately in `watchdog_device_overrides` for the per-device Watchdogs tab.
+    ### Incident payload shape
+    - Incident rows include:
+      - watchdog id and name
+      - hostname and device GUID
+      - site id and site name
+      - severity and state
+      - title and message
+      - sampled rule data
+      - acknowledgement metadata
+      - opened, updated, and resolved timestamps
+    - Offline-only incidents that auto-clear are deleted, so they disappear from the queue instead of moving into the resolved dataset.
+
+    ### Suppression behavior
+    - Queue-level suppression is an incident-state transition, not just a visual filter.
+    - Suppressed incidents remain distinct from resolved history so operators can re-open them later without manufacturing a brand-new record.
+    - Device-level suppressions still exist separately in `watchdog_device_overrides` for the per-device Watchdogs tab.

@@ -3,6 +3,23 @@
 ## Purpose
 Explain Borealis assemblies (script definitions), how they are stored, and how quick jobs execute them.
 
+## Visual Tour
+
+<div class="bo-screenshot-grid">
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Assembly_List.png" alt="Borealis assembly list" loading="lazy">
+    <figcaption>Assembly List is the catalog for scripts, playbooks, and workflows.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Assembly_Editor.png" alt="Borealis assembly editor" loading="lazy">
+    <figcaption>Assembly Editor captures reusable automation payloads and metadata.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Ansible_Playbook_Recap.png" alt="Borealis Ansible playbook recap" loading="lazy">
+    <figcaption>Ansible recaps preserve Engine-side playbook execution results.</figcaption>
+  </figure>
+</div>
+
 ## Assemblies at a Glance
 - Assemblies are script definitions stored in PostgreSQL assembly-domain tables.
 - Domains include: `official`, `community`, and `user`.
@@ -103,116 +120,117 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - [Watchdogs](watchdogs.md)
 - [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
 
-## Codex Agent (Detailed)
-### Storage layout and caching
-- Aurora (`https://github.com/bunny-lab-io/Aurora`) is the official assembly authoring source of truth.
-- Engine keeps a managed Aurora checkout under `Engine/Services/api-backend/cache/Aurora/` for update checks and imports.
-- Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a generated seed snapshot for fresh installs and release packaging.
-- Startup seeds from the bundled snapshot and then attempts an Aurora git sync so official assemblies can be refreshed without relying on the bundled files alone.
-- Runtime assembly data lives in PostgreSQL `assemblies.official_assemblies`, `assemblies.community_assemblies`, and `assemblies.user_created_assemblies`.
-- The Engine loads and caches assemblies via `Data/Engine/Containers/api-backend/data/assembly_management` and `AssemblyRuntimeService`.
-- Official rows persist `source_repo`, `source_path`, `source_version`, and `content_hash` so GUID-based Aurora updates can be tracked without mirroring repo folders into PostgreSQL.
+??? example "Detailed Codex Breakdown"
 
-### Payload sizing guidance
-- Treat `500 MB` as the practical operator-facing target for a single assembly payload.
-- Runtime import limit remains `950,000,000` bytes as an application guardrail.
+    ### Storage layout and caching
+    - Aurora (`https://github.com/bunny-lab-io/Aurora`) is the official assembly authoring source of truth.
+    - Engine keeps a managed Aurora checkout under `Engine/Services/api-backend/cache/Aurora/` for update checks and imports.
+    - Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a generated seed snapshot for fresh installs and release packaging.
+    - Startup seeds from the bundled snapshot and then attempts an Aurora git sync so official assemblies can be refreshed without relying on the bundled files alone.
+    - Runtime assembly data lives in PostgreSQL `assemblies.official_assemblies`, `assemblies.community_assemblies`, and `assemblies.user_created_assemblies`.
+    - The Engine loads and caches assemblies via `Data/Engine/Containers/api-backend/data/assembly_management` and `AssemblyRuntimeService`.
+    - Official rows persist `source_repo`, `source_path`, `source_version`, and `content_hash` so GUID-based Aurora updates can be tracked without mirroring repo folders into PostgreSQL.
 
-### Dev Mode behavior
-- User-created domain writes are allowed for authenticated operators.
-- Official/community domains require Admin + Dev Mode enabled.
-- Dev Mode state is tracked per session and expires after a TTL.
-- Use `/api/assemblies/dev-mode/switch` to toggle and `/api/assemblies/dev-mode/write` to flush.
+    ### Payload sizing guidance
+    - Treat `500 MB` as the practical operator-facing target for a single assembly payload.
+    - Runtime import limit remains `950,000,000` bytes as an application guardrail.
 
-### Quick job execution path
-1) Operator calls `/api/scripts/quick_run` with `script_path` or `assembly_guid`, plus `hostnames`.
-2) Engine resolves the assembly document (DB-backed or filesystem).
-3) Engine rewrites variable placeholders and signs the script with Ed25519.
-4) Engine creates `activity_history` rows, sets `target_context`, and emits `quick_job_run` over Socket.IO to the host's SYSTEM socket.
-5) The agent either executes the script in SYSTEM mode or forwards current-user work into one or more helper sessions, depending on `run_mode`, `session_target`, and `target_session_id`.
-6) The agent returns `quick_job_result` through the SYSTEM socket.
-7) Engine updates `activity_history` and emits `device_activity_changed`.
+    ### Dev Mode behavior
+    - User-created domain writes are allowed for authenticated operators.
+    - Official/community domains require Admin + Dev Mode enabled.
+    - Dev Mode state is tracked per session and expires after a TTL.
+    - Use `/api/assemblies/dev-mode/switch` to toggle and `/api/assemblies/dev-mode/write` to flush.
 
-### Script variables and environment injection
-- Assembly variables are stored with name, type, default, and description.
-- Engine always builds an environment map for agent-side scripts.
-- PowerShell scripts also use literal rewrite for `$env:VAR` references before dispatch.
-- Batch and Bash scripts rely on the injected process environment on the agent side (`%VAR%` / `$VAR`).
-- Variables are included in the payload so agents can log context.
+    ### Quick job execution path
+    1) Operator calls `/api/scripts/quick_run` with `script_path` or `assembly_guid`, plus `hostnames`.
+    2) Engine resolves the assembly document (DB-backed or filesystem).
+    3) Engine rewrites variable placeholders and signs the script with Ed25519.
+    4) Engine creates `activity_history` rows, sets `target_context`, and emits `quick_job_run` over Socket.IO to the host's SYSTEM socket.
+    5) The agent either executes the script in SYSTEM mode or forwards current-user work into one or more helper sessions, depending on `run_mode`, `session_target`, and `target_session_id`.
+    6) The agent returns `quick_job_result` through the SYSTEM socket.
+    7) Engine updates `activity_history` and emits `device_activity_changed`.
 
-### Code signing
-- Script bytes are signed in `Data/Engine/Containers/api-backend/data/services/API/assemblies/execution.py`.
-- Agents verify signatures using `signature_utils` before execution.
+    ### Script variables and environment injection
+    - Assembly variables are stored with name, type, default, and description.
+    - Engine always builds an environment map for agent-side scripts.
+    - PowerShell scripts also use literal rewrite for `$env:VAR` references before dispatch.
+    - Batch and Bash scripts rely on the injected process environment on the agent side (`%VAR%` / `$VAR`).
+    - Variables are included in the payload so agents can log context.
 
-### Activity history
-- `activity_history` stores script metadata, timestamps, status, stdout, stderr.
-- Use `/api/device/activity/<hostname>` to query or clear entries.
+    ### Code signing
+    - Script bytes are signed in `Data/Engine/Containers/api-backend/data/services/API/assemblies/execution.py`.
+    - Agents verify signatures using `signature_utils` before execution.
 
-### Backup guidance
-- Back up PostgreSQL `assemblies.*` tables.
-- Back up `Data/Engine/Containers/api-backend/data/Official_Assemblies/` if you want the bundled official seed snapshot tracked with releases.
+    ### Activity history
+    - `activity_history` stores script metadata, timestamps, status, stdout, stderr.
+    - Use `/api/device/activity/<hostname>` to query or clear entries.
 
-### PostgreSQL dump commands
-- Use these commands when you want a raw database export of all assemblies before reorganizing them into Aurora-friendly folders.
+    ### Backup guidance
+    - Back up PostgreSQL `assemblies.*` tables.
+    - Back up `Data/Engine/Containers/api-backend/data/Official_Assemblies/` if you want the bundled official seed snapshot tracked with releases.
 
-```bash
-. /opt/Borealis/Engine/database.env
-mkdir -p /opt/Borealis/Aurora/_db_exports
-psql "$BOREALIS_DATABASE_URL" -c "\copy (
-  SELECT jsonb_build_object(
-    'domain', domain,
-    'assembly_guid', assembly_guid,
-    'display_name', display_name,
-    'summary', summary,
-    'assembly_type', assembly_type,
-    'assembly_subtype', assembly_subtype,
-    'source_repo', source_repo,
-    'source_path', source_path,
-    'source_version', source_version,
-    'content_hash', content_hash,
-    'payload_json', payload_json::jsonb,
-    'created_at', created_at,
-    'updated_at', updated_at
-  )::text
-  FROM (
-    SELECT 'official' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
-    FROM assemblies.official_assemblies
-    UNION ALL
-    SELECT 'community' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
-    FROM assemblies.community_assemblies
-    UNION ALL
-    SELECT 'user' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
-    FROM assemblies.user_created_assemblies
-  ) AS assemblies_export
-  ORDER BY domain, assembly_type, lower(coalesce(display_name, '')), assembly_guid
-) TO '/opt/Borealis/Aurora/_db_exports/all_assemblies.jsonl'"
-```
+    ### PostgreSQL dump commands
+    - Use these commands when you want a raw database export of all assemblies before reorganizing them into Aurora-friendly folders.
 
-```bash
-. /opt/Borealis/Engine/database.env
-mkdir -p /opt/Borealis/Aurora/_db_exports
-psql "$BOREALIS_DATABASE_URL" -c "\copy (
-  SELECT *
-  FROM assemblies.official_assemblies
-  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
-) TO '/opt/Borealis/Aurora/_db_exports/official_assemblies.csv' CSV HEADER"
-psql "$BOREALIS_DATABASE_URL" -c "\copy (
-  SELECT *
-  FROM assemblies.community_assemblies
-  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
-) TO '/opt/Borealis/Aurora/_db_exports/community_assemblies.csv' CSV HEADER"
-psql "$BOREALIS_DATABASE_URL" -c "\copy (
-  SELECT *
-  FROM assemblies.user_created_assemblies
-  ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
-) TO '/opt/Borealis/Aurora/_db_exports/user_created_assemblies.csv' CSV HEADER"
-```
+    ```bash
+    . /opt/Borealis/Engine/database.env
+    mkdir -p /opt/Borealis/Aurora/_db_exports
+    psql "$BOREALIS_DATABASE_URL" -c "\copy (
+      SELECT jsonb_build_object(
+        'domain', domain,
+        'assembly_guid', assembly_guid,
+        'display_name', display_name,
+        'summary', summary,
+        'assembly_type', assembly_type,
+        'assembly_subtype', assembly_subtype,
+        'source_repo', source_repo,
+        'source_path', source_path,
+        'source_version', source_version,
+        'content_hash', content_hash,
+        'payload_json', payload_json::jsonb,
+        'created_at', created_at,
+        'updated_at', updated_at
+      )::text
+      FROM (
+        SELECT 'official' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+        FROM assemblies.official_assemblies
+        UNION ALL
+        SELECT 'community' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+        FROM assemblies.community_assemblies
+        UNION ALL
+        SELECT 'user' AS domain, assembly_guid, display_name, summary, assembly_type, assembly_subtype, source_repo, source_path, source_version, content_hash, payload_json, created_at, updated_at
+        FROM assemblies.user_created_assemblies
+      ) AS assemblies_export
+      ORDER BY domain, assembly_type, lower(coalesce(display_name, '')), assembly_guid
+    ) TO '/opt/Borealis/Aurora/_db_exports/all_assemblies.jsonl'"
+    ```
 
-### Known limitations
-- Scheduled jobs are the supported playbook execution path in the Engine runtime.
-- Recap/report APIs and some recap-focused UI surfaces are still being fleshed out around the working Engine-side runner.
-- Linux agent support is incomplete; PowerShell scripts are Windows-first.
+    ```bash
+    . /opt/Borealis/Engine/database.env
+    mkdir -p /opt/Borealis/Aurora/_db_exports
+    psql "$BOREALIS_DATABASE_URL" -c "\copy (
+      SELECT *
+      FROM assemblies.official_assemblies
+      ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+    ) TO '/opt/Borealis/Aurora/_db_exports/official_assemblies.csv' CSV HEADER"
+    psql "$BOREALIS_DATABASE_URL" -c "\copy (
+      SELECT *
+      FROM assemblies.community_assemblies
+      ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+    ) TO '/opt/Borealis/Aurora/_db_exports/community_assemblies.csv' CSV HEADER"
+    psql "$BOREALIS_DATABASE_URL" -c "\copy (
+      SELECT *
+      FROM assemblies.user_created_assemblies
+      ORDER BY assembly_type, lower(coalesce(display_name, '')), assembly_guid
+    ) TO '/opt/Borealis/Aurora/_db_exports/user_created_assemblies.csv' CSV HEADER"
+    ```
 
-### Touch points to remember
-- API routes: `Data/Engine/Containers/api-backend/data/services/API/assemblies/`.
-- Assembly runtime: `Data/Engine/Containers/api-backend/data/services/assemblies/service.py` and `Data/Engine/Containers/api-backend/data/assembly_management/`.
-- UI editors: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`.
+    ### Known limitations
+    - Scheduled jobs are the supported playbook execution path in the Engine runtime.
+    - Recap/report APIs and some recap-focused UI surfaces are still being fleshed out around the working Engine-side runner.
+    - Linux agent support is incomplete; PowerShell scripts are Windows-first.
+
+    ### Touch points to remember
+    - API routes: `Data/Engine/Containers/api-backend/data/services/API/assemblies/`.
+    - Assembly runtime: `Data/Engine/Containers/api-backend/data/services/assemblies/service.py` and `Data/Engine/Containers/api-backend/data/assembly_management/`.
+    - UI editors: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Assemblies/`.

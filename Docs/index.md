@@ -1,120 +1,111 @@
-# Borealis Knowledgebase Index
+# Borealis Documentation
 
-## Purpose
-This page is the navigation hub for the Borealis documentation set. The knowledgebase is organized by domain folders under `Docs/` and published as a Zensical site through GitHub Pages.
+<div class="bo-hero" markdown>
 
-## Table Of Contents
-### Start Here
-- [Getting Started](Start%20Here/getting-started.md)
-- [Architecture Overview](Start%20Here/architecture-overview.md)
-- [Security and Trust](Start%20Here/security-and-trust.md)
-- [UI and Notifications](Start%20Here/ui-and-notifications.md)
-- [Unit Testing](Start%20Here/Unit_Testing.md)
-- [Testing](Start%20Here/testing.md)
-- [Testing Regressions](Start%20Here/testing-regressions.md)
+<div markdown>
 
-### Core Runtimes
-- [Engine Runtime](Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](Core%20Runtimes/agent-runtime.md)
-- [Docker Stack Breakdown](Core%20Runtimes/Stack_Breakdown.md)
+Borealis is a self-hosted remote management and visual automation platform. These docs cover deployment, agent behavior, device operations, automation authoring, remote access, database ownership, and contributor guardrails.
 
-### Data And Schema
-- [Database Reference](Data%20and%20Schema/db-reference.md)
-- [API Reference](Data%20and%20Schema/api-reference.md)
-- [Integrations](Data%20and%20Schema/integrations.md)
-- [SBOM](SBOM.md)
+Start with the operator guides when deploying or running Borealis. Use runtime, schema, and API references when changing code or troubleshooting production behavior.
 
-### Automation And Execution
-- [Assemblies and Quick Jobs](Automation%20and%20Execution/assemblies.md)
-- [Flow Editor and Nodes](Automation%20and%20Execution/flow-editor-and-nodes.md)
-- [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md)
-- [SSH Connection Logic](Automation%20and%20Execution/SSH_Connection_Logic.md)
-- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
+<div class="bo-pill-row">
+  <span class="bo-pill">Engine</span>
+  <span class="bo-pill">Agent</span>
+  <span class="bo-pill">Automation</span>
+  <span class="bo-pill">Remote Access</span>
+  <span class="bo-pill">PostgreSQL</span>
+</div>
 
-### Operations And Remote Access
-- [Device Management](Operations%20and%20Remote%20Access/device-management.md)
-- [Device Alerts](Operations%20and%20Remote%20Access/device-alerts.md)
-- [VPN and Remote Access](Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
-- [Logging and Operations](Operations%20and%20Remote%20Access/logging-and-operations.md)
+</div>
 
-### Software Management
-- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
-- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+<figure class="bo-screenshot">
+  <img src="images/repo_screenshots/Server_Overview.png" alt="Borealis server overview page" loading="lazy">
+  <figcaption>Server overview gives operators a quick read on Engine health and connected services.</figcaption>
+</figure>
 
-### Migration Paths
-- [Migrating Pages to React Router](Migration%20Paths/migrating-pages-to-react-router.md)
+</div>
 
-### Future Roadmaps
-- [Competitive Feature Gap Analysis](Future_Roadmaps/competitive-feature-gap-analysis.md)
+## Choose Starting Point
 
-### Assets
-- [Branding Assets](Branding/)
-- [Repository Screenshots](images/repo_screenshots/)
+<div class="bo-card-grid" markdown>
 
-### External References
-- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
+<div class="bo-card" markdown>
+**New Operators**
 
-### Key Repo References
+[Getting Started](Start%20Here/getting-started.md) covers Engine bootstrap, optional Agent install, and first-run checks.
+</div>
+
+<div class="bo-card" markdown>
+**Runtime Maintainers**
+
+[Architecture Overview](Start%20Here/architecture-overview.md), [Engine Runtime](Core%20Runtimes/engine-runtime.md), and [Agent Runtime](Core%20Runtimes/agent-runtime.md) explain system shape.
+</div>
+
+<div class="bo-card" markdown>
+**Fleet Operations**
+
+[Device Management](Operations%20and%20Remote%20Access/device-management.md), [Device Alerts](Operations%20and%20Remote%20Access/device-alerts.md), and [Logging and Operations](Operations%20and%20Remote%20Access/logging-and-operations.md) cover daily operator workflows.
+</div>
+
+<div class="bo-card" markdown>
+**Automation Authors**
+
+[Assemblies and Quick Jobs](Automation%20and%20Execution/assemblies.md), [Flow Editor and Nodes](Automation%20and%20Execution/flow-editor-and-nodes.md), and [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md) cover automation design and execution.
+</div>
+
+<div class="bo-card" markdown>
+**Remote Support**
+
+[VPN and Remote Access](Operations%20and%20Remote%20Access/vpn-and-remote-access.md) covers WireGuard tunnels, Remote PowerShell, and browser VNC.
+</div>
+
+<div class="bo-card" markdown>
+**Contributors**
+
+[Unit Testing](Start%20Here/Unit_Testing.md), [API Reference](Data%20and%20Schema/api-reference.md), and [Database Reference](Data%20and%20Schema/db-reference.md) define validation and shared contracts.
+</div>
+
+</div>
+
+## Documentation Map
+
+- [Start Here](Start%20Here/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
+- [Core Runtimes](Core%20Runtimes/index.md) - Engine, Agent, and Docker service layout.
+- [Data and Schema](Data%20and%20Schema/index.md) - PostgreSQL ownership, API surfaces, integrations, and SBOM.
+- [Automation and Execution](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
+- [Operations and Remote Access](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, WireGuard, VNC, shell, and logs.
+- [Software Management](Software%20Management/index.md) - installed software inventory, icon overrides, uninstall overrides, and uninstall blocklists.
+- [Migration Paths](Migration%20Paths/index.md) - WebUI route migration guidance.
+- [Future Roadmaps](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
+
+## Repository References
+
 - [README](https://github.com/bunny-lab-io/Borealis/blob/main/README.md)
 - [AGENTS.md](https://github.com/bunny-lab-io/Borealis/blob/main/AGENTS.md)
 - [Engine Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Engine_Unit_Tests.sh)
 - [Linux Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
 - [Windows Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
+- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 
-## API Endpoints
-None. This index only links to other pages.
+??? example "Detailed Codex Breakdown"
 
-## Related Documentation
-- See the Table of Contents above for the primary knowledgebase pages.
+    Start with `AGENTS.md` at the repo root, then use this documentation site as the knowledgebase entrypoint.
 
-## Codex Agent
-### How To Use This Knowledgebase
-- Start with `AGENTS.md` at the repo root.
-- Read `Docs/Start Here/getting-started.md` and `Docs/Start Here/architecture-overview.md` to build the global model.
-- Use `Docs/Core Runtimes/engine-runtime.md`, `Docs/Core Runtimes/agent-runtime.md`, and `Docs/Core Runtimes/Stack_Breakdown.md` for implementation-level runtime details.
-- Use `Docs/Data and Schema/db-reference.md` for PostgreSQL table ownership, relationships, and DB lifecycle guardrails.
-- Use `Docs/Automation and Execution/assemblies.md`, `Docs/Automation and Execution/flow-editor-and-nodes.md`, `Docs/Automation and Execution/scheduled-jobs.md`, `Docs/Automation and Execution/SSH_Connection_Logic.md`, and `Docs/Automation and Execution/watchdogs.md` for automation authoring and execution behavior.
-- Use `Docs/Operations and Remote Access/device-management.md`, `Docs/Operations and Remote Access/device-alerts.md`, `Docs/Operations and Remote Access/logging-and-operations.md`, and `Docs/Operations and Remote Access/vpn-and-remote-access.md` for operational workflows, incident handling, and remote access behavior.
-- Use `Docs/Start Here/ui-and-notifications.md` for MagicUI, AG Grid, toast notification, and shared UI rules.
-- Use `Docs/Migration Paths/migrating-pages-to-react-router.md` when moving legacy WebUI pages onto the shared router and app shell.
-- Use `Docs/Data and Schema/api-reference.md` and `Docs/Data and Schema/integrations.md` for API surfaces and external service behavior.
-- Use `Docs/Start Here/security-and-trust.md` for enrollment, tokens, Aegis, and code-signing behavior.
-- Use `Docs/Start Here/Unit_Testing.md` and `Docs/Start Here/testing-regressions.md` for unit test commands, domain selection, helper rules, result locations, and known regression status.
-- Use GitHub issues labeled `Technical Debt` when documenting workarounds, non-standard build steps, or dev/prod drift.
+    Runtime source locations:
 
-### Where Truth Lives In Code
-- Engine package shim and tests: `Data/Engine/`.
-- Engine API source code: `Data/Engine/Containers/api-backend/data/` (edit here).
-- Agent source code: `Data/Agent/` (edit here).
-- Web UI source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
-- Runtime copies: `Engine/` and `Agent/` (do not edit directly; they are regenerated).
-- Logs: `Engine/Services/api-backend/logs/` and `Agent/Logs/` (runtime artifacts).
-- Official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated bundled seed snapshot).
-- Runtime assembly data: PostgreSQL `assemblies.*` tables.
+    - Engine package shim and tests: `Data/Engine/`.
+    - Engine API source code: `Data/Engine/Containers/api-backend/data/`.
+    - Agent source code: `Data/Agent/`.
+    - Web UI source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
+    - Runtime copies: `Engine/` and `Agent/`; do not edit directly.
+    - Logs: `Engine/Services/api-backend/logs/` and `Agent/Logs/`.
 
-### Documentation Authoring Rules
-- Keep new documentation inside the closest domain folder.
-- Add new pages to `../zensical.toml` navigation and this Table of Contents when they should appear in the public documentation site.
-- Use ASCII characters only unless the file already uses Unicode.
-- Avoid duplicating long source code; paraphrase and point to files instead.
-- When a feature has UI and backend components, document both and link the relevant files.
-- Codex Agent sections should stay detailed enough for a future agent to act without rediscovery.
+    Authoring rules:
 
-### Cross-Linking And Maintenance
-- Link outward to adjacent domains. Example: device management should link to filters, scheduled jobs, VPN, and API reference.
-- When adding a new doc, add it to this Table of Contents and add at least two Related Documentation links from other pages.
-- When moving docs between folders, update this index and any Related Documentation links that still point at old root-level paths.
-
-### Update Workflow Example
-- Change: add a new endpoint in `Data/Engine/Containers/api-backend/data/services/API/devices/management.py`.
-- Update steps:
-  1. Add the endpoint to the file header in that module.
-  2. Update `Docs/Data and Schema/api-reference.md` under the Devices and Inventory section.
-  3. Update `Docs/Operations and Remote Access/device-management.md` with the new endpoint and behavior.
-  4. If UI changes are involved, update `Docs/Start Here/ui-and-notifications.md`.
-
-### Editing Safety Reminders
-- Do not edit runtime directories `Engine/` or `Agent/`.
-- Prefer reading with `rg` or `find` for quick discovery and update docs after code changes.
-- If you notice unexpected changes in git, identify them before editing and do not revert user work.
+    - Keep new documentation inside closest domain folder.
+    - Add public pages to `../zensical.toml` navigation.
+    - Use ASCII unless existing file already uses Unicode.
+    - Avoid duplicating long source code; link to files and summarize behavior.
+    - Document UI and backend components together when both change.
+    - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
+    - Use GitHub issues labeled `Technical Debt` for workarounds, non-standard build steps, or dev/prod drift.

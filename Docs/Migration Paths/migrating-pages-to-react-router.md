@@ -159,45 +159,46 @@ function openQuickJob(hostnames) {
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
 
-## Codex Agent (Detailed)
-### Default migration sequence for future agents
-- Start by reading `Docs/ui-and-notifications.md` and this guide.
-- Open the target page component and find every dependency on:
-  - `currentPage`
-  - `navigateTo`
-  - `onPageMetaChange`
-  - direct `window.history` writes
-  - direct `window.location.search` parsing
-- Register the page's canonical route in `src/app/routes/router.jsx`.
-- Decide which values belong in params, query, or `location.state`.
-- Implement or update the thin route module in `src/app/route-modules/`.
-- Convert the page itself to route-native hooks instead of adding new compatibility props.
-- Only after the page works via the new route should you remove any local compatibility glue.
+??? example "Detailed Codex Breakdown"
 
-### Params vs query vs location.state
-- Params:
-  - resource identifiers such as `deviceId`, `filterId`, `jobId`, `assemblyGuid`, `workflowGuid`, `runId`
-- Query:
-  - active tab keys
-  - repeated values that must survive refresh and be shareable, such as `?user=alice&user=bob`
-- `location.state`:
-  - quick-job draft payloads
-  - "new workflow" suggested names
-  - other launch-only state that should not survive refresh
+    ### Default migration sequence for future agents
+    - Start by reading `Docs/ui-and-notifications.md` and this guide.
+    - Open the target page component and find every dependency on:
+      - `currentPage`
+      - `navigateTo`
+      - `onPageMetaChange`
+      - direct `window.history` writes
+      - direct `window.location.search` parsing
+    - Register the page's canonical route in `src/app/routes/router.jsx`.
+    - Decide which values belong in params, query, or `location.state`.
+    - Implement or update the thin route module in `src/app/route-modules/`.
+    - Convert the page itself to route-native hooks instead of adding new compatibility props.
+    - Only after the page works via the new route should you remove any local compatibility glue.
 
-### What to do with legacy helpers
-- `onPageMetaChange`:
-  - remove it from the page contract
-  - replace it with `useRoutePageChrome()` or `usePageChrome()`
-- `navigateTo`:
-  - remove it from the page contract
-  - replace it with `useNavigate()` and shared path helpers
-- Manual `window.history` writes:
-  - replace them with `useUrlTabState(...)` or `useSearchParams()`
+    ### Params vs query vs location.state
+    - Params:
+      - resource identifiers such as `deviceId`, `filterId`, `jobId`, `assemblyGuid`, `workflowGuid`, `runId`
+    - Query:
+      - active tab keys
+      - repeated values that must survive refresh and be shareable, such as `?user=alice&user=bob`
+    - `location.state`:
+      - quick-job draft payloads
+      - "new workflow" suggested names
+      - other launch-only state that should not survive refresh
 
-### Code review expectations for migrations
-- Prefer smaller, route-complete migrations over half-converted pages.
-- If a page still needs the adapter bridge, keep the bridge thin and obvious.
-- Preserve deep-link refresh behavior before cleaning up internal code style.
-- When a migration adds dependencies or changes shell ownership, update docs and `Docs/SBOM.md` in the same change.
-- For buffered routes, verify the old page remains visible while the next route loader is pending and that the page does not render an empty-shell first paint before its critical loader data arrives.
+    ### What to do with legacy helpers
+    - `onPageMetaChange`:
+      - remove it from the page contract
+      - replace it with `useRoutePageChrome()` or `usePageChrome()`
+    - `navigateTo`:
+      - remove it from the page contract
+      - replace it with `useNavigate()` and shared path helpers
+    - Manual `window.history` writes:
+      - replace them with `useUrlTabState(...)` or `useSearchParams()`
+
+    ### Code review expectations for migrations
+    - Prefer smaller, route-complete migrations over half-converted pages.
+    - If a page still needs the adapter bridge, keep the bridge thin and obvious.
+    - Preserve deep-link refresh behavior before cleaning up internal code style.
+    - When a migration adds dependencies or changes shell ownership, update docs and `Docs/SBOM.md` in the same change.
+    - For buffered routes, verify the old page remains visible while the next route loader is pending and that the page does not render an empty-shell first paint before its critical loader data arrives.

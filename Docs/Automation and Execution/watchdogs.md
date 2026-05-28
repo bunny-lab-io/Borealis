@@ -3,6 +3,13 @@
 ## Purpose
 Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing device data, explain why they matched, and optionally launch native remediation.
 
+## Visual Tour
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Watchdog_List.png" alt="Borealis watchdog list" loading="lazy">
+  <figcaption>Watchdog List is the policy surface for monitoring rules, assignment scope, and remediation.</figcaption>
+</figure>
+
 ## Watchdogs at a Glance
 - Watchdogs live under `Automation` in the sidebar because they are policy-authoring and remediation tools.
 - Each watchdog has:
@@ -113,40 +120,41 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - [UI and Notifications](../Start%20Here/ui-and-notifications.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 
-## Codex Agent (Detailed)
-### Main implementation files
-- API registration: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`
-- Runtime service: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
-- Schema migration: `Data/Engine/Containers/api-backend/data/database_migrations.py`
-- Navigation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`
-- Routes: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`
+??? example "Detailed Codex Breakdown"
 
-### Runtime ownership
-- `WatchdogRuntimeService` is attached to `EngineContext.watchdog_runtime`.
-- The Engine app factory wires the watchdog API registration after the normal API/WebUI/Socket.IO registrars.
-- The runtime keeps a background evaluator loop that periodically re-evaluates enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
+    ### Main implementation files
+    - API registration: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`
+    - Runtime service: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
+    - Schema migration: `Data/Engine/Containers/api-backend/data/database_migrations.py`
+    - Navigation: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Navigation_Sidebar.jsx`
+    - Routes: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` and `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`
 
-### Device data sources used by v1
-- Device heartbeat age from `devices.last_seen`
-- Heartbeat performance metrics from `devices.cpu_percent` and `devices.memory_percent`
-- Storage JSON from `devices.storage`
-- Cached session snapshots from `devices.sessions`
-- Cached process snapshots from `devices.processes`
-- Cached service inventory from `devices.services`
-- Agent role telemetry from `devices.agent_role_health`
-- Normalized software inventory from `device_software_inventory`
-- Agent repo/hash comparison from `devices.agent_hash` plus the Engine-side current-repo-hash lookup
+    ### Runtime ownership
+    - `WatchdogRuntimeService` is attached to `EngineContext.watchdog_runtime`.
+    - The Engine app factory wires the watchdog API registration after the normal API/WebUI/Socket.IO registrars.
+    - The runtime keeps a background evaluator loop that periodically re-evaluates enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
 
-### State and incident tables
-- `watchdogs`
-- `watchdog_sites`
-- `watchdog_targets`
-- `watchdog_device_overrides`
-- `watchdog_device_state`
-- `watchdog_incidents`
+    ### Device data sources used by v1
+    - Device heartbeat age from `devices.last_seen`
+    - Heartbeat performance metrics from `devices.cpu_percent` and `devices.memory_percent`
+    - Storage JSON from `devices.storage`
+    - Cached session snapshots from `devices.sessions`
+    - Cached process snapshots from `devices.processes`
+    - Cached service inventory from `devices.services`
+    - Agent role telemetry from `devices.agent_role_health`
+    - Normalized software inventory from `device_software_inventory`
+    - Agent repo/hash comparison from `devices.agent_hash` plus the Engine-side current-repo-hash lookup
 
-### Runtime notes
-- Saving a watchdog immediately re-evaluates it so operators see current state without waiting for the next scheduler tick.
-- Disabling or archiving a watchdog resolves open incidents and marks saved device state as disabled instead of leaving stale incidents behind.
-- Deleting a watchdog removes related targets, site scope rows, overrides, runtime state rows, and incidents.
-- On Engine startup, Borealis purges any lingering resolved incidents belonging to offline-only watchdogs so transient offline history does not accumulate after restarts or earlier bugs.
+    ### State and incident tables
+    - `watchdogs`
+    - `watchdog_sites`
+    - `watchdog_targets`
+    - `watchdog_device_overrides`
+    - `watchdog_device_state`
+    - `watchdog_incidents`
+
+    ### Runtime notes
+    - Saving a watchdog immediately re-evaluates it so operators see current state without waiting for the next scheduler tick.
+    - Disabling or archiving a watchdog resolves open incidents and marks saved device state as disabled instead of leaving stale incidents behind.
+    - Deleting a watchdog removes related targets, site scope rows, overrides, runtime state rows, and incidents.
+    - On Engine startup, Borealis purges any lingering resolved incidents belonging to offline-only watchdogs so transient offline history does not accumulate after restarts or earlier bugs.

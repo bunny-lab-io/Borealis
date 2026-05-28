@@ -3,6 +3,23 @@
 ## Purpose
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.
 
+## Visual Tour
+
+<div class="bo-screenshot-grid">
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Scheduled_Job_List.png" alt="Borealis scheduled job list" loading="lazy">
+    <figcaption>Scheduled Job List shows enabled jobs, cadence, target state, and recent execution status.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Scheduled_Job_Editor.png" alt="Borealis scheduled job editor" loading="lazy">
+    <figcaption>Scheduled Job Editor binds assemblies to targets, schedules, execution contexts, and variables.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Scheduled_Job_History.png" alt="Borealis scheduled job history" loading="lazy">
+    <figcaption>Run history records target outcomes and activity for troubleshooting.</figcaption>
+  </figure>
+</div>
+
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
 - `job-scheduler` owns the scheduled tick loop in container deployments. `api-backend` keeps CRUD/status APIs and the live Socket.IO bridge.
@@ -129,86 +146,87 @@ Supported schedule types (from the scheduler core):
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [SSH Connection Logic](SSH_Connection_Logic.md)
 
-## Codex Agent (Detailed)
-### Scheduler entry points
-- API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
-- Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
-- Job scheduler runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/manager.py`.
-- Site worker runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
+??? example "Detailed Codex Breakdown"
 
-### Core tables (Engine DB)
-- `scheduled_jobs` - job definition, schedule, targets, execution context.
-- `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
-- `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
-- `scheduled_job_run_activity` - links activity_history to scheduled runs.
-- `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
-- `scheduled_job_onboarding_target_events` - persistent per-target onboarding task timeline for Detailed Breakdown.
-- `job_scheduler_work_items` - durable queued/running/completed work with Postgres leases. Current kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, and `service_action`.
-- `job_scheduler_workers` - active/recent site-worker lifecycle snapshots.
-- `job_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
+    ### Scheduler entry points
+    - API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.
+    - Scheduler core: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
+    - Job scheduler runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/manager.py`.
+    - Site worker runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
 
-### Schedule computation
-- `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.
-- `immediately` schedules once if the job never ran.
-- `once` schedules at `start_ts` only once.
+    ### Core tables (Engine DB)
+    - `scheduled_jobs` - job definition, schedule, targets, execution context.
+    - `scheduled_job_runs` - per-run status, timestamps, error fields, skip reason.
+    - `scheduled_job_run_targets` - frozen occurrence target snapshot and originating filter links.
+    - `scheduled_job_run_activity` - links activity_history to scheduled runs.
+    - `scheduled_job_onboarding_targets` - per-target local-network onboarding attempt state and sanitized output.
+    - `scheduled_job_onboarding_target_events` - persistent per-target onboarding task timeline for Detailed Breakdown.
+    - `job_scheduler_work_items` - durable queued/running/completed work with Postgres leases. Current kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, and `service_action`.
+    - `job_scheduler_workers` - active/recent site-worker lifecycle snapshots.
+    - `job_scheduler_service_snapshots` - last known Compose service state from `job-scheduler` for Server Info when `api-backend` has no Docker socket.
 
-### Targeting logic
-- Targets can be hostnames or device filters.
-- `DeviceFilterMatcher` loads device snapshots and resolves filter matches.
-- Operator-created filter targets carry persisted `allowed_site_ids`; matcher resolution must honor that saved site scope instead of treating the filter as globally visible.
-- A due occurrence is resolved once, then reused for the rest of that occurrence.
-- The scheduler can also request an online-only hostname snapshot when deciding whether a pending target can dispatch.
+    ### Schedule computation
+    - `_compute_next_run` normalizes timestamps to minutes and applies schedule type logic.
+    - `immediately` schedules once if the job never ran.
+    - `once` schedules at `start_ts` only once.
 
-### Execution context
-- Payloads are emitted as quick jobs with extra context:
-  - `scheduled_job_id`
-  - `scheduled_job_run_id`
-  - `scheduled_ts`
-- Agent-side script payloads also carry:
-  - `target_context` (`system` or `currentuser`)
-  - `session_target` (`all_active_sessions` for scheduled current-user jobs)
-  - `target_session_id` only when a specific session is explicitly chosen by an ad hoc caller
-- `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
-- The scheduler does not speak to helpers directly; it targets the host's SYSTEM socket and lets the agent broker fan current-user runs out to helper-ready sessions.
-- `execution_context = local` is Engine-side only and runs the playbook directly on the Linux Engine against the localhost-style Engine target.
-- `execution_context = ssh` and `execution_context = winrm` run from the Linux Engine, synthesize shared per-run inventories, and target remote devices over the managed WireGuard network.
-- `execution_context = ssh_individual` and `execution_context = winrm_individual` run from the Linux Engine, synthesize one-host inventories, and dispatch one run row per target host per playbook component with bounded concurrency.
-- Scheduled-job authoring only exposes `system` / `current_user` for script assemblies and `ssh_individual` / `ssh` / `winrm_individual` / `winrm` for Ansible playbook assemblies. Mixing script and Ansible components is rejected in both the editor and API, while workflow-backed jobs continue to own their runtime inside the workflow document.
-- Shared Ansible occurrences write one `scheduled_job_runs` row per playbook component and freeze one deduplicated target snapshot per resolved device in `scheduled_job_run_targets`.
-- Individual Ansible occurrences write one `scheduled_job_runs` row per resolved target host per playbook component and freeze one `scheduled_job_run_targets` row per child run, which keeps device-level status/output isolated.
-- Remote SSH targets are admitted when Borealis has a WireGuard peer IP, resolved credential material, and agent-side readiness for the active tunnel. Ansible itself owns SSH reachability and authentication outcomes after that point.
-- Engine-side Ansible SSH runs isolate their SSH control sockets to a short per-run directory under `/tmp/ansible_controlplane` so stale multiplexed sessions do not bleed across retries or later jobs.
-- Engine-side scheduled SSH runs also write `ansible_ssh_transfer_method = scp` by default because some peers first hung forever in the SFTP subsystem and then also stalled in the `piped`/`dd` module upload path. `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` can override that default, and `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` defaults to `-O` when SCP is selected.
-- Remote SSH/WinRM targets that do not report agent-side WireGuard readiness are marked `resolution_status = skipped` with `resolution_reason = wireguard_not_ready`.
-- Remote WinRM targets that report WireGuard readiness but fail Engine-side TCP preflight are marked `resolution_status = skipped` with `resolution_reason = remote_preflight_failed` and are not forwarded into Ansible.
-- Individual scheduled Ansible runner fan-out is bounded by persisted settings from `Data/Engine/Containers/api-backend/data/services/ansible/runtime_settings.py`, surfaced through Server Info, and enforced inside `_tick_once()` before dispatch.
+    ### Targeting logic
+    - Targets can be hostnames or device filters.
+    - `DeviceFilterMatcher` loads device snapshots and resolves filter matches.
+    - Operator-created filter targets carry persisted `allowed_site_ids`; matcher resolution must honor that saved site scope instead of treating the filter as globally visible.
+    - A due occurrence is resolved once, then reused for the rest of that occurrence.
+    - The scheduler can also request an online-only hostname snapshot when deciding whether a pending target can dispatch.
 
-### Retention and cleanup
-- Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.
-- Purging is done inside the scheduler tick loop.
-- Site worker lifecycle rows are separate from scheduled job history. Terminal `site-worker-*` rows are kept for the worker canvas history window, then pruned by `job-scheduler`; default is 60 seconds via `BOREALIS_WORKER_HISTORY_SECONDS`.
-- `GET /api/server/workers?history_seconds=60` uses the same history window for stopped/lost worker visibility, so old terminal rows with missing `stopped_at` no longer remain visible forever.
+    ### Execution context
+    - Payloads are emitted as quick jobs with extra context:
+      - `scheduled_job_id`
+      - `scheduled_job_run_id`
+      - `scheduled_ts`
+    - Agent-side script payloads also carry:
+      - `target_context` (`system` or `currentuser`)
+      - `session_target` (`all_active_sessions` for scheduled current-user jobs)
+      - `target_session_id` only when a specific session is explicitly chosen by an ad hoc caller
+    - `quick_job_result` updates `scheduled_job_runs` and `activity_history`.
+    - The scheduler does not speak to helpers directly; it targets the host's SYSTEM socket and lets the agent broker fan current-user runs out to helper-ready sessions.
+    - `execution_context = local` is Engine-side only and runs the playbook directly on the Linux Engine against the localhost-style Engine target.
+    - `execution_context = ssh` and `execution_context = winrm` run from the Linux Engine, synthesize shared per-run inventories, and target remote devices over the managed WireGuard network.
+    - `execution_context = ssh_individual` and `execution_context = winrm_individual` run from the Linux Engine, synthesize one-host inventories, and dispatch one run row per target host per playbook component with bounded concurrency.
+    - Scheduled-job authoring only exposes `system` / `current_user` for script assemblies and `ssh_individual` / `ssh` / `winrm_individual` / `winrm` for Ansible playbook assemblies. Mixing script and Ansible components is rejected in both the editor and API, while workflow-backed jobs continue to own their runtime inside the workflow document.
+    - Shared Ansible occurrences write one `scheduled_job_runs` row per playbook component and freeze one deduplicated target snapshot per resolved device in `scheduled_job_run_targets`.
+    - Individual Ansible occurrences write one `scheduled_job_runs` row per resolved target host per playbook component and freeze one `scheduled_job_run_targets` row per child run, which keeps device-level status/output isolated.
+    - Remote SSH targets are admitted when Borealis has a WireGuard peer IP, resolved credential material, and agent-side readiness for the active tunnel. Ansible itself owns SSH reachability and authentication outcomes after that point.
+    - Engine-side Ansible SSH runs isolate their SSH control sockets to a short per-run directory under `/tmp/ansible_controlplane` so stale multiplexed sessions do not bleed across retries or later jobs.
+    - Engine-side scheduled SSH runs also write `ansible_ssh_transfer_method = scp` by default because some peers first hung forever in the SFTP subsystem and then also stalled in the `piped`/`dd` module upload path. `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` can override that default, and `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` defaults to `-O` when SCP is selected.
+    - Remote SSH/WinRM targets that do not report agent-side WireGuard readiness are marked `resolution_status = skipped` with `resolution_reason = wireguard_not_ready`.
+    - Remote WinRM targets that report WireGuard readiness but fail Engine-side TCP preflight are marked `resolution_status = skipped` with `resolution_reason = remote_preflight_failed` and are not forwarded into Ansible.
+    - Individual scheduled Ansible runner fan-out is bounded by persisted settings from `Data/Engine/Containers/api-backend/data/services/ansible/runtime_settings.py`, surfaced through Server Info, and enforced inside `_tick_once()` before dispatch.
 
-### Failure and retry notes
-- The scheduler is designed to be resilient; it logs and continues on errors.
-- Expired runs are marked `Timed Out` when they exceed the expiration window.
-- Offline pending targets can age into `Expired`.
-- Zero-target occurrences are stored as skipped instead of success or failure.
+    ### Retention and cleanup
+    - Retention defaults to 30 days and is configured by `BOREALIS_JOB_HISTORY_DAYS`.
+    - Purging is done inside the scheduler tick loop.
+    - Site worker lifecycle rows are separate from scheduled job history. Terminal `site-worker-*` rows are kept for the worker canvas history window, then pruned by `job-scheduler`; default is 60 seconds via `BOREALIS_WORKER_HISTORY_SECONDS`.
+    - `GET /api/server/workers?history_seconds=60` uses the same history window for stopped/lost worker visibility, so old terminal rows with missing `stopped_at` no longer remain visible forever.
 
-### UI touch points
-- Scheduled job UI lives under `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`.
-- The list page expects pagination and run history endpoints to respond quickly.
-- The list page exposes `Re-Run Job` for one selected enabled job. It calls `/api/scheduled_jobs/<id>/rerun`, which records a new pending occurrence and lets the scheduler/site-worker lane execute the saved configuration.
-- Session-target selection is currently an ad hoc quick-run concept; scheduled current-user jobs intentionally default to all active sessions until a dedicated scheduler UI is introduced.
-- WebUI deep links:
-- Create route: `/jobs/new`
-- Edit route: `/jobs/<job_id>`
-- Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
-- Scheduled automation history subtab query keys: `current_run`, `historical_runs`, and `historical_run`.
-- Automatic onboarding tab query keys: `job_name`, `scope`, `connection_method`, `schedule`, `discovered_devices` (edit mode only). Legacy `ssh_context` and `target_status` links still map to the current tabs.
-- Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
+    ### Failure and retry notes
+    - The scheduler is designed to be resilient; it logs and continues on errors.
+    - Expired runs are marked `Timed Out` when they exceed the expiration window.
+    - Offline pending targets can age into `Expired`.
+    - Zero-target occurrences are stored as skipped instead of success or failure.
 
-### Debug checklist
-- Jobs not running: check `Engine/Services/api-backend/logs/engine.log` and `Engine/Services/api-backend/logs/scheduled_jobs.log`.
-- Run history empty: verify `scheduled_job_runs` table and quick job events.
-- Filter target mismatch: inspect the saved filter payload, `scheduled_job_run_targets`, and matcher logic.
+    ### UI touch points
+    - Scheduled job UI lives under `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/`.
+    - The list page expects pagination and run history endpoints to respond quickly.
+    - The list page exposes `Re-Run Job` for one selected enabled job. It calls `/api/scheduled_jobs/<id>/rerun`, which records a new pending occurrence and lets the scheduler/site-worker lane execute the saved configuration.
+    - Session-target selection is currently an ad hoc quick-run concept; scheduled current-user jobs intentionally default to all active sessions until a dedicated scheduler UI is introduced.
+    - WebUI deep links:
+    - Create route: `/jobs/new`
+    - Edit route: `/jobs/<job_id>`
+    - Scheduled automation tab query keys: `job_name`, `assemblies`, `targets`, `schedule`, `execution_context`, `job_history` (edit mode only).
+    - Scheduled automation history subtab query keys: `current_run`, `historical_runs`, and `historical_run`.
+    - Automatic onboarding tab query keys: `job_name`, `scope`, `connection_method`, `schedule`, `discovered_devices` (edit mode only). Legacy `ssh_context` and `target_status` links still map to the current tabs.
+    - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`.
+
+    ### Debug checklist
+    - Jobs not running: check `Engine/Services/api-backend/logs/engine.log` and `Engine/Services/api-backend/logs/scheduled_jobs.log`.
+    - Run history empty: verify `scheduled_job_runs` table and quick job events.
+    - Filter target mismatch: inspect the saved filter payload, `scheduled_job_run_targets`, and matcher logic.

@@ -23,14 +23,15 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 | REG-TEST-006 | Engine RBAC and filters | `Data/Engine/Unit_Tests/test_device_filters_api.py` and `Data/Engine/Unit_Tests/test_rbac_api.py` | fixed | Full Engine validation exposed filter reload and usage-conflict checks running without the current actor plus stale site-scope tuple unpacking. | Keep create/update/archive/delete filter paths passing the current user into visibility and usage checks. |
 | REG-TEST-007 | Engine runner isolation | `Engine_Unit_Tests.sh` Engine Python lane | fixed | Single-process pytest run exceeded the lane timeout after slow API tests and process-global state leaked between files. Runner now executes Engine Python test files in isolated pytest processes with per-file timeouts. | Preserve all-test execution while keeping file-level isolation and useful per-file logs. |
 
-## Codex Agent
-- Add a row when introducing a regression test for a bug found in production, operator validation, or a PR review.
-- If a formalization run exposes a failure that predates the cleanup, record it here before changing or quarantining the test.
-- Prefer fixing stale expectations over marking tests skipped.
-- If a skip or xfail is necessary, include the regression ID in the marker reason.
-
 ## Related Documentation
 - [Unit Testing](Unit_Testing.md)
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
+
+??? example "Detailed Codex Breakdown"
+
+    - Add a row when introducing a regression test for a bug found in production, operator validation, or a PR review.
+    - If a formalization run exposes a failure that predates the cleanup, record it here before changing or quarantining the test.
+    - Prefer fixing stale expectations over marking tests skipped.
+    - If a skip or xfail is necessary, include the regression ID in the marker reason.

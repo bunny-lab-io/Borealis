@@ -916,114 +916,6 @@ Each table has the same schema:
 - `POST /api/admin/enrollment-codes` returns `410` (`legacy_endpoint_removed_use_sites_api`).
 - `DELETE /api/admin/enrollment-codes/<code_id>` returns `410` (`legacy_endpoint_removed_use_sites_api`).
 
-## Codex Agent (Detailed)
-### Troubleshooting queries
-```sql
--- 1) List user-managed Borealis tables in PostgreSQL
-SELECT schemaname, tablename
-FROM pg_tables
-WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
-ORDER BY schemaname, tablename;
-
--- 2) Site-to-enrollment code map (current source of truth)
-SELECT id, name, enrollment_code
-FROM sites
-ORDER BY LOWER(name);
-
--- 3) Pending approvals with site context
-SELECT da.id, da.approval_reference, da.hostname_claimed, da.enrollment_code, da.status, s.name AS site_name
-FROM device_approvals da
-LEFT JOIN sites s ON s.id = da.site_id
-WHERE LOWER(da.status) = 'pending'
-ORDER BY da.created_at ASC;
-
--- 4) Recent wrong-code enrollment attempts
-SELECT hostname_claimed, enrollment_code_mask, remote_addr, attempt_count, last_seen_at
-FROM enrollment_code_failures
-ORDER BY last_seen_at DESC;
-
--- 5) Device-to-site assignments
-SELECT d.guid, d.hostname, s.id AS site_id, s.name AS site_name
-FROM devices d
-LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
-LEFT JOIN sites s ON s.id = ds.site_id
-ORDER BY LOWER(d.hostname);
-
--- 5) Check for orphaned hostname mappings (no matching device row)
-SELECT ds.device_hostname, ds.site_id
-FROM device_sites ds
-LEFT JOIN devices d ON d.hostname = ds.device_hostname
-WHERE d.hostname IS NULL;
-
--- 6) Check for orphaned site mappings (no matching site row)
-SELECT ds.device_hostname, ds.site_id
-FROM device_sites ds
-LEFT JOIN sites s ON s.id = ds.site_id
-WHERE s.id IS NULL;
-
--- 7) Scheduled run/activity linkage health
-SELECT r.id AS run_id, r.job_id, r.status, a.id AS link_id, a.activity_id
-FROM scheduled_job_runs r
-LEFT JOIN scheduled_job_run_activity a ON a.run_id = r.id
-ORDER BY r.id DESC
-LIMIT 200;
-
--- 8) Confirm legacy columns are gone (expect 0 rows)
-SELECT COUNT(*) AS has_legacy_sites_col
-FROM pragma_table_info('sites')
-WHERE name = 'enrollment_code_id';
-
--- 9) Identify sessions that are cleanly pooled and waiting for reuse
-SELECT pid, state, wait_event, query_start, now() - query_start AS age, left(query, 200) AS query
-FROM pg_stat_activity
-WHERE datname = 'borealis'
-ORDER BY query_start;
-
--- 10) Focus only on bad pooled sessions (these should be rare and short-lived)
-SELECT pid, usename, state, wait_event, xact_start, now() - xact_start AS txn_age, left(query, 200) AS query
-FROM pg_stat_activity
-WHERE datname = 'borealis'
-  AND state = 'idle in transaction'
-ORDER BY xact_start NULLS LAST;
-```
-
-### Change-management checklist for schema edits
-- Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
-- Update this document and any affected domain docs (`device-management.md`, `scheduled-jobs.md`, `security-and-trust.md`).
-- Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
-- Verify runtime startup applies schema without errors by checking `Engine/Services/api-backend/logs/engine.log`.
-
-### Data-model guidance for the current enrollment design
-- Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
-- Keep `device_sites` as hostname-to-site map for UI and filter joins.
-- Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
-- Treat `enrollment_code_failures.enrollment_code_mask` as operator visibility only; do not persist full wrong codes.
-
-### Codex checklist for DB connection hygiene
-- Start with the hottest request or loop, not the easiest file. Prioritize watchdogs, device inventory, scheduled jobs, workflows, and auth-sensitive routes.
-- Search for `conn =`, `_db_conn()`, `_conn()`, `cur.fetchall()`, `commit()`, and `conn.close()` in the target module before editing.
-- Look for any work between the last SQL statement and `conn.close()`:
-- payload shaping loops
-- `json.loads()` or other parsing
-- `resolve_target_entries()` or `fetch_devices()`
-- Aegis crypto helpers
-- GitHub or other integration lookups
-- If that work does not require the live cursor or transaction, move it after `conn.close()`.
-- For write paths, keep the transaction open only for validation reads that must be consistent with the write. Do not leave the connection open for response shaping.
-- If a route resolves filters or device targets more than once, fetch one inventory snapshot and reuse it for the whole request.
-- If a helper repeatedly asks for repo or catalog metadata, add a short TTL cache so repeated reads do not create unnecessary external latency while DB connections are checked out.
-- After each fix, test the route and inspect `pg_stat_activity` to confirm pooled sessions return to `idle` rather than `idle in transaction`.
-
-### Codex remediation workflow
-1. Reproduce the route or background loop that is suspected of exhausting the pool.
-2. Inspect `pg_stat_activity` and note whether the bad rows are `idle in transaction`, long-lived `active`, or simply a large number of healthy `idle` sessions.
-3. Read the corresponding service code and mark every line between the final SQL statement and `conn.close()`.
-4. Move all non-DB work out of the connection scope unless the logic requires transactional consistency.
-5. For repeated target resolution, build one device snapshot and pass it to downstream helpers instead of refetching inventory.
-6. For repeated integration lookups, add a small in-memory TTL cache rather than doing the lookup on every request.
-7. Re-run the route, verify the behavior, and check `pg_stat_activity` again.
-8. If the route is still heavy, then consider query-count reduction, bulk loading, or schema/index tuning. Do not jump to pool-size changes before the connection lifecycle is clean.
-
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Security and Trust](../Start%20Here/security-and-trust.md)
@@ -1031,3 +923,112 @@ ORDER BY xact_start NULLS LAST;
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
 - [Security and Trust](../Start%20Here/security-and-trust.md)
+
+??? example "Detailed Codex Breakdown"
+
+    ### Troubleshooting queries
+    ```sql
+    -- 1) List user-managed Borealis tables in PostgreSQL
+    SELECT schemaname, tablename
+    FROM pg_tables
+    WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+    ORDER BY schemaname, tablename;
+
+    -- 2) Site-to-enrollment code map (current source of truth)
+    SELECT id, name, enrollment_code
+    FROM sites
+    ORDER BY LOWER(name);
+
+    -- 3) Pending approvals with site context
+    SELECT da.id, da.approval_reference, da.hostname_claimed, da.enrollment_code, da.status, s.name AS site_name
+    FROM device_approvals da
+    LEFT JOIN sites s ON s.id = da.site_id
+    WHERE LOWER(da.status) = 'pending'
+    ORDER BY da.created_at ASC;
+
+    -- 4) Recent wrong-code enrollment attempts
+    SELECT hostname_claimed, enrollment_code_mask, remote_addr, attempt_count, last_seen_at
+    FROM enrollment_code_failures
+    ORDER BY last_seen_at DESC;
+
+    -- 5) Device-to-site assignments
+    SELECT d.guid, d.hostname, s.id AS site_id, s.name AS site_name
+    FROM devices d
+    LEFT JOIN device_sites ds ON ds.device_hostname = d.hostname
+    LEFT JOIN sites s ON s.id = ds.site_id
+    ORDER BY LOWER(d.hostname);
+
+    -- 5) Check for orphaned hostname mappings (no matching device row)
+    SELECT ds.device_hostname, ds.site_id
+    FROM device_sites ds
+    LEFT JOIN devices d ON d.hostname = ds.device_hostname
+    WHERE d.hostname IS NULL;
+
+    -- 6) Check for orphaned site mappings (no matching site row)
+    SELECT ds.device_hostname, ds.site_id
+    FROM device_sites ds
+    LEFT JOIN sites s ON s.id = ds.site_id
+    WHERE s.id IS NULL;
+
+    -- 7) Scheduled run/activity linkage health
+    SELECT r.id AS run_id, r.job_id, r.status, a.id AS link_id, a.activity_id
+    FROM scheduled_job_runs r
+    LEFT JOIN scheduled_job_run_activity a ON a.run_id = r.id
+    ORDER BY r.id DESC
+    LIMIT 200;
+
+    -- 8) Confirm legacy columns are gone (expect 0 rows)
+    SELECT COUNT(*) AS has_legacy_sites_col
+    FROM pragma_table_info('sites')
+    WHERE name = 'enrollment_code_id';
+
+    -- 9) Identify sessions that are cleanly pooled and waiting for reuse
+    SELECT pid, state, wait_event, query_start, now() - query_start AS age, left(query, 200) AS query
+    FROM pg_stat_activity
+    WHERE datname = 'borealis'
+    ORDER BY query_start;
+
+    -- 10) Focus only on bad pooled sessions (these should be rare and short-lived)
+    SELECT pid, usename, state, wait_event, xact_start, now() - xact_start AS txn_age, left(query, 200) AS query
+    FROM pg_stat_activity
+    WHERE datname = 'borealis'
+      AND state = 'idle in transaction'
+    ORDER BY xact_start NULLS LAST;
+    ```
+
+    ### Change-management checklist for schema edits
+    - Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
+    - Update this document and any affected domain docs (`device-management.md`, `scheduled-jobs.md`, `security-and-trust.md`).
+    - Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
+    - Verify runtime startup applies schema without errors by checking `Engine/Services/api-backend/logs/engine.log`.
+
+    ### Data-model guidance for the current enrollment design
+    - Keep site/code association in `sites.enrollment_code` unless the enrollment model changes fundamentally.
+    - Keep `device_sites` as hostname-to-site map for UI and filter joins.
+    - Treat `device_approvals.enrollment_code` as immutable audit snapshot of the code used at request time.
+    - Treat `enrollment_code_failures.enrollment_code_mask` as operator visibility only; do not persist full wrong codes.
+
+    ### Codex checklist for DB connection hygiene
+    - Start with the hottest request or loop, not the easiest file. Prioritize watchdogs, device inventory, scheduled jobs, workflows, and auth-sensitive routes.
+    - Search for `conn =`, `_db_conn()`, `_conn()`, `cur.fetchall()`, `commit()`, and `conn.close()` in the target module before editing.
+    - Look for any work between the last SQL statement and `conn.close()`:
+    - payload shaping loops
+    - `json.loads()` or other parsing
+    - `resolve_target_entries()` or `fetch_devices()`
+    - Aegis crypto helpers
+    - GitHub or other integration lookups
+    - If that work does not require the live cursor or transaction, move it after `conn.close()`.
+    - For write paths, keep the transaction open only for validation reads that must be consistent with the write. Do not leave the connection open for response shaping.
+    - If a route resolves filters or device targets more than once, fetch one inventory snapshot and reuse it for the whole request.
+    - If a helper repeatedly asks for repo or catalog metadata, add a short TTL cache so repeated reads do not create unnecessary external latency while DB connections are checked out.
+    - After each fix, test the route and inspect `pg_stat_activity` to confirm pooled sessions return to `idle` rather than `idle in transaction`.
+
+    ### Codex remediation workflow
+    1. Reproduce the route or background loop that is suspected of exhausting the pool.
+    2. Inspect `pg_stat_activity` and note whether the bad rows are `idle in transaction`, long-lived `active`, or simply a large number of healthy `idle` sessions.
+    3. Read the corresponding service code and mark every line between the final SQL statement and `conn.close()`.
+    4. Move all non-DB work out of the connection scope unless the logic requires transactional consistency.
+    5. For repeated target resolution, build one device snapshot and pass it to downstream helpers instead of refetching inventory.
+    6. For repeated integration lookups, add a small in-memory TTL cache rather than doing the lookup on every request.
+    7. Re-run the route, verify the behavior, and check `pg_stat_activity` again.
+    8. If the route is still heavy, then consider query-count reduction, bulk loading, or schema/index tuning. Do not jump to pool-size changes before the connection lifecycle is clean.

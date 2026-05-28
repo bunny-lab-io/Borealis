@@ -19,36 +19,37 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - [API Reference](api-reference.md)
 - [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
 
-## Codex Agent (Detailed)
-### Integration implementation
-- `Data/Engine/Containers/api-backend/data/integrations/github.py` implements `GitHubIntegration`.
-- The integration uses:
-  - Cached results stored in `repo_hash_cache.json` (under the Engine cache directory).
-  - Token storage in the `github_token` PostgreSQL table.
+??? example "Detailed Codex Breakdown"
 
-### Defaults and overrides
-- Default repo: `bunny-lab-io/Borealis`.
-- Default branch: `main`.
-- Environment overrides:
-  - `BOREALIS_REPO`
-  - `BOREALIS_REPO_BRANCH`
-- Cache TTL can be overridden via Engine config (`repo_hash_refresh`).
+    ### Integration implementation
+    - `Data/Engine/Containers/api-backend/data/integrations/github.py` implements `GitHubIntegration`.
+    - The integration uses:
+      - Cached results stored in `repo_hash_cache.json` (under the Engine cache directory).
+      - Token storage in the `github_token` PostgreSQL table.
 
-### Token management
-- Admins manage tokens via `/api/github/token`.
-- The token is stored in the Engine database (`github_token` table).
-- `GitHubIntegration.verify_token()` reports validity and rate-limit status.
-- The Sites page branch picker reads the token through `/api/github/token`, calls GitHub's branch list API from the operator browser, and never stores the token in component state.
-- `main` keeps install commands on the default raw URL without `--repo-branch`; any selected non-main branch changes the raw URL and adds `--repo-branch <branch>` to Linux/macOS/Windows agent commands.
+    ### Defaults and overrides
+    - Default repo: `bunny-lab-io/Borealis`.
+    - Default branch: `main`.
+    - Environment overrides:
+      - `BOREALIS_REPO`
+      - `BOREALIS_REPO_BRANCH`
+    - Cache TTL can be overridden via Engine config (`repo_hash_refresh`).
 
-### `GET /api/repo/current_hash`
-- This endpoint uses the cached GitHub integration to return a hash for `repo`, `branch`, and `ttl` query parameters.
-- Branch refs with slashes are resolved through GitHub's commit endpoint with URL-encoded refs, so feature branches such as `feature/agent-metadata-fields` work.
-- It supports device-auth and operator-auth contexts.
-- Device/operator bearer tokens authenticate the Borealis request only. GitHub calls use stored Engine token, `X-GitHub-Token`, or environment token.
-- Useful for agent update checks and diagnostics.
+    ### Token management
+    - Admins manage tokens via `/api/github/token`.
+    - The token is stored in the Engine database (`github_token` table).
+    - `GitHubIntegration.verify_token()` reports validity and rate-limit status.
+    - The Sites page branch picker reads the token through `/api/github/token`, calls GitHub's branch list API from the operator browser, and never stores the token in component state.
+    - `main` keeps install commands on the default raw URL without `--repo-branch`; any selected non-main branch changes the raw URL and adds `--repo-branch <branch>` to Linux/macOS/Windows agent commands.
 
-### Debug checklist
-- Token missing: call `/api/github/token` as Admin and confirm `has_token`.
-- API rate limit errors: inspect the response payload for `rate_limit` fields.
-- Cache stale: use the `force_refresh` behavior in `GitHubIntegration` (via config or code).
+    ### `GET /api/repo/current_hash`
+    - This endpoint uses the cached GitHub integration to return a hash for `repo`, `branch`, and `ttl` query parameters.
+    - Branch refs with slashes are resolved through GitHub's commit endpoint with URL-encoded refs, so feature branches such as `feature/agent-metadata-fields` work.
+    - It supports device-auth and operator-auth contexts.
+    - Device/operator bearer tokens authenticate the Borealis request only. GitHub calls use stored Engine token, `X-GitHub-Token`, or environment token.
+    - Useful for agent update checks and diagnostics.
+
+    ### Debug checklist
+    - Token missing: call `/api/github/token` as Admin and confirm `has_token`.
+    - API rate limit errors: inspect the response payload for `rate_limit` fields.
+    - Cache stale: use the `force_refresh` behavior in `GitHubIntegration` (via config or code).

@@ -3,6 +3,13 @@
 ## Purpose
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.
 
+## Visual Context
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Installed_Software.png" alt="Borealis installed software inventory" loading="lazy">
+  <figcaption>Blocklist rules protect operators from unsafe unattended uninstall actions.</figcaption>
+</figure>
+
 ## Blocklist File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
 - Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
@@ -85,17 +92,18 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
-## Codex Agent (Detailed)
-### How to decide between blocklist vs override
-- Use the blocklist when the existing quiet metadata is unsafe and no verified unattended replacement command is available yet.
-- Use `software_uninstall_overrides.json` instead when a tested custom command is already known.
-- Uninstall overrides are checked before the blocklist, so a verified override can intentionally replace an otherwise blocked registry quiet string.
+??? example "Detailed Codex Breakdown"
 
-### Codex workflow
-- Prefer the operator-created hotloaded rule in `software_uninstall_blocklist.json` as the source of truth when asked to make a block official.
-- If the operator has not created the rule yet, gather the current software row data from `GET /api/device/details/<hostname>` plus the observed failure mode from the operator.
-- Keep the reason explicit so other operators understand whether the problem is a prompt, a hang, a misleading silent flag, or another unsafe behavior.
+    ### How to decide between blocklist vs override
+    - Use the blocklist when the existing quiet metadata is unsafe and no verified unattended replacement command is available yet.
+    - Use `software_uninstall_overrides.json` instead when a tested custom command is already known.
+    - Uninstall overrides are checked before the blocklist, so a verified override can intentionally replace an otherwise blocked registry quiet string.
 
-### Implementation reference
-- Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
-- Blocklist data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
+    ### Codex workflow
+    - Prefer the operator-created hotloaded rule in `software_uninstall_blocklist.json` as the source of truth when asked to make a block official.
+    - If the operator has not created the rule yet, gather the current software row data from `GET /api/device/details/<hostname>` plus the observed failure mode from the operator.
+    - Keep the reason explicit so other operators understand whether the problem is a prompt, a hang, a misleading silent flag, or another unsafe behavior.
+
+    ### Implementation reference
+    - Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
+    - Blocklist data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`

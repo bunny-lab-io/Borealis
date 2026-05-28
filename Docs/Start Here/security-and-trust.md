@@ -3,6 +3,19 @@
 ## Purpose
 Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.
 
+## Visual Tour
+
+<div class="bo-screenshot-grid">
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Aegis_Cipher.png" alt="Borealis Aegis Cipher prompt" loading="lazy">
+    <figcaption>Aegis gates operator authentication and protects sensitive credentials at rest.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Credential_Management.png" alt="Borealis credential management" loading="lazy">
+    <figcaption>Credential Management stores reusable credentials behind Borealis authorization and Aegis protection.</figcaption>
+  </figure>
+</div>
+
 ## Security Model Summary
 - Mutual trust: each agent has a unique Ed25519 identity key; the Engine issues Ed25519-signed access tokens bound to that fingerprint.
 - Public CA trust: Borealis exposes the Engine through a Borealis-managed Traefik edge that uses Let's Encrypt certificates for browser and agent HTTPS traffic.
@@ -235,100 +248,101 @@ sequenceDiagram
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
 
-## Codex Agent (Detailed)
-### Key material locations (Engine)
-- Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
-- Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic.yml`.
-- Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
-- Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
+??? example "Detailed Codex Breakdown"
 
-### Key material locations (Agent)
-- Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
+    ### Key material locations (Engine)
+    - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
+    - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic.yml`.
+    - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
+    - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 
-### Enrollment sequence (step-by-step)
-1) Agent generates Ed25519 key pair and a fingerprint.
-2) Agent submits `/api/agent/enroll/request` with install code and public key.
-3) Engine rate-limits and queues for operator approval.
-4) Operator approves via `/api/admin/device-approvals/<id>/approve`.
-5) Agent polls `/api/agent/enroll/poll`, returns signed nonce.
-6) Engine issues GUID, access token, refresh token, and signing key.
-7) Agent stores tokens securely and trusts the Engine FQDN via the public CA chain.
+    ### Key material locations (Agent)
+    - Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
 
-### Access vs refresh tokens
-- Access token (JWT, EdDSA): used on every device API call; default expiry about 900 seconds.
-- Refresh token: used only on `/api/agent/token/refresh` to mint new access tokens.
-- Refresh token is SHA-256 hashed in DB and never stored in plaintext by the Engine.
+    ### Enrollment sequence (step-by-step)
+    1) Agent generates Ed25519 key pair and a fingerprint.
+    2) Agent submits `/api/agent/enroll/request` with install code and public key.
+    3) Engine rate-limits and queues for operator approval.
+    4) Operator approves via `/api/admin/device-approvals/<id>/approve`.
+    5) Agent polls `/api/agent/enroll/poll`, returns signed nonce.
+    6) Engine issues GUID, access token, refresh token, and signing key.
+    7) Agent stores tokens securely and trusts the Engine FQDN via the public CA chain.
 
-### DPoP binding
-- Refresh token requests can include a `DPoP` header.
-- Engine validates DPoP proof and stores `dpop_jkt` in `refresh_tokens` table.
-- Replay attempts return `dpop_replayed` and force re-enrollment behavior.
+    ### Access vs refresh tokens
+    - Access token (JWT, EdDSA): used on every device API call; default expiry about 900 seconds.
+    - Refresh token: used only on `/api/agent/token/refresh` to mint new access tokens.
+    - Refresh token is SHA-256 hashed in DB and never stored in plaintext by the Engine.
 
-### Rate limiting and abuse controls
-- Enrollment uses IP and fingerprint rate limiters (see `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`).
-- README documents IP and fingerprint rate limits (40 req/min/IP, 12 req/min/fingerprint).
+    ### DPoP binding
+    - Refresh token requests can include a `DPoP` header.
+    - Engine validates DPoP proof and stores `dpop_jkt` in `refresh_tokens` table.
+    - Replay attempts return `dpop_replayed` and force re-enrollment behavior.
 
-### Code signing behavior
-- Engine signs script payload bytes (Ed25519) before dispatch.
-- Agent verifies signatures with `signature_utils` and stores the signing key on first success.
-- If verification fails, the script is rejected and the agent logs an incident.
+    ### Rate limiting and abuse controls
+    - Enrollment uses IP and fingerprint rate limiters (see `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`).
+    - README documents IP and fingerprint rate limits (40 req/min/IP, 12 req/min/fingerprint).
 
-### Common failure modes
-- `fingerprint_mismatch`: agent identity changed or cert data was wiped.
-- `token_version_mismatch`: device token version bumped or revoked.
-- `refresh_token_expired`: agent offline too long (greater than 90 days without refresh).
-- `dpop_invalid`: DPoP proof missing or malformed.
+    ### Code signing behavior
+    - Engine signs script payload bytes (Ed25519) before dispatch.
+    - Agent verifies signatures with `signature_utils` and stores the signing key on first success.
+    - If verification fails, the script is rejected and the agent logs an incident.
 
-### Agent Refresh Tokens (Full)
-#### What a refresh token is
-- A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
-- Stored locally in protected `agent.json` alongside token metadata and the agent GUID.
-- Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
+    ### Common failure modes
+    - `fingerprint_mismatch`: agent identity changed or cert data was wiped.
+    - `token_version_mismatch`: device token version bumped or revoked.
+    - `refresh_token_expired`: agent offline too long (greater than 90 days without refresh).
+    - `dpop_invalid`: DPoP proof missing or malformed.
 
-#### How the agent obtains it
-1) Enrollment (`/api/agent/enroll/request` -> `/api/agent/enroll/poll`):
-   - The agent proves possession of its Ed25519 identity and an operator-approved enrollment code.
-   - The Engine issues:
-     - `guid` (device identity)
-     - `access_token` (EdDSA JWT, about 15 minutes)
-     - `refresh_token` (random urlsafe string)
-     - Engine signing key
-   - The agent persists the GUID, access token, refresh token, and expiry metadata through `Data/Agent/internal/config`.
+    ### Agent Refresh Tokens (Full)
+    #### What a refresh token is
+    - A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
+    - Stored locally in protected `agent.json` alongside token metadata and the agent GUID.
+    - Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
 
-#### How long it lasts (sliding expiry)
-- Base TTL: 90 days (Engine stores `expires_at = now + 90 days`).
-- Sliding refresh: every successful call to `/api/agent/token/refresh` resets `expires_at` to `now + 90 days`.
-- Expiry is enforced by the Engine clock, not the agent.
+    #### How the agent obtains it
+    1) Enrollment (`/api/agent/enroll/request` -> `/api/agent/enroll/poll`):
+       - The agent proves possession of its Ed25519 identity and an operator-approved enrollment code.
+       - The Engine issues:
+         - `guid` (device identity)
+         - `access_token` (EdDSA JWT, about 15 minutes)
+         - `refresh_token` (random urlsafe string)
+         - Engine signing key
+       - The agent persists the GUID, access token, refresh token, and expiry metadata through `Data/Agent/internal/config`.
 
-#### Access tokens vs refresh tokens
-- Access tokens: EdDSA JWTs with a about 15 minute lifetime (default `expires_in = 900`). Used for all device API calls and Socket.IO auth.
-- Refresh tokens: used only to obtain new access tokens. If missing or invalid, the agent re-enrolls.
+    #### How long it lasts (sliding expiry)
+    - Base TTL: 90 days (Engine stores `expires_at = now + 90 days`).
+    - Sliding refresh: every successful call to `/api/agent/token/refresh` resets `expires_at` to `now + 90 days`.
+    - Expiry is enforced by the Engine clock, not the agent.
 
-#### How the agent uses it
-- All authenticated calls pass through the Go auth client (`Data/Agent/internal/auth`).
-- If no GUID/refresh token, the agent triggers enrollment.
-- If the access token is missing or near expiry, the agent posts `{guid, refresh_token}` to `/api/agent/token/refresh`.
-- On success, it stores the new access token and updated expiry metadata.
+    #### Access tokens vs refresh tokens
+    - Access tokens: EdDSA JWTs with a about 15 minute lifetime (default `expires_in = 900`). Used for all device API calls and Socket.IO auth.
+    - Refresh tokens: used only to obtain new access tokens. If missing or invalid, the agent re-enrolls.
 
-#### When it stops working
-- Engine-side expiry: `refresh_token_expired` (401) forces re-enrollment.
-- Revocation: device status `revoked` or `decommissioned` blocks refresh.
-- Fingerprint mismatch: identity key changes cause the Engine to reject refresh.
-- Token version mismatch: token version bump in DB forces re-enrollment.
+    #### How the agent uses it
+    - All authenticated calls pass through the Go auth client (`Data/Agent/internal/auth`).
+    - If no GUID/refresh token, the agent triggers enrollment.
+    - If the access token is missing or near expiry, the agent posts `{guid, refresh_token}` to `/api/agent/token/refresh`.
+    - On success, it stores the new access token and updated expiry metadata.
 
-#### Operational notes
-- Short outages are tolerated: the 90-day sliding window resets on the first successful refresh after the Engine is back.
-- Long inactivity (more than 90 days without refresh) requires re-enrollment; the agent will reuse the last installer code if available, otherwise operator action is needed.
-- Logs for token activity live under `Agent/Logs/Agent/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
+    #### When it stops working
+    - Engine-side expiry: `refresh_token_expired` (401) forces re-enrollment.
+    - Revocation: device status `revoked` or `decommissioned` blocks refresh.
+    - Fingerprint mismatch: identity key changes cause the Engine to reject refresh.
+    - Token version mismatch: token version bump in DB forces re-enrollment.
 
-#### Relevant files
-- Agent token lifecycle: `Data/Agent/internal/auth`.
-- Token storage: `Data/Agent/internal/config`.
-- Refresh API: `Data/Engine/Containers/api-backend/data/services/API/tokens/routes.py`.
-- Enrollment API: `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`.
-- JWT issuance: `Data/Engine/Containers/api-backend/data/auth/jwt_service.py`.
-- Database schema: `Data/Engine/Containers/api-backend/data/database_migrations.py` (`refresh_tokens` table).
+    #### Operational notes
+    - Short outages are tolerated: the 90-day sliding window resets on the first successful refresh after the Engine is back.
+    - Long inactivity (more than 90 days without refresh) requires re-enrollment; the agent will reuse the last installer code if available, otherwise operator action is needed.
+    - Logs for token activity live under `Agent/Logs/Agent/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
 
-### Where to update docs when security changes
-- Update this page and any impacted runtime docs (engine or agent).
-- Update `api-reference.md` if you add or change security-related endpoints.
+    #### Relevant files
+    - Agent token lifecycle: `Data/Agent/internal/auth`.
+    - Token storage: `Data/Agent/internal/config`.
+    - Refresh API: `Data/Engine/Containers/api-backend/data/services/API/tokens/routes.py`.
+    - Enrollment API: `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`.
+    - JWT issuance: `Data/Engine/Containers/api-backend/data/auth/jwt_service.py`.
+    - Database schema: `Data/Engine/Containers/api-backend/data/database_migrations.py` (`refresh_tokens` table).
+
+    ### Where to update docs when security changes
+    - Update this page and any impacted runtime docs (engine or agent).
+    - Update `api-reference.md` if you add or change security-related endpoints.

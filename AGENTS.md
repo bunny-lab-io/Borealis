@@ -11,7 +11,7 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 ## Where to Read
 - Start at `Docs/index.md`.
 - Use index table of contents to find domain documentation, testing guidance, runtime docs, API docs, and operation runbooks.
-- Follow domain docs found through index. Where docs overlap, domain page wins. Codex Agent sections inside each page are authoritative agent guidance.
+- Follow domain docs found through index. Where docs overlap, domain page wins. `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
 
 ## Interacting with the Codebase
 - When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.

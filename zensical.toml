@@ -8,10 +8,13 @@ repo_name = "bunny-lab-io/Borealis"
 edit_uri = "edit/main/Docs/"
 docs_dir = "Docs"
 site_dir = "site"
+copyright = "Copyright &copy; 2026 Bunny Lab"
+extra_css = ["stylesheets/extra.css"]
 
 nav = [
   { "Home" = "index.md" },
   { "Start Here" = [
+    { "Overview" = "Start Here/index.md" },
     "Start Here/getting-started.md",
     "Start Here/architecture-overview.md",
     "Start Here/security-and-trust.md",
@@ -21,17 +24,20 @@ nav = [
     "Start Here/testing-regressions.md",
   ] },
   { "Core Runtimes" = [
+    { "Overview" = "Core Runtimes/index.md" },
     "Core Runtimes/engine-runtime.md",
     "Core Runtimes/agent-runtime.md",
     "Core Runtimes/Stack_Breakdown.md",
   ] },
   { "Data and Schema" = [
+    { "Overview" = "Data and Schema/index.md" },
     "Data and Schema/db-reference.md",
     "Data and Schema/api-reference.md",
     "Data and Schema/integrations.md",
     "SBOM.md",
   ] },
   { "Automation and Execution" = [
+    { "Overview" = "Automation and Execution/index.md" },
     "Automation and Execution/assemblies.md",
     "Automation and Execution/flow-editor-and-nodes.md",
     "Automation and Execution/scheduled-jobs.md",
@@ -39,20 +45,24 @@ nav = [
     "Automation and Execution/watchdogs.md",
   ] },
   { "Operations and Remote Access" = [
+    { "Overview" = "Operations and Remote Access/index.md" },
     "Operations and Remote Access/device-management.md",
     "Operations and Remote Access/device-alerts.md",
     "Operations and Remote Access/vpn-and-remote-access.md",
     "Operations and Remote Access/logging-and-operations.md",
   ] },
   { "Software Management" = [
+    { "Overview" = "Software Management/index.md" },
     "Software Management/adding-software-to-icon-overrides.md",
     "Software Management/adding-software-to-uninstall-blocklist.md",
     "Software Management/adding-software-to-uninstall-overrides.md",
   ] },
   { "Migration Paths" = [
+    { "Overview" = "Migration Paths/index.md" },
     "Migration Paths/migrating-pages-to-react-router.md",
   ] },
   { "Future Roadmaps" = [
+    { "Overview" = "Future_Roadmaps/index.md" },
     "Future_Roadmaps/competitive-feature-gap-analysis.md",
   ] },
 ]
@@ -61,6 +71,7 @@ nav = [
 variant = "classic"
 language = "en"
 logo = "Branding/Borealis_Logo_Full.png"
+favicon = "Branding/Borealis_Logo.png"
 features = [
   "announce.dismiss",
   "content.action.edit",

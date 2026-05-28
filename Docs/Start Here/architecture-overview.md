@@ -3,6 +3,13 @@
 ## Purpose
 Explain how Borealis is structured and how the core components interact end to end.
 
+## Visual Overview
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Server_Overview.png" alt="Borealis server overview" loading="lazy">
+  <figcaption>Server Overview is the operator-facing view of Engine host health, Compose services, WireGuard, and public edge state.</figcaption>
+</figure>
+
 ## Core Components
 - Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
 - WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
@@ -50,51 +57,52 @@ None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
 - [UI and Notifications](ui-and-notifications.md)
 - [Migrating Pages to React Router](../Migration%20Paths/migrating-pages-to-react-router.md)
 
-## Codex Agent (Detailed)
-### Service map by folder
-- Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).
-- Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
-- WebUI hosting: `Data/Engine/Containers/api-backend/data/services/WebUI/` (SPA static assets and 404 fallback).
-- WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
-- Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
-  The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
-- VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server and tunnel lifecycle).
-- Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
-- Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
-- Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
+??? example "Detailed Codex Breakdown"
 
-### End-to-end flow examples (use these to debug)
-- Quick job:
-  1) UI calls `/api/scripts/quick_run` with script path + hostnames.
-  2) Engine signs the script, sets `target_context`, and emits `quick_job_run` to the host's SYSTEM socket.
-  3) The SYSTEM broker either executes the SYSTEM role locally or routes current-user work into one or more session helpers over local IPC.
-  4) The SYSTEM runtime posts `quick_job_result` over Socket.IO.
-  5) Engine updates `activity_history` and emits `device_activity_changed`.
-- VPN shell:
-  1) UI calls `/api/shell/establish` to ensure shell readiness.
-  2) Agent WireGuard role keeps the tunnel online; agent shell role listens on TCP 47002.
-  3) UI opens `vpn_shell_open` Socket.IO event; Engine bridges to TCP shell.
-  4) UI sends/receives `vpn_shell_send` and `vpn_shell_output` events.
+    ### Service map by folder
+    - Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).
+    - Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
+    - WebUI hosting: `Data/Engine/Containers/api-backend/data/services/WebUI/` (SPA static assets and 404 fallback).
+    - WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
+    - Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
+      The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
+    - VPN orchestration: `Data/Engine/Containers/api-backend/data/services/VPN/` (WireGuard server and tunnel lifecycle).
+    - Remote desktop proxy: `Data/Engine/Containers/api-backend/data/services/RemoteDesktop/` (VNC WebSocket proxy).
+    - Filters and targeting: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` (used by scheduled jobs and filter counts).
+    - Agent runtime: `Data/Agent/cmd/agent` plus packages under `Data/Agent/internal/`.
 
-### Runtime boundaries
-- Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-- Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
+    ### End-to-end flow examples (use these to debug)
+    - Quick job:
+      1) UI calls `/api/scripts/quick_run` with script path + hostnames.
+      2) Engine signs the script, sets `target_context`, and emits `quick_job_run` to the host's SYSTEM socket.
+      3) The SYSTEM broker either executes the SYSTEM role locally or routes current-user work into one or more session helpers over local IPC.
+      4) The SYSTEM runtime posts `quick_job_result` over Socket.IO.
+      5) Engine updates `activity_history` and emits `device_activity_changed`.
+    - VPN shell:
+      1) UI calls `/api/shell/establish` to ensure shell readiness.
+      2) Agent WireGuard role keeps the tunnel online; agent shell role listens on TCP 47002.
+      3) UI opens `vpn_shell_open` Socket.IO event; Engine bridges to TCP shell.
+      4) UI sends/receives `vpn_shell_send` and `vpn_shell_output` events.
 
-### What to read first when debugging
-- Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
-- Check domain-specific logs (example: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`).
-- Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
+    ### Runtime boundaries
+    - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
+    - Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
 
-### Interaction points to remember
-- REST for inventory, enrollment, and admin actions.
-- Socket.IO for realtime job results, VPN shell, and notifications, with the supported Windows agent model exposing one SYSTEM socket per host.
-- Local IPC inside the agent for SYSTEM-to-helper current-user dispatch; helpers do not open their own Engine socket.
-- WireGuard for remote protocol transport (shell, VNC, future protocols).
+    ### What to read first when debugging
+    - Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
+    - Check domain-specific logs (example: `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`).
+    - Inspect active DB state in PostgreSQL (`engine.*` and `assemblies.*`) for device/job metadata.
 
-### Container service map
-- `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
-- `webui-frontend`: `127.0.0.1:8000` in production and dev.
-- `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
-- `postgres-db`: `127.0.0.1:5432`, persistent database state.
-- `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.
-- `wireguard-tunnel`: UDP `30000`, `borealis-wg`, WireGuard command control socket.
+    ### Interaction points to remember
+    - REST for inventory, enrollment, and admin actions.
+    - Socket.IO for realtime job results, VPN shell, and notifications, with the supported Windows agent model exposing one SYSTEM socket per host.
+    - Local IPC inside the agent for SYSTEM-to-helper current-user dispatch; helpers do not open their own Engine socket.
+    - WireGuard for remote protocol transport (shell, VNC, future protocols).
+
+    ### Container service map
+    - `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+    - `webui-frontend`: `127.0.0.1:8000` in production and dev.
+    - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
+    - `postgres-db`: `127.0.0.1:5432`, persistent database state.
+    - `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.
+    - `wireguard-tunnel`: UDP `30000`, `borealis-wg`, WireGuard command control socket.

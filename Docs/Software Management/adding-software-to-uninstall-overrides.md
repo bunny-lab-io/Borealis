@@ -3,6 +3,13 @@
 ## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.
 
+## Visual Context
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Software_Audit_List.png" alt="Borealis software audit list" loading="lazy">
+  <figcaption>Uninstall overrides make fleet software actions predictable when vendor registry metadata is incomplete.</figcaption>
+</figure>
+
 ## Override File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
 - Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
@@ -106,26 +113,27 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
-## Codex Agent (Detailed)
-### Codex workflow
-- Prefer the operator-created hotloaded rule in `software_uninstall_overrides.json` as the source of truth when asked to make an uninstall override official.
-- If the operator has not created the rule yet, gather the current software row data from `GET /api/device/details/<hostname>` and any manually verified unattended uninstall command the operator tested.
-- Cross-check these values before finalizing a permanent rule:
-  - `metadata.quiet_uninstall_string`
-  - `metadata.uninstall_string`
-  - `metadata.product_code`
-  - `metadata.package_family_name`
-  - the operator-provided verified executable path and arguments
-- Keep the override narrow enough to avoid accidentally matching unrelated versions or similarly named products.
+??? example "Detailed Codex Breakdown"
 
-### Strategy guidance
-- `direct_command`
-  Best when you have a tested vendor command line.
-- `msi_product_code`
-  Best when MSI metadata is the stable source of truth.
-- `windows_store`
-  Best when Borealis needs to remove an AppX/Store package by family name.
+    ### Codex workflow
+    - Prefer the operator-created hotloaded rule in `software_uninstall_overrides.json` as the source of truth when asked to make an uninstall override official.
+    - If the operator has not created the rule yet, gather the current software row data from `GET /api/device/details/<hostname>` and any manually verified unattended uninstall command the operator tested.
+    - Cross-check these values before finalizing a permanent rule:
+      - `metadata.quiet_uninstall_string`
+      - `metadata.uninstall_string`
+      - `metadata.product_code`
+      - `metadata.package_family_name`
+      - the operator-provided verified executable path and arguments
+    - Keep the override narrow enough to avoid accidentally matching unrelated versions or similarly named products.
 
-### Implementation reference
-- Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
-- Override data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
+    ### Strategy guidance
+    - `direct_command`
+      Best when you have a tested vendor command line.
+    - `msi_product_code`
+      Best when MSI metadata is the stable source of truth.
+    - `windows_store`
+      Best when Borealis needs to remove an AppX/Store package by family name.
+
+    ### Implementation reference
+    - Engine resolver: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`
+    - Override data file: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`

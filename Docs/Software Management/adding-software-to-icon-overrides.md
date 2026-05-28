@@ -3,6 +3,13 @@
 ## Purpose
 Explain how to add file-backed icon-location overrides for installed software when registry `DisplayIcon` metadata is missing or points at the wrong asset.
 
+## Visual Context
+
+<figure class="bo-screenshot">
+  <img src="../images/repo_screenshots/Installed_Software.png" alt="Borealis installed software inventory" loading="lazy">
+  <figcaption>Icon overrides improve software inventory readability when registry icon metadata is missing or wrong.</figcaption>
+</figure>
+
 ## Override File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons_overrides.json`
 - Runtime consumer:
@@ -99,22 +106,23 @@ Clear-icon rules are also supported:
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 
-## Codex Agent (Detailed)
-### Codex workflow
-- Prefer the operator-created hotloaded rule in `software_icons_overrides.json` as the source of truth when asked to make an icon override official.
-- If the operator has not saved a rule yet, gather the needed values from the current software row in `GET /api/device/details/<hostname>` or from the Installed Software UI:
-  - `name`
-  - any verified icon resource path the operator tested manually
-- Candidate icon paths shown in the UI are heuristics, not proof. Verify the file/resource path before keeping it in the official JSON file.
-- If the rule already works in production, prefer updating the existing same-name rule instead of inventing a brand-new duplicate rule.
+??? example "Detailed Codex Breakdown"
 
-### Recommended authoring rules
-- Start with the exact `name` from the software row.
-- Do not add `version`, `publisher_contains_any`, `source`, or install-location match fields for icon overrides. Borealis intentionally keeps icon matching name-only so overrides survive normal version churn.
-- Reuse the existing rule ID shape `icon_override_<software_name_slug>`.
+    ### Codex workflow
+    - Prefer the operator-created hotloaded rule in `software_icons_overrides.json` as the source of truth when asked to make an icon override official.
+    - If the operator has not saved a rule yet, gather the needed values from the current software row in `GET /api/device/details/<hostname>` or from the Installed Software UI:
+      - `name`
+      - any verified icon resource path the operator tested manually
+    - Candidate icon paths shown in the UI are heuristics, not proof. Verify the file/resource path before keeping it in the official JSON file.
+    - If the rule already works in production, prefer updating the existing same-name rule instead of inventing a brand-new duplicate rule.
 
-### Implementation references
-- Engine override loader: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons.py`
-- Agent application path: `Data/Agent/Roles/system_software_management.py`
-- Agent publishing role: `Data/Agent/Roles/role_system_software_management.py`
-- Installed Software UI operator action: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`
+    ### Recommended authoring rules
+    - Start with the exact `name` from the software row.
+    - Do not add `version`, `publisher_contains_any`, `source`, or install-location match fields for icon overrides. Borealis intentionally keeps icon matching name-only so overrides survive normal version churn.
+    - Reuse the existing rule ID shape `icon_override_<software_name_slug>`.
+
+    ### Implementation references
+    - Engine override loader: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons.py`
+    - Agent application path: `Data/Agent/Roles/system_software_management.py`
+    - Agent publishing role: `Data/Agent/Roles/role_system_software_management.py`
+    - Installed Software UI operator action: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Installed_Software.jsx`

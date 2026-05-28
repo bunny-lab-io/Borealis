@@ -612,20 +612,21 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 3. Check `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`.
 4. Check target agent VPN logs.
 
-## Codex Agent
-- Edit Docker/Compose source under `Data/Engine/Containers/`.
-- Do not edit generated runtime under `Engine/` except when reading logs/manifests.
-- Use `Engine.sh deploy prod|dev` for full stack deployment.
-- Use `Engine.sh --service ...` for scoped service actions.
-- Validate launcher syntax after changing shell scripts:
-```sh
-bash -n Engine.sh
-docker compose -f Data/Engine/Containers/compose.yaml config
-```
-- Update this page when adding a service, port, volume, service action, or load-order dependency.
-
 ## Related Documentation
 - [Getting Started](../Start%20Here/getting-started.md)
 - [Engine Runtime](engine-runtime.md)
 - [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
 - [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+
+??? example "Detailed Codex Breakdown"
+
+    - Edit Docker/Compose source under `Data/Engine/Containers/`.
+    - Do not edit generated runtime under `Engine/` except when reading logs/manifests.
+    - Use `Engine.sh deploy prod|dev` for full stack deployment.
+    - Use `Engine.sh --service ...` for scoped service actions.
+    - Validate launcher syntax after changing shell scripts:
+    ```sh
+    bash -n Engine.sh
+    docker compose -f Data/Engine/Containers/compose.yaml config
+    ```
+    - Update this page when adding a service, port, volume, service action, or load-order dependency.

@@ -357,24 +357,25 @@ Do not let future features:
 - log secret-bearing command lines
 - infer password support from sshd config alone
 
-## Codex Agent
-- Reuse `apply_ssh_credential_host_vars(...)` for Ansible inventory rendering.
-- Keep `_resolve_mixed_ssh_auth_mode(...)` behavior as source of truth until a shared SSH auth service is extracted.
-- If editing SSH behavior, run at least:
-```bash
-./Engine_Unit_Tests.sh --domain scheduler
-./Engine_Unit_Tests.sh --domain ansible
-```
-- Add focused tests for:
-  - key accepted
-  - key denied then password accepted
-  - key denied then password denied
-  - key timeout then password accepted
-  - key timeout then password timeout/denied
-  - passphrase-only private key
-- After deployment, validate both shared and individual Ansible modes against mixed key-only/password-capable hosts.
-
 ## Related Documentation
 - [Scheduled Jobs](scheduled-jobs.md)
 - [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
 - [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+
+??? example "Detailed Codex Breakdown"
+
+    - Reuse `apply_ssh_credential_host_vars(...)` for Ansible inventory rendering.
+    - Keep `_resolve_mixed_ssh_auth_mode(...)` behavior as source of truth until a shared SSH auth service is extracted.
+    - If editing SSH behavior, run at least:
+    ```bash
+    ./Engine_Unit_Tests.sh --domain scheduler
+    ./Engine_Unit_Tests.sh --domain ansible
+    ```
+    - Add focused tests for:
+      - key accepted
+      - key denied then password accepted
+      - key denied then password denied
+      - key timeout then password accepted
+      - key timeout then password timeout/denied
+      - passphrase-only private key
+    - After deployment, validate both shared and individual Ansible modes against mixed key-only/password-capable hosts.

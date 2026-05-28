@@ -126,20 +126,21 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 - Add or update `Docs/testing-regressions.md` when a test protects known production, operator, or PR-review regression.
 - Use status labels from `Docs/testing-regressions.md`: `open`, `fixed`, `stale-test`, `environment-gap`, or `flaky`.
 
-## Codex Agent
-- Read this page before choosing validation for codebase changes.
-- Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
-- For container deployment changes, run shell syntax checks for `Engine.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
-- Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
-- For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
-- Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.
-- When adding Python or WebUI tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code. When adding Go Agent tests, keep them package-local as `*_test.go` files and run them through the Agent lane scripts under `Data/Agent/Unit_Tests`.
-- When a test needs fake Engine, fake device, fake config, or fake Role state, add helper capability under nearest `support/` package first, then call it from individual tests.
-- Keep helper defaults realistic for Borealis code paths, and expose test-specific changes through keyword overrides.
-- If domain membership changes, update this page and the matching lane script in same commit.
-
 ## Related Documentation
 - [Testing Regressions](testing-regressions.md)
 - [Architecture Overview](architecture-overview.md)
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+
+??? example "Detailed Codex Breakdown"
+
+    - Read this page before choosing validation for codebase changes.
+    - Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
+    - For container deployment changes, run shell syntax checks for `Engine.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
+    - Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
+    - For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
+    - Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.
+    - When adding Python or WebUI tests, place them under the nearest `Unit_Tests` folder and reuse helpers before inventing new setup code. When adding Go Agent tests, keep them package-local as `*_test.go` files and run them through the Agent lane scripts under `Data/Agent/Unit_Tests`.
+    - When a test needs fake Engine, fake device, fake config, or fake Role state, add helper capability under nearest `support/` package first, then call it from individual tests.
+    - Keep helper defaults realistic for Borealis code paths, and expose test-specific changes through keyword overrides.
+    - If domain membership changes, update this page and the matching lane script in same commit.

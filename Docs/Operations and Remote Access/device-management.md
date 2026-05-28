@@ -3,6 +3,27 @@
 ## Purpose
 Explain how Borealis tracks devices, ingests inventory, manages sites and filters, and handles enrollment approvals.
 
+## Visual Tour
+
+<div class="bo-screenshot-grid">
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Device_List.png" alt="Borealis device list" loading="lazy">
+    <figcaption>Device List is the main fleet inventory surface for operators.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Device_Details.png" alt="Borealis device details" loading="lazy">
+    <figcaption>Device Summary centralizes inventory, role health, actions, and device-specific workflows.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Device_Filter_List.png" alt="Borealis device filter list" loading="lazy">
+    <figcaption>Device filters provide reusable dynamic targeting for jobs, watchdogs, and scoped views.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Site_List.png" alt="Borealis site list" loading="lazy">
+    <figcaption>Sites group devices and drive operator visibility, enrollment, and targeting boundaries.</figcaption>
+  </figure>
+</div>
+
 ## Inventory and Status
 - Agents send heartbeats and inventory payloads to the Engine.
 - The Engine stores device summaries and detailed hardware, software, and cached service data in PostgreSQL.
@@ -204,74 +225,75 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
 - [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)
 
-## Codex Agent (Detailed)
-### Key files and services
-- Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
-- Filters: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` and `Data/Engine/Containers/api-backend/data/services/API/filters/management.py`.
-- Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
+??? example "Detailed Codex Breakdown"
 
-### Inventory ingestion behavior
-- `/api/agent/heartbeat` updates `last_seen`, key metrics (last_user, OS/build, last reboot, uptime), and sparse Agent Metadata Field changes.
-- `/api/agent/status` updates `last_seen`, upserts only the `system:system_heartbeat` role-health row, and emits `agent_status_changed` after commit.
-- `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
-- JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
-- Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
-- Agent Metadata Field heartbeat sync is timestamp-based. Queued Agent updates are accepted when newer, superseded when Engine has the same/newer timestamp, and returned in `metadata_field_acks` so the Agent can remove them from `metadata-queue.json`.
-- The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
-- Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/Containers/api-backend/data/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
-- The Installed Software tab also exposes a `Query Software Changes` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.
-- Session inventory enrichment from the Go agent broker flows through `Data/Agent/internal/roles/current_user` and heartbeat role health, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
-- Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
-- Process Management uses the device SYSTEM Socket.IO channel with ACK responses under `process_management_request` for live process snapshots and process termination. It does not replace the slower cached `devices.processes` watchdog inventory, which remains name/count oriented.
-- Manual agent update requests from Device Summary or Device List call `POST /api/devices/agent-maintenance` with `action=update_now`. The Engine records `Update Borealis Agent` scheduled-job history, enqueues site-scoped `agent_maintenance_run` work, and site workers emit `agent_maintenance_request` to the device SYSTEM socket through the API internal bridge.
-- The agent starts the local AutoUpdater scheduler path for that request. Windows uses the `Borealis Agent (AutoUpdater)` scheduled task; Linux uses `borealis-agent-updater.service` plus the hourly `borealis-agent-updater.timer`. Both paths consume the Engine cached Go binary bundle.
-- Device Summary and Device List admins can change an agent's release channel and branch through the same `POST /api/devices/agent-maintenance` path with `action=switch_branch_channel`. The Engine stores `agent_release_channel` and `agent_branch` on the device row, records a `Switch Agent Branch/Channel` scheduled job, and lets heartbeat `agent_update_status` close each target as success or failure.
-- File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.
-- File transfers use Engine temp-file staging plus device-authenticated agent pull/push endpoints so large uploads and downloads do not have to fit inside one socket payload.
-- Folder uploads rely on an Engine-staged upload manifest that preserves each browser file's relative path so the agent can rebuild the destination tree incrementally without requiring the whole folder to ride in one payload.
-- Transfer progress updates now double as cancellation checkpoints: the operator requests cancellation through the Engine, the Engine marks the transfer `cancel_requested`, and the agent polls that control snapshot while streaming upload chunks or building archives.
+    ### Key files and services
+    - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/` (management, approval, services, tunnel, vnc, routes).
+    - Filters: `Data/Engine/Containers/api-backend/data/services/filters/matcher.py` and `Data/Engine/Containers/api-backend/data/services/API/filters/management.py`.
+    - Enrollment approvals: `Data/Engine/Containers/api-backend/data/services/API/devices/approval.py`.
 
-### Status computation
-- Online/offline is computed from `last_seen` (online if within ~300 seconds).
-- UI tables use the derived `status` field from the API payload.
-- Agent Health startup flow status is not a replacement for online/offline. It explains startup progression, especially auth, Socket.IO, role loading, WireGuard, inventory, and steady-state milestones.
+    ### Inventory ingestion behavior
+    - `/api/agent/heartbeat` updates `last_seen`, key metrics (last_user, OS/build, last reboot, uptime), and sparse Agent Metadata Field changes.
+    - `/api/agent/status` updates `last_seen`, upserts only the `system:system_heartbeat` role-health row, and emits `agent_status_changed` after commit.
+    - `/api/agent/details` stores full inventory payloads for memory, network, storage, software, cpu, and services.
+    - JSON blobs are serialized into PostgreSQL text columns and rehydrated for UI.
+    - Installed software is also normalized into `device_software_inventory` so filters can match name, source, and version reliably.
+    - Agent Metadata Field heartbeat sync is timestamp-based. Queued Agent updates are accepted when newer, superseded when Engine has the same/newer timestamp, and returned in `metadata_field_acks` so the Agent can remove them from `metadata-queue.json`.
+    - The Installed Software tab now also exposes a row-level `Uninstall` action for supported Windows software entries. Borealis queues that work through the signed quick-job path in SYSTEM context, so uninstall output lands in `activity_history` and the row disappears after the next successful device software inventory refresh.
+    - Operators can right-click a software name in the Installed Software tab to create global icon overrides, global uninstall overrides, uninstall blocks, or uninstall unblocks directly from the WebUI. Borealis writes those operator-approved changes into the file-backed JSON override/blocklist stores under `Data/Engine/Containers/api-backend/data/services/API/devices/`, hotloads them without an Engine restart, and lets the developer commit those files to Git later when the pilot rules should become official.
+    - The Installed Software tab also exposes a `Query Software Changes` button that emits `software_inventory_refresh_request` over the device SYSTEM socket so operators can observe override and inventory changes faster than the normal software-management poll cadence.
+    - Session inventory enrichment from the Go agent broker flows through `Data/Agent/internal/roles/current_user` and heartbeat role health, so Device Details can distinguish a merely logged-in session from a helper-ready interactive session.
+    - Service inventory is cached in the `devices.services` JSON blob and merged with pending operator actions until a fresh agent snapshot confirms the desired state.
+    - Process Management uses the device SYSTEM Socket.IO channel with ACK responses under `process_management_request` for live process snapshots and process termination. It does not replace the slower cached `devices.processes` watchdog inventory, which remains name/count oriented.
+    - Manual agent update requests from Device Summary or Device List call `POST /api/devices/agent-maintenance` with `action=update_now`. The Engine records `Update Borealis Agent` scheduled-job history, enqueues site-scoped `agent_maintenance_run` work, and site workers emit `agent_maintenance_request` to the device SYSTEM socket through the API internal bridge.
+    - The agent starts the local AutoUpdater scheduler path for that request. Windows uses the `Borealis Agent (AutoUpdater)` scheduled task; Linux uses `borealis-agent-updater.service` plus the hourly `borealis-agent-updater.timer`. Both paths consume the Engine cached Go binary bundle.
+    - Device Summary and Device List admins can change an agent's release channel and branch through the same `POST /api/devices/agent-maintenance` path with `action=switch_branch_channel`. The Engine stores `agent_release_channel` and `agent_branch` on the device row, records a `Switch Agent Branch/Channel` scheduled job, and lets heartbeat `agent_update_status` close each target as success or failure.
+    - File Management browse and mutation requests use the device SYSTEM Socket.IO channel with Socket.IO ACK responses under the `file_management_request` event instead of piggybacking on quick-job stdout/stderr.
+    - File transfers use Engine temp-file staging plus device-authenticated agent pull/push endpoints so large uploads and downloads do not have to fit inside one socket payload.
+    - Folder uploads rely on an Engine-staged upload manifest that preserves each browser file's relative path so the agent can rebuild the destination tree incrementally without requiring the whole folder to ride in one payload.
+    - Transfer progress updates now double as cancellation checkpoints: the operator requests cancellation through the Engine, the Engine marks the transfer `cancel_requested`, and the agent polls that control snapshot while streaming upload chunks or building archives.
 
-### Device identity and keys
-- Device identity is tied to GUID + SSL fingerprint + token version.
-- `DeviceAuthManager` enforces fingerprint matches and token version checks.
-- Purge inserts a `device_purge_barriers` row so deleted devices cannot be silently recreated by stale access tokens or stale refresh tokens.
-- Re-enrollment clears the barrier only after the recreated device row has been seeded with a token version at or above the purge barrier.
+    ### Status computation
+    - Online/offline is computed from `last_seen` (online if within ~300 seconds).
+    - UI tables use the derived `status` field from the API payload.
+    - Agent Health startup flow status is not a replacement for online/offline. It explains startup progression, especially auth, Socket.IO, role loading, WireGuard, inventory, and steady-state milestones.
 
-### Sites and enrollment codes
-- Sites live in `sites` and `device_sites` tables (see `Data/Engine/Containers/api-backend/data/database.py`).
-- Operator RBAC scope lives in `user_site_assignments`.
-- Enrollment codes are stored directly on `sites.enrollment_code`.
-- Rotating a site code updates the `sites` record only.
-- `GET /api/sites` also returns `public_base_url` and `public_hostname` so the Sites WebUI can generate per-site agent install commands without a second server-info fetch.
+    ### Device identity and keys
+    - Device identity is tied to GUID + SSL fingerprint + token version.
+    - `DeviceAuthManager` enforces fingerprint matches and token version checks.
+    - Purge inserts a `device_purge_barriers` row so deleted devices cannot be silently recreated by stale access tokens or stale refresh tokens.
+    - Re-enrollment clears the barrier only after the recreated device row has been seeded with a token version at or above the purge barrier.
 
-### Device filters (matching)
-- Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/Containers/api-backend/data/services/filters/matcher.py`.
-- `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
-- It also joins normalized software rows from `device_software_inventory`.
-- It also joins sparse metadata rows from `device_metadata_fields` so criteria can match text values or empty fields by `metadata_field_number`.
-- `count_filter_devices` computes match counts for UI summaries and scheduler previews.
+    ### Sites and enrollment codes
+    - Sites live in `sites` and `device_sites` tables (see `Data/Engine/Containers/api-backend/data/database.py`).
+    - Operator RBAC scope lives in `user_site_assignments`.
+    - Enrollment codes are stored directly on `sites.enrollment_code`.
+    - Rotating a site code updates the `sites` record only.
+    - `GET /api/sites` also returns `public_base_url` and `public_hostname` so the Sites WebUI can generate per-site agent install commands without a second server-info fetch.
 
-### Approval flow detail
-- Enrollment requests create approval records (pending).
-- Approval access is site-scoped for operators and unrestricted for admins.
-- Approval handles hostname conflicts (merge or rename).
-- Denials are logged and remove pending requests.
-- Invalid-code enrollment attempts do not create approval records. Admins can surface them through the Device Approval Queue `Invalid Code` filter for recent active failures.
+    ### Device filters (matching)
+    - Filters are stored in typed basic/advanced payloads and normalized by `Data/Engine/Containers/api-backend/data/services/filters/matcher.py`.
+    - `DeviceFilterMatcher.fetch_devices()` loads a snapshot from `devices` and joins `sites`.
+    - It also joins normalized software rows from `device_software_inventory`.
+    - It also joins sparse metadata rows from `device_metadata_fields` so criteria can match text values or empty fields by `metadata_field_number`.
+    - `count_filter_devices` computes match counts for UI summaries and scheduler previews.
 
-### WebUI deep links
-- Device Details route: `/devices/<agent_guid_or_hostname>`.
-- Tab query keys: `device_summary`, `metadata_fields`, `installed_software`, `services`, `process_management`, `activity_history`, `remote_shell`, `remote_desktop`.
-- Device Details also exposes the `file_management` tab query key for the File Management view.
-- File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
-- Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
-- Shared header hostname search is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
+    ### Approval flow detail
+    - Enrollment requests create approval records (pending).
+    - Approval access is site-scoped for operators and unrestricted for admins.
+    - Approval handles hostname conflicts (merge or rename).
+    - Denials are logged and remove pending requests.
+    - Invalid-code enrollment attempts do not create approval records. Admins can surface them through the Device Approval Queue `Invalid Code` filter for recent active failures.
 
-### Debug checklist
-- Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.
-- Online status wrong: check `last_seen` timestamps in `devices` table.
-- Filter counts zero: validate the active criteria payload plus `device_software_inventory` or `device_metadata_fields` rows when software or metadata criteria are involved.
+    ### WebUI deep links
+    - Device Details route: `/devices/<agent_guid_or_hostname>`.
+    - Tab query keys: `device_summary`, `metadata_fields`, `installed_software`, `services`, `process_management`, `activity_history`, `remote_shell`, `remote_desktop`.
+    - Device Details also exposes the `file_management` tab query key for the File Management view.
+    - File Management also exposes a `working_directory` query param for shareable folder deep links, for example `?tab=file_management&working_directory=C%3A%5CUsers%5Cnicole.rappe%5CDesktop`.
+    - Route registration and URL preservation are implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/router.jsx` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/paths.js`; component-level tab URL sync is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`.
+    - Shared header hostname search is implemented in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx` and queries `GET /api/devices/search`.
+
+    ### Debug checklist
+    - Device missing from list: check PostgreSQL `engine.devices` and `engine.device_keys`.
+    - Online status wrong: check `last_seen` timestamps in `devices` table.
+    - Filter counts zero: validate the active criteria payload plus `device_software_inventory` or `device_metadata_fields` rows when software or metadata criteria are involved.

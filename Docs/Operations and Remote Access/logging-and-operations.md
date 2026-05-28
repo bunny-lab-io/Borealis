@@ -3,6 +3,19 @@
 ## Purpose
 Describe Borealis operational logging, retention, and core runtime checks.
 
+## Visual Tour
+
+<div class="bo-screenshot-grid">
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Log_Management.png" alt="Borealis log management" loading="lazy">
+    <figcaption>Log Management gives operators a filtered view of Engine and service logs.</figcaption>
+  </figure>
+  <figure class="bo-screenshot">
+    <img src="../images/repo_screenshots/Log_Management_Raw.png" alt="Borealis raw log viewer" loading="lazy">
+    <figcaption>Raw log view keeps low-level troubleshooting available without shell access.</figcaption>
+  </figure>
+</div>
+
 ## Log Locations
 - Engine container build log: `Engine/Deploy/build.log`.
 - Engine BuildKit cache: `Engine/Deploy/cache/buildkit/<service>/` when Docker Buildx is usable.
@@ -51,44 +64,45 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 
-## Codex Agent (Detailed)
-### Engine log formatting
-- Service logs are written via `service_log` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
-- Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL][CONTEXT-<SCOPE>] message`.
-- Context values are derived from agent context headers or message patterns.
-- `Engine.sh` records Docker build output in `Engine/Deploy/build.log`; container runtime logs are written to each service role's `logs/` directory or Docker stdout/stderr.
+??? example "Detailed Codex Breakdown"
 
-### Log retention implementation
-- `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py` manages retention.
-- Retention overrides are stored in `Engine/Services/api-backend/logs/retention_policy.json`.
-- The API never deletes the active log file automatically.
+    ### Engine log formatting
+    - Service logs are written via `service_log` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.
+    - Format: `[YYYY-MM-DD HH:MM:SS] [LEVEL][CONTEXT-<SCOPE>] message`.
+    - Context values are derived from agent context headers or message patterns.
+    - `Engine.sh` records Docker build output in `Engine/Deploy/build.log`; container runtime logs are written to each service role's `logs/` directory or Docker stdout/stderr.
 
-### Operational checks
-- Startup warnings appear in `Engine/Services/api-backend/logs/engine.log`.
-- API access metrics appear in `Engine/Services/api-backend/logs/api.log` (method, path, duration, status).
-- Embedded edge request outcomes appear in `Engine/Services/traefik-edge/logs/traefik-access.log` (frontend path, upstream target, status, latency).
-- VPN-specific logs are under `Engine/Services/api-backend/logs/VPN_Tunnel/` and `Engine/Services/wireguard-tunnel/logs/`.
-- Watchdog evaluator ticks, incident transitions, and remediation dispatch failures are written through the `watchdogs` service log domain.
-- The Server Info admin page is informational first: it surfaces service health, public cert expiry, live operator sessions, and WireGuard listener state. It intentionally does not embed journal tails or recent log snippets.
-- Service restarts initiated from Server Info are systemd-only. In container mode use `Engine.sh --service <role> restart|rebuild|reload|reconcile`.
+    ### Log retention implementation
+    - `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py` manages retention.
+    - Retention overrides are stored in `Engine/Services/api-backend/logs/retention_policy.json`.
+    - The API never deletes the active log file automatically.
 
-### Agent logging notes
-- Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
-- Agent runtime, bootstrap, and remote shell logs live under `Logs/Agent/`.
-- Role recovery, watchdog repair, stale-liveness restart, and startup auth retry events live under `Logs/Agent/role_recovery.log`.
-- WireGuard role and installer logs live under `Logs/WireGuard/`.
-- UltraVNC role and installer logs live under `Logs/UltraVNC/`.
-- Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
+    ### Operational checks
+    - Startup warnings appear in `Engine/Services/api-backend/logs/engine.log`.
+    - API access metrics appear in `Engine/Services/api-backend/logs/api.log` (method, path, duration, status).
+    - Embedded edge request outcomes appear in `Engine/Services/traefik-edge/logs/traefik-access.log` (frontend path, upstream target, status, latency).
+    - VPN-specific logs are under `Engine/Services/api-backend/logs/VPN_Tunnel/` and `Engine/Services/wireguard-tunnel/logs/`.
+    - Watchdog evaluator ticks, incident transitions, and remediation dispatch failures are written through the `watchdogs` service log domain.
+    - The Server Info admin page is informational first: it surfaces service health, public cert expiry, live operator sessions, and WireGuard listener state. It intentionally does not embed journal tails or recent log snippets.
+    - Service restarts initiated from Server Info are systemd-only. In container mode use `Engine.sh --service <role> restart|rebuild|reload|reconcile`.
 
-### Debug workflow
-- Start with the log file closest to the symptom.
-- Use API log lines to confirm the request reached the Engine.
-- Use `traefik-access.log` to confirm whether the embedded edge returned a `502` before the Engine loopback runtime was ready.
-- Use service logs to diagnose domain-specific behavior.
-- If troubleshooting WireGuard, inspect both Engine and Agent VPN logs.
-- If troubleshooting watchdogs, compare `watchdogs.log`, device inventory freshness, and the current `watchdog_device_state` / `watchdog_incidents` rows.
+    ### Agent logging notes
+    - Logs are scoped by context (SYSTEM vs CURRENTUSER) in prefixes.
+    - Agent runtime, bootstrap, and remote shell logs live under `Logs/Agent/`.
+    - Role recovery, watchdog repair, stale-liveness restart, and startup auth retry events live under `Logs/Agent/role_recovery.log`.
+    - WireGuard role and installer logs live under `Logs/WireGuard/`.
+    - UltraVNC role and installer logs live under `Logs/UltraVNC/`.
+    - Cross-platform updater traces are written to `<AgentInstallRoot>/Logs/Agent/bootstrap.log`; Windows bootstrap starts by truncating this file and keeps verbose output out of operator-facing stdout/stderr streams.
 
-### Operational safety
-- Do not delete logs by hand while debugging; use the log API or archive first.
-- Keep runtime artifacts inside `Engine/Services/<role>/`, `Engine/Deploy/`, and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
-- If you change log formats, update this document and `engine-runtime.md`.
+    ### Debug workflow
+    - Start with the log file closest to the symptom.
+    - Use API log lines to confirm the request reached the Engine.
+    - Use `traefik-access.log` to confirm whether the embedded edge returned a `502` before the Engine loopback runtime was ready.
+    - Use service logs to diagnose domain-specific behavior.
+    - If troubleshooting WireGuard, inspect both Engine and Agent VPN logs.
+    - If troubleshooting watchdogs, compare `watchdogs.log`, device inventory freshness, and the current `watchdog_device_state` / `watchdog_incidents` rows.
+
+    ### Operational safety
+    - Do not delete logs by hand while debugging; use the log API or archive first.
+    - Keep runtime artifacts inside `Engine/Services/<role>/`, `Engine/Deploy/`, and `Agent/` to preserve boundaries, except for the intentionally shared updater trace at `<ProjectRoot>/Updater.log`.
+    - If you change log formats, update this document and `engine-runtime.md`.
