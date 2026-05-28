@@ -1,5 +1,4 @@
 # Device Alerts
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.

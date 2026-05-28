@@ -1,5 +1,4 @@
 # Software Uninstall Blocklist
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.

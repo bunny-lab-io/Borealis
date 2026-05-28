@@ -1,5 +1,4 @@
 # Getting Started with Borealis
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.

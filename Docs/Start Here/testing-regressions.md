@@ -1,5 +1,4 @@
 # Borealis Testing Regressions
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Track unit tests that protect prior regressions or currently fail during test formalization.

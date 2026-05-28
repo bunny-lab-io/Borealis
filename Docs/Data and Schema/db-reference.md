@@ -1,5 +1,4 @@
 # Database Reference
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, and legacy migration structures so operators and Codex agents can troubleshoot and change schema safely.

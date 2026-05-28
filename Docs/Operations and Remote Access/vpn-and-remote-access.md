@@ -1,5 +1,4 @@
 # VPN and Remote Access
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via Apache Guacamole.
@@ -354,7 +353,7 @@ Note: Data/Agent changes only apply after Agent.exe re-stages the agent under Ag
 1) Re-stage the agent runtime after `Data/Agent/internal/roles/remote_shell`, `Data/Agent/internal/roles/wireguard_tunnel`, or VNC role changes so the runtime copy matches `Data/Agent/`.
 2) For shell regressions, correlate `Engine/Services/api-backend/logs/VPN_Tunnel/remote_shell.log` with `Z:\Agent\Logs\Agent\remote_shell.log` by `session_id` before assuming browser-side buffering.
 3) For VNC regressions on weaker hosts, capture `vnc_connect_retry`, `vnc_backend_connect`, `vpn_transport_recovery_request`, and `vpn_transport_watchdog_recovery` from `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log` before changing shell code paths.
-4) If issues persist, confirm `Agent\wireguard.conf` still has a valid [Peer], verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
+4) If issues persist, confirm `Agent\wireguard.conf` still has a valid `[Peer]`, verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
 
 #### Related Documentation
 - [Ansible SSH Connection Logic](../Automation%20and%20Execution/SSH_Connection_Logic.md)

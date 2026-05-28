@@ -1,5 +1,4 @@
 # Migrating Pages to React Router
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document the Borealis WebUI router architecture and provide a repeatable migration runbook for moving legacy pages onto the shared React Router app shell.

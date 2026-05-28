@@ -1,5 +1,4 @@
 # Borealis Docker Stack Breakdown
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain the Borealis Engine Docker Compose stack, service ownership, startup order, runtime paths, and common operator commands.

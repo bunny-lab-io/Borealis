@@ -1,5 +1,4 @@
 # Watchdogs
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing device data, explain why they matched, and optionally launch native remediation.

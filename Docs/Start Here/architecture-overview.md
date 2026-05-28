@@ -1,5 +1,4 @@
 # Architecture Overview
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis is structured and how the core components interact end to end.

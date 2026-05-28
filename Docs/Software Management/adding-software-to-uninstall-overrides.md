@@ -1,5 +1,4 @@
 # Software Uninstall Overrides
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.

@@ -1,5 +1,4 @@
 # Device Management
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis tracks devices, ingests inventory, manages sites and filters, and handles enrollment approvals.

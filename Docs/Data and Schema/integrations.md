@@ -1,5 +1,4 @@
 # Integrations
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document external integrations used by Borealis, primarily the GitHub repository hash service.

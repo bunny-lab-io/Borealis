@@ -1,5 +1,4 @@
 # Flow Editor and Nodes
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.

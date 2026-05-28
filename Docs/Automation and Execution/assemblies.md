@@ -1,5 +1,4 @@
 # Assemblies and Quick Jobs
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain Borealis assemblies (script definitions), how they are stored, and how quick jobs execute them.

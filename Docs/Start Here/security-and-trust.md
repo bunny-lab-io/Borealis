@@ -1,5 +1,4 @@
 # Security and Trust
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.

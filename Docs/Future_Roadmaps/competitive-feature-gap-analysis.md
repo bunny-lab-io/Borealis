@@ -1,5 +1,4 @@
 # Competitive Feature Gap Analysis
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Turn the provided RMM competitor CSV into a Borealis roadmap analysis that is grounded in current Borealis repo truth, not aspirational parity.

@@ -1,5 +1,4 @@
 # API Reference
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Provide a consolidated, human-readable list of Borealis Engine API endpoints grouped by domain.

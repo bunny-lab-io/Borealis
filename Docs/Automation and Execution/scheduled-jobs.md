@@ -1,5 +1,4 @@
 # Scheduled Jobs
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.

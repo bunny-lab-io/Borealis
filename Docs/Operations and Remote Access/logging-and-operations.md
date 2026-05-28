@@ -1,5 +1,4 @@
 # Logging and Operations
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe Borealis operational logging, retention, and core runtime checks.

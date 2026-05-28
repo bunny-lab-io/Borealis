@@ -1,5 +1,4 @@
 # Software Icon Overrides
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Explain how to add file-backed icon-location overrides for installed software when registry `DisplayIcon` metadata is missing or points at the wrong asset.

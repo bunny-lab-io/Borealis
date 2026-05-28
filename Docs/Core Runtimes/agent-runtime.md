@@ -1,5 +1,4 @@
 # Agent Runtime
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis agent runtime, its roles, service modes, and how it communicates with the Engine.

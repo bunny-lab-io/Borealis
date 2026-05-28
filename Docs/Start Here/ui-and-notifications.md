@@ -1,5 +1,4 @@
 # UI and Notifications
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis WebUI architecture, styling conventions, and the toast notification system.

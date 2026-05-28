@@ -1,5 +1,4 @@
 # Borealis SSH Connection Logic
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Define standard SSH handshake, probing, credential selection, and Ansible inventory behavior for Borealis Engine-side SSH connections. This page documents the strategy proven by scheduled Ansible jobs 8 and 9 on the Bunny Lab mixed SSH fleet, and should be reused for future SSH-based Borealis features instead of reinventing per-feature connection logic.

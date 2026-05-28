@@ -1,5 +1,4 @@
 # Engine Runtime
-[Back to Docs Index](../index.md) | [Index (HTML)](../website/index.html)
 
 ## Purpose
 Describe the Borealis Engine runtime, its services, configuration, and operational responsibilities.

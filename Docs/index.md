@@ -1,8 +1,7 @@
 # Borealis Knowledgebase Index
-[Index (HTML)](website/index.html)
 
 ## Purpose
-This page is the navigation hub for the Borealis documentation set. The knowledgebase is organized by domain folders under `Docs/`.
+This page is the navigation hub for the Borealis documentation set. The knowledgebase is organized by domain folders under `Docs/` and published as a Zensical site through GitHub Pages.
 
 ## Table Of Contents
 ### Start Here
@@ -23,6 +22,7 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 - [Database Reference](Data%20and%20Schema/db-reference.md)
 - [API Reference](Data%20and%20Schema/api-reference.md)
 - [Integrations](Data%20and%20Schema/integrations.md)
+- [SBOM](SBOM.md)
 
 ### Automation And Execution
 - [Assemblies and Quick Jobs](Automation%20and%20Execution/assemblies.md)
@@ -51,17 +51,16 @@ This page is the navigation hub for the Borealis documentation set. The knowledg
 ### Assets
 - [Branding Assets](Branding/)
 - [Repository Screenshots](images/repo_screenshots/)
-- [Static Website Index](website/index.html)
 
 ### External References
 - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
 
 ### Key Repo References
-- [README](../README.md)
-- [AGENTS.md](../AGENTS.md)
-- [Engine Unit Test Script](../Engine_Unit_Tests.sh)
-- [Linux Agent Unit Test Script](../Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
-- [Windows Agent Unit Test Script](../Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
+- [README](https://github.com/bunny-lab-io/Borealis/blob/main/README.md)
+- [AGENTS.md](https://github.com/bunny-lab-io/Borealis/blob/main/AGENTS.md)
+- [Engine Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Engine_Unit_Tests.sh)
+- [Linux Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
+- [Windows Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
 
 ## API Endpoints
 None. This index only links to other pages.
@@ -96,7 +95,7 @@ None. This index only links to other pages.
 
 ### Documentation Authoring Rules
 - Keep new documentation inside the closest domain folder.
-- Add a top-of-page link back to the index. For docs in subfolders, link `Back to Docs Index` to `../index.md` and `Index (HTML)` to `../website/index.html`.
+- Add new pages to `../zensical.toml` navigation and this Table of Contents when they should appear in the public documentation site.
 - Use ASCII characters only unless the file already uses Unicode.
 - Avoid duplicating long source code; paraphrase and point to files instead.
 - When a feature has UI and backend components, document both and link the relevant files.
