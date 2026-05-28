@@ -86,7 +86,7 @@ Engine container deployment uses conservative defaults from `Engine/Deploy/compo
     | --- | ---: | ---: | ---: | ---: | ---: |
     | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
 
- === "MSP / Production"
+ === "MSP"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: |
     | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
