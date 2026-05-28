@@ -6,16 +6,14 @@ Borealis is a self-hosted remote management, monitoring, and visual automation p
 
 Full deployment, operation, automation, architecture, testing, and contributor documentation lives in the documentation site:
 
-**Documentation:** https://bunny-lab-io.github.io/Borealis/
+**Documentation:** https://bunny-lab-io.github.io/Borealis
 
 ## Repository Layout
 
-- `Engine/` - deployable Engine runtime files.
-- `Agent/` - deployable Agent runtime files.
 - `Data/Engine/` - Engine source, service code, web UI source, migrations, and tests.
 - `Data/Agent/` - Agent source, roles, staging logic, and tests.
 - `Docs/` - Zensical documentation source for GitHub Pages.
-- `AGENTS.md` - Codex and contributor operating guidance.
+- `AGENTS.md` - Codex Agent operating guidance.
 
 ## Deployment and Management
 
