@@ -1,4 +1,4 @@
-# Borealis Documentation
+# Borealis Automation Platform
 
 Borealis is a self-hosted remote management, monitoring, and visual automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime. It replaces separate homelab and real-world operations tools with one cohesive operator interface.
 
@@ -15,22 +15,22 @@ Borealis is maintained by one person while working a full-time IT job. Progress 
 
 ## Getting Started
 
-Deploy the Borealis Engine to a Linux host:
+Deploy the Borealis Engine to a Linux host (*preferrably Ubuntu Server 24.04.4 LTS or newer*):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```
 
-Use [Getting Started](Start%20Here/getting-started.md) for deployment flow, first-run checks, Agent setup, and operational next steps.
+Refer to [Getting Started](Start%20Here/getting-started.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
 
 ## Architecture
 
-- **Engine**: Linux-hosted single-node control plane with Python services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI.
-- **Agent**: Script-staged cross-platform runtime with Windows as reference path, Linux as partial-but-working path, role-based capabilities, signed work execution, inventory, WireGuard, remote shell, file management, and remote operation roles.
-- **Transport**: Agents connect outbound. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
+- **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across several isolated Docker containers.
+- **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, with Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
+- **Transport**: Agents connect outbound to the engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
 - **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
-- **Automation Model**: Assemblies can run through quick jobs, scheduled jobs, workflows, watchdog remediation, and Engine-side Ansible playbooks.
-- **Security Model**: Aegis Cipher protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
+- **Automation Model**: Assemblies can run through quick jobs, scheduled jobs, workflows, automated watchdog remediation, and Engine-side Ansible playbooks.
+- **Security Model**: Aegis Cipher (global encryption system) protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
 
 ## Feature Support Matrix
 
@@ -74,7 +74,7 @@ Status means productized support in current Borealis codebase and docs, not long
 
 ## Engine Deployment Profiles
 
-Engine container deployment uses conservative defaults from `Engine/Deploy/compose.env`. Sizing below is planning guidance; tune database pool and PostgreSQL settings explicitly for larger installations.
+The Engine container deployment system uses conservative defaults from `Engine/Deploy/compose.env`. The sizing tables below are used for planning guidance and the engine will automatically scale itself to meet the system specs given to it everytime it is deployed/updated; if you tune database pool and PostgreSQL settings explicitly for larger installations.
 
 === "Homelab"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
