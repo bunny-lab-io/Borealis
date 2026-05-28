@@ -55,34 +55,51 @@ Status means productized support in current Borealis codebase and docs, not long
 
 === "Engine (Server)"
 
-    | Feature | What it Does | Windows | Linux | macOS |
-    | --- | --- | --- | --- | --- |
-    | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. | - | - | - |
-    | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. | - | - | - |
-    | Device Filters | Build typed filters, preview matches, scope automations by site, and save per-operator device-list views. | - | - | - |
-    | Remote Operations API and UI | Provide operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions. | - | - | - |
-    | Scheduled and Quick Jobs | Dispatch signed scripts, workflows, and Engine-side Ansible playbook runs with target history. | - | - | - |
-    | Workflow Editor | Build and run graph-based automation from web UI. | - | - | - |
-    | Watchdogs and Auto-Remediation | Preview watchdog matches, track incidents, suppress noise, and dispatch remediation automations. | - | - | - |
-    | Aurora Content Repository | Ingest official assemblies, scripts, and playbooks while keeping local user assemblies on Engine. | - | - | - |
-    | Engine-side Ansible | Run SSH or WinRM automation from Linux Engine over Borealis-managed WireGuard sessions. | - | - | - |
-    | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. | - | - | - |
-    | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. | - | - | - |
-    | Code Signing | Sign script delivery and enforce trusted execution payloads. | - | - | - |
-    | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. | - | - | - |
-    | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. | - | - | - |
+    | Feature | What it Does |
+    | --- | --- |
+    | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. |
+    | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. |
+    | Device Filters | Build typed filters, preview matches, scope automations by site, and save per-operator device-list views. |
+    | Remote Operations API and UI | Provide operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions. |
+    | Scheduled and Quick Jobs | Dispatch signed scripts, workflows, and Engine-side Ansible playbook runs with target history. |
+    | Workflow Editor | Build and run graph-based automation from web UI. |
+    | Watchdogs and Auto-Remediation | Preview watchdog matches, track incidents, suppress noise, and dispatch remediation automations. |
+    | Aurora Content Repository | Ingest official assemblies, scripts, and playbooks while keeping local user assemblies on Engine. |
+    | Engine-side Ansible | Run SSH or WinRM automation from Linux Engine over Borealis-managed WireGuard sessions. |
+    | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. |
+    | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. |
+    | Code Signing | Sign script delivery and enforce trusted execution payloads. |
+    | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. |
+    | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
 ## Engine Deployment Profiles
 
 Engine container deployment uses conservative defaults from `Engine/Deploy/compose.env`. Sizing below is planning guidance; tune database pool and PostgreSQL settings explicitly for larger installations.
 
-| Profile | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Homelab | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
-| Small Business | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
-| MSP / Production | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
-| Enterprise | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
-| Enterprise Clustered | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
+=== "Homelab"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
+
+=== "Small Business"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
+
+ === "MSP / Production"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
+
+ === "Enterprise"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
+
+ === "Enterprise Clustered"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |    
+    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
 ## Choose Starting Point
 
