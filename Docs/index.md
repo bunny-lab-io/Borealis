@@ -1,9 +1,5 @@
 # Borealis Documentation
 
-<div class="bo-hero" markdown>
-
-<div markdown>
-
 Borealis is a self-hosted remote management and visual automation platform. These docs cover deployment, agent behavior, device operations, automation authoring, remote access, database ownership, and contributor guardrails.
 
 Start with the operator guides when deploying or running Borealis. Use runtime, schema, and API references when changing code or troubleshooting production behavior.
@@ -16,14 +12,10 @@ Start with the operator guides when deploying or running Borealis. Use runtime, 
   <span class="bo-pill">PostgreSQL</span>
 </div>
 
-</div>
-
 <figure class="bo-screenshot">
-  <img src="images/repo_screenshots/Server_Overview.png" alt="Borealis server overview page" loading="lazy">
-  <figcaption>Server overview gives operators a quick read on Engine health and connected services.</figcaption>
+  <img src="images/repo_screenshots/Device_List.png" alt="Borealis device list page" loading="lazy">
+  <figcaption>Device List is the normal operator entrypoint for managed fleet work.</figcaption>
 </figure>
-
-</div>
 
 ## Choose Starting Point
 
@@ -70,13 +62,11 @@ Start with the operator guides when deploying or running Borealis. Use runtime, 
 ## Documentation Map
 
 - [Start Here](Start%20Here/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
-- [Core Runtimes](Core%20Runtimes/index.md) - Engine, Agent, and Docker service layout.
-- [Data and Schema](Data%20and%20Schema/index.md) - PostgreSQL ownership, API surfaces, integrations, and SBOM.
-- [Automation and Execution](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
-- [Operations and Remote Access](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, WireGuard, VNC, shell, and logs.
-- [Software Management](Software%20Management/index.md) - installed software inventory, icon overrides, uninstall overrides, and uninstall blocklists.
-- [Migration Paths](Migration%20Paths/index.md) - WebUI route migration guidance.
-- [Future Roadmaps](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
+- [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
+- [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
+- [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
+- [Development](Start%20Here/Unit_Testing.md) - testing and migration guidance.
+- [Roadmap](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
 
 ## Repository References
 

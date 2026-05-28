@@ -19,24 +19,21 @@ nav = [
     "Start Here/architecture-overview.md",
     "Start Here/security-and-trust.md",
     "Start Here/ui-and-notifications.md",
-    "Start Here/Unit_Testing.md",
-    "Start Here/testing.md",
-    "Start Here/testing-regressions.md",
   ] },
-  { "Core Runtimes" = [
-    { "Overview" = "Core Runtimes/index.md" },
-    "Core Runtimes/engine-runtime.md",
-    "Core Runtimes/agent-runtime.md",
-    "Core Runtimes/Stack_Breakdown.md",
+  { "Operations" = [
+    { "Overview" = "Operations and Remote Access/index.md" },
+    "Operations and Remote Access/device-management.md",
+    "Operations and Remote Access/device-alerts.md",
+    "Operations and Remote Access/vpn-and-remote-access.md",
+    "Operations and Remote Access/logging-and-operations.md",
+    { "Software Management" = [
+      { "Overview" = "Software Management/index.md" },
+      "Software Management/adding-software-to-icon-overrides.md",
+      "Software Management/adding-software-to-uninstall-blocklist.md",
+      "Software Management/adding-software-to-uninstall-overrides.md",
+    ] },
   ] },
-  { "Data and Schema" = [
-    { "Overview" = "Data and Schema/index.md" },
-    "Data and Schema/db-reference.md",
-    "Data and Schema/api-reference.md",
-    "Data and Schema/integrations.md",
-    "SBOM.md",
-  ] },
-  { "Automation and Execution" = [
+  { "Automation" = [
     { "Overview" = "Automation and Execution/index.md" },
     "Automation and Execution/assemblies.md",
     "Automation and Execution/flow-editor-and-nodes.md",
@@ -44,24 +41,31 @@ nav = [
     "Automation and Execution/SSH_Connection_Logic.md",
     "Automation and Execution/watchdogs.md",
   ] },
-  { "Operations and Remote Access" = [
-    { "Overview" = "Operations and Remote Access/index.md" },
-    "Operations and Remote Access/device-management.md",
-    "Operations and Remote Access/device-alerts.md",
-    "Operations and Remote Access/vpn-and-remote-access.md",
-    "Operations and Remote Access/logging-and-operations.md",
+  { "Reference" = [
+    { "Core Runtimes" = [
+      { "Overview" = "Core Runtimes/index.md" },
+      "Core Runtimes/engine-runtime.md",
+      "Core Runtimes/agent-runtime.md",
+      "Core Runtimes/Stack_Breakdown.md",
+    ] },
+    { "Data and Schema" = [
+      { "Overview" = "Data and Schema/index.md" },
+      "Data and Schema/db-reference.md",
+      "Data and Schema/api-reference.md",
+      "Data and Schema/integrations.md",
+      "SBOM.md",
+    ] },
   ] },
-  { "Software Management" = [
-    { "Overview" = "Software Management/index.md" },
-    "Software Management/adding-software-to-icon-overrides.md",
-    "Software Management/adding-software-to-uninstall-blocklist.md",
-    "Software Management/adding-software-to-uninstall-overrides.md",
+  { "Development" = [
+    "Start Here/Unit_Testing.md",
+    "Start Here/testing.md",
+    "Start Here/testing-regressions.md",
+    { "Migration Paths" = [
+      { "Overview" = "Migration Paths/index.md" },
+      "Migration Paths/migrating-pages-to-react-router.md",
+    ] },
   ] },
-  { "Migration Paths" = [
-    { "Overview" = "Migration Paths/index.md" },
-    "Migration Paths/migrating-pages-to-react-router.md",
-  ] },
-  { "Future Roadmaps" = [
+  { "Roadmap" = [
     { "Overview" = "Future_Roadmaps/index.md" },
     "Future_Roadmaps/competitive-feature-gap-analysis.md",
   ] },
