@@ -34,36 +34,43 @@ Use [Getting Started](Start%20Here/getting-started.md) for deployment flow, firs
 
 ## Feature Support Matrix
 
-Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. Engine features use `-` for OS columns because they are Engine-side capabilities.
+Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. 
 
-| Scope | Feature | What it Does | Windows | Linux | macOS |
-| --- | --- | --- | --- | --- | --- |
-| Agent | Agent Runtime | Script-staged Python Agent with role loading, enrollment, telemetry, and remote-operation roles. | Full | Full | - |
-| Agent | Inventory Collection | Collect hardware, OS, software, services, sessions, status, and health payloads from endpoint. | Full | Full | - |
-| Agent | WireGuard Tunnel | Maintain outbound WireGuard transport for remote operations and Engine-side automation reachability. | Full | Full | - |
-| Agent | Remote Shell Host | Expose interactive shell over managed WireGuard tunnel. | Full | Full | - |
-| Agent | Remote Desktop Host | Run endpoint-side remote desktop service used by Apache Guacamole browser sessions. | Full | - | - |
-| Agent | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
-| Agent | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Full | - |
-| Agent | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Full | - |
-| Agent | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Full | - |
-| Agent | Signed Script Execution | Validate signed payloads and run scripts in supported contexts. | Full | Full | - |
-| Agent | Watchdog Inputs and Remediation | Provide endpoint telemetry used by watchdogs and execute remediation assemblies when dispatched. | Full | Full | - |
-| Agent | Device Identity and Tunnel Trust | Use Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation. | Full | Full | - |
-| Engine | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. | - | - | - |
-| Engine | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. | - | - | - |
-| Engine | Device Filters | Build typed filters, preview matches, scope automations by site, and save per-operator device-list views. | - | - | - |
-| Engine | Remote Operations API and UI | Provide operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions. | - | - | - |
-| Engine | Scheduled and Quick Jobs | Dispatch signed scripts, workflows, and Engine-side Ansible playbook runs with target history. | - | - | - |
-| Engine | Workflow Editor | Build and run graph-based automation from web UI. | - | - | - |
-| Engine | Watchdogs and Auto-Remediation | Preview watchdog matches, track incidents, suppress noise, and dispatch remediation automations. | - | - | - |
-| Engine | Aurora Content Repository | Ingest official assemblies, scripts, and playbooks while keeping local user assemblies on Engine. | - | - | - |
-| Engine | Engine-side Ansible | Run SSH or WinRM automation from Linux Engine over Borealis-managed WireGuard sessions. | - | - | - |
-| Engine | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. | - | - | - |
-| Engine | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. | - | - | - |
-| Engine | Code Signing | Sign script delivery and enforce trusted execution payloads. | - | - | - |
-| Engine | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. | - | - | - |
-| Engine | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. | - | - | - |
+=== "Agent (Client)"
+
+    | Feature | What it Does | Windows | Linux | macOS |
+    | --- | --- | --- | --- | --- |
+    | Agent Runtime | Script-staged Python Agent with role loading, enrollment, telemetry, and remote-operation roles. | Full | Full | - |
+    | Inventory Collection | Collect hardware, OS, software, services, sessions, status, and health payloads from endpoint. | Full | Full | - |
+    | WireGuard Tunnel | Maintain outbound WireGuard transport for remote operations and Engine-side automation reachability. | Full | Full | - |
+    | Remote Shell Host | Expose interactive shell over managed WireGuard tunnel. | Full | Full | - |
+    | Remote Desktop | Run endpoint-side remote desktop service used by Apache Guacamole browser sessions. | Full | - | - |
+    | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
+    | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Full | - |
+    | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Full | - |
+    | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Full | - |
+    | Signed Script Execution | Validate signed payloads and run scripts in supported contexts. | Full | Full | - |
+    | Watchdog Inputs and Remediation | Provide endpoint telemetry used by watchdogs and execute remediation assemblies when dispatched. | Full | Full | - |
+    | Device Identity and Tunnel Trust | Use Ed25519 device identity, short-lived tunnel tokens, and public CA/hostname validation. | Full | Full | - |
+
+=== "Engine (Server)"
+
+    | Feature | What it Does | Windows | Linux | macOS |
+    | --- | --- | --- | --- | --- |
+    | Device Inventory Store | Store device inventory, status, health, software, services, sessions, and activity history in PostgreSQL. | - | - | - |
+    | Sites, Agent Approvals, and RBAC | Scope devices by site, approve agent enrollments, and restrict operators by site. | - | - | - |
+    | Device Filters | Build typed filters, preview matches, scope automations by site, and save per-operator device-list views. | - | - | - |
+    | Remote Operations API and UI | Provide operator-facing APIs and UI for shell, desktop, files, processes, services, and software actions. | - | - | - |
+    | Scheduled and Quick Jobs | Dispatch signed scripts, workflows, and Engine-side Ansible playbook runs with target history. | - | - | - |
+    | Workflow Editor | Build and run graph-based automation from web UI. | - | - | - |
+    | Watchdogs and Auto-Remediation | Preview watchdog matches, track incidents, suppress noise, and dispatch remediation automations. | - | - | - |
+    | Aurora Content Repository | Ingest official assemblies, scripts, and playbooks while keeping local user assemblies on Engine. | - | - | - |
+    | Engine-side Ansible | Run SSH or WinRM automation from Linux Engine over Borealis-managed WireGuard sessions. | - | - | - |
+    | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. | - | - | - |
+    | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. | - | - | - |
+    | Code Signing | Sign script delivery and enforce trusted execution payloads. | - | - | - |
+    | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. | - | - | - |
+    | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. | - | - | - |
 
 ## Engine Deployment Profiles
 
