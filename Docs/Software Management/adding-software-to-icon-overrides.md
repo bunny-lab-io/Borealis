@@ -3,13 +3,6 @@
 ## Purpose
 Explain how to add file-backed icon-location overrides for installed software when registry `DisplayIcon` metadata is missing or points at the wrong asset.
 
-## Visual Context
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Installed_Software.png" alt="Borealis installed software inventory" loading="lazy">
-  <figcaption>Icon overrides improve software inventory readability when registry icon metadata is missing or wrong.</figcaption>
-</figure>
-
 ## Override File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_icons_overrides.json`
 - Runtime consumer:

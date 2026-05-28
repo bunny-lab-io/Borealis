@@ -3,19 +3,6 @@
 ## Purpose
 Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Aegis_Cipher.png" alt="Borealis Aegis Cipher prompt" loading="lazy">
-    <figcaption>Aegis gates operator authentication and protects sensitive credentials at rest.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Credential_Management.png" alt="Borealis credential management" loading="lazy">
-    <figcaption>Credential Management stores reusable credentials behind Borealis authorization and Aegis protection.</figcaption>
-  </figure>
-</div>
-
 ## Security Model Summary
 - Mutual trust: each agent has a unique Ed25519 identity key; the Engine issues Ed25519-signed access tokens bound to that fingerprint.
 - Public CA trust: Borealis exposes the Engine through a Borealis-managed Traefik edge that uses Let's Encrypt certificates for browser and agent HTTPS traffic.

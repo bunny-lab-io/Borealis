@@ -3,13 +3,6 @@
 ## Purpose
 Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.
 
-## Visual Tour
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Alert_List.png" alt="Borealis alert list" loading="lazy">
-  <figcaption>Alerts queue shows open, suppressed, and resolved incidents from watchdog evaluation.</figcaption>
-</figure>
-
 ## Alerts Queue
 - Alerts lives under `Alerting & Reporting` in the sidebar.
 - The queue is the operational surface for incidents opened by Watchdogs.

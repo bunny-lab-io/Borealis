@@ -31,13 +31,6 @@
   margin: .35rem 0 0;
 }
 
-.md-typeset .bo-screenshot-grid {
-  display: grid;
-  gap: .9rem;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-  margin: 1rem 0 1.5rem;
-}
-
 .md-typeset .bo-screenshot {
   margin: 0;
 }

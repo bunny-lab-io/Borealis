@@ -3,23 +3,6 @@
 ## Purpose
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Scheduled_Job_List.png" alt="Borealis scheduled job list" loading="lazy">
-    <figcaption>Scheduled Job List shows enabled jobs, cadence, target state, and recent execution status.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Scheduled_Job_Editor.png" alt="Borealis scheduled job editor" loading="lazy">
-    <figcaption>Scheduled Job Editor binds assemblies to targets, schedules, execution contexts, and variables.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Scheduled_Job_History.png" alt="Borealis scheduled job history" loading="lazy">
-    <figcaption>Run history records target outcomes and activity for troubleshooting.</figcaption>
-  </figure>
-</div>
-
 ## Scheduler Overview
 - Scheduler implementation lives in `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`.
 - `job-scheduler` owns the scheduled tick loop in container deployments. `api-backend` keeps CRUD/status APIs and the live Socket.IO bridge.

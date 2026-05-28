@@ -54,6 +54,7 @@ Start with the operator guides when deploying or running Borealis. Use runtime, 
 ## Documentation Map
 
 - [Start Here](Start%20Here/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
+- [Screenshots](Start%20Here/screenshots.md) - visual tour of Borealis operator surfaces.
 - [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
 - [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
 - [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
@@ -89,5 +90,6 @@ Start with the operator guides when deploying or running Borealis. Use runtime, 
     - Use ASCII unless existing file already uses Unicode.
     - Avoid duplicating long source code; link to files and summarize behavior.
     - Document UI and backend components together when both change.
+    - Keep screenshots on [Screenshots](Start%20Here/screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
     - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
     - Use GitHub issues labeled `Technical Debt` for workarounds, non-standard build steps, or dev/prod drift.

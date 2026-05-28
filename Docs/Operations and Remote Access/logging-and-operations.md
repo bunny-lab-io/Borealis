@@ -3,19 +3,6 @@
 ## Purpose
 Describe Borealis operational logging, retention, and core runtime checks.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Log_Management.png" alt="Borealis log management" loading="lazy">
-    <figcaption>Log Management gives operators a filtered view of Engine and service logs.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Log_Management_Raw.png" alt="Borealis raw log viewer" loading="lazy">
-    <figcaption>Raw log view keeps low-level troubleshooting available without shell access.</figcaption>
-  </figure>
-</div>
-
 ## Log Locations
 - Engine container build log: `Engine/Deploy/build.log`.
 - Engine BuildKit cache: `Engine/Deploy/cache/buildkit/<service>/` when Docker Buildx is usable.

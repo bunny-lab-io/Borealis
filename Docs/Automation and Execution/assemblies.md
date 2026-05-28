@@ -3,23 +3,6 @@
 ## Purpose
 Explain Borealis assemblies (script definitions), how they are stored, and how quick jobs execute them.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Assembly_List.png" alt="Borealis assembly list" loading="lazy">
-    <figcaption>Assembly List is the catalog for scripts, playbooks, and workflows.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Assembly_Editor.png" alt="Borealis assembly editor" loading="lazy">
-    <figcaption>Assembly Editor captures reusable automation payloads and metadata.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Ansible_Playbook_Recap.png" alt="Borealis Ansible playbook recap" loading="lazy">
-    <figcaption>Ansible recaps preserve Engine-side playbook execution results.</figcaption>
-  </figure>
-</div>
-
 ## Assemblies at a Glance
 - Assemblies are script definitions stored in PostgreSQL assembly-domain tables.
 - Domains include: `official`, `community`, and `user`.

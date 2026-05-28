@@ -3,13 +3,6 @@
 ## Purpose
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.
 
-## Visual Tour
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Workflow_Editor.png" alt="Borealis workflow editor" loading="lazy">
-  <figcaption>Workflow Editor provides canvas-based automation authoring with typed nodes and edges.</figcaption>
-</figure>
-
 ## Core UI Components
 - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor.jsx` - workflow editor page controller/compositor. Owns route-driven workflow load/save/run behavior, access checks, run snapshot hydration, and the access-warning dialog.
 - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/Flow_Editor_Canvas.jsx` - React Flow canvas, drag/drop, node/edge selection, snap guides, and canvas interaction wiring.

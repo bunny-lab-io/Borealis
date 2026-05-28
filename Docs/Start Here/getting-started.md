@@ -3,19 +3,6 @@
 ## Purpose
 Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
 
-## First Look
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Server_Overview.png" alt="Borealis server overview" loading="lazy">
-    <figcaption>Use Server Overview after deployment to confirm service health and Engine status.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Device_Approval_Queue.png" alt="Borealis device approval queue" loading="lazy">
-    <figcaption>New agents land in the approval queue before they become managed devices.</figcaption>
-  </figure>
-</div>
-
 ## Quick Start (Engine)
 - Linux production, first install from a cloned checkout: `./Engine.sh deploy prod` (installs Docker Engine + Docker Compose when missing, then deploys the Compose-backed Engine at `https://<your-public-fqdn>` through the Traefik edge container).
 - Linux production, one-line install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod`.

@@ -3,13 +3,6 @@
 ## Purpose
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.
 
-## Visual Context
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Installed_Software.png" alt="Borealis installed software inventory" loading="lazy">
-  <figcaption>Blocklist rules protect operators from unsafe unattended uninstall actions.</figcaption>
-</figure>
-
 ## Blocklist File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_blocklist.json`
 - Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`

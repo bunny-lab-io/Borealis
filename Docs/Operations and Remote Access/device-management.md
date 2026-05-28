@@ -3,27 +3,6 @@
 ## Purpose
 Explain how Borealis tracks devices, ingests inventory, manages sites and filters, and handles enrollment approvals.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Device_List.png" alt="Borealis device list" loading="lazy">
-    <figcaption>Device List is the main fleet inventory surface for operators.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Device_Details.png" alt="Borealis device details" loading="lazy">
-    <figcaption>Device Summary centralizes inventory, role health, actions, and device-specific workflows.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Device_Filter_List.png" alt="Borealis device filter list" loading="lazy">
-    <figcaption>Device filters provide reusable dynamic targeting for jobs, watchdogs, and scoped views.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Site_List.png" alt="Borealis site list" loading="lazy">
-    <figcaption>Sites group devices and drive operator visibility, enrollment, and targeting boundaries.</figcaption>
-  </figure>
-</div>
-
 ## Inventory and Status
 - Agents send heartbeats and inventory payloads to the Engine.
 - The Engine stores device summaries and detailed hardware, software, and cached service data in PostgreSQL.

@@ -3,23 +3,6 @@
 ## Purpose
 Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via Apache Guacamole.
 
-## Visual Tour
-
-<div class="bo-screenshot-grid">
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Remote_Desktop.png" alt="Borealis remote desktop" loading="lazy">
-    <figcaption>Remote Desktop uses browser VNC through Guacamole over the managed WireGuard path.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Device_Remote_Shell.png" alt="Borealis remote shell" loading="lazy">
-    <figcaption>Remote Shell bridges PowerShell sessions over the same persistent tunnel.</figcaption>
-  </figure>
-  <figure class="bo-screenshot">
-    <img src="../images/repo_screenshots/Agent_File_Management.png" alt="Borealis agent file management" loading="lazy">
-    <figcaption>File Management uses the agent channel for remote browse, upload, download, and edit workflows.</figcaption>
-  </figure>
-</div>
-
 ## WireGuard Reverse VPN (High Level)
 - Outbound-only: agents initiate tunnels to the Engine; no inbound listeners on devices.
 - Transport: WireGuard UDP 30000.

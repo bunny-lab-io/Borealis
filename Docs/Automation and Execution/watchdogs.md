@@ -3,13 +3,6 @@
 ## Purpose
 Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing device data, explain why they matched, and optionally launch native remediation.
 
-## Visual Tour
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Watchdog_List.png" alt="Borealis watchdog list" loading="lazy">
-  <figcaption>Watchdog List is the policy surface for monitoring rules, assignment scope, and remediation.</figcaption>
-</figure>
-
 ## Watchdogs at a Glance
 - Watchdogs live under `Automation` in the sidebar because they are policy-authoring and remediation tools.
 - Each watchdog has:

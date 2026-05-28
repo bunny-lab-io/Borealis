@@ -3,13 +3,6 @@
 ## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.
 
-## Visual Context
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Software_Audit_List.png" alt="Borealis software audit list" loading="lazy">
-  <figcaption>Uninstall overrides make fleet software actions predictable when vendor registry metadata is incomplete.</figcaption>
-</figure>
-
 ## Override File
 - Path: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall_overrides.json`
 - Runtime consumer: `Data/Engine/Containers/api-backend/data/services/API/devices/software_uninstall.py`

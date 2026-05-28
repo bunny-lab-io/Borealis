@@ -3,13 +3,6 @@
 ## Purpose
 Explain how Borealis is structured and how the core components interact end to end.
 
-## Visual Overview
-
-<figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Server_Overview.png" alt="Borealis server overview" loading="lazy">
-  <figcaption>Server Overview is the operator-facing view of Engine host health, Compose services, WireGuard, and public edge state.</figcaption>
-</figure>
-
 ## Core Components
 - Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
 - WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
