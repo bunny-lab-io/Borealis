@@ -6,6 +6,16 @@
   margin: 1rem 0 1.6rem;
 }
 
+.md-typeset .bo-hero > * {
+  min-width: 0;
+}
+
+.md-typeset .bo-hero .bo-screenshot {
+  justify-self: end;
+  max-width: 31rem;
+  width: 100%;
+}
+
 .md-typeset .bo-hero p {
   font-size: 1.05rem;
 }
@@ -81,6 +91,7 @@
   display: block;
   height: auto;
   max-width: 100%;
+  width: 100%;
 }
 
 .md-typeset .bo-screenshot figcaption {
@@ -92,5 +103,10 @@
 @media screen and (max-width: 54rem) {
   .md-typeset .bo-hero {
     grid-template-columns: 1fr;
+  }
+
+  .md-typeset .bo-hero .bo-screenshot {
+    justify-self: stretch;
+    max-width: none;
   }
 }
