@@ -16,11 +16,12 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -39,14 +40,28 @@ jobs:
       - name: Build documentation
         run: zensical build --clean --strict
 
+      - name: Prune Pages artifact
+        run: |
+          find site -type f \( \
+            -iname '*.psd' -o \
+            -iname '*.psb' -o \
+            -iname '*.xcf' -o \
+            -iname '*.ai' -o \
+            -iname '*.sketch' \
+          \) -delete
+          du -sh site
+          find site -type f -printf '%s\t%p\n' | sort -nr | head -40
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
+        timeout-minutes: 5
         with:
           path: site
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    timeout-minutes: 8
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
