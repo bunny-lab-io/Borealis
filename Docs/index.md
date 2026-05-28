@@ -4,14 +4,6 @@ Borealis is a self-hosted remote management and visual automation platform. Thes
 
 Start with the operator guides when deploying or running Borealis. Use runtime, schema, and API references when changing code or troubleshooting production behavior.
 
-<div class="bo-pill-row">
-  <span class="bo-pill">Engine</span>
-  <span class="bo-pill">Agent</span>
-  <span class="bo-pill">Automation</span>
-  <span class="bo-pill">Remote Access</span>
-  <span class="bo-pill">PostgreSQL</span>
-</div>
-
 <figure class="bo-screenshot">
   <img src="images/repo_screenshots/Device_List.png" alt="Borealis device list page" loading="lazy">
   <figcaption>Device List is the normal operator entrypoint for managed fleet work.</figcaption>
