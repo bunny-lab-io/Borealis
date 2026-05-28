@@ -86,17 +86,17 @@ Engine container deployment uses conservative defaults from `Engine/Deploy/compo
     | --- | ---: | ---: | ---: | ---: | ---: |
     | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
 
- === "MSP"
+=== "MSP / Production"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: |
     | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
 
- === "Enterprise"
+=== "Enterprise"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: |
     | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
 
- === "Enterprise Clustered"
+=== "Enterprise Clustered"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: |    
     | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
