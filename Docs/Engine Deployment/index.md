@@ -1,12 +1,12 @@
 # Getting Started
-We are glad you decided to give Borealis a try.  You can follow the instructions on this page to install the Borealis Engine onto a Linux host which acts as the heart of the platform.
+You can follow the instructions on this page to install the Borealis Engine onto a Linux host which acts as the heart of the automation platform.
 
 !!! info "System Requirements"
 
     **Engine Host**:
 
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
-        - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
+    - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
 
     **DNS Records & Let's Encrypt Considerations**:
 
@@ -49,7 +49,6 @@ The Engine container deployment system uses conservative defaults from `Engine/D
 Use the following one-line installer command when starting from a fresh Linux host:
 
 ```sh
-# Download the Borealis launcher from GitHub and deploy the production Engine stack.
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```
 
@@ -69,10 +68,13 @@ During deployment, Borealis will install missing dependencies, prepare runtime c
     curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod
     ```
 
+### Configure the Engine
+You will be asked as series of questions during initial setup for a new engine.  The questions will be generally straight-forward and not too complicated.
+
 ## First Run Checklist
 After deployment finishes:
 
-1. Open `https://<your-public-fqdn>`.
+1. Navigate to: `https://<your-public-fqdn>`.
 2. Confirm the Borealis Aegis Cipher page loads and configure a passphrase to encrypt all Engine secrets like machine credentials, passkeys, Github tokens, etc.
 
 !!! warning "Do not Lose Aegis Cipher"

@@ -8,19 +8,10 @@ Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, s
   <figcaption>Device List is the normal operator entrypoint for managed fleet work.</figcaption>
 </figure>
 
-## Project Status
+## Development Pace
 Borealis is maintained by one person while working a full-time IT job. Progress is iterative, and some internals get reworked as better architecture emerges. Current focus is turning the automation and remote-operations core into a broader MSP-ready platform.
 
-## Getting Started
-Deploy the Borealis Engine to a Linux host (*preferrably Ubuntu Server 24.04.4 LTS or newer*):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
-```
-
-Refer to [Getting Started](Engine%20Deployment/index.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
-
-## Architecture
+## High-Level Architecture Overview
 Borealis has two main runtime sides: a Linux-hosted Engine server and cross-platform Agent clients. See [Architecture Overview](Engine%20Deployment/architecture-overview.md) for component roles, runtime boundaries, data flow, and debugging entrypoints.
 
 ## Feature Support Matrix
@@ -62,66 +53,8 @@ Status means productized support in current Borealis codebase and docs, not long
     | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. |
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
-## Choose Starting Point
-
-<div class="bo-card-grid" markdown>
-
-<div class="bo-card" markdown>
-**New Operators**
-
-[Getting Started](Engine%20Deployment/index.md) covers Engine bootstrap, optional Agent install, and first-run checks.
-</div>
-
-<div class="bo-card" markdown>
-**Runtime Maintainers**
-
-[Architecture Overview](Engine%20Deployment/architecture-overview.md), [Engine Runtime](Core%20Runtimes/engine-runtime.md), and [Agent Runtime](Core%20Runtimes/agent-runtime.md) explain system shape.
-</div>
-
-<div class="bo-card" markdown>
-**Fleet Operations**
-
-[Device Management](Operations%20and%20Remote%20Access/device-management.md), [Device Alerts](Operations%20and%20Remote%20Access/device-alerts.md), and [Logging and Operations](Operations%20and%20Remote%20Access/logging-and-operations.md) cover daily operator workflows.
-</div>
-
-<div class="bo-card" markdown>
-**Automation Authors**
-
-[Assemblies and Quick Jobs](Automation%20and%20Execution/assemblies.md), [Flow Editor and Nodes](Automation%20and%20Execution/flow-editor-and-nodes.md), and [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md) cover automation design and execution.
-</div>
-
-<div class="bo-card" markdown>
-**Remote Support**
-
-[VPN and Remote Access](Operations%20and%20Remote%20Access/vpn-and-remote-access.md) covers WireGuard tunnels, Remote PowerShell, and browser VNC.
-</div>
-
-<div class="bo-card" markdown>
-**Contributors**
-
-[Unit Testing](Engine%20Deployment/Unit_Testing.md), [API Reference](Data%20and%20Schema/api-reference.md), and [Database Reference](Data%20and%20Schema/db-reference.md) define validation and shared contracts.
-</div>
-
-</div>
-
-## Documentation Map
-
-- [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
-- [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
-- [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
-- [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
-- [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
-- [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
-- [Roadmap](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
-
-## Repository References
-
-- [README](https://github.com/bunny-lab-io/Borealis/blob/main/README.md)
-- [AGENTS.md](https://github.com/bunny-lab-io/Borealis/blob/main/AGENTS.md)
-- [Engine Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Engine_Unit_Tests.sh)
-- [Linux Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
-- [Windows Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
-- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
+## Getting Started
+Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20Deployment/index.md) documentation.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -146,3 +79,22 @@ Status means productized support in current Borealis codebase and docs, not long
     - Keep screenshots on [Screenshots](Engine%20Deployment/screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
     - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
     - Use GitHub issues labeled `Technical Debt` for workarounds, non-standard build steps, or dev/prod drift.
+
+    Documentation Map:
+
+    - [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
+    - [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
+    - [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
+    - [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
+    - [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
+    - [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
+    - [Roadmap](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
+
+    Repository References:
+
+    - [README](https://github.com/bunny-lab-io/Borealis/blob/main/README.md)
+    - [AGENTS.md](https://github.com/bunny-lab-io/Borealis/blob/main/AGENTS.md)
+    - [Engine Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Engine_Unit_Tests.sh)
+    - [Linux Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.sh)
+    - [Windows Agent Unit Test Script](https://github.com/bunny-lab-io/Borealis/blob/main/Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1)
+    - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
