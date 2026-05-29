@@ -1,43 +1,59 @@
-# Getting Started with Borealis
+# Getting Started
+We are glad you decided to give Borealis a try.  You can follow the instructions on this page to install the Borealis Engine onto a Linux host which acts as the heart of the platform.
 
-## Purpose
+!!! info "System Requirements"
 
-Use this page to install the Borealis Engine, open the web interface, and verify the first startup. Agent installation is optional and can happen after the Engine is running.
+    **Engine Host**:
+    - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
+        - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
+    
+    **DNS Records & Let's Encrypt**:
+    - Point a public FQDN at the Engine host before production deployment (e.g. `borealis.bunny-lab.io`), this will be used by Let's Encrypt later during Engine setup.
+    - Also be sure to have an email address ready for Let's Encrypt certificate registration (e.g. `infrastructure@bunny-lab.io`)
 
-!!! tip "Beginner path"
-    Start with the Engine only. Add Agents after the login page works and `GET /health` returns `{"status":"ok"}`.
+    **Firewall Preparation**:
+    - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
-## Before You Start
+## Engine Deployment Profiles
+The Engine container deployment system uses conservative defaults from `Engine/Deploy/compose.env`. The sizing tables below are used for planning guidance and the engine will automatically scale itself to meet the system specs given to it everytime it is deployed/updated; if you tune database pool and PostgreSQL settings explicitly for larger installations.
 
-- Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
-- Point a public FQDN at the Engine host before production deployment.
-- Have an email address ready for Let's Encrypt certificate registration.
-- Run install commands from a shell with `sudo` rights.
-- Keep WireGuard UDP `30000` reachable for remote operations.
+=== "Homelab"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
 
-!!! warning "Engine host boundary"
-    Do not install a Linux Agent into the same runtime root used by a deployed Engine. Keep Agent files in a dedicated Agent install directory.
+=== "Small Business"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
+
+=== "MSP / Production"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
+
+=== "Enterprise"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |
+    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
+
+=== "Enterprise Clustered"
+    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: |    
+    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
 ## Install the Engine
-
-Use the one-line installer when starting from a fresh Linux host:
+Use the following one-line installer command when starting from a fresh Linux host:
 
 ```sh
 # Download the Borealis launcher from GitHub and deploy the production Engine stack.
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```
 
-Use a cloned checkout when you already have the repository on disk:
+During deployment, Borealis will install missing dependencies, prepare runtime configuration, builds changed service container images, and starts the Docker Compose stack automatically for you.
 
-```sh
-# Run production deployment from the repository root.
-./Engine.sh deploy prod
-```
-
-During deployment, Borealis installs missing Docker dependencies, prepares runtime configuration, builds changed service images, and starts the Docker Compose project.
-
-??? note "Optional: development and branch installs"
-    Use these commands only when testing changes or validating a specific release channel.
+??? note "Optional: Development and Branch Installs"
+    Use these commands only when testing changes or validating a specific release channel.  *Do not use in Production.*
 
     ```sh
     # Deploy the development stack with WebUI Vite HMR behind Traefik.
@@ -50,41 +66,28 @@ During deployment, Borealis installs missing Docker dependencies, prepares runti
     curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod
     ```
 
-## Verify First Run
-
+## First Run Checklist
 After deployment finishes:
 
 1. Open `https://<your-public-fqdn>`.
-2. Confirm the Borealis login page loads.
-3. Check Engine startup logs.
-4. Confirm the health endpoint returns `{"status":"ok"}`.
+2. Confirm the Borealis Aegis Cipher page loads and configure a passphrase to encrypt all Engine secrets like machine credentials, passkeys, Github tokens, etc.
+
+!!! warning "Do not Lose Aegis Cipher"
+    If you lose the Aegis Cipher, you can forcefully reset it from the WebUI, but you will lose all stored credentials in the Engine, requiring you to manually re-enter all of them.  
+    
+    Thankfully all affected credentials are clearly indicated and all scheduled jobs requiring the lost credentials are suspended until the credentials are re-entered.
+
+## Update or Re-deploy the Engine"
+Use redeploy commands after pulling updates or changing Engine configuration.
 
 ```sh
-# Watch Engine startup messages.
-tail -f Engine/Services/api-backend/logs/engine.log
-
-# Confirm the API process is alive.
-curl -fsSL https://<your-public-fqdn>/health
+# Update a cloned checkout, then redeploy production.
+cd /opt/Borealis
+git pull --ff-only
+./Engine.sh deploy prod
 ```
 
-!!! info "HTTPS and WireGuard"
-    Borealis owns its public HTTPS edge with the `traefik-edge` container when a public FQDN and ACME email are configured. WireGuard stays separate as direct UDP traffic on port `30000`.
-
-??? note "Optional: update or redeploy the Engine"
-    Use redeploy commands after pulling updates or changing Engine configuration.
-
-    ```sh
-    # Update a cloned checkout, then redeploy production.
-    git pull --ff-only
-    ./Engine.sh deploy prod
-
-    # Redeploy development mode.
-    ./Engine.sh deploy dev
-    ```
-
-    No-op deploys skip unchanged image builds and skip Compose when the deploy manifest, environment, image hashes, and running containers already match.
-
-??? note "Optional: service maintenance commands"
+??? note "Optional: Service Maintenance Commands"
     Use service-scoped commands when troubleshooting one Engine component.
 
     ```sh
@@ -100,40 +103,6 @@ curl -fsSL https://<your-public-fqdn>/health
     # Reconcile WireGuard tunnel state.
     ./Engine.sh --service wireguard-tunnel reconcile
     ```
-
-## Optional: Install an Agent
-
-Install Agents after the Engine is reachable. Agent enrollment needs the Engine URL and a site enrollment code.
-
-=== "Windows"
-
-    Build or refresh the Windows Agent binary from Linux when source changes:
-
-    ```sh
-    # Build Agent binaries under Data/Agent/dist/.
-    Data/Agent/build-agent.sh
-    ```
-
-    Run the Agent from elevated PowerShell:
-
-    ```powershell
-    # Start interactive Agent setup from a checkout.
-    .\Data\Agent\dist\windows-amd64\Agent.exe
-    ```
-
-    Use non-interactive enrollment when the Engine URL and site enrollment code are already known:
-
-    ```powershell
-    # Enroll a Windows endpoint into a Borealis site.
-    .\Data\Agent\dist\windows-amd64\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
-    ```
-
-=== "Linux"
-
-    Linux Agent builds to `Data/Agent/dist/linux-amd64/Agent`. Install commands run the downloaded binary with the Engine URL and enrollment code, then stage the Agent as `/opt/Borealis/Agent/Agent`.
-
-    !!! warning "Separate Engine and Agent installs"
-        Do not place a Linux Agent inside a deployed Engine runtime root. Use a dedicated Agent install directory so Engine redeploys cannot overwrite Agent state.
 
 ??? example "Detailed Codex Breakdown"
 

@@ -1,5 +1,4 @@
 # Borealis Automation Platform
-
 Borealis is a self-hosted remote management, monitoring, and visual automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime. It replaces separate homelab and real-world operations tools with one cohesive operator interface.
 
 Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution.
@@ -10,11 +9,9 @@ Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, s
 </figure>
 
 ## Project Status
-
 Borealis is maintained by one person while working a full-time IT job. Progress is iterative, and some internals get reworked as better architecture emerges. Current focus is turning the automation and remote-operations core into a broader MSP-ready platform.
 
 ## Getting Started
-
 Deploy the Borealis Engine to a Linux host (*preferrably Ubuntu Server 24.04.4 LTS or newer*):
 
 ```sh
@@ -24,7 +21,6 @@ curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/ma
 Refer to [Getting Started](Start%20Here/getting-started.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
 
 ## Architecture
-
 - **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across several isolated Docker containers.
 - **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, with Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
 - **Transport**: Agents connect outbound to the engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
@@ -33,7 +29,6 @@ Refer to [Getting Started](Start%20Here/getting-started.md) for more information
 - **Security Model**: Aegis Cipher (global encryption system) protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
 
 ## Feature Support Matrix
-
 Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. 
 
 === "Agent (Client)"
@@ -71,35 +66,6 @@ Status means productized support in current Borealis codebase and docs, not long
     | Code Signing | Sign script delivery and enforce trusted execution payloads. |
     | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. |
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
-
-## Engine Deployment Profiles
-
-The Engine container deployment system uses conservative defaults from `Engine/Deploy/compose.env`. The sizing tables below are used for planning guidance and the engine will automatically scale itself to meet the system specs given to it everytime it is deployed/updated; if you tune database pool and PostgreSQL settings explicitly for larger installations.
-
-=== "Homelab"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
-
-=== "Small Business"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
-
-=== "MSP / Production"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
-
-=== "Enterprise"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
-
-=== "Enterprise Clustered"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |    
-    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
 ## Choose Starting Point
 
