@@ -1,4 +1,4 @@
-# Borealis Automation Platform
+# Overview
 Borealis is a self-hosted remote management, monitoring, and visual automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime. It replaces separate homelab and real-world operations tools with one cohesive operator interface.
 
 Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution.
@@ -85,7 +85,7 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20
     - [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
     - [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - device inventory, alerts, remote access, logs, and software management.
-    - [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
+    - [Automation](Using%20the%20Platform/Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
     - [Reference](Reference/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
     - [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
     - [Roadmap](Reference/Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.

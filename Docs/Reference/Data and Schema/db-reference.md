@@ -920,8 +920,8 @@ Each table has the same schema:
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
 - [Device Management](../../Using%20the%20Platform/device-management.md)
-- [Scheduled Jobs](../../Automation%20and%20Execution/scheduled-jobs.md)
-- [Assemblies and Quick Jobs](../../Automation%20and%20Execution/assemblies.md)
+- [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
 - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
 
 ??? example "Detailed Codex Breakdown"

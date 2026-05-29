@@ -39,42 +39,42 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 ### Remote Access and Technician Tooling
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Remote shell / technician command line | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis ships WireGuard-backed remote shell plus SYSTEM/current-user script execution. |
-| Remote desktop | Shipped | `Docs/vpn-and-remote-access.md`, `Docs/architecture-overview.md` | Same-origin Apache Guacamole VNC is a real product surface. |
-| PowerShell / script execution | Shipped | `Docs/assemblies.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
-| Service inventory and service control | Shipped | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
-| Installed software inventory, uninstall, and software override governance | Shipped | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Software Management/adding-software-to-icon-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
-| Processes | Shipped | `Docs/device-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
+| Remote shell / technician command line | Shipped | `Docs/Using the Platform/vpn-and-remote-access.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis ships WireGuard-backed remote shell plus SYSTEM/current-user script execution. |
+| Remote desktop | Shipped | `Docs/Using the Platform/vpn-and-remote-access.md`, `Docs/Engine Deployment/architecture-overview.md` | Same-origin Apache Guacamole VNC is a real product surface. |
+| PowerShell / script execution | Shipped | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
+| Service inventory and service control | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
+| Installed software inventory, uninstall, and software override governance | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Software Management/adding-software-to-icon-overrides.md`, `Docs/Using the Platform/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Using the Platform/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
+| Processes | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
 | Screenshot / quick visual capture | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy node screenshot support is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
 | Macro / UI automation | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy macro automation is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
-| Event Viewer | Absent | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
-| File Manager / file transfer | Shipped | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/ui-and-notifications.md` | Borealis now ships a first-class File Management tab with lazy remote browse, file and folder upload, file and folder download, copy/cut/paste, duplicate handling, cancelable transfers, and lightweight inline text editing. |
-| Local user and group management | Absent | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No dedicated device account-management feature was found. |
-| Startup management | Absent | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No startup-item management APIs or UI were found. |
-| Technician/end-user chat | Absent | `Docs/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
+| Event Viewer | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
+| File Manager / file transfer | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Engine Deployment/ui-and-notifications.md` | Borealis now ships a first-class File Management tab with lazy remote browse, file and folder upload, file and folder download, copy/cut/paste, duplicate handling, cancelable transfers, and lightweight inline text editing. |
+| Local user and group management | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No dedicated device account-management feature was found. |
+| Startup management | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No startup-item management APIs or UI were found. |
+| Technician/end-user chat | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
 
 ### Automation and Policy Management
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Run scripts / script editor / quick jobs | Shipped | `Docs/assemblies.md`, `Docs/scheduled-jobs.md`, `README.md` | Borealis is strong here. |
-| Workflow editor and execution | Shipped | `Docs/flow-editor-and-nodes.md`, `Docs/assemblies.md` | This is a differentiator, not a gap. |
-| Watchdogs, preview, incident queue, remediation | Shipped | `Docs/watchdogs.md`, `Docs/device-alerts.md` | Strong monitoring/remediation story. |
-| Scheduled jobs with targeting and history | Shipped | `Docs/scheduled-jobs.md` | Also a differentiator. |
-| Device filters and saved views | Shipped | `Docs/device-management.md` | Borealis already has robust targeting primitives. |
-| System/company/endpoint policy layer | Partial but still a gap | `Docs/device-management.md`, `Docs/scheduled-jobs.md`, `Docs/watchdogs.md` | Borealis has sites, filters, jobs, and watchdog scopes, but not a named RMM policy-management layer for baseline configuration, patching, or software policy. |
-| Auto-assign policies by search/filter | Partial but still a gap | `Docs/device-management.md`, `Docs/scheduled-jobs.md` | Filter-based targeting exists, but not policy auto-assignment as a first-class feature. |
-| Local/domain account automation | Partial but still a gap | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/scheduled-jobs.md` | Scripts and Ansible can do this indirectly, but Borealis does not productize it as account automation. |
-| Software install/deploy policy | Absent | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/assemblies.md` | Borealis can inventory, uninstall, and govern uninstall behavior, but it does not yet ship a first-class software deployment/catalog/policy surface for installing or enforcing software at scale. |
+| Run scripts / script editor / quick jobs | Shipped | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md`, `README.md` | Borealis is strong here. |
+| Workflow editor and execution | Shipped | `Docs/Using the Platform/Automation and Execution/flow-editor-and-nodes.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md` | This is a differentiator, not a gap. |
+| Watchdogs, preview, incident queue, remediation | Shipped | `Docs/Using the Platform/Automation and Execution/watchdogs.md`, `Docs/Using the Platform/device-alerts.md` | Strong monitoring/remediation story. |
+| Scheduled jobs with targeting and history | Shipped | `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md` | Also a differentiator. |
+| Device filters and saved views | Shipped | `Docs/Using the Platform/device-management.md` | Borealis already has robust targeting primitives. |
+| System/company/endpoint policy layer | Partial but still a gap | `Docs/Using the Platform/device-management.md`, `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md`, `Docs/Using the Platform/Automation and Execution/watchdogs.md` | Borealis has sites, filters, jobs, and watchdog scopes, but not a named RMM policy-management layer for baseline configuration, patching, or software policy. |
+| Auto-assign policies by search/filter | Partial but still a gap | `Docs/Using the Platform/device-management.md`, `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md` | Filter-based targeting exists, but not policy auto-assignment as a first-class feature. |
+| Local/domain account automation | Partial but still a gap | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md` | Scripts and Ansible can do this indirectly, but Borealis does not productize it as account automation. |
+| Software install/deploy policy | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md` | Borealis can inventory, uninstall, and govern uninstall behavior, but it does not yet ship a first-class software deployment/catalog/policy surface for installing or enforcing software at scale. |
 
 ### Patch Management
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Windows patch management | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/device-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | No patch-management endpoints, UI, or agent role were found. |
-| Windows build / feature updates | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/device-management.md` | No productized feature-update lane was found. |
-| Third-party application patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/assemblies.md`, `Docs/integrations.md` | Borealis can script and automate, but not through a supported third-party patch catalog or policy system. |
+| Windows patch management | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | No patch-management endpoints, UI, or agent role were found. |
+| Windows build / feature updates | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-management.md` | No productized feature-update lane was found. |
+| Third-party application patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md`, `Docs/Reference/Data and Schema/integrations.md` | Borealis can script and automate, but not through a supported third-party patch catalog or policy system. |
 | macOS patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No macOS patch product surface was found. |
 | Linux patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Reference/Core Runtimes/engine-runtime.md` | Engine-side automation exists, but there is no Borealis patching product for Linux endpoints. |
-| WUA monitoring / remediation | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/device-management.md` | No Windows Update monitoring/remediation surface was found. |
+| WUA monitoring / remediation | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-management.md` | No Windows Update monitoring/remediation surface was found. |
 
 ### Software Management Delta Since The Initial Matrix Pass
 - Borealis now has a real Windows software-management surface instead of just passive inventory.
@@ -108,46 +108,46 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Linux endpoint agent | Partial but still a gap | `Docs/Engine Deployment/index.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Linux agents are script-staged, load roles, and support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability. Linux still lacks tray/helper UI and remote desktop, while service control, process management, and software management need validation. |
 | macOS endpoint support | Absent | `README.md`, `Docs/Engine Deployment/index.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | macOS appears in UI filters and OS naming logic, but there is no documented macOS agent/runtime path. |
 | iOS / Android / MDM | Absent | `Docs/index.md`, `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No mobile-device-management feature set was found. |
-| Technician mobile app | Absent | `Docs/ui-and-notifications.md`, `README.md` | Borealis documents a web SPA only; no iOS/Android admin app is documented. |
-| SNMP / network-device monitoring | Absent | `Docs/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No SNMP or probe-based network monitoring feature was found. |
+| Technician mobile app | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `README.md` | Borealis documents a web SPA only; no iOS/Android admin app is documented. |
+| SNMP / network-device monitoring | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No SNMP or probe-based network monitoring feature was found. |
 
 ### Integrations and Ecosystem
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
 | Borealis REST/API surface | Shipped | `Docs/Reference/Data and Schema/api-reference.md` | Borealis has a real API. |
-| GitHub integration | Shipped | `Docs/integrations.md` | Useful, but narrow. |
-| PSA platform built-in or owned | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No PSA/helpdesk platform was found. |
-| PSA integrations: ConnectWise, Autotask, Halo, Salesforce, rev.io, etc. | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | The docs currently describe GitHub repo-hash integration only. |
-| Backup integrations: Acronis, Veeam, MSP360, Cove, etc. | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No backup connector story is documented. |
-| Security integrations: Bitdefender, SentinelOne, Huntress, Webroot, etc. | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No AV/EDR integration layer is documented. |
-| Documentation and MSP stack integrations: IT Glue, Hudu, Passportal, ScalePad | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No documentation or lifecycle integration layer is documented. |
-| Workflow ecosystem: Zapier, Rewst, CloudRadial, Tier2Tickets | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No integration framework for this ecosystem is documented. |
+| GitHub integration | Shipped | `Docs/Reference/Data and Schema/integrations.md` | Useful, but narrow. |
+| PSA platform built-in or owned | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No PSA/helpdesk platform was found. |
+| PSA integrations: ConnectWise, Autotask, Halo, Salesforce, rev.io, etc. | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | The docs currently describe GitHub repo-hash integration only. |
+| Backup integrations: Acronis, Veeam, MSP360, Cove, etc. | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No backup connector story is documented. |
+| Security integrations: Bitdefender, SentinelOne, Huntress, Webroot, etc. | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No AV/EDR integration layer is documented. |
+| Documentation and MSP stack integrations: IT Glue, Hudu, Passportal, ScalePad | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No documentation or lifecycle integration layer is documented. |
+| Workflow ecosystem: Zapier, Rewst, CloudRadial, Tier2Tickets | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No integration framework for this ecosystem is documented. |
 
 ### Reporting, Branding, and MSP Packaging
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Device activity and run history | Shipped | `Docs/assemblies.md`, `Docs/scheduled-jobs.md`, `Docs/device-management.md` | Borealis persists activity history and job/run history. |
-| Alerts and operational status surfaces | Shipped | `Docs/device-alerts.md`, `Docs/logging-and-operations.md` | Good operational visibility, but not formal reporting. |
+| Device activity and run history | Shipped | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md`, `Docs/Using the Platform/device-management.md` | Borealis persists activity history and job/run history. |
+| Alerts and operational status surfaces | Shipped | `Docs/Using the Platform/device-alerts.md`, `Docs/Using the Platform/logging-and-operations.md` | Good operational visibility, but not formal reporting. |
 | Monitoring reports (daily/weekly/monthly) | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No scheduled reporting/report-export feature was found. |
 | Executive summary reports | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No executive summary/reporting feature was found. |
-| Script-output reporting | Partial but still a gap | `Docs/assemblies.md`, `README.md`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/Reporting/Node_Export_to_CSV.jsx` | Borealis stores outputs and has workflow export primitives, but not a report product around script-returned values. |
-| Branded reports / header / domain | Absent | `Docs/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Branding assets exist for Borealis itself, but no operator-facing white-label or custom-domain feature was documented. |
-| White-label helpdesk / client-facing portal | Absent | `Docs/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No helpdesk/portal product surface was found. |
+| Script-output reporting | Partial but still a gap | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `README.md`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/Reporting/Node_Export_to_CSV.jsx` | Borealis stores outputs and has workflow export primitives, but not a report product around script-returned values. |
+| Branded reports / header / domain | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Branding assets exist for Borealis itself, but no operator-facing white-label or custom-domain feature was documented. |
+| White-label helpdesk / client-facing portal | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No helpdesk/portal product surface was found. |
 
 ### Security Controls vs Vendor-Assurance/Compliance
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| MFA | Shipped | `Docs/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
-| Passkeys / modern auth | Shipped | `Docs/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
+| MFA | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
+| Passkeys / modern auth | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
 | LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
-| Script/code signing | Shipped | `Docs/security-and-trust.md`, `Docs/assemblies.md` | Strong differentiator versus much of the field. |
-| Aegis secret protection | Shipped | `Docs/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
-| Site-scoped RBAC | Shipped | `Docs/device-management.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
-| Customer lockbox | Absent | `Docs/security-and-trust.md`, `Docs/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
-| SAML / SSO | Absent | `Docs/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
-| Management IP allowlisting | Absent | `Docs/security-and-trust.md`, `Docs/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
-| Log export / SIEM integration | Partial but still a gap | `Docs/logging-and-operations.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis exposes log APIs and retention management, but no SIEM export/integration is documented. |
-| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
+| Script/code signing | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md` | Strong differentiator versus much of the field. |
+| Aegis secret protection | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
+| Site-scoped RBAC | Shipped | `Docs/Using the Platform/device-management.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
+| Customer lockbox | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
+| SAML / SSO | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
+| Management IP allowlisting | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
+| Log export / SIEM integration | Partial but still a gap | `Docs/Using the Platform/logging-and-operations.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis exposes log APIs and retention management, but no SIEM export/integration is documented. |
+| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/Engine Deployment/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
 
 ## Top Roadmap Gaps
 
@@ -168,7 +168,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
   - Integrations are a major switching blocker for MSPs.
   - The matrix shows heavy competitor coverage across PSA, backup, AV/EDR, documentation, and adjacent ops platforms.
 - Current Borealis position:
-  - `Docs/integrations.md` documents GitHub repo-hash integration only.
+  - `Docs/Reference/Data and Schema/integrations.md` documents GitHub repo-hash integration only.
   - Borealis currently lacks a connector framework that covers the MSP stack.
 - Immediate product implication:
   - Without PSA/security/backup/documentation integrations, Borealis risks being adopted as a sidecar tool instead of the system of record.
@@ -233,40 +233,40 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 Borealis is not starting from zero. Several areas already compare well, and these should remain part of the product thesis:
 
 - Workflows and visual automation:
-  - `Docs/flow-editor-and-nodes.md`
-  - `Docs/assemblies.md`
+  - `Docs/Using the Platform/Automation and Execution/flow-editor-and-nodes.md`
+  - `Docs/Using the Platform/Automation and Execution/assemblies.md`
 - Watchdogs with preview, incident tracking, and remediation:
-  - `Docs/watchdogs.md`
-  - `Docs/device-alerts.md`
+  - `Docs/Using the Platform/Automation and Execution/watchdogs.md`
+  - `Docs/Using the Platform/device-alerts.md`
 - WireGuard-first remote shell, VNC, and Engine-side Ansible:
-  - `Docs/vpn-and-remote-access.md`
-  - `Docs/scheduled-jobs.md`
+  - `Docs/Using the Platform/vpn-and-remote-access.md`
+  - `Docs/Using the Platform/Automation and Execution/scheduled-jobs.md`
   - `README.md`
 - Windows software inventory, uninstall, and override governance:
-  - `Docs/device-management.md`
+  - `Docs/Using the Platform/device-management.md`
   - `Docs/Reference/Data and Schema/api-reference.md`
-  - `Docs/Software Management/adding-software-to-icon-overrides.md`
-  - `Docs/Software Management/adding-software-to-uninstall-overrides.md`
-  - `Docs/Software Management/adding-software-to-uninstall-blocklist.md`
+  - `Docs/Using the Platform/Software Management/adding-software-to-icon-overrides.md`
+  - `Docs/Using the Platform/Software Management/adding-software-to-uninstall-overrides.md`
+  - `Docs/Using the Platform/Software Management/adding-software-to-uninstall-blocklist.md`
 - Remote file browsing, transfer, and inline text editing:
-  - `Docs/device-management.md`
+  - `Docs/Using the Platform/device-management.md`
   - `Docs/Reference/Data and Schema/api-reference.md`
-  - `Docs/ui-and-notifications.md`
+  - `Docs/Engine Deployment/ui-and-notifications.md`
 - Live process inspection and termination:
-  - `Docs/device-management.md`
+  - `Docs/Using the Platform/device-management.md`
   - `Docs/Reference/Core Runtimes/agent-runtime.md`
   - `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`
   - `Data/Agent/Roles/role_system_process_management.py`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
-  - `Docs/security-and-trust.md`
+  - `Docs/Engine Deployment/security-and-trust.md`
   - `Docs/Reference/Core Runtimes/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
   - `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
   - `Data/Engine/Containers/api-backend/data/database.py`
 - Site-scoped RBAC and scoped targeting:
-  - `Docs/device-management.md`
+  - `Docs/Using the Platform/device-management.md`
   - `README.md`
 
 ## Public Interface Implications

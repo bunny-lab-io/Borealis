@@ -44,7 +44,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
 - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-- [Watchdogs](../../Automation%20and%20Execution/watchdogs.md)
+- [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
 
 ??? example "Detailed Codex Breakdown"

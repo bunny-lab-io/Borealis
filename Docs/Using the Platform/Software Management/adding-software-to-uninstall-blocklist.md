@@ -80,8 +80,8 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 ```
 
 ## Related Documentation
-- [Device Management](../Using%20the%20Platform/device-management.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+- [Device Management](../device-management.md)
+- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 

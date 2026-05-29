@@ -3,7 +3,7 @@
 Use this section for script assemblies, visual workflows, scheduled jobs, SSH/WinRM execution, Ansible playbooks, and watchdog remediation.
 
 <figure class="bo-screenshot">
-  <img src="../Reference/images/repo_screenshots/Workflow_Editor.png" alt="Borealis workflow editor" loading="lazy">
+  <img src="../../Reference/images/repo_screenshots/Workflow_Editor.png" alt="Borealis workflow editor" loading="lazy">
   <figcaption>Workflow Editor composes automation with visual nodes and typed connections.</figcaption>
 </figure>
 

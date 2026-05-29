@@ -125,8 +125,8 @@ Supported schedule types (from the scheduler core):
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Ansible SSH Connection Logic](SSH_Connection_Logic.md)
-- [Device Management](../Using%20the%20Platform/device-management.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+- [Device Management](../device-management.md)
+- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
 - [SSH Connection Logic](SSH_Connection_Logic.md)
 
 ??? example "Detailed Codex Breakdown"

@@ -97,11 +97,11 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Related Documentation
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
 - [Scheduled Jobs](scheduled-jobs.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
 - [SSH Connection Logic](SSH_Connection_Logic.md)
 - [Watchdogs](watchdogs.md)
-- [Device Alerts](../Using%20the%20Platform/device-alerts.md)
+- [Device Alerts](../device-alerts.md)
 
 ??? example "Detailed Codex Breakdown"
 

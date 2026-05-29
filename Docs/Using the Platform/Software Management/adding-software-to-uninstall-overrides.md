@@ -101,8 +101,8 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 ```
 
 ## Related Documentation
-- [Device Management](../Using%20the%20Platform/device-management.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+- [Device Management](../device-management.md)
+- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 

@@ -55,7 +55,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
 
 ## Related Documentation
-- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
+- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
 - [Device Management](device-management.md)
 - [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
 - [Logging and Operations](logging-and-operations.md)

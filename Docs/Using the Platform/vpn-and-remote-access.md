@@ -357,5 +357,5 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
     4) If issues persist, confirm `Agent\wireguard.conf` still has a valid `[Peer]`, verify `Test-NetConnection -ComputerName <agent_vpn_ip> -Port 47002`, and re-check WireGuard service state on both ends.
 
     #### Related Documentation
-    - [Ansible SSH Connection Logic](../Automation%20and%20Execution/SSH_Connection_Logic.md)
-    - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
+    - [Ansible SSH Connection Logic](Automation%20and%20Execution/SSH_Connection_Logic.md)
+    - [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md)

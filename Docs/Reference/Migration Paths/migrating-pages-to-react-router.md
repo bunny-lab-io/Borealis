@@ -156,13 +156,13 @@ function openQuickJob(hostnames) {
 ## Related Documentation
 - [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
 - [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
-- [Scheduled Jobs](../../Automation%20and%20Execution/scheduled-jobs.md)
-- [Assemblies and Quick Jobs](../../Automation%20and%20Execution/assemblies.md)
+- [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
 
 ??? example "Detailed Codex Breakdown"
 
     ### Default migration sequence for future agents
-    - Start by reading `Docs/ui-and-notifications.md` and this guide.
+    - Start by reading `Docs/Engine Deployment/ui-and-notifications.md` and this guide.
     - Open the target page component and find every dependency on:
       - `currentPage`
       - `navigateTo`

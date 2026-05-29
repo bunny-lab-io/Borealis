@@ -195,14 +195,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
 - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
 - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
-- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
+- [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md)
+- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
 - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)
+- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ??? example "Detailed Codex Breakdown"
 

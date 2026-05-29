@@ -233,14 +233,14 @@ Playbook execution currently happens through scheduled jobs with `execution_cont
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [Database Reference](db-reference.md)
 - [Device Management](../../Using%20the%20Platform/device-management.md)
-- [Watchdogs](../../Automation%20and%20Execution/watchdogs.md)
+- [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
-- [Assemblies and Quick Jobs](../../Automation%20and%20Execution/assemblies.md)
-- [Scheduled Jobs](../../Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
+- [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
 - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-- [Software Icon Overrides](../../Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](../../Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](../../Software%20Management/adding-software-to-uninstall-blocklist.md)
+- [Software Icon Overrides](../../Using%20the%20Platform/Software%20Management/adding-software-to-icon-overrides.md)
+- [Software Uninstall Overrides](../../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-overrides.md)
+- [Software Uninstall Blocklist](../../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-blocklist.md)
 
 ??? example "Detailed Codex Breakdown"
 
