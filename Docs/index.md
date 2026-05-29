@@ -21,12 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/ma
 Refer to [Getting Started](Engine%20Deployment/index.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
 
 ## Architecture
-- **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across several isolated Docker containers.
-- **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, with Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
-- **Transport**: Agents connect outbound to the engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
-- **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
-- **Automation Model**: Assemblies can run through quick jobs, scheduled jobs, workflows, automated watchdog remediation, and Engine-side Ansible playbooks.
-- **Security Model**: Aegis Cipher (global encryption system) protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
+Borealis has two main runtime sides: a Linux-hosted Engine server and cross-platform Agent clients. See [Architecture Overview](Engine%20Deployment/architecture-overview.md) for component roles, runtime boundaries, data flow, and debugging entrypoints.
 
 ## Feature Support Matrix
 Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. 

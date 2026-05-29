@@ -4,14 +4,17 @@ We are glad you decided to give Borealis a try.  You can follow the instructions
 !!! info "System Requirements"
 
     **Engine Host**:
+
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
         - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
-    
-    **DNS Records & Let's Encrypt**:
+
+    **DNS Records & Let's Encrypt Considerations**:
+
     - Point a public FQDN at the Engine host before production deployment (e.g. `borealis.bunny-lab.io`), this will be used by Let's Encrypt later during Engine setup.
     - Also be sure to have an email address ready for Let's Encrypt certificate registration (e.g. `infrastructure@bunny-lab.io`)
 
     **Firewall Preparation**:
+
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
@@ -39,7 +42,7 @@ The Engine container deployment system uses conservative defaults from `Engine/D
 
 === "Enterprise Clustered"
     | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |    
+    | --- | ---: | ---: | ---: | ---: | ---: |
     | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
 
 ## Install the Engine
@@ -73,36 +76,9 @@ After deployment finishes:
 2. Confirm the Borealis Aegis Cipher page loads and configure a passphrase to encrypt all Engine secrets like machine credentials, passkeys, Github tokens, etc.
 
 !!! warning "Do not Lose Aegis Cipher"
-    If you lose the Aegis Cipher, you can forcefully reset it from the WebUI, but you will lose all stored credentials in the Engine, requiring you to manually re-enter all of them.  
-    
+    If you lose the Aegis Cipher, you can forcefully reset it from the WebUI, but you will lose all stored credentials in the Engine, requiring you to manually re-enter all of them.
+
     Thankfully all affected credentials are clearly indicated and all scheduled jobs requiring the lost credentials are suspended until the credentials are re-entered.
-
-## Update or Re-deploy the Engine"
-Use redeploy commands after pulling updates or changing Engine configuration.
-
-```sh
-# Update a cloned checkout, then redeploy production.
-cd /opt/Borealis
-git pull --ff-only
-./Engine.sh deploy prod
-```
-
-??? note "Optional: Service Maintenance Commands"
-    Use service-scoped commands when troubleshooting one Engine component.
-
-    ```sh
-    # Restart the API backend container.
-    ./Engine.sh --service api-backend restart
-
-    # Rebuild the WebUI frontend container in development mode.
-    ./Engine.sh --service webui-frontend rebuild dev
-
-    # Reload Traefik edge configuration.
-    ./Engine.sh --service traefik-edge reload
-
-    # Reconcile WireGuard tunnel state.
-    ./Engine.sh --service wireguard-tunnel reconcile
-    ```
 
 ??? example "Detailed Codex Breakdown"
 

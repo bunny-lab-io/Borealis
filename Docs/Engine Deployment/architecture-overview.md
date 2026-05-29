@@ -3,6 +3,19 @@
 ## Purpose
 Explain how Borealis is structured and how the core components interact end to end.
 
+## Platform Shape
+Borealis has two main runtime sides: the Engine server and the Agent clients. The Engine gives operators one web interface for inventory, remote operations, automation, reporting, credentials, and security controls. Agents run on managed endpoints and connect outbound to the Engine.
+
+- **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across isolated Docker containers.
+- **Agent (Client)**: Cross-platform runtime written in Golang with Windows as the primary reference path, Linux support, role-based capabilities, signed task execution, device inventory, WireGuard tunneling, remote shell, file management, process management, and remote operation roles.
+- **Transport**: Agents connect outbound to the Engine. Remote operations use WireGuard sessions with strict `/32` isolation and Engine-controlled port allowlists.
+- **Data Layer**: PostgreSQL stores devices, inventory, jobs, activity history, alerts, assemblies, credentials metadata, and operational state.
+- **Automation Model**: Assemblies can run through quick jobs, scheduled jobs, workflows, automated watchdog remediation, and Engine-side Ansible playbooks.
+- **Security Model**: Aegis Cipher protects secrets, MFA is required by default, passkeys are supported, scripts are signed, and WireGuard tunnel access uses short-lived tokens.
+
+!!! info "Operator mental model"
+    Treat the Engine as the control plane and Agents as workers. Operators use the web UI; Agents phone home, report state, and execute approved work.
+
 ## Core Components
 - Engine API backend: Flask + Socket.IO runtime that hosts APIs, scheduled jobs, VPN orchestration, VNC WebSocket proxy, and Engine-side Ansible execution.
 - WebUI frontend: React single page app served by the WebUI container (Vite in dev, static build in prod).
