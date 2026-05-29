@@ -114,15 +114,15 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 - `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.
 
 ## Related Documentation
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
+- [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
 - [Flow Editor and Nodes](../Automation%20and%20Execution/flow-editor-and-nodes.md)
-- [Migrating Pages to React Router](../Migration%20Paths/migrating-pages-to-react-router.md)
+- [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
+- [Device Alerts](../Using%20the%20Platform/device-alerts.md)
 - [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
 - [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
 - [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)

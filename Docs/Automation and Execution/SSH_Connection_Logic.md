@@ -359,8 +359,8 @@ Do not let future features:
 
 ## Related Documentation
 - [Scheduled Jobs](scheduled-jobs.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+- [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
+- [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
 
 ??? example "Detailed Codex Breakdown"
 

@@ -242,7 +242,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `effective_io_concurrency = 64`
 
 ### Maintenance rule
-- If you change the profile thresholds or any profile-tuned values in `Engine.sh` or container PostgreSQL configuration, update this section in `Docs/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
+- If you change the profile thresholds or any profile-tuned values in `Engine.sh` or container PostgreSQL configuration, update this section in `Docs/Reference/Data and Schema/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
 
 ## Container PostgreSQL Operations
 - Runtime state: `Engine/Services/postgres-db/state`.
@@ -918,11 +918,11 @@ Each table has the same schema:
 
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
-- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
-- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+- [Device Management](../../Using%20the%20Platform/device-management.md)
+- [Scheduled Jobs](../../Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../../Automation%20and%20Execution/assemblies.md)
+- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
 
 ??? example "Detailed Codex Breakdown"
 

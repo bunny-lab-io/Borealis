@@ -37,15 +37,15 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ## Related Documentation
-- [Architecture Overview](../Engine%20Deployment/architecture-overview.md)
+- [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
 - [Docker Stack Breakdown](Stack_Breakdown.md)
 - [Database Reference](../Data%20and%20Schema/db-reference.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
-- [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
+- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
+- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
+- [Watchdogs](../../Automation%20and%20Execution/watchdogs.md)
+- [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
 
 ??? example "Detailed Codex Breakdown"
 
@@ -117,7 +117,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Add new routes under `Data/Engine/Containers/api-backend/data/services/API/<domain>/`.
     - Ensure each module starts with the standard header block (purpose + API endpoints).
     - Update `Data/Engine/Containers/api-backend/data/services/API/__init__.py` if you add a new API group.
-    - Update `Docs/Data and Schema/api-reference.md` and the relevant domain doc.
+    - Update `Docs/Reference/Data and Schema/api-reference.md` and the relevant domain doc.
 
     ### WebUI hosting and dev mode
     - Production UI is served by the `webui-frontend` container from its built static output.
@@ -203,7 +203,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable operator auth secrets, clears the Aegis state row, marks existing users for recovery, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
 
     #### Reverse VPN tunnels
-    - WireGuard reverse VPN design and lifecycle are documented in `Docs/Operations and Remote Access/vpn-and-remote-access.md`.
+    - WireGuard reverse VPN design and lifecycle are documented in `Docs/Using the Platform/vpn-and-remote-access.md`.
     - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
     - Engine orchestrator: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
     - UI shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`.

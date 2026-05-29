@@ -1,4 +1,4 @@
-# Borealis SBOM
+# Software Bill of Materials
 
 This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Engine.sh`, `Data/Agent/go.mod`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
 

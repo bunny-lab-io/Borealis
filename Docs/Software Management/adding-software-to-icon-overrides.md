@@ -94,8 +94,8 @@ Clear-icon rules are also supported:
 ```
 
 ## Related Documentation
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [Device Management](../Using%20the%20Platform/device-management.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
 - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 

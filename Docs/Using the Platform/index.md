@@ -1,9 +1,9 @@
-# Operations and Remote Access
+# Using the Platform
 
 Use this section for daily fleet operations: inventory, device details, alerts, logs, remote shell, remote desktop, and WireGuard transport.
 
 <figure class="bo-screenshot">
-  <img src="../images/repo_screenshots/Device_Details.png" alt="Borealis device details page" loading="lazy">
+  <img src="../Reference/images/repo_screenshots/Device_Details.png" alt="Borealis device details page" loading="lazy">
   <figcaption>Device Summary centralizes inventory, role health, actions, and remote workflows.</figcaption>
 </figure>
 

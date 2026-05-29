@@ -51,9 +51,9 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
 
 ## Related Documentation
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+- [Device Management](../../Using%20the%20Platform/device-management.md)
+- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
 
 ??? example "Detailed Codex Breakdown"
 

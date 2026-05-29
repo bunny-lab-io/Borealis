@@ -613,10 +613,10 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 4. Check target agent VPN logs.
 
 ## Related Documentation
-- [Getting Started](../Engine%20Deployment/index.md)
+- [Getting Started](../../Engine%20Deployment/index.md)
 - [Engine Runtime](engine-runtime.md)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
+- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
 
 ??? example "Detailed Codex Breakdown"
 

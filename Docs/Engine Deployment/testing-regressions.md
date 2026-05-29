@@ -25,8 +25,8 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
 
 ## Related Documentation
 - [Unit Testing](Unit_Testing.md)
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
 
 ??? example "Detailed Codex Breakdown"

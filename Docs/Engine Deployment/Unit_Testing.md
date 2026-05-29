@@ -129,8 +129,8 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 ## Related Documentation
 - [Testing Regressions](testing-regressions.md)
 - [Architecture Overview](architecture-overview.md)
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
 
 ??? example "Detailed Codex Breakdown"
 

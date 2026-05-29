@@ -45,9 +45,9 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
 
 ## Related Documentation
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
 - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 

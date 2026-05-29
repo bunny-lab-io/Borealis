@@ -50,18 +50,18 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
 ## API Endpoints
-None on this page. See [API Reference](../Data%20and%20Schema/api-reference.md).
+None on this page. See [API Reference](../Reference/Data%20and%20Schema/api-reference.md).
 
 ## Related Documentation
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
 - [Security and Trust](security-and-trust.md)
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Device Management](../Using%20the%20Platform/device-management.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
-- [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)
+- [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
 - [UI and Notifications](ui-and-notifications.md)
-- [Migrating Pages to React Router](../Migration%20Paths/migrating-pages-to-react-router.md)
+- [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
 
 ??? example "Detailed Codex Breakdown"
 

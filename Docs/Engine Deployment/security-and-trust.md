@@ -229,11 +229,11 @@ sequenceDiagram
 - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
 
 ## Related Documentation
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
-- [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
+- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+- [Device Management](../Using%20the%20Platform/device-management.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+- [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
 ??? example "Detailed Codex Breakdown"
 

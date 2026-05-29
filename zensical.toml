@@ -13,8 +13,8 @@ extra_css = ["stylesheets/extra.css"]
 [project.theme]
 variant = "classic"
 language = "en"
-logo = "Branding/Borealis_Logo_Full.png"
-favicon = "Branding/Borealis_Logo.png"
+logo = "Reference/Branding/Borealis_Logo_Full.png"
+favicon = "Reference/Branding/Borealis_Logo.png"
 features = [
   "announce.dismiss",
   "content.action.edit",

@@ -192,14 +192,14 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence, including current approval context when available.
 
 ## Related Documentation
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
-- [Database Reference](../Data%20and%20Schema/db-reference.md)
+- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+- [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
 - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)
 - [VPN and Remote Access](vpn-and-remote-access.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 - [Software Icon Overrides](../Software%20Management/adding-software-to-icon-overrides.md)
 - [Software Uninstall Overrides](../Software%20Management/adding-software-to-uninstall-overrides.md)
 - [Software Uninstall Blocklist](../Software%20Management/adding-software-to-uninstall-blocklist.md)

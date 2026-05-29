@@ -154,10 +154,10 @@ function openQuickJob(hostnames) {
 - Do not create legacy redirects unless product intent explicitly requires them.
 
 ## Related Documentation
-- [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
-- [Architecture Overview](../Engine%20Deployment/architecture-overview.md)
-- [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
-- [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
+- [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
+- [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
+- [Scheduled Jobs](../../Automation%20and%20Execution/scheduled-jobs.md)
+- [Assemblies and Quick Jobs](../../Automation%20and%20Execution/assemblies.md)
 
 ??? example "Detailed Codex Breakdown"
 
@@ -200,5 +200,5 @@ function openQuickJob(hostnames) {
     - Prefer smaller, route-complete migrations over half-converted pages.
     - If a page still needs the adapter bridge, keep the bridge thin and obvious.
     - Preserve deep-link refresh behavior before cleaning up internal code style.
-    - When a migration adds dependencies or changes shell ownership, update docs and `Docs/SBOM.md` in the same change.
+    - When a migration adds dependencies or changes shell ownership, update docs and `Docs/Reference/SBOM.md` in the same change.
     - For buffered routes, verify the old page remains visible while the next route loader is pending and that the page does not render an empty-shell first paint before its critical loader data arrives.

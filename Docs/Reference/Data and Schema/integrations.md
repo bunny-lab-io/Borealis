@@ -17,7 +17,7 @@ Document external integrations used by Borealis, primarily the GitHub repository
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
 - [API Reference](api-reference.md)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
 
 ??? example "Detailed Codex Breakdown"
 

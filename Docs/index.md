@@ -4,7 +4,7 @@ Borealis is a self-hosted remote management, monitoring, and visual automation p
 Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution.
 
 <figure class="bo-screenshot">
-  <img src="images/repo_screenshots/Device_List.png" alt="Borealis device list page" loading="lazy">
+  <img src="Reference/images/repo_screenshots/Device_List.png" alt="Borealis device list page" loading="lazy">
   <figcaption>Device List is the normal operator entrypoint for managed fleet work.</figcaption>
 </figure>
 
@@ -84,11 +84,11 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20
 
     - [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
     - [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
-    - [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
+    - [Using the Platform](Using%20the%20Platform/index.md) - device inventory, alerts, remote access, logs, and software management.
     - [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
-    - [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
+    - [Reference](Reference/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
     - [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
-    - [Roadmap](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
+    - [Roadmap](Reference/Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
 
     Repository References:
 

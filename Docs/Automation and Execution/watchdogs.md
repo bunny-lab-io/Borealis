@@ -107,11 +107,11 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete one watchdog and its runtime state.
 
 ## Related Documentation
-- [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
-- [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
+- [Device Alerts](../Using%20the%20Platform/device-alerts.md)
+- [Device Management](../Using%20the%20Platform/device-management.md)
 - [Assemblies and Quick Jobs](assemblies.md)
 - [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
+- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 
 ??? example "Detailed Codex Breakdown"
 
