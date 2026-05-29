@@ -1,4 +1,4 @@
-# Service Maintenance Commands
+# Engine Maintenance Commands
 Use service-scoped commands when troubleshooting one Engine component without redeploying the full Borealis stack.
 
 !!! info "When to use these"

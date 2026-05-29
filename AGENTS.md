@@ -14,7 +14,7 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 - Follow domain docs found through index. Where docs overlap, domain page wins. `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
 
 ## Documentation Authoring Style
-- Write operator-facing docs like `Docs/Engine Deployment/deploying-the-engine.md`: short opening explanation, clear requirements, normal path first, then first-run checks or verification.
+- Write operator-facing docs like `Docs/Engine/deploying-the-engine.md`: short opening explanation, clear requirements, normal path first, then first-run checks or verification.
 - Do not add a visible `Purpose` section. Put the plain-language purpose directly under the page title so the page starts quickly.
 - Keep visible sections friendly and task-focused. Explain what an operator should do, what they should expect, and what can go wrong.
 - Keep implementation detail out of the operator path. API endpoints, related documentation, source paths, database tables, implementation notes, debug flow, and Codex-only reasoning belong inside a final `??? example "Detailed Codex Breakdown"` section.

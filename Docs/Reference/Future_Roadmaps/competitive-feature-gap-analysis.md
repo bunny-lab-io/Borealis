@@ -39,7 +39,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
 | Remote shell / technician command line | Shipped | `Docs/Using the Platform/vpn-and-remote-access.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis ships WireGuard-backed remote shell plus SYSTEM/current-user script execution. |
-| Remote desktop | Shipped | `Docs/Using the Platform/vpn-and-remote-access.md`, `Docs/Engine Deployment/architecture-overview.md` | Same-origin Apache Guacamole VNC is a real product surface. |
+| Remote desktop | Shipped | `Docs/Using the Platform/vpn-and-remote-access.md`, `Docs/Reference/architecture-overview.md` | Same-origin Apache Guacamole VNC is a real product surface. |
 | PowerShell / script execution | Shipped | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Installed software inventory, uninstall, and software override governance | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Software Management/adding-software-to-icon-overrides.md`, `Docs/Using the Platform/Software Management/adding-software-to-uninstall-overrides.md`, `Docs/Using the Platform/Software Management/adding-software-to-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
@@ -47,10 +47,10 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Screenshot / quick visual capture | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy node screenshot support is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
 | Macro / UI automation | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy macro automation is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
 | Event Viewer | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
-| File Manager / file transfer | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Engine Deployment/ui-and-notifications.md` | Borealis now ships a first-class File Management tab with lazy remote browse, file and folder upload, file and folder download, copy/cut/paste, duplicate handling, cancelable transfers, and lightweight inline text editing. |
+| File Manager / file transfer | Shipped | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Reference/ui-and-notifications.md` | Borealis now ships a first-class File Management tab with lazy remote browse, file and folder upload, file and folder download, copy/cut/paste, duplicate handling, cancelable transfers, and lightweight inline text editing. |
 | Local user and group management | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No dedicated device account-management feature was found. |
 | Startup management | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No startup-item management APIs or UI were found. |
-| Technician/end-user chat | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
+| Technician/end-user chat | Absent | `Docs/Reference/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis has operator toast notifications, not remote chat. |
 
 ### Automation and Policy Management
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
@@ -103,11 +103,11 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 ### Platform Coverage
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Windows endpoint agent | Shipped | `Docs/Engine Deployment/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Windows is the reference platform. |
-| Linux endpoint agent | Partial but still a gap | `Docs/Engine Deployment/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Linux agents are script-staged, load roles, and support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability. Linux still lacks tray/helper UI and remote desktop, while service control, process management, and software management need validation. |
-| macOS endpoint support | Absent | `README.md`, `Docs/Engine Deployment/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | macOS appears in UI filters and OS naming logic, but there is no documented macOS agent/runtime path. |
+| Windows endpoint agent | Shipped | `Docs/Engine/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Windows is the reference platform. |
+| Linux endpoint agent | Partial but still a gap | `Docs/Engine/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Linux agents are script-staged, load roles, and support WireGuard VPN, remote Bash/script execution, file/folder interaction, and Engine-side Ansible reachability. Linux still lacks tray/helper UI and remote desktop, while service control, process management, and software management need validation. |
+| macOS endpoint support | Absent | `README.md`, `Docs/Engine/deploy-the-engine.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | macOS appears in UI filters and OS naming logic, but there is no documented macOS agent/runtime path. |
 | iOS / Android / MDM | Absent | `Docs/index.md`, `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No mobile-device-management feature set was found. |
-| Technician mobile app | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `README.md` | Borealis documents a web SPA only; no iOS/Android admin app is documented. |
+| Technician mobile app | Absent | `Docs/Reference/ui-and-notifications.md`, `README.md` | Borealis documents a web SPA only; no iOS/Android admin app is documented. |
 | SNMP / network-device monitoring | Absent | `Docs/Using the Platform/device-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | No SNMP or probe-based network monitoring feature was found. |
 
 ### Integrations and Ecosystem
@@ -130,23 +130,23 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | Monitoring reports (daily/weekly/monthly) | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No scheduled reporting/report-export feature was found. |
 | Executive summary reports | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No executive summary/reporting feature was found. |
 | Script-output reporting | Partial but still a gap | `Docs/Using the Platform/Automation and Execution/assemblies.md`, `README.md`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/Reporting/Node_Export_to_CSV.jsx` | Borealis stores outputs and has workflow export primitives, but not a report product around script-returned values. |
-| Branded reports / header / domain | Absent | `Docs/Engine Deployment/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Branding assets exist for Borealis itself, but no operator-facing white-label or custom-domain feature was documented. |
+| Branded reports / header / domain | Absent | `Docs/Reference/ui-and-notifications.md`, `Docs/Reference/Data and Schema/api-reference.md` | Branding assets exist for Borealis itself, but no operator-facing white-label or custom-domain feature was documented. |
 | White-label helpdesk / client-facing portal | Absent | `Docs/Reference/Data and Schema/integrations.md`, `Docs/Reference/Data and Schema/api-reference.md` | No helpdesk/portal product surface was found. |
 
 ### Security Controls vs Vendor-Assurance/Compliance
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| MFA | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
-| Passkeys / modern auth | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
+| MFA | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
+| Passkeys / modern auth | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
 | LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
-| Script/code signing | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md` | Strong differentiator versus much of the field. |
-| Aegis secret protection | Shipped | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
+| Script/code signing | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/Automation and Execution/assemblies.md` | Strong differentiator versus much of the field. |
+| Aegis secret protection | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
 | Site-scoped RBAC | Shipped | `Docs/Using the Platform/device-management.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
-| Customer lockbox | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
-| SAML / SSO | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
-| Management IP allowlisting | Absent | `Docs/Engine Deployment/security-and-trust.md`, `Docs/Using the Platform/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
+| Customer lockbox | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/logging-and-operations.md` | No tenancy-support lockbox pattern is documented. |
+| SAML / SSO | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
+| Management IP allowlisting | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/vpn-and-remote-access.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
 | Log export / SIEM integration | Partial but still a gap | `Docs/Using the Platform/logging-and-operations.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis exposes log APIs and retention management, but no SIEM export/integration is documented. |
-| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/Engine Deployment/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
+| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/Reference/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
 
 ## Top Roadmap Gaps
 
@@ -250,7 +250,7 @@ Borealis is not starting from zero. Several areas already compare well, and thes
 - Remote file browsing, transfer, and inline text editing:
   - `Docs/Using the Platform/device-management.md`
   - `Docs/Reference/Data and Schema/api-reference.md`
-  - `Docs/Engine Deployment/ui-and-notifications.md`
+  - `Docs/Reference/ui-and-notifications.md`
 - Live process inspection and termination:
   - `Docs/Using the Platform/device-management.md`
   - `Docs/Reference/Core Runtimes/agent-runtime.md`
@@ -258,7 +258,7 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Data/Agent/Roles/role_system_process_management.py`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
-  - `Docs/Engine Deployment/security-and-trust.md`
+  - `Docs/Reference/security-and-trust.md`
   - `Docs/Reference/Core Runtimes/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
   - `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
