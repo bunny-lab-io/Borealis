@@ -11,11 +11,11 @@ import { sql as sqlLanguage } from "@codemirror/lang-sql";
 import { xml as xmlLanguage } from "@codemirror/lang-xml";
 import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
 import { HighlightStyle, StreamLanguage, foldAll, syntaxHighlighting, unfoldAll } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { linter, lintGutter } from "@codemirror/lint";
 import { MergeView } from "@codemirror/merge";
-import { findNext, findPrevious, gotoLine, openSearchPanel, replaceAll, replaceNext } from "@codemirror/search";
+import { SearchQuery, findNext, findPrevious, gotoLine, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
 import { c, cpp, csharp, java } from "@codemirror/legacy-modes/mode/clike";
 import { diff } from "@codemirror/legacy-modes/mode/diff";
 import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
@@ -33,6 +33,7 @@ import {
   Box,
   Checkbox,
   Button,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
@@ -77,6 +78,7 @@ import ContentCutRoundedIcon from "@mui/icons-material/ContentCutRounded";
 import ContentPasteRoundedIcon from "@mui/icons-material/ContentPasteRounded";
 import DriveFolderUploadRoundedIcon from "@mui/icons-material/DriveFolderUploadRounded";
 import FindReplaceRoundedIcon from "@mui/icons-material/FindReplaceRounded";
+import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import UnfoldMoreRoundedIcon from "@mui/icons-material/UnfoldMoreRounded";
 import {
@@ -300,9 +302,9 @@ const TRANSFER_CANCEL_BUTTON_SX = {
 
 const EDITOR_TOOL_BUTTON_SX = {
   ...DIALOG_BUTTON_SX,
-  minHeight: 32,
-  px: 1.25,
-  fontSize: "0.78rem",
+  minHeight: 34,
+  px: 1.35,
+  fontSize: "0.82rem",
   "& .MuiButton-startIcon": {
     mr: 0.55,
     "& > *:nth-of-type(1)": {
@@ -311,11 +313,91 @@ const EDITOR_TOOL_BUTTON_SX = {
   },
 };
 
-const EDITOR_TOOL_BUTTON_ACTIVE_SX = {
-  ...EDITOR_TOOL_BUTTON_SX,
+const EDITOR_TOOL_RAIL_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.45,
+  p: 0.45,
+  borderRadius: 2,
+  border: "1px solid rgba(148,163,184,0.18)",
+  background: "rgba(5,10,24,0.58)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+
+const EDITOR_ICON_BUTTON_SX = {
+  width: 36,
+  height: 36,
+  borderRadius: 1.45,
+  flexShrink: 0,
+  border: "1px solid transparent",
+  color: MAGIC_UI.textMuted,
+  transition: "background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease",
+  "&:hover": {
+    color: "#e6f7ff",
+    borderColor: "rgba(125,211,252,0.3)",
+    background: "rgba(125,211,252,0.1)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.36)",
+    borderColor: "transparent",
+    background: "transparent",
+  },
+};
+
+const EDITOR_ICON_BUTTON_ACTIVE_SX = {
+  ...EDITOR_ICON_BUTTON_SX,
   borderColor: "rgba(125,211,252,0.5)",
-  background: "rgba(14,116,144,0.2)",
+  background: "rgba(14,116,144,0.26)",
   color: "#e6f7ff",
+  "&:hover": {
+    borderColor: "rgba(125,211,252,0.62)",
+    background: "rgba(14,116,144,0.34)",
+  },
+};
+
+const EDITOR_SYMBOL_ICON_SX = {
+  fontSize: 20,
+  lineHeight: 1,
+  fontVariationSettings: '"FILL" 0, "wght" 450, "GRAD" 0, "opsz" 24',
+};
+
+const EDITOR_SEARCH_PANEL_SX = {
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  borderRadius: 2,
+  background: "rgba(5,10,24,0.9)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 36px rgba(2,8,23,0.28)",
+  p: { xs: 1, sm: 1.25 },
+};
+
+const EDITOR_SEARCH_FIELD_SX = {
+  ...DIALOG_INPUT_SX,
+  flex: "1 1 280px",
+  minWidth: { xs: "100%", md: 280 },
+  "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+    ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
+    borderRadius: 1.6,
+    minHeight: 46,
+  },
+  "& .MuiOutlinedInput-input, & .MuiInputBase-input": {
+    ...DIALOG_INPUT_SX["& .MuiOutlinedInput-input, & .MuiInputBase-input"],
+    fontSize: "0.95rem",
+  },
+};
+
+const EDITOR_SEARCH_OPTION_SX = {
+  m: 0,
+  color: MAGIC_UI.textMuted,
+  "& .MuiFormControlLabel-label": {
+    fontSize: "0.8rem",
+    lineHeight: 1.25,
+  },
+  "& .MuiCheckbox-root": {
+    color: "rgba(148,163,184,0.72)",
+    p: 0.45,
+  },
+  "& .MuiCheckbox-root.Mui-checked": {
+    color: "#7dd3fc",
+  },
 };
 
 const ACTION_MENU_HEADER_SX = {
@@ -1361,6 +1443,7 @@ export default function RemoteFileManagement({ device }) {
   const hydratedWorkingDirectoryRef = useRef("");
   const pendingScrollPathRef = useRef("");
   const editorViewRef = useRef(null);
+  const editorSearchInputRef = useRef(null);
   const handleSaveEditorRef = useRef(null);
 
   const hostname = useMemo(() => getHostname(device), [device]);
@@ -1399,6 +1482,13 @@ export default function RemoteFileManagement({ device }) {
   const [editorWordWrap, setEditorWordWrap] = useState(false);
   const [editorDiffOpen, setEditorDiffOpen] = useState(false);
   const [editorCloseConfirmOpen, setEditorCloseConfirmOpen] = useState(false);
+  const [editorSearchOpen, setEditorSearchOpen] = useState(false);
+  const [editorToolsMenuAnchor, setEditorToolsMenuAnchor] = useState(null);
+  const [editorSearchValue, setEditorSearchValue] = useState("");
+  const [editorReplaceValue, setEditorReplaceValue] = useState("");
+  const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
+  const [editorSearchRegexp, setEditorSearchRegexp] = useState(false);
+  const [editorSearchWholeWord, setEditorSearchWholeWord] = useState(false);
   const [inlineEditingUnsupported, setInlineEditingUnsupported] = useState(false);
   const [pendingUploadFiles, setPendingUploadFiles] = useState([]);
   const [pendingUploadManifest, setPendingUploadManifest] = useState([]);
@@ -1444,6 +1534,26 @@ export default function RemoteFileManagement({ device }) {
   const editorContentLargeWarning =
     Math.max(editorContent.length, editorOriginalContent.length) > LARGE_TEXT_FILE_WARNING_BYTES;
   const editorDiffDisabled = editorLoading || editorSaving || !editorHasChanges || editorContentLargeWarning;
+  const editorSearchQuery = useMemo(
+    () => {
+      try {
+        return new SearchQuery({
+          search: editorSearchValue,
+          replace: editorReplaceValue,
+          caseSensitive: editorSearchCaseSensitive,
+          regexp: editorSearchRegexp,
+          wholeWord: editorSearchWholeWord,
+        });
+      } catch {
+        return null;
+      }
+    },
+    [editorReplaceValue, editorSearchCaseSensitive, editorSearchRegexp, editorSearchValue, editorSearchWholeWord]
+  );
+  const editorSearchInvalid =
+    Boolean(editorSearchValue) && (!editorSearchQuery || !editorSearchQuery.valid);
+  const editorSearchActionsDisabled =
+    editorLoading || editorDiffOpen || editorSearchInvalid || !editorSearchValue;
   const currentUploadConflict = uploadConflicts[uploadConflictIndex] || null;
   const currentUploadConflictFile = useMemo(
     () =>
@@ -1972,6 +2082,13 @@ export default function RemoteFileManagement({ device }) {
     setEditorFileSizeBytes(0);
     setEditorDiffOpen(false);
     setEditorCloseConfirmOpen(false);
+    setEditorSearchOpen(false);
+    setEditorToolsMenuAnchor(null);
+    setEditorSearchValue("");
+    setEditorReplaceValue("");
+    setEditorSearchCaseSensitive(false);
+    setEditorSearchRegexp(false);
+    setEditorSearchWholeWord(false);
     editorViewRef.current = null;
   }, []);
 
@@ -2002,6 +2119,13 @@ export default function RemoteFileManagement({ device }) {
       setEditorFileSizeBytes(Number(entry?.size_bytes || 0));
       setEditorDiffOpen(false);
       setEditorCloseConfirmOpen(false);
+      setEditorSearchOpen(false);
+      setEditorToolsMenuAnchor(null);
+      setEditorSearchValue("");
+      setEditorReplaceValue("");
+      setEditorSearchCaseSensitive(false);
+      setEditorSearchRegexp(false);
+      setEditorSearchWholeWord(false);
       editorViewRef.current = null;
       try {
         const response = await fetch(
@@ -2121,11 +2245,62 @@ export default function RemoteFileManagement({ device }) {
     command(view);
   }, []);
 
+  const openEditorSearch = useCallback(() => {
+    if (editorLoading || editorDiffOpen) return;
+    setEditorSearchOpen(true);
+    window.setTimeout(() => {
+      editorSearchInputRef.current?.focus?.();
+      editorSearchInputRef.current?.select?.();
+    }, 0);
+  }, [editorDiffOpen, editorLoading]);
+
+  useEffect(() => {
+    if (!editorSearchOpen) return undefined;
+    const focusTimer = window.setTimeout(() => {
+      editorSearchInputRef.current?.focus?.();
+      editorSearchInputRef.current?.select?.();
+    }, 0);
+    return () => {
+      window.clearTimeout(focusTimer);
+    };
+  }, [editorSearchOpen]);
+
+  const applyEditorSearchQuery = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view || !editorSearchQuery || editorSearchInvalid) return null;
+    view.dispatch({ effects: setSearchQuery.of(editorSearchQuery) });
+    return view;
+  }, [editorSearchInvalid, editorSearchQuery]);
+
+  useEffect(() => {
+    if (!editorSearchOpen || editorDiffOpen) return;
+    applyEditorSearchQuery();
+  }, [applyEditorSearchQuery, editorDiffOpen, editorSearchOpen]);
+
+  const runEditorSearchCommand = useCallback(
+    (command) => {
+      if (editorSearchActionsDisabled || typeof command !== "function") return;
+      const view = applyEditorSearchQuery();
+      if (!view) return;
+      command(view);
+    },
+    [applyEditorSearchQuery, editorSearchActionsDisabled]
+  );
+
   const editorExtensions = useMemo(
     () => [
       ...getEditorLanguageExtensions(editorLanguage, { lintJson: true }),
+      search({ top: true }),
       ...(editorWordWrap ? [EditorView.lineWrapping] : []),
-      keymap.of([
+      Prec.high(keymap.of([
+        {
+          key: "Mod-f",
+          preventDefault: true,
+          run: () => {
+            openEditorSearch();
+            return true;
+          },
+        },
         {
           key: "Mod-s",
           preventDefault: true,
@@ -2134,9 +2309,9 @@ export default function RemoteFileManagement({ device }) {
             return true;
           },
         },
-      ]),
+      ])),
     ],
-    [editorLanguage, editorWordWrap]
+    [editorLanguage, editorWordWrap, openEditorSearch]
   );
 
   const clearUploadConflictState = useCallback(() => {
@@ -3724,91 +3899,275 @@ export default function RemoteFileManagement({ device }) {
             overflow: "hidden",
           }}
         >
-          <Stack direction="row" spacing={1.5} flexWrap="wrap" sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem" }}>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Syntax: {formatEditorLanguage(editorLanguage)}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Encoding: {normalizeText(editorEncoding) || "utf-8"}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Line Endings: {formatLineEndingLabel(editorLineEnding)}
-            </Typography>
-          </Stack>
-          <Stack direction="row" spacing={0.85} useFlexGap flexWrap="wrap" alignItems="center">
-            <Button
-              onClick={() => setEditorWordWrap((current) => !current)}
-              disabled={editorLoading}
-              sx={editorWordWrap ? EDITOR_TOOL_BUTTON_ACTIVE_SX : EDITOR_TOOL_BUTTON_SX}
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: { xs: "column", md: "row" },
+              alignItems: { xs: "stretch", md: "center" },
+              justifyContent: "space-between",
+              gap: 1,
+            }}
+          >
+            <Stack
+              direction="row"
+              spacing={1.5}
+              useFlexGap
+              flexWrap="wrap"
+              sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem", minWidth: 0 }}
             >
-              Word Wrap
-            </Button>
-            <Button
-              startIcon={<SearchRoundedIcon />}
-              onClick={() => runEditorCommand(openSearchPanel)}
-              disabled={editorLoading || editorDiffOpen}
-              sx={EDITOR_TOOL_BUTTON_SX}
-            >
-              Search
-            </Button>
-            <Button onClick={() => runEditorCommand(findPrevious)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
-              Previous
-            </Button>
-            <Button onClick={() => runEditorCommand(findNext)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
-              Next
-            </Button>
-            <Button
-              startIcon={<FindReplaceRoundedIcon />}
-              onClick={() => runEditorCommand(replaceNext)}
-              disabled={editorLoading || editorDiffOpen}
-              sx={EDITOR_TOOL_BUTTON_SX}
-            >
-              Replace
-            </Button>
-            <Button onClick={() => runEditorCommand(replaceAll)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
-              Replace All
-            </Button>
-            <Button onClick={() => runEditorCommand(gotoLine)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
-              Go To Line
-            </Button>
-            <Button
-              startIcon={<UnfoldLessRoundedIcon />}
-              onClick={() => runEditorCommand(foldAll)}
-              disabled={editorLoading || editorDiffOpen}
-              sx={EDITOR_TOOL_BUTTON_SX}
-            >
-              Fold All
-            </Button>
-            <Button
-              startIcon={<UnfoldMoreRoundedIcon />}
-              onClick={() => runEditorCommand(unfoldAll)}
-              disabled={editorLoading || editorDiffOpen}
-              sx={EDITOR_TOOL_BUTTON_SX}
-            >
-              Unfold All
-            </Button>
-            <Tooltip
-              title={
-                editorDiffDisabled
-                  ? editorContentLargeWarning
-                    ? "Diff is disabled for files over 10 MB."
-                    : "Make a change before opening diff view."
-                  : "Compare original content against current edits."
-              }
-              arrow
-            >
-              <span>
-                <Button
-                  startIcon={<CompareArrowsRoundedIcon />}
-                  onClick={() => setEditorDiffOpen((current) => !current)}
-                  disabled={editorDiffDisabled}
-                  sx={editorDiffOpen ? EDITOR_TOOL_BUTTON_ACTIVE_SX : EDITOR_TOOL_BUTTON_SX}
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Syntax: {formatEditorLanguage(editorLanguage)}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Encoding: {normalizeText(editorEncoding) || "utf-8"}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Line Endings: {formatLineEndingLabel(editorLineEnding)}
+              </Typography>
+            </Stack>
+            <Box sx={{ display: "flex", justifyContent: { xs: "flex-start", md: "flex-end" } }}>
+              <Box sx={EDITOR_TOOL_RAIL_SX}>
+                <Tooltip title={editorWordWrap ? "Disable Word Wrap" : "Enable Word Wrap"} arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Toggle word wrap"
+                      onClick={() => setEditorWordWrap((current) => !current)}
+                      disabled={editorLoading}
+                      sx={editorWordWrap ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <Icon baseClassName="material-symbols-outlined" sx={EDITOR_SYMBOL_ICON_SX}>
+                        wrap_text
+                      </Icon>
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Search And Replace" arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Open search and replace"
+                      onClick={openEditorSearch}
+                      disabled={editorLoading || editorDiffOpen}
+                      sx={editorSearchOpen ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <SearchRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    editorDiffDisabled
+                      ? editorContentLargeWarning
+                        ? "Diff disabled for files over 10 MB."
+                        : "Make change before opening diff view."
+                      : editorDiffOpen
+                        ? "Hide Diff"
+                        : "Show Diff"
+                  }
+                  arrow
                 >
-                  {editorDiffOpen ? "Hide Diff" : "Show Diff"}
-                </Button>
-              </span>
-            </Tooltip>
-          </Stack>
+                  <span>
+                    <IconButton
+                      aria-label={editorDiffOpen ? "Hide diff" : "Show diff"}
+                      onClick={() => {
+                        if (!editorDiffOpen) setEditorSearchOpen(false);
+                        setEditorDiffOpen((current) => !current);
+                      }}
+                      disabled={editorDiffDisabled}
+                      sx={editorDiffOpen ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <CompareArrowsRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="More Editor Actions" arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Open editor actions"
+                      onClick={(event) => setEditorToolsMenuAnchor(event.currentTarget)}
+                      disabled={editorLoading}
+                      sx={EDITOR_ICON_BUTTON_SX}
+                    >
+                      <MoreVertRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            </Box>
+          </Box>
+          <Menu
+            anchorEl={editorToolsMenuAnchor}
+            open={Boolean(editorToolsMenuAnchor)}
+            onClose={() => setEditorToolsMenuAnchor(null)}
+            PaperProps={{ sx: { ...ACTION_MENU_PAPER_SX, minWidth: 236 } }}
+          >
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(gotoLine);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <SearchRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Go To Line</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Jump inside current document.</Typography>
+              </Box>
+            </MenuItem>
+            <Divider sx={ACTION_MENU_DIVIDER_SX} />
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(foldAll);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <UnfoldLessRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Fold All</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Collapse foldable sections.</Typography>
+              </Box>
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(unfoldAll);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <UnfoldMoreRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Unfold All</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Expand folded sections.</Typography>
+              </Box>
+            </MenuItem>
+          </Menu>
+          <Collapse in={editorSearchOpen && !editorDiffOpen} timeout={170} unmountOnExit>
+            <Box sx={EDITOR_SEARCH_PANEL_SX}>
+              <Stack
+                direction={{ xs: "column", lg: "row" }}
+                spacing={1}
+                useFlexGap
+                alignItems={{ xs: "stretch", lg: "flex-start" }}
+              >
+                <TextField
+                  inputRef={editorSearchInputRef}
+                  label="Find"
+                  value={editorSearchValue}
+                  onChange={(event) => setEditorSearchValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    runEditorSearchCommand(event.shiftKey ? findPrevious : findNext);
+                  }}
+                  error={editorSearchInvalid}
+                  autoComplete="off"
+                  sx={EDITOR_SEARCH_FIELD_SX}
+                />
+                <TextField
+                  label="Replace"
+                  value={editorReplaceValue}
+                  onChange={(event) => setEditorReplaceValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    runEditorSearchCommand(replaceNext);
+                  }}
+                  autoComplete="off"
+                  sx={EDITOR_SEARCH_FIELD_SX}
+                />
+                <Stack
+                  direction="row"
+                  spacing={0.65}
+                  useFlexGap
+                  flexWrap="wrap"
+                  alignItems="center"
+                  sx={{ pt: { xs: 0, lg: 0.35 }, minWidth: { xs: "100%", lg: "auto" } }}
+                >
+                  <Button
+                    onClick={() => runEditorSearchCommand(findPrevious)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    onClick={() => runEditorSearchCommand(findNext)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    startIcon={<FindReplaceRoundedIcon />}
+                    onClick={() => runEditorSearchCommand(replaceNext)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    onClick={() => runEditorSearchCommand(replaceAll)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Replace All
+                  </Button>
+                  <Tooltip title="Close Search" arrow>
+                    <IconButton
+                      aria-label="Close search"
+                      onClick={() => setEditorSearchOpen(false)}
+                      sx={EDITOR_ICON_BUTTON_SX}
+                    >
+                      <CloseRoundedIcon sx={{ fontSize: 19 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+              </Stack>
+              <Stack direction="row" spacing={1.4} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchCaseSensitive}
+                      onChange={(event) => setEditorSearchCaseSensitive(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Match Case"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchRegexp}
+                      onChange={(event) => setEditorSearchRegexp(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Regex"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchWholeWord}
+                      onChange={(event) => setEditorSearchWholeWord(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Whole Word"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                {editorSearchInvalid ? (
+                  <Typography sx={{ color: "#fecaca", fontSize: "0.8rem" }}>
+                    Invalid regular expression
+                  </Typography>
+                ) : null}
+              </Stack>
+            </Box>
+          </Collapse>
           {editorError ? (
             <Alert severity="error" sx={{ borderRadius: 2 }}>
               {editorError}
