@@ -458,7 +458,11 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	revision := m.credentialRevision
 	removeWallpaper := m.removeWallpaper
 	serviceConfigLoaded := m.serviceConfigLoaded
+	previousReady := m.lastReady
+	previousServiceState := m.lastServiceState
+	previousListenerState := m.lastListenerState
 	m.mu.Unlock()
+	routineEnsure := isRoutineEnsureReason(reason)
 	if password == "" {
 		return fmt.Errorf("VNC controller credential unavailable")
 	}
@@ -472,7 +476,11 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 		return fmt.Errorf("UltraVNC winvnc.exe not found")
 	}
 	serviceStateBefore := m.queryServiceState(ctx, m.serviceName)
-	m.logf("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
+	if routineEnsure && isServiceRunning(serviceStateBefore) {
+		m.tracef("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
+	} else {
+		m.logf("VNC ensure start reason=%s service=%s state=%s port=%d allowed_ips=%s credential_revision=%d remove_wallpaper=%t", reason, m.serviceName, displayServiceState(serviceStateBefore), port, allowedIPs, revision, removeWallpaper)
+	}
 	if err := m.ensureFirewall(ctx, allowedIPs, port); err != nil {
 		m.logf("VNC firewall ensure failed: %v", err)
 	}
@@ -481,14 +489,18 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 		m.setError(err.Error())
 		return err
 	}
-	m.logf("VNC config ensured path=%s changed=%t", configPath, configChanged)
+	if routineEnsure && !configChanged {
+		m.tracef("VNC config ensured path=%s changed=%t", configPath, configChanged)
+	} else {
+		m.logf("VNC config ensured path=%s changed=%t", configPath, configChanged)
+	}
 	reloadReason := ""
 	if configChanged {
 		reloadReason = "config_changed"
 	} else if !serviceConfigLoaded {
 		reloadReason = "initial_config_sync"
 	}
-	if err := m.ensureService(ctx, reloadReason); err != nil {
+	if err := m.ensureService(ctx, reloadReason, reason); err != nil {
 		m.setError(err.Error())
 		return err
 	}
@@ -513,7 +525,11 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	}
 	m.mu.Unlock()
 	if ready {
-		m.logf("VNC service ready port=%d reason=%s", port, reason)
+		if routineEnsure && previousReady && isServiceRunning(previousServiceState) && strings.EqualFold(previousListenerState, "listening") {
+			m.tracef("VNC service ready port=%d reason=%s", port, reason)
+		} else {
+			m.logf("VNC service ready port=%d reason=%s", port, reason)
+		}
 		return nil
 	}
 	return fmt.Errorf("VNC listener not ready on port %d", port)
@@ -585,7 +601,7 @@ func (m *Manager) ensureConfig(port int, password string, removeWallpaper bool) 
 	return configPath, changed, nil
 }
 
-func (m *Manager) ensureService(ctx context.Context, reloadReason string) error {
+func (m *Manager) ensureService(ctx context.Context, reloadReason string, reason string) error {
 	service := m.serviceName
 	state := m.queryServiceState(ctx, service)
 	if state == "" {
@@ -600,7 +616,11 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string) error 
 		if strings.TrimSpace(reloadReason) != "" {
 			return m.restartService(ctx, service, reloadReason)
 		}
-		m.logf("VNC service already running service=%s reload_required=false", service)
+		if isRoutineEnsureReason(reason) {
+			m.tracef("VNC service already running service=%s reload_required=false", service)
+		} else {
+			m.logf("VNC service already running service=%s reload_required=false", service)
+		}
 		return nil
 	}
 	return m.startService(ctx, service)
@@ -824,6 +844,26 @@ func (m *Manager) logf(format string, args ...any) {
 		time.Now().Format("2006-01-02T15:04:05"),
 		fmt.Sprintf(format, args...),
 	)
+}
+
+func (m *Manager) tracef(format string, args ...any) {
+	if !vncTraceEnabled() {
+		return
+	}
+	m.logf("vnc_trace "+format, args...)
+}
+
+func isRoutineEnsureReason(reason string) bool {
+	return strings.EqualFold(strings.TrimSpace(reason), "always_on_check")
+}
+
+func vncTraceEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_VNC_TRACE"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {

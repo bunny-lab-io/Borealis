@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -299,6 +301,62 @@ func TestEnsureConfigReportsOnlyActualChanges(t *testing.T) {
 	}
 }
 
+func TestRoutineAlwaysOnEnsureDoesNotWriteSteadyStateLogs(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	t.Setenv("BOREALIS_VNC_TRACE", "")
+
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	manager := &Manager{
+		supported:           true,
+		configPath:          filepath.Join(dir, "agent.json"),
+		logPath:             filepath.Join(dir, "vnc.log"),
+		serviceName:         serviceName,
+		vncExe:              exePath,
+		port:                port,
+		allowedIPs:          "10.255.0.1/32",
+		controllerPassword:  "bootpass",
+		credentialRevision:  12345,
+		removeWallpaper:     true,
+		serviceConfigLoaded: true,
+		lastReady:           true,
+		lastServiceState:    "RUNNING",
+		lastListenerState:   "listening",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "sc.exe" && len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+	if _, _, err := manager.ensureConfig(port, "bootpass", true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.ensureAlwaysOn(context.Background(), "always_on_check"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := os.ReadFile(manager.logPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(raw)) != "" {
+		t.Fatalf("expected steady always-on check to stay quiet, got:\n%s", string(raw))
+	}
+}
+
 func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 	calls := []string{}
 	queryCount := 0
@@ -325,7 +383,7 @@ func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 		},
 	}
 
-	if err := manager.ensureService(context.Background(), "config_changed"); err != nil {
+	if err := manager.ensureService(context.Background(), "config_changed", "vnc_session_start"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -351,7 +409,7 @@ func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T)
 		},
 	}
 
-	if err := manager.ensureService(context.Background(), ""); err != nil {
+	if err := manager.ensureService(context.Background(), "", "vnc_session_start"); err != nil {
 		t.Fatal(err)
 	}
 
