@@ -1,59 +1,158 @@
 # Getting Started with Borealis
 
 ## Purpose
-Help operators install, launch, and verify the Borealis Engine and (optionally) the Agent.
 
-## Quick Start (Engine)
-- Linux production, first install from a cloned checkout: `./Engine.sh deploy prod` (installs Docker Engine + Docker Compose when missing, then deploys the Compose-backed Engine at `https://<your-public-fqdn>` through the Traefik edge container).
-- Linux production, one-line install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod`.
-- Linux dev, first install: `./Engine.sh deploy dev` (same Compose stack, with Vite HMR on loopback `127.0.0.1:8000` behind Traefik).
-- Linux stable-channel install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --release-channel stable deploy prod`.
-- Linux branch testing install: `curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod`.
-- Linux production, local redeploy: `./Engine.sh deploy prod`.
-- Linux dev, local redeploy: `./Engine.sh deploy dev`.
-- Engine service action examples: `./Engine.sh --service api-backend restart`, `./Engine.sh --service webui-frontend rebuild dev`, `./Engine.sh --service traefik-edge reload`, and `./Engine.sh --service wireguard-tunnel reconcile`.
-- Updates from a cloned checkout: `git pull --ff-only` followed by `./Engine.sh deploy prod` or `./Engine.sh deploy dev`; Go Agent release-channel packaging is tracked in `Data/Agent/Golang_Agent_Migration.md`.
-- Production TLS is managed by the embedded Traefik edge; the Python Engine stays on loopback HTTP.
-- During Engine deployment, `Engine.sh` renders `Engine/Deploy/compose.env` for Compose interpolation, renders shared and WebUI mode-scoped service env files under `Engine/Deploy/`, builds changed local images as `borealis-engine/<service>:sha-<hash>`, and starts or updates the Compose project `borealis-engine`.
-- No-op Engine deploys skip unchanged image builds and skip Compose when the deploy manifest, env, image hashes, and running containers already match.
-- Storage is displayed during profile detection as an advisory guideline only. It does not change which Engine profile gets selected.
+Use this page to install the Borealis Engine, open the web interface, and verify the first startup. Agent installation is optional and can happen after the Engine is running.
 
-## Optional: Install the Agent (Windows)
-- Build or refresh Go Agent binaries from Linux when source changes: `Data/Agent/build-agent.sh`.
-- Run in elevated PowerShell from a checkout: `.\Data\Agent\dist\windows-amd64\Agent.exe`.
-- Automated enrollment example:
-  `.\Data\Agent\dist\windows-amd64\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Non-interactive server URL + enrollment example:
-  `C:\Borealis\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"`
-- Linux Go Agent builds to `Data/Agent/dist/linux-amd64/Agent`; install commands run the downloaded binary with server URL and enrollment code, then the Agent stages itself as `/opt/Borealis/Agent/Agent`.
-- Linux Agent one-line installs use a root check: root shells pipe to `bash`; non-root shells use `sudo bash` before the script starts.
-- Do not install the Linux Agent into a deployed Engine runtime root. Keep the installed Agent binary and `agent.json` in a dedicated Agent install directory.
+!!! tip "Beginner path"
+    Start with the Engine only. Add Agents after the login page works and `GET /health` returns `{"status":"ok"}`.
 
-## First Run Checklist
-- Open the Engine URL and confirm the login page loads.
-- Check `Engine/Services/api-backend/logs/engine.log` for startup messages.
-- Verify liveness: `GET /health` returns `{"status":"ok"}`.
+## Before You Start
 
-## Reverse Proxy Notes
-- Borealis expects HTTPS for production use.
-- Borealis owns its public TLS edge with the `traefik-edge` container and Let's Encrypt when a public FQDN plus ACME email are configured.
-- Keep WireGuard separate from the HTTPS edge; it remains direct UDP on port `30000`.
+- Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
+- Point a public FQDN at the Engine host before production deployment.
+- Have an email address ready for Let's Encrypt certificate registration.
+- Run install commands from a shell with `sudo` rights.
+- Keep WireGuard UDP `30000` reachable for remote operations.
 
-## API Endpoints
-- `GET /health` (No Authentication) - Engine liveness probe.
-- `GET /api/server/time` (Operator Session) - Quick sanity check after login.
+!!! warning "Engine host boundary"
+    Do not install a Linux Agent into the same runtime root used by a deployed Engine. Keep Agent files in a dedicated Agent install directory.
 
-## Related Documentation
-- [Architecture Overview](architecture-overview.md)
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
-- [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
-- [Security and Trust](security-and-trust.md)
-- [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+## Install the Engine
+
+Use the one-line installer when starting from a fresh Linux host:
+
+```sh
+# Download the Borealis launcher from GitHub and deploy the production Engine stack.
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
+```
+
+Use a cloned checkout when you already have the repository on disk:
+
+```sh
+# Run production deployment from the repository root.
+./Engine.sh deploy prod
+```
+
+During deployment, Borealis installs missing Docker dependencies, prepares runtime configuration, builds changed service images, and starts the Docker Compose project.
+
+??? note "Optional: development and branch installs"
+    Use these commands only when testing changes or validating a specific release channel.
+
+    ```sh
+    # Deploy the development stack with WebUI Vite HMR behind Traefik.
+    ./Engine.sh deploy dev
+
+    # Install from the stable release channel.
+    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --release-channel stable deploy prod
+
+    # Install from a specific branch for testing.
+    curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod
+    ```
+
+## Verify First Run
+
+After deployment finishes:
+
+1. Open `https://<your-public-fqdn>`.
+2. Confirm the Borealis login page loads.
+3. Check Engine startup logs.
+4. Confirm the health endpoint returns `{"status":"ok"}`.
+
+```sh
+# Watch Engine startup messages.
+tail -f Engine/Services/api-backend/logs/engine.log
+
+# Confirm the API process is alive.
+curl -fsSL https://<your-public-fqdn>/health
+```
+
+!!! info "HTTPS and WireGuard"
+    Borealis owns its public HTTPS edge with the `traefik-edge` container when a public FQDN and ACME email are configured. WireGuard stays separate as direct UDP traffic on port `30000`.
+
+??? note "Optional: update or redeploy the Engine"
+    Use redeploy commands after pulling updates or changing Engine configuration.
+
+    ```sh
+    # Update a cloned checkout, then redeploy production.
+    git pull --ff-only
+    ./Engine.sh deploy prod
+
+    # Redeploy development mode.
+    ./Engine.sh deploy dev
+    ```
+
+    No-op deploys skip unchanged image builds and skip Compose when the deploy manifest, environment, image hashes, and running containers already match.
+
+??? note "Optional: service maintenance commands"
+    Use service-scoped commands when troubleshooting one Engine component.
+
+    ```sh
+    # Restart the API backend container.
+    ./Engine.sh --service api-backend restart
+
+    # Rebuild the WebUI frontend container in development mode.
+    ./Engine.sh --service webui-frontend rebuild dev
+
+    # Reload Traefik edge configuration.
+    ./Engine.sh --service traefik-edge reload
+
+    # Reconcile WireGuard tunnel state.
+    ./Engine.sh --service wireguard-tunnel reconcile
+    ```
+
+## Optional: Install an Agent
+
+Install Agents after the Engine is reachable. Agent enrollment needs the Engine URL and a site enrollment code.
+
+=== "Windows"
+
+    Build or refresh the Windows Agent binary from Linux when source changes:
+
+    ```sh
+    # Build Agent binaries under Data/Agent/dist/.
+    Data/Agent/build-agent.sh
+    ```
+
+    Run the Agent from elevated PowerShell:
+
+    ```powershell
+    # Start interactive Agent setup from a checkout.
+    .\Data\Agent\dist\windows-amd64\Agent.exe
+    ```
+
+    Use non-interactive enrollment when the Engine URL and site enrollment code are already known:
+
+    ```powershell
+    # Enroll a Windows endpoint into a Borealis site.
+    .\Data\Agent\dist\windows-amd64\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
+    ```
+
+=== "Linux"
+
+    Linux Agent builds to `Data/Agent/dist/linux-amd64/Agent`. Install commands run the downloaded binary with the Engine URL and enrollment code, then stage the Agent as `/opt/Borealis/Agent/Agent`.
+
+    !!! warning "Separate Engine and Agent installs"
+        Do not place a Linux Agent inside a deployed Engine runtime root. Use a dedicated Agent install directory so Engine redeploys cannot overwrite Agent state.
 
 ??? example "Detailed Codex Breakdown"
 
+    ### API endpoints
+
+    - `GET /health` (No Authentication) - Engine liveness probe.
+    - `GET /api/server/time` (Operator Session) - quick sanity check after login.
+
+    ### Related documentation
+
+    - [Architecture Overview](architecture-overview.md)
+    - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+    - [Docker Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md)
+    - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
+    - [Security and Trust](security-and-trust.md)
+    - [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
+
     ### Bootstrap and runtime separation
+
     - Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
     - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
     - Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
@@ -63,6 +162,7 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
     - Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh deploy dev`.
 
     ### Launch mechanics
+
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh deploy` uses existing on-disk source.
     - `Engine.sh deploy` installs missing Engine OS dependencies, defaults to production, and runs Docker Compose with project name `borealis-engine`.
     - `Engine.sh deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
@@ -73,28 +173,35 @@ Help operators install, launch, and verify the Borealis Engine and (optionally) 
     - `Engine/Deploy/image-manifest.json` records image hashes and tags. `Engine/Deploy/deploy-manifest.json` records mode, Compose/env hashes, service image hashes, changed services, and whether Compose ran or was skipped.
 
     ### Configuration precedence
-    - Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
-      1) Explicit overrides passed to the app factory.
-      2) Environment variables prefixed with `BOREALIS_`.
-      3) Defaults baked into `config.py`.
-    - Key defaults to remember:
-      - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
-      - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
-      - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
-      - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
-      - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
+
+    Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
+
+    1. Explicit overrides passed to the app factory.
+    2. Environment variables prefixed with `BOREALIS_`.
+    3. Defaults baked into `config.py`.
+
+    Key defaults:
+
+    - Database: `BOREALIS_DATABASE_URL` (required PostgreSQL connection URL)
+    - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
+    - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
+    - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
+    - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
 
     ### Public edge and trust
+
     - Borealis embedded Traefik manages the public HTTPS identity and ACME state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
     - Agents must use the public HTTPS FQDN and rely on normal CA + hostname validation.
     - The Python Engine is not a direct public TLS endpoint in production.
 
     ### Agent install and enrollment notes
-    - The Windows agent must run elevated to create the `BorealisAgent` service plus AutoUpdater/Watchdog scheduled tasks.
-    - Enrollment requires an install code and operator approval (see `Docs/Operations and Remote Access/device-management.md`).
+
+    - Windows Agent must run elevated to create the `BorealisAgent` service plus AutoUpdater/Watchdog scheduled tasks.
+    - Enrollment requires an install code and operator approval. See [Device Management](../Operations%20and%20Remote%20Access/device-management.md).
     - If enrollment fails, inspect `Agent/Logs/Agent/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
     ### Health verification
+
     - Use `GET /health` to confirm the API is alive.
     - Use `GET /api/server/time` after login to verify session auth and API reachability.
     - Confirm WebSockets by opening the UI and checking that toasts and live updates work.

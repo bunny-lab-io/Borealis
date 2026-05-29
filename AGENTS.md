@@ -13,6 +13,19 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 - Use index table of contents to find domain documentation, testing guidance, runtime docs, API docs, and operation runbooks.
 - Follow domain docs found through index. Where docs overlap, domain page wins. `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
 
+## Documentation Authoring Style
+- Keep operator-facing docs beginner-first: purpose, prerequisites, happy-path workflow, verification, then troubleshooting.
+- Keep visible sections clean and task-focused. Avoid exposing API endpoint lists, source path maps, implementation notes, and dense cross-link lists to operators unless they need them to complete the task.
+- Put API endpoints, related documentation, source file references, implementation details, and Codex-only reasoning inside final `??? example "Detailed Codex Breakdown"` sections.
+- Use contextual admonitions for optional or advanced material:
+  - `!!! tip` for beginner guidance or recommended choices.
+  - `!!! warning` for destructive, risky, or environment-sensitive actions.
+  - `!!! info` for short operational context that helps without requiring code knowledge.
+  - `??? note` for optional advanced commands, alternate install paths, and deeper configuration.
+  - `??? example "Detailed Codex Breakdown"` for Codex-only details and hidden reference material.
+- Add short comments inside code blocks when commands need context. Prefer one complete, copyable command path before listing variants.
+- Keep screenshots on `Docs/Start Here/screenshots.md` by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless the operator intentionally adds one.
+
 ## Interacting with the Codebase
 - When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
 
