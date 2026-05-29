@@ -59,7 +59,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 
     - [Assemblies and Quick Jobs](assemblies.md)
     - [Scheduled Jobs](scheduled-jobs.md)
-    - [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
+    - [UI and Notifications](../../Reference/ui-and-notifications.md)
 
     ### How node modules are structured
     - A node file exports a descriptor object, for example:

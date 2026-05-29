@@ -60,7 +60,7 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
 
     - [Watchdogs](Automation%20and%20Execution/watchdogs.md)
     - [Device Management](device-management.md)
-    - [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
+    - [UI and Notifications](../Reference/ui-and-notifications.md)
     - [Logging and Operations](logging-and-operations.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 

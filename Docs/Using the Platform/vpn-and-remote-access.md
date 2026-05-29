@@ -87,7 +87,7 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 
     - [Device Management](device-management.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+    - [Security and Trust](../Reference/security-and-trust.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 

@@ -30,8 +30,8 @@ git pull --ff-only
 
     ### Related documentation
 
-    - [Engine Deployment](Engine/deploying-the-engine.md)
-    - [Service Maintenance Commands](service-maintenance-commands.md)
+    - [Engine Deployment](deploying-the-engine.md)
+    - [Service Maintenance Commands](engine-maintenance-commands.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
