@@ -1,5 +1,5 @@
 [project]
-site_name = "Borealis Documentation"
+site_name = "Documentation"
 site_description = "Borealis operator, runtime, API, and contributor documentation."
 site_author = "Bunny Lab"
 site_url = "https://bunny-lab-io.github.io/Borealis/"
@@ -13,6 +13,7 @@ extra_css = ["stylesheets/extra.css"]
 [project.theme]
 variant = "classic"
 language = "en"
+logo = "Reference/Branding/Borealis_Logo.png"
 favicon = "Reference/Branding/Borealis_Logo.png"
 features = [
   "announce.dismiss",
