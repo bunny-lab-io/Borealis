@@ -10,7 +10,7 @@ Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, s
 Borealis is maintained by one person while working a full-time IT job. Progress is iterative, and some internals get reworked as better architecture emerges. Current focus is turning the automation and remote-operations core into a broader MSP-ready platform.
 
 ## High-Level Architecture Overview
-Borealis has two main runtime sides: a Linux-hosted Engine server and cross-platform Agent clients. See [Architecture Overview](Engine%20Deployment/architecture-overview.md) for component roles, runtime boundaries, data flow, and debugging entrypoints.
+Borealis has two main runtime sides: a Linux-hosted Engine server and cross-platform Agent clients. See [Architecture Overview](Reference/architecture-overview.md) for component roles, runtime boundaries, data flow, and debugging entrypoints.
 
 ## Feature Support Matrix
 Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply.
@@ -52,7 +52,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
 ## Getting Started
-Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20Deployment/index.md) documentation.
+Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/deploying-the-engine.md) documentation.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -82,12 +82,12 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20
 
     Documentation Map:
 
-    - [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
+    - [Engine Deployment](Engine/deploying-the-engine.md) - install path, architecture, security, UI rules, and testing entrypoints.
     - [Screenshots](screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - device inventory, alerts, remote access, logs, and software management.
     - [Automation](Using%20the%20Platform/Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
     - [Reference](Reference/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
-    - [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
+    - [Development](Reference/Unit_Testing.md) - testing and migration guidance.
     - [Roadmap](Reference/Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
 
     Repository References:
