@@ -76,8 +76,23 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE
 - Apache Guacamole Client (`guacamole-common-js`) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE
 - LibVNCServer / LibVNCClient - GPL-2.0-or-later - https://github.com/LibVNC/libvncserver/blob/master/COPYING
+- @codemirror/lang-css - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-html - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-javascript - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-json - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-markdown - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-python - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-sql - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-xml - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lang-yaml - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/language - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/legacy-modes - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/state - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/theme-one-dark - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/view - MIT - https://spdx.org/licenses/MIT.html
 - dayjs - MIT - https://spdx.org/licenses/MIT.html
 - normalize.css - MIT - https://spdx.org/licenses/MIT.html
+- @lezer/highlight - MIT - https://spdx.org/licenses/MIT.html
 - prismjs - MIT - https://spdx.org/licenses/MIT.html
 - react-simple-code-editor - MIT - https://spdx.org/licenses/MIT.html
 - react - MIT - https://spdx.org/licenses/MIT.html
@@ -89,6 +104,8 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - reactflow - MIT - https://spdx.org/licenses/MIT.html
 - react-simple-keyboard - MIT - https://spdx.org/licenses/MIT.html
 - socket.io-client - MIT - https://spdx.org/licenses/MIT.html
+- @uiw/react-codemirror - MIT - https://github.com/uiwjs/react-codemirror/blob/master/LICENSE
+- codemirror - MIT - https://spdx.org/licenses/MIT.html
 - @testing-library/jest-dom - MIT - https://spdx.org/licenses/MIT.html
 - @testing-library/react - MIT - https://spdx.org/licenses/MIT.html
 - @vitejs/plugin-react - MIT - https://spdx.org/licenses/MIT.html

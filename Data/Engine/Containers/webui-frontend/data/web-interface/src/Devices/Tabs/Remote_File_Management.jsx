@@ -1,23 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import Prism from "prismjs";
-import Editor from "react-simple-code-editor";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-batch";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-ini";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-jsx";
-import "prismjs/components/prism-markdown";
-import "prismjs/components/prism-markup";
-import "prismjs/components/prism-powershell";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-sql";
-import "prismjs/components/prism-tsx";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-yaml";
-import "prismjs/themes/prism-okaidia.css";
+import CodeMirror from "@uiw/react-codemirror";
+import { css as cssLanguage } from "@codemirror/lang-css";
+import { html as htmlLanguage } from "@codemirror/lang-html";
+import { javascript as javascriptLanguage } from "@codemirror/lang-javascript";
+import { json as jsonLanguage } from "@codemirror/lang-json";
+import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
+import { python as pythonLanguage } from "@codemirror/lang-python";
+import { sql as sqlLanguage } from "@codemirror/lang-sql";
+import { xml as xmlLanguage } from "@codemirror/lang-xml";
+import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
+import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
+import { EditorView } from "@codemirror/view";
+import { c, cpp, csharp, java } from "@codemirror/legacy-modes/mode/clike";
+import { diff } from "@codemirror/legacy-modes/mode/diff";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { go } from "@codemirror/legacy-modes/mode/go";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { rust } from "@codemirror/legacy-modes/mode/rust";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { tags } from "@lezer/highlight";
 import {
   Alert,
   Box,
@@ -28,6 +34,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  Drawer,
   FormControlLabel,
   Icon,
   IconButton,
@@ -386,6 +393,200 @@ const UPLOAD_CONFLICT_OPTION_SX = {
   },
 };
 
+const CODE_EDITOR_FONT_FAMILY =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+const CODEMIRROR_BASIC_SETUP = {
+  lineNumbers: true,
+  highlightActiveLineGutter: true,
+  highlightSpecialChars: true,
+  history: true,
+  foldGutter: true,
+  drawSelection: true,
+  dropCursor: true,
+  allowMultipleSelections: true,
+  indentOnInput: true,
+  syntaxHighlighting: false,
+  bracketMatching: true,
+  closeBrackets: true,
+  autocompletion: true,
+  rectangularSelection: true,
+  crosshairCursor: true,
+  highlightActiveLine: true,
+  highlightSelectionMatches: true,
+  closeBracketsKeymap: true,
+  defaultKeymap: true,
+  searchKeymap: true,
+  historyKeymap: true,
+  foldKeymap: true,
+  completionKeymap: true,
+  lintKeymap: true,
+};
+
+const BOREALIS_CODEMIRROR_THEME = [
+  EditorView.theme(
+    {
+      "&": {
+        height: "100%",
+        color: "#e6edf3",
+        backgroundColor: "transparent",
+        fontSize: "12px",
+      },
+      "&.cm-focused": {
+        outline: "none",
+      },
+      ".cm-scroller": {
+        height: "100%",
+        overflow: "auto",
+        fontFamily: CODE_EDITOR_FONT_FAMILY,
+        lineHeight: "1.55",
+        scrollbarColor: "rgba(125,183,255,0.45) rgba(15,23,42,0.45)",
+      },
+      ".cm-content": {
+        minHeight: "100%",
+        caretColor: "#7dd3fc",
+      },
+      ".cm-line": {
+        padding: "0 12px",
+      },
+      ".cm-gutters": {
+        backgroundColor: "rgba(3,7,18,0.82)",
+        color: "rgba(148,163,184,0.78)",
+        borderRight: "1px solid rgba(148,163,184,0.2)",
+      },
+      ".cm-activeLineGutter": {
+        color: "#e6f2ff",
+        backgroundColor: "rgba(125,211,252,0.14)",
+      },
+      ".cm-activeLine": {
+        backgroundColor: "rgba(125,211,252,0.07)",
+      },
+      ".cm-cursor": {
+        borderLeftColor: "#7dd3fc",
+      },
+      ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+        backgroundColor: "rgba(125,211,252,0.26)",
+      },
+      ".cm-matchingBracket, .cm-nonmatchingBracket": {
+        outline: "1px solid rgba(192,132,252,0.6)",
+        backgroundColor: "rgba(192,132,252,0.12)",
+      },
+      ".cm-foldPlaceholder": {
+        backgroundColor: "rgba(15,23,42,0.82)",
+        border: "1px solid rgba(148,163,184,0.24)",
+        color: "#cbd5e1",
+      },
+      ".cm-tooltip": {
+        backgroundColor: "rgba(8,12,24,0.98)",
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        color: MAGIC_UI.textBright,
+      },
+      ".cm-tooltip-autocomplete ul li[aria-selected]": {
+        backgroundColor: "rgba(88,166,255,0.18)",
+        color: "#f8fafc",
+      },
+      ".cm-searchMatch": {
+        backgroundColor: "rgba(250,204,21,0.24)",
+      },
+      ".cm-searchMatch-selected": {
+        backgroundColor: "rgba(192,132,252,0.34)",
+      },
+      ".cm-panels": {
+        backgroundColor: "rgba(8,12,24,0.98)",
+        color: MAGIC_UI.textBright,
+        borderColor: "rgba(148,163,184,0.22)",
+      },
+      ".cm-panels input": {
+        backgroundColor: "rgba(15,23,42,0.86)",
+        color: MAGIC_UI.textBright,
+        border: "1px solid rgba(148,163,184,0.28)",
+        borderRadius: "6px",
+      },
+    },
+    { dark: true }
+  ),
+  syntaxHighlighting(
+    HighlightStyle.define([
+      { tag: tags.keyword, color: "#f472b6", fontWeight: 600 },
+      { tag: tags.atom, color: "#c084fc" },
+      { tag: tags.bool, color: "#c084fc", fontWeight: 600 },
+      { tag: tags.url, color: "#7dd3fc", textDecoration: "underline" },
+      { tag: tags.labelName, color: "#93c5fd" },
+      { tag: tags.propertyName, color: "#7dd3fc" },
+      { tag: tags.string, color: "#86efac" },
+      { tag: tags.variableName, color: "#e2e8f0" },
+      { tag: tags.function(tags.variableName), color: "#93c5fd" },
+      { tag: tags.typeName, color: "#f0abfc" },
+      { tag: tags.number, color: "#fbbf24" },
+      { tag: tags.comment, color: "#64748b", fontStyle: "italic" },
+      { tag: tags.meta, color: "#94a3b8" },
+      { tag: tags.invalid, color: "#fecaca", backgroundColor: "rgba(248,113,113,0.18)" },
+    ])
+  ),
+];
+
+const CODEMIRROR_LANGUAGE_LABELS = {
+  plaintext: "Plain Text",
+  batch: "Batch",
+  c: "C",
+  cpp: "C++",
+  csharp: "C#",
+  css: "CSS",
+  diff: "Diff",
+  dockerfile: "Dockerfile",
+  go: "Go",
+  html: "HTML",
+  ini: "INI / Properties",
+  java: "Java",
+  javascript: "JavaScript",
+  json: "JSON",
+  jsx: "JSX",
+  markdown: "Markdown",
+  nginx: "Nginx",
+  powershell: "PowerShell",
+  python: "Python",
+  ruby: "Ruby",
+  rust: "Rust",
+  shell: "Shell",
+  sql: "SQL",
+  toml: "TOML",
+  tsx: "TSX",
+  typescript: "TypeScript",
+  xml: "XML",
+  yaml: "YAML",
+};
+
+const CODEMIRROR_LANGUAGE_FACTORIES = {
+  plaintext: () => [],
+  batch: () => [StreamLanguage.define(shell)],
+  c: () => [StreamLanguage.define(c)],
+  cpp: () => [StreamLanguage.define(cpp)],
+  csharp: () => [StreamLanguage.define(csharp)],
+  css: () => [cssLanguage()],
+  diff: () => [StreamLanguage.define(diff)],
+  dockerfile: () => [StreamLanguage.define(dockerFile)],
+  go: () => [StreamLanguage.define(go)],
+  html: () => [htmlLanguage()],
+  ini: () => [StreamLanguage.define(properties)],
+  java: () => [StreamLanguage.define(java)],
+  javascript: () => [javascriptLanguage()],
+  json: () => [jsonLanguage()],
+  jsx: () => [javascriptLanguage({ jsx: true })],
+  markdown: () => [markdownLanguage()],
+  nginx: () => [StreamLanguage.define(nginx)],
+  powershell: () => [StreamLanguage.define(powerShell)],
+  python: () => [pythonLanguage()],
+  ruby: () => [StreamLanguage.define(ruby)],
+  rust: () => [StreamLanguage.define(rust)],
+  shell: () => [StreamLanguage.define(shell)],
+  sql: () => [sqlLanguage()],
+  toml: () => [StreamLanguage.define(toml)],
+  tsx: () => [javascriptLanguage({ jsx: true, typescript: true })],
+  typescript: () => [javascriptLanguage({ typescript: true })],
+  xml: () => [xmlLanguage()],
+  yaml: () => [yamlLanguage()],
+};
+
 function normalizeText(value) {
   if (value == null) return "";
   try {
@@ -696,22 +897,58 @@ function isPathMissingFetchError(error) {
   );
 }
 
+function getEditorFileName(pathValue) {
+  return normalizeText(pathValue).toLowerCase().split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
 function detectEditorLanguage(pathValue) {
   const normalizedPath = normalizeText(pathValue).toLowerCase();
-  if (!normalizedPath) return "markup";
+  const fileName = getEditorFileName(pathValue);
+  if (!normalizedPath) return "plaintext";
+  if (fileName === "dockerfile" || fileName === "containerfile" || fileName.endsWith(".dockerfile")) {
+    return "dockerfile";
+  }
+  if (
+    fileName === "nginx.conf" ||
+    (fileName.endsWith(".conf") &&
+      (fileName.startsWith("nginx") || normalizedPath.includes("/nginx/") || normalizedPath.includes("\\nginx\\")))
+  ) {
+    return "nginx";
+  }
+  if (
+    fileName === ".env" ||
+    fileName.endsWith(".env") ||
+    fileName.startsWith(".env.") ||
+    fileName === ".editorconfig" ||
+    fileName === ".npmrc" ||
+    fileName === ".yarnrc" ||
+    fileName === ".gitconfig" ||
+    fileName === ".gitmodules"
+  ) {
+    return "ini";
+  }
   if (normalizedPath.endsWith(".ps1") || normalizedPath.endsWith(".psm1") || normalizedPath.endsWith(".psd1")) {
     return "powershell";
   }
   if (normalizedPath.endsWith(".bat") || normalizedPath.endsWith(".cmd")) {
     return "batch";
   }
-  if (normalizedPath.endsWith(".sh") || normalizedPath.endsWith(".bash") || normalizedPath.endsWith(".zsh")) {
-    return "bash";
+  if (
+    normalizedPath.endsWith(".sh") ||
+    normalizedPath.endsWith(".bash") ||
+    normalizedPath.endsWith(".zsh") ||
+    normalizedPath.endsWith(".ksh") ||
+    normalizedPath.endsWith(".fish") ||
+    fileName === ".bashrc" ||
+    fileName === ".zshrc" ||
+    fileName === ".profile"
+  ) {
+    return "shell";
   }
   if (normalizedPath.endsWith(".yml") || normalizedPath.endsWith(".yaml")) {
     return "yaml";
   }
-  if (normalizedPath.endsWith(".json")) {
+  if (normalizedPath.endsWith(".json") || normalizedPath.endsWith(".jsonc") || normalizedPath.endsWith(".jsonl")) {
     return "json";
   }
   if (normalizedPath.endsWith(".py")) {
@@ -729,42 +966,92 @@ function detectEditorLanguage(pathValue) {
   if (normalizedPath.endsWith(".js") || normalizedPath.endsWith(".mjs") || normalizedPath.endsWith(".cjs")) {
     return "javascript";
   }
-  if (normalizedPath.endsWith(".css") || normalizedPath.endsWith(".scss")) {
+  if (
+    normalizedPath.endsWith(".css") ||
+    normalizedPath.endsWith(".scss") ||
+    normalizedPath.endsWith(".sass") ||
+    normalizedPath.endsWith(".less")
+  ) {
     return "css";
   }
   if (
     normalizedPath.endsWith(".html") ||
-    normalizedPath.endsWith(".htm") ||
-    normalizedPath.endsWith(".xml") ||
-    normalizedPath.endsWith(".svg")
+    normalizedPath.endsWith(".htm")
   ) {
-    return "markup";
+    return "html";
+  }
+  if (normalizedPath.endsWith(".xml") || normalizedPath.endsWith(".svg")) {
+    return "xml";
   }
   if (
     normalizedPath.endsWith(".ini") ||
     normalizedPath.endsWith(".cfg") ||
     normalizedPath.endsWith(".conf") ||
+    normalizedPath.endsWith(".cnf") ||
+    normalizedPath.endsWith(".config") ||
     normalizedPath.endsWith(".service") ||
-    normalizedPath.endsWith(".toml") ||
-    normalizedPath.endsWith(".properties")
+    normalizedPath.endsWith(".socket") ||
+    normalizedPath.endsWith(".timer") ||
+    normalizedPath.endsWith(".target") ||
+    normalizedPath.endsWith(".mount") ||
+    normalizedPath.endsWith(".desktop") ||
+    normalizedPath.endsWith(".properties") ||
+    normalizedPath.endsWith(".prefs")
   ) {
     return "ini";
+  }
+  if (normalizedPath.endsWith(".toml")) {
+    return "toml";
   }
   if (normalizedPath.endsWith(".sql")) {
     return "sql";
   }
-  if (normalizedPath.endsWith(".md")) {
+  if (normalizedPath.endsWith(".md") || normalizedPath.endsWith(".markdown")) {
     return "markdown";
   }
-  return "markup";
+  if (normalizedPath.endsWith(".diff") || normalizedPath.endsWith(".patch")) {
+    return "diff";
+  }
+  if (normalizedPath.endsWith(".go")) {
+    return "go";
+  }
+  if (normalizedPath.endsWith(".rb")) {
+    return "ruby";
+  }
+  if (normalizedPath.endsWith(".rs")) {
+    return "rust";
+  }
+  if (normalizedPath.endsWith(".c") || normalizedPath.endsWith(".h")) {
+    return "c";
+  }
+  if (normalizedPath.endsWith(".cpp") || normalizedPath.endsWith(".cc") || normalizedPath.endsWith(".cxx") || normalizedPath.endsWith(".hpp")) {
+    return "cpp";
+  }
+  if (normalizedPath.endsWith(".cs")) {
+    return "csharp";
+  }
+  if (normalizedPath.endsWith(".java")) {
+    return "java";
+  }
+  if (normalizedPath.endsWith(".log") || normalizedPath.endsWith(".txt")) {
+    return "plaintext";
+  }
+  return "plaintext";
 }
 
 function formatEditorLanguage(language) {
   const normalized = normalizeText(language).toLowerCase();
-  if (!normalized) return "Plain Text";
-  return normalized
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+  return CODEMIRROR_LANGUAGE_LABELS[normalized] || "Plain Text";
+}
+
+function getEditorLanguageExtensions(language) {
+  const normalized = normalizeText(language).toLowerCase() || "plaintext";
+  const factory = CODEMIRROR_LANGUAGE_FACTORIES[normalized] || CODEMIRROR_LANGUAGE_FACTORIES.plaintext;
+  try {
+    return factory();
+  } catch {
+    return [];
+  }
 }
 
 function formatLineEndingLabel(value) {
@@ -962,7 +1249,7 @@ export default function RemoteFileManagement({ device }) {
   const [editorPath, setEditorPath] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [editorOriginalContent, setEditorOriginalContent] = useState("");
-  const [editorLanguage, setEditorLanguage] = useState("markup");
+  const [editorLanguage, setEditorLanguage] = useState("plaintext");
   const [editorEncoding, setEditorEncoding] = useState("utf-8");
   const [editorLineEnding, setEditorLineEnding] = useState("lf");
   const [inlineEditingUnsupported, setInlineEditingUnsupported] = useState(false);
@@ -1006,6 +1293,7 @@ export default function RemoteFileManagement({ device }) {
     [addressPath, currentPath, platform]
   );
   const editorHasChanges = useMemo(() => editorContent !== editorOriginalContent, [editorContent, editorOriginalContent]);
+  const editorExtensions = useMemo(() => getEditorLanguageExtensions(editorLanguage), [editorLanguage]);
   const currentUploadConflict = uploadConflicts[uploadConflictIndex] || null;
   const currentUploadConflictFile = useMemo(
     () =>
@@ -1525,14 +1813,6 @@ export default function RemoteFileManagement({ device }) {
       window.clearInterval(timerId);
     };
   }, [activeTransfers, hostname, notifyOperator, refreshBaseView, triggerDownload]);
-
-  const highlightCode = useCallback((code, language) => {
-    try {
-      return Prism.highlight(code ?? "", Prism.languages[language] || Prism.languages.markup, language || "markup");
-    } catch {
-      return String(code || "");
-    }
-  }, []);
 
   const handleCloseEditor = useCallback(() => {
     setEditorOpen(false);
@@ -3170,24 +3450,33 @@ export default function RemoteFileManagement({ device }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <Drawer
+        anchor="right"
         open={editorOpen}
         onClose={handleCloseEditor}
-        fullWidth
-        maxWidth={false}
+        ModalProps={{ keepMounted: true }}
         PaperProps={{
           sx: {
             ...DIALOG_PAPER_SX,
             display: "flex",
             flexDirection: "column",
-            width: "92vw",
-            maxWidth: "92vw",
-            height: "88vh",
-            maxHeight: "88vh",
+            width: { xs: "100vw", sm: "92vw", md: "82vw", lg: "76vw", xl: "70vw" },
+            maxWidth: "1280px",
+            height: "100vh",
+            maxHeight: "100vh",
+            borderRadius: 0,
+            borderTop: 0,
+            borderRight: 0,
+            borderBottom: 0,
+            borderLeft: `1px solid ${MAGIC_UI.panelBorder}`,
+            background:
+              "radial-gradient(120% 120% at 0% 0%, rgba(76,186,255,0.12), transparent 56%), " +
+              "radial-gradient(100% 100% at 100% 0%, rgba(192,132,252,0.14), transparent 62%), rgba(5,8,20,0.98)",
+            boxShadow: "-32px 0 80px rgba(2,6,23,0.72)",
           },
         }}
       >
-        <DialogTitle sx={DIALOG_TITLE_SX}>
+        <Box sx={{ ...DIALOG_TITLE_SX, flexShrink: 0 }}>
           <Box
             sx={{
               display: "flex",
@@ -3216,8 +3505,19 @@ export default function RemoteFileManagement({ device }) {
               </Button>
             </Stack>
           </Box>
-        </DialogTitle>
-        <DialogContent
+        </Box>
+        {(editorLoading || editorSaving) && (
+          <LinearProgress
+            sx={{
+              height: 2,
+              backgroundColor: "rgba(30,41,59,0.72)",
+              "& .MuiLinearProgress-bar": {
+                background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+              },
+            }}
+          />
+        )}
+        <Box
           sx={{
             ...DIALOG_CONTENT_SX,
             display: "flex",
@@ -3259,57 +3559,39 @@ export default function RemoteFileManagement({ device }) {
               flexDirection: "column",
               flex: 1,
               minHeight: 0,
-              overflow: "auto",
+              overflow: "hidden",
               overscrollBehavior: "contain",
-              scrollbarGutter: "stable both-edges",
-              "&::-webkit-scrollbar": {
-                width: 10,
-                height: 10,
-              },
-              "&::-webkit-scrollbar-track": {
-                background: "rgba(15,23,42,0.45)",
-                borderRadius: 999,
-              },
-              "&::-webkit-scrollbar-thumb": {
-                background: "rgba(125,183,255,0.35)",
-                borderRadius: 999,
-                border: "2px solid rgba(15,23,42,0.45)",
-              },
-              "& textarea, & pre": {
-                minHeight: "100% !important",
-                whiteSpace: "pre !important",
-                overflowWrap: "normal !important",
-                wordBreak: "normal !important",
+              "& .cm-theme, & .cm-editor": {
+                width: "100%",
+                height: "100%",
               },
             }}
           >
             {!editorLoading ? (
-              <Editor
+              <CodeMirror
                 value={editorContent}
-                onValueChange={setEditorContent}
-                highlight={(code) => highlightCode(code, editorLanguage)}
-                padding={12}
+                height="100%"
+                theme={BOREALIS_CODEMIRROR_THEME}
+                basicSetup={CODEMIRROR_BASIC_SETUP}
+                extensions={editorExtensions}
+                onChange={(value) => setEditorContent(value)}
+                readOnly={editorSaving}
+                editable={!editorSaving}
+                autoFocus
                 spellCheck={false}
-                wrap="off"
                 autoCapitalize="off"
                 autoCorrect="off"
                 autoComplete="off"
                 style={{
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                  fontSize: 12,
-                  color: "#e6edf3",
+                  width: "100%",
                   minHeight: "100%",
-                  whiteSpace: "pre",
-                  overflowWrap: "normal",
-                  wordBreak: "normal",
                   backgroundColor: "transparent",
                 }}
               />
             ) : null}
           </Box>
-        </DialogContent>
-      </Dialog>
+        </Box>
+      </Drawer>
 
       <Dialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} fullWidth maxWidth="xs" PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>
