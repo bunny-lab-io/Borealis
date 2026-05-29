@@ -46,7 +46,7 @@ Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)

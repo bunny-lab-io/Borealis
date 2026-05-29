@@ -194,7 +194,7 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 ## Related Documentation
 - [Agent Runtime](../Core%20Runtimes/agent-runtime.md)
 - [Database Reference](../Data%20and%20Schema/db-reference.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Watchdogs](../Automation%20and%20Execution/watchdogs.md)
 - [Device Alerts](device-alerts.md)

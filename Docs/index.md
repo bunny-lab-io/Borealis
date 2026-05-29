@@ -18,7 +18,7 @@ Deploy the Borealis Engine to a Linux host (*preferrably Ubuntu Server 24.04.4 L
 curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- deploy prod
 ```
 
-Refer to [Getting Started](Start%20Here/getting-started.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
+Refer to [Getting Started](Engine%20Deployment/index.md) for more information on the engine deployment flow, first-run checks, and operational next steps.
 
 ## Architecture
 - **Engine (Server)**: Linux-hosted single-node control plane with Python backend services, PostgreSQL, Traefik, WebSockets, scheduling, automation, and web UI, split across several isolated Docker containers.
@@ -74,13 +74,13 @@ Status means productized support in current Borealis codebase and docs, not long
 <div class="bo-card" markdown>
 **New Operators**
 
-[Getting Started](Start%20Here/getting-started.md) covers Engine bootstrap, optional Agent install, and first-run checks.
+[Getting Started](Engine%20Deployment/index.md) covers Engine bootstrap, optional Agent install, and first-run checks.
 </div>
 
 <div class="bo-card" markdown>
 **Runtime Maintainers**
 
-[Architecture Overview](Start%20Here/architecture-overview.md), [Engine Runtime](Core%20Runtimes/engine-runtime.md), and [Agent Runtime](Core%20Runtimes/agent-runtime.md) explain system shape.
+[Architecture Overview](Engine%20Deployment/architecture-overview.md), [Engine Runtime](Core%20Runtimes/engine-runtime.md), and [Agent Runtime](Core%20Runtimes/agent-runtime.md) explain system shape.
 </div>
 
 <div class="bo-card" markdown>
@@ -104,19 +104,19 @@ Status means productized support in current Borealis codebase and docs, not long
 <div class="bo-card" markdown>
 **Contributors**
 
-[Unit Testing](Start%20Here/Unit_Testing.md), [API Reference](Data%20and%20Schema/api-reference.md), and [Database Reference](Data%20and%20Schema/db-reference.md) define validation and shared contracts.
+[Unit Testing](Engine%20Deployment/Unit_Testing.md), [API Reference](Data%20and%20Schema/api-reference.md), and [Database Reference](Data%20and%20Schema/db-reference.md) define validation and shared contracts.
 </div>
 
 </div>
 
 ## Documentation Map
 
-- [Start Here](Start%20Here/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
-- [Screenshots](Start%20Here/screenshots.md) - visual tour of Borealis operator surfaces.
+- [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
+- [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
 - [Operations](Operations%20and%20Remote%20Access/index.md) - device inventory, alerts, remote access, logs, and software management.
 - [Automation](Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
 - [Reference](Core%20Runtimes/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
-- [Development](Start%20Here/Unit_Testing.md) - testing and migration guidance.
+- [Development](Engine%20Deployment/Unit_Testing.md) - testing and migration guidance.
 - [Roadmap](Future_Roadmaps/index.md) - competitive gaps and roadmap pressure.
 
 ## Repository References
@@ -148,6 +148,6 @@ Status means productized support in current Borealis codebase and docs, not long
     - Use ASCII unless existing file already uses Unicode.
     - Avoid duplicating long source code; link to files and summarize behavior.
     - Document UI and backend components together when both change.
-    - Keep screenshots on [Screenshots](Start%20Here/screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
+    - Keep screenshots on [Screenshots](Engine%20Deployment/screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
     - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
     - Use GitHub issues labeled `Technical Debt` for workarounds, non-standard build steps, or dev/prod drift.

@@ -918,11 +918,11 @@ Each table has the same schema:
 
 ## Related Documentation
 - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 
 ??? example "Detailed Codex Breakdown"
 

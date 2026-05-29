@@ -8,7 +8,7 @@ Use this section when moving legacy WebUI pages into the shared React Router she
 
 ## Related Areas
 
-- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
-- [Architecture Overview](../Start%20Here/architecture-overview.md)
+- [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
+- [Architecture Overview](../Engine%20Deployment/architecture-overview.md)
 - [Scheduled Jobs](../Automation%20and%20Execution/scheduled-jobs.md)
 - [Assemblies and Quick Jobs](../Automation%20and%20Execution/assemblies.md)

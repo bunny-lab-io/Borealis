@@ -13,13 +13,12 @@ extra_css = ["stylesheets/extra.css"]
 
 nav = [
   { "Home" = "index.md" },
-  { "Start Here" = [
-    { "Overview" = "Start Here/index.md" },
-    "Start Here/getting-started.md",
-    "Start Here/architecture-overview.md",
-    "Start Here/security-and-trust.md",
-    "Start Here/ui-and-notifications.md",
-    "Start Here/screenshots.md",
+  { "Engine Deployment" = [
+    { "Overview" = "Engine Deployment/index.md" },
+    "Engine Deployment/architecture-overview.md",
+    "Engine Deployment/security-and-trust.md",
+    "Engine Deployment/ui-and-notifications.md",
+    "Engine Deployment/screenshots.md",
   ] },
   { "Operations" = [
     { "Overview" = "Operations and Remote Access/index.md" },
@@ -58,9 +57,9 @@ nav = [
     ] },
   ] },
   { "Development" = [
-    "Start Here/Unit_Testing.md",
-    "Start Here/testing.md",
-    "Start Here/testing-regressions.md",
+    "Engine Deployment/Unit_Testing.md",
+    "Engine Deployment/testing.md",
+    "Engine Deployment/testing-regressions.md",
     { "Migration Paths" = [
       { "Overview" = "Migration Paths/index.md" },
       "Migration Paths/migrating-pages-to-react-router.md",

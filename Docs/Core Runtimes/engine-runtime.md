@@ -164,7 +164,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Linux agent remains incomplete.
 
     ### Borealis Engine Codex (Full)
-    Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Start Here/ui-and-notifications.md` and other knowledgebase pages.
+    Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Engine Deployment/ui-and-notifications.md` and other knowledgebase pages.
 
     #### Scope and runtime paths
     - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
