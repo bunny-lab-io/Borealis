@@ -27,10 +27,6 @@ Use `Onboard Devices` from the Sites page when the Engine should attempt local-n
 
 Onboarding jobs still send agents through Device Approvals. Successful remote install means the agent reached Borealis, not that it is trusted yet.
 
-## Active Site Workers
-
-The Sites page can show active site workers for onboarding and automation pressure work. Use this view when a site-scoped job looks stuck or busy.
-
 !!! tip
 
     Keep one site per customer, lab, or security boundary. Filters and scheduled jobs become easier to reason about when site scope matches real ownership.
