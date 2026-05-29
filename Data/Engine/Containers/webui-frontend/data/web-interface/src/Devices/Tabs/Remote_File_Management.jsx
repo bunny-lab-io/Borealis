@@ -1,33 +1,45 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import Prism from "prismjs";
-import Editor from "react-simple-code-editor";
-import "prismjs/components/prism-bash";
-import "prismjs/components/prism-batch";
-import "prismjs/components/prism-css";
-import "prismjs/components/prism-ini";
-import "prismjs/components/prism-javascript";
-import "prismjs/components/prism-json";
-import "prismjs/components/prism-jsx";
-import "prismjs/components/prism-markdown";
-import "prismjs/components/prism-markup";
-import "prismjs/components/prism-powershell";
-import "prismjs/components/prism-python";
-import "prismjs/components/prism-sql";
-import "prismjs/components/prism-tsx";
-import "prismjs/components/prism-typescript";
-import "prismjs/components/prism-yaml";
-import "prismjs/themes/prism-okaidia.css";
+import CodeMirror from "@uiw/react-codemirror";
+import { css as cssLanguage } from "@codemirror/lang-css";
+import { html as htmlLanguage } from "@codemirror/lang-html";
+import { javascript as javascriptLanguage } from "@codemirror/lang-javascript";
+import { json as jsonLanguage, jsonParseLinter } from "@codemirror/lang-json";
+import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
+import { python as pythonLanguage } from "@codemirror/lang-python";
+import { sql as sqlLanguage } from "@codemirror/lang-sql";
+import { xml as xmlLanguage } from "@codemirror/lang-xml";
+import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
+import { HighlightStyle, StreamLanguage, foldAll, syntaxHighlighting, unfoldAll } from "@codemirror/language";
+import { EditorState, Prec } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { linter, lintGutter } from "@codemirror/lint";
+import { MergeView } from "@codemirror/merge";
+import { SearchQuery, findNext, findPrevious, gotoLine, replaceAll, replaceNext, search, setSearchQuery } from "@codemirror/search";
+import { c, cpp, csharp, java } from "@codemirror/legacy-modes/mode/clike";
+import { diff } from "@codemirror/legacy-modes/mode/diff";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
+import { go } from "@codemirror/legacy-modes/mode/go";
+import { nginx } from "@codemirror/legacy-modes/mode/nginx";
+import { powerShell } from "@codemirror/legacy-modes/mode/powershell";
+import { properties } from "@codemirror/legacy-modes/mode/properties";
+import { ruby } from "@codemirror/legacy-modes/mode/ruby";
+import { rust } from "@codemirror/legacy-modes/mode/rust";
+import { shell } from "@codemirror/legacy-modes/mode/shell";
+import { toml } from "@codemirror/legacy-modes/mode/toml";
+import { tags } from "@lezer/highlight";
 import {
   Alert,
   Box,
   Checkbox,
   Button,
+  Collapse,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   Divider,
+  Drawer,
   FormControlLabel,
   Icon,
   IconButton,
@@ -65,6 +77,10 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import ContentCutRoundedIcon from "@mui/icons-material/ContentCutRounded";
 import ContentPasteRoundedIcon from "@mui/icons-material/ContentPasteRounded";
 import DriveFolderUploadRoundedIcon from "@mui/icons-material/DriveFolderUploadRounded";
+import FindReplaceRoundedIcon from "@mui/icons-material/FindReplaceRounded";
+import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import UnfoldMoreRoundedIcon from "@mui/icons-material/UnfoldMoreRounded";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -86,6 +102,7 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
 const ROOTS_SENTINEL = "__borealis_roots__";
 const TRANSFER_POLL_INTERVAL_MS = 2000;
+const LARGE_TEXT_FILE_WARNING_BYTES = 10 * 1024 * 1024;
 
 const REFRESH_ICON_BUTTON_SX = {
   width: 42,
@@ -283,6 +300,106 @@ const TRANSFER_CANCEL_BUTTON_SX = {
   },
 };
 
+const EDITOR_TOOL_BUTTON_SX = {
+  ...DIALOG_BUTTON_SX,
+  minHeight: 34,
+  px: 1.35,
+  fontSize: "0.82rem",
+  "& .MuiButton-startIcon": {
+    mr: 0.55,
+    "& > *:nth-of-type(1)": {
+      fontSize: 16,
+    },
+  },
+};
+
+const EDITOR_TOOL_RAIL_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.45,
+  p: 0.45,
+  borderRadius: 2,
+  border: "1px solid rgba(148,163,184,0.18)",
+  background: "rgba(5,10,24,0.58)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+};
+
+const EDITOR_ICON_BUTTON_SX = {
+  width: 36,
+  height: 36,
+  borderRadius: 1.45,
+  flexShrink: 0,
+  border: "1px solid transparent",
+  color: MAGIC_UI.textMuted,
+  transition: "background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease",
+  "&:hover": {
+    color: "#e6f7ff",
+    borderColor: "rgba(125,211,252,0.3)",
+    background: "rgba(125,211,252,0.1)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.36)",
+    borderColor: "transparent",
+    background: "transparent",
+  },
+};
+
+const EDITOR_ICON_BUTTON_ACTIVE_SX = {
+  ...EDITOR_ICON_BUTTON_SX,
+  borderColor: "rgba(125,211,252,0.5)",
+  background: "rgba(14,116,144,0.26)",
+  color: "#e6f7ff",
+  "&:hover": {
+    borderColor: "rgba(125,211,252,0.62)",
+    background: "rgba(14,116,144,0.34)",
+  },
+};
+
+const EDITOR_SYMBOL_ICON_SX = {
+  fontSize: 20,
+  lineHeight: 1,
+  fontVariationSettings: '"FILL" 0, "wght" 450, "GRAD" 0, "opsz" 24',
+};
+
+const EDITOR_SEARCH_PANEL_SX = {
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  borderRadius: 2,
+  background: "rgba(5,10,24,0.9)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 16px 36px rgba(2,8,23,0.28)",
+  p: { xs: 1, sm: 1.25 },
+};
+
+const EDITOR_SEARCH_FIELD_SX = {
+  ...DIALOG_INPUT_SX,
+  flex: "1 1 280px",
+  minWidth: { xs: "100%", md: 280 },
+  "& .MuiOutlinedInput-root, & .MuiInputBase-root": {
+    ...DIALOG_INPUT_SX["& .MuiOutlinedInput-root, & .MuiInputBase-root"],
+    borderRadius: 1.6,
+    minHeight: 46,
+  },
+  "& .MuiOutlinedInput-input, & .MuiInputBase-input": {
+    ...DIALOG_INPUT_SX["& .MuiOutlinedInput-input, & .MuiInputBase-input"],
+    fontSize: "0.95rem",
+  },
+};
+
+const EDITOR_SEARCH_OPTION_SX = {
+  m: 0,
+  color: MAGIC_UI.textMuted,
+  "& .MuiFormControlLabel-label": {
+    fontSize: "0.8rem",
+    lineHeight: 1.25,
+  },
+  "& .MuiCheckbox-root": {
+    color: "rgba(148,163,184,0.72)",
+    p: 0.45,
+  },
+  "& .MuiCheckbox-root.Mui-checked": {
+    color: "#7dd3fc",
+  },
+};
+
 const ACTION_MENU_HEADER_SX = {
   display: "flex",
   alignItems: "center",
@@ -384,6 +501,203 @@ const UPLOAD_CONFLICT_OPTION_SX = {
     cursor: "not-allowed",
     opacity: 0.48,
   },
+};
+
+const CODE_EDITOR_FONT_FAMILY =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
+const CODEMIRROR_BASIC_SETUP = {
+  lineNumbers: true,
+  highlightActiveLineGutter: true,
+  highlightSpecialChars: true,
+  history: true,
+  foldGutter: true,
+  drawSelection: true,
+  dropCursor: true,
+  allowMultipleSelections: true,
+  indentOnInput: true,
+  syntaxHighlighting: false,
+  bracketMatching: true,
+  closeBrackets: true,
+  autocompletion: true,
+  rectangularSelection: true,
+  crosshairCursor: true,
+  highlightActiveLine: true,
+  highlightSelectionMatches: true,
+  closeBracketsKeymap: true,
+  defaultKeymap: true,
+  searchKeymap: true,
+  historyKeymap: true,
+  foldKeymap: true,
+  completionKeymap: true,
+  lintKeymap: true,
+};
+
+const BOREALIS_CODEMIRROR_THEME = [
+  EditorView.theme(
+    {
+      "&": {
+        height: "100%",
+        color: "#e6edf3",
+        backgroundColor: "transparent",
+        fontSize: "12px",
+      },
+      "&.cm-focused": {
+        outline: "none",
+      },
+      ".cm-scroller": {
+        height: "100%",
+        overflow: "auto",
+        fontFamily: CODE_EDITOR_FONT_FAMILY,
+        lineHeight: "1.55",
+        scrollbarColor: "rgba(125,183,255,0.45) rgba(15,23,42,0.45)",
+      },
+      ".cm-content": {
+        minHeight: "100%",
+        caretColor: "#7dd3fc",
+      },
+      ".cm-line": {
+        padding: "0 12px",
+      },
+      ".cm-gutters": {
+        backgroundColor: "rgba(3,7,18,0.82)",
+        color: "rgba(148,163,184,0.78)",
+        borderRight: "1px solid rgba(148,163,184,0.2)",
+      },
+      ".cm-activeLineGutter": {
+        color: "#e6f2ff",
+        backgroundColor: "rgba(125,211,252,0.14)",
+      },
+      ".cm-activeLine": {
+        backgroundColor: "rgba(125,211,252,0.07)",
+      },
+      ".cm-cursor": {
+        borderLeftColor: "#7dd3fc",
+      },
+      ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
+        backgroundColor: "rgba(125,211,252,0.26)",
+      },
+      ".cm-matchingBracket, .cm-nonmatchingBracket": {
+        outline: "1px solid rgba(192,132,252,0.6)",
+        backgroundColor: "rgba(192,132,252,0.12)",
+      },
+      ".cm-foldPlaceholder": {
+        backgroundColor: "rgba(15,23,42,0.82)",
+        border: "1px solid rgba(148,163,184,0.24)",
+        color: "#cbd5e1",
+      },
+      ".cm-tooltip": {
+        backgroundColor: "rgba(8,12,24,0.98)",
+        border: `1px solid ${MAGIC_UI.panelBorder}`,
+        color: MAGIC_UI.textBright,
+      },
+      ".cm-tooltip-autocomplete ul li[aria-selected]": {
+        backgroundColor: "rgba(88,166,255,0.18)",
+        color: "#f8fafc",
+      },
+      ".cm-searchMatch": {
+        backgroundColor: "rgba(250,204,21,0.24)",
+      },
+      ".cm-searchMatch-selected": {
+        backgroundColor: "rgba(192,132,252,0.34)",
+      },
+      ".cm-panels": {
+        backgroundColor: "rgba(8,12,24,0.98)",
+        color: MAGIC_UI.textBright,
+        borderColor: "rgba(148,163,184,0.22)",
+      },
+      ".cm-panels input": {
+        backgroundColor: "rgba(15,23,42,0.86)",
+        color: MAGIC_UI.textBright,
+        border: "1px solid rgba(148,163,184,0.28)",
+        borderRadius: "6px",
+      },
+    },
+    { dark: true }
+  ),
+  syntaxHighlighting(
+    HighlightStyle.define([
+      { tag: tags.keyword, color: "#f472b6", fontWeight: 600 },
+      { tag: tags.atom, color: "#c084fc" },
+      { tag: tags.bool, color: "#c084fc", fontWeight: 600 },
+      { tag: tags.url, color: "#7dd3fc", textDecoration: "underline" },
+      { tag: tags.labelName, color: "#93c5fd" },
+      { tag: tags.propertyName, color: "#7dd3fc" },
+      { tag: tags.string, color: "#86efac" },
+      { tag: tags.variableName, color: "#e2e8f0" },
+      { tag: tags.function(tags.variableName), color: "#93c5fd" },
+      { tag: tags.typeName, color: "#f0abfc" },
+      { tag: tags.number, color: "#fbbf24" },
+      { tag: tags.comment, color: "#64748b", fontStyle: "italic" },
+      { tag: tags.meta, color: "#94a3b8" },
+      { tag: tags.invalid, color: "#fecaca", backgroundColor: "rgba(248,113,113,0.18)" },
+    ])
+  ),
+];
+
+const CODEMIRROR_LANGUAGE_LABELS = {
+  plaintext: "Plain Text",
+  batch: "Batch",
+  c: "C",
+  cpp: "C++",
+  csharp: "C#",
+  css: "CSS",
+  diff: "Diff",
+  dockerfile: "Dockerfile",
+  go: "Go",
+  html: "HTML",
+  ini: "INI / Properties",
+  java: "Java",
+  javascript: "JavaScript",
+  json: "JSON",
+  jsx: "JSX",
+  markdown: "Markdown",
+  nginx: "Nginx",
+  powershell: "PowerShell",
+  python: "Python",
+  ruby: "Ruby",
+  rust: "Rust",
+  shell: "Shell",
+  sql: "SQL",
+  toml: "TOML",
+  tsx: "TSX",
+  typescript: "TypeScript",
+  xml: "XML",
+  yaml: "YAML",
+};
+
+const CODEMIRROR_LANGUAGE_FACTORIES = {
+  plaintext: () => [],
+  batch: () => [StreamLanguage.define(shell)],
+  c: () => [StreamLanguage.define(c)],
+  cpp: () => [StreamLanguage.define(cpp)],
+  csharp: () => [StreamLanguage.define(csharp)],
+  css: () => [cssLanguage()],
+  diff: () => [StreamLanguage.define(diff)],
+  dockerfile: () => [StreamLanguage.define(dockerFile)],
+  go: () => [StreamLanguage.define(go)],
+  html: () => [htmlLanguage()],
+  ini: () => [StreamLanguage.define(properties)],
+  java: () => [StreamLanguage.define(java)],
+  javascript: () => [javascriptLanguage()],
+  json: ({ lintJson = false } = {}) => [
+    jsonLanguage(),
+    ...(lintJson ? [linter(jsonParseLinter(), { delay: 500 }), lintGutter()] : []),
+  ],
+  jsx: () => [javascriptLanguage({ jsx: true })],
+  markdown: () => [markdownLanguage()],
+  nginx: () => [StreamLanguage.define(nginx)],
+  powershell: () => [StreamLanguage.define(powerShell)],
+  python: () => [pythonLanguage()],
+  ruby: () => [StreamLanguage.define(ruby)],
+  rust: () => [StreamLanguage.define(rust)],
+  shell: () => [StreamLanguage.define(shell)],
+  sql: () => [sqlLanguage()],
+  toml: () => [StreamLanguage.define(toml)],
+  tsx: () => [javascriptLanguage({ jsx: true, typescript: true })],
+  typescript: () => [javascriptLanguage({ typescript: true })],
+  xml: () => [xmlLanguage()],
+  yaml: () => [yamlLanguage()],
 };
 
 function normalizeText(value) {
@@ -696,22 +1010,58 @@ function isPathMissingFetchError(error) {
   );
 }
 
+function getEditorFileName(pathValue) {
+  return normalizeText(pathValue).toLowerCase().split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
 function detectEditorLanguage(pathValue) {
   const normalizedPath = normalizeText(pathValue).toLowerCase();
-  if (!normalizedPath) return "markup";
+  const fileName = getEditorFileName(pathValue);
+  if (!normalizedPath) return "plaintext";
+  if (fileName === "dockerfile" || fileName === "containerfile" || fileName.endsWith(".dockerfile")) {
+    return "dockerfile";
+  }
+  if (
+    fileName === "nginx.conf" ||
+    (fileName.endsWith(".conf") &&
+      (fileName.startsWith("nginx") || normalizedPath.includes("/nginx/") || normalizedPath.includes("\\nginx\\")))
+  ) {
+    return "nginx";
+  }
+  if (
+    fileName === ".env" ||
+    fileName.endsWith(".env") ||
+    fileName.startsWith(".env.") ||
+    fileName === ".editorconfig" ||
+    fileName === ".npmrc" ||
+    fileName === ".yarnrc" ||
+    fileName === ".gitconfig" ||
+    fileName === ".gitmodules"
+  ) {
+    return "ini";
+  }
   if (normalizedPath.endsWith(".ps1") || normalizedPath.endsWith(".psm1") || normalizedPath.endsWith(".psd1")) {
     return "powershell";
   }
   if (normalizedPath.endsWith(".bat") || normalizedPath.endsWith(".cmd")) {
     return "batch";
   }
-  if (normalizedPath.endsWith(".sh") || normalizedPath.endsWith(".bash") || normalizedPath.endsWith(".zsh")) {
-    return "bash";
+  if (
+    normalizedPath.endsWith(".sh") ||
+    normalizedPath.endsWith(".bash") ||
+    normalizedPath.endsWith(".zsh") ||
+    normalizedPath.endsWith(".ksh") ||
+    normalizedPath.endsWith(".fish") ||
+    fileName === ".bashrc" ||
+    fileName === ".zshrc" ||
+    fileName === ".profile"
+  ) {
+    return "shell";
   }
   if (normalizedPath.endsWith(".yml") || normalizedPath.endsWith(".yaml")) {
     return "yaml";
   }
-  if (normalizedPath.endsWith(".json")) {
+  if (normalizedPath.endsWith(".json") || normalizedPath.endsWith(".jsonc") || normalizedPath.endsWith(".jsonl")) {
     return "json";
   }
   if (normalizedPath.endsWith(".py")) {
@@ -729,42 +1079,92 @@ function detectEditorLanguage(pathValue) {
   if (normalizedPath.endsWith(".js") || normalizedPath.endsWith(".mjs") || normalizedPath.endsWith(".cjs")) {
     return "javascript";
   }
-  if (normalizedPath.endsWith(".css") || normalizedPath.endsWith(".scss")) {
+  if (
+    normalizedPath.endsWith(".css") ||
+    normalizedPath.endsWith(".scss") ||
+    normalizedPath.endsWith(".sass") ||
+    normalizedPath.endsWith(".less")
+  ) {
     return "css";
   }
   if (
     normalizedPath.endsWith(".html") ||
-    normalizedPath.endsWith(".htm") ||
-    normalizedPath.endsWith(".xml") ||
-    normalizedPath.endsWith(".svg")
+    normalizedPath.endsWith(".htm")
   ) {
-    return "markup";
+    return "html";
+  }
+  if (normalizedPath.endsWith(".xml") || normalizedPath.endsWith(".svg")) {
+    return "xml";
   }
   if (
     normalizedPath.endsWith(".ini") ||
     normalizedPath.endsWith(".cfg") ||
     normalizedPath.endsWith(".conf") ||
+    normalizedPath.endsWith(".cnf") ||
+    normalizedPath.endsWith(".config") ||
     normalizedPath.endsWith(".service") ||
-    normalizedPath.endsWith(".toml") ||
-    normalizedPath.endsWith(".properties")
+    normalizedPath.endsWith(".socket") ||
+    normalizedPath.endsWith(".timer") ||
+    normalizedPath.endsWith(".target") ||
+    normalizedPath.endsWith(".mount") ||
+    normalizedPath.endsWith(".desktop") ||
+    normalizedPath.endsWith(".properties") ||
+    normalizedPath.endsWith(".prefs")
   ) {
     return "ini";
+  }
+  if (normalizedPath.endsWith(".toml")) {
+    return "toml";
   }
   if (normalizedPath.endsWith(".sql")) {
     return "sql";
   }
-  if (normalizedPath.endsWith(".md")) {
+  if (normalizedPath.endsWith(".md") || normalizedPath.endsWith(".markdown")) {
     return "markdown";
   }
-  return "markup";
+  if (normalizedPath.endsWith(".diff") || normalizedPath.endsWith(".patch")) {
+    return "diff";
+  }
+  if (normalizedPath.endsWith(".go")) {
+    return "go";
+  }
+  if (normalizedPath.endsWith(".rb")) {
+    return "ruby";
+  }
+  if (normalizedPath.endsWith(".rs")) {
+    return "rust";
+  }
+  if (normalizedPath.endsWith(".c") || normalizedPath.endsWith(".h")) {
+    return "c";
+  }
+  if (normalizedPath.endsWith(".cpp") || normalizedPath.endsWith(".cc") || normalizedPath.endsWith(".cxx") || normalizedPath.endsWith(".hpp")) {
+    return "cpp";
+  }
+  if (normalizedPath.endsWith(".cs")) {
+    return "csharp";
+  }
+  if (normalizedPath.endsWith(".java")) {
+    return "java";
+  }
+  if (normalizedPath.endsWith(".log") || normalizedPath.endsWith(".txt")) {
+    return "plaintext";
+  }
+  return "plaintext";
 }
 
 function formatEditorLanguage(language) {
   const normalized = normalizeText(language).toLowerCase();
-  if (!normalized) return "Plain Text";
-  return normalized
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+  return CODEMIRROR_LANGUAGE_LABELS[normalized] || "Plain Text";
+}
+
+function getEditorLanguageExtensions(language, options = {}) {
+  const normalized = normalizeText(language).toLowerCase() || "plaintext";
+  const factory = CODEMIRROR_LANGUAGE_FACTORIES[normalized] || CODEMIRROR_LANGUAGE_FACTORIES.plaintext;
+  try {
+    return factory(options);
+  } catch {
+    return [];
+  }
 }
 
 function formatLineEndingLabel(value) {
@@ -921,6 +1321,116 @@ function TransferBanner({ transfers = {}, onCancel = null, actionBusy = "" }) {
   );
 }
 
+function SideBySideDiffView({ originalContent = "", currentContent = "", language = "plaintext", wordWrap = false }) {
+  const containerRef = useRef(null);
+  const diffExtensions = useMemo(
+    () => [
+      BOREALIS_CODEMIRROR_THEME,
+      ...getEditorLanguageExtensions(language),
+      ...(wordWrap ? [EditorView.lineWrapping] : []),
+      EditorState.readOnly.of(true),
+      EditorView.editable.of(false),
+    ],
+    [language, wordWrap]
+  );
+
+  useEffect(() => {
+    const parent = containerRef.current;
+    if (!parent) return undefined;
+    const mergeView = new MergeView({
+      a: {
+        doc: originalContent || "",
+        extensions: diffExtensions,
+      },
+      b: {
+        doc: currentContent || "",
+        extensions: diffExtensions,
+      },
+      parent,
+      orientation: "a-b",
+      revertControls: false,
+      highlightChanges: true,
+      gutter: true,
+      collapseUnchanged: {
+        margin: 4,
+        minSize: 10,
+      },
+      diffConfig: {
+        scanLimit: 10000,
+        timeout: 1000,
+      },
+    });
+    return () => {
+      mergeView.destroy();
+    };
+  }, [currentContent, diffExtensions, originalContent]);
+
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Stack
+        direction="row"
+        sx={{
+          flexShrink: 0,
+          borderBottom: "1px solid rgba(148,163,184,0.18)",
+          background: "rgba(3,7,18,0.62)",
+        }}
+      >
+        {["Original", "Current Edits"].map((label) => (
+          <Box
+            key={label}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              px: 1.35,
+              py: 0.8,
+              color: label === "Original" ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
+              fontSize: "0.76rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              borderRight: label === "Original" ? "1px solid rgba(148,163,184,0.18)" : 0,
+            }}
+          >
+            {label}
+          </Box>
+        ))}
+      </Stack>
+      <Box
+        ref={containerRef}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          "& .cm-mergeView": {
+            height: "100%",
+            overflow: "auto",
+            background: "transparent",
+          },
+          "& .cm-mergeViewEditors": {
+            height: "100%",
+            gap: "1px",
+          },
+          "& .cm-mergeViewEditor": {
+            minWidth: 0,
+            borderRight: "1px solid rgba(148,163,184,0.18)",
+          },
+          "& .cm-mergeViewEditor:last-of-type": {
+            borderRight: 0,
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
 export default function RemoteFileManagement({ device }) {
   const notifyOperator = useAppNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -932,6 +1442,9 @@ export default function RemoteFileManagement({ device }) {
   const loadSuccessTimersRef = useRef({});
   const hydratedWorkingDirectoryRef = useRef("");
   const pendingScrollPathRef = useRef("");
+  const editorViewRef = useRef(null);
+  const editorSearchInputRef = useRef(null);
+  const handleSaveEditorRef = useRef(null);
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [platform, setPlatform] = useState("");
@@ -962,9 +1475,20 @@ export default function RemoteFileManagement({ device }) {
   const [editorPath, setEditorPath] = useState("");
   const [editorContent, setEditorContent] = useState("");
   const [editorOriginalContent, setEditorOriginalContent] = useState("");
-  const [editorLanguage, setEditorLanguage] = useState("markup");
+  const [editorLanguage, setEditorLanguage] = useState("plaintext");
   const [editorEncoding, setEditorEncoding] = useState("utf-8");
   const [editorLineEnding, setEditorLineEnding] = useState("lf");
+  const [editorFileSizeBytes, setEditorFileSizeBytes] = useState(0);
+  const [editorWordWrap, setEditorWordWrap] = useState(false);
+  const [editorDiffOpen, setEditorDiffOpen] = useState(false);
+  const [editorCloseConfirmOpen, setEditorCloseConfirmOpen] = useState(false);
+  const [editorSearchOpen, setEditorSearchOpen] = useState(false);
+  const [editorToolsMenuAnchor, setEditorToolsMenuAnchor] = useState(null);
+  const [editorSearchValue, setEditorSearchValue] = useState("");
+  const [editorReplaceValue, setEditorReplaceValue] = useState("");
+  const [editorSearchCaseSensitive, setEditorSearchCaseSensitive] = useState(false);
+  const [editorSearchRegexp, setEditorSearchRegexp] = useState(false);
+  const [editorSearchWholeWord, setEditorSearchWholeWord] = useState(false);
   const [inlineEditingUnsupported, setInlineEditingUnsupported] = useState(false);
   const [pendingUploadFiles, setPendingUploadFiles] = useState([]);
   const [pendingUploadManifest, setPendingUploadManifest] = useState([]);
@@ -1006,6 +1530,30 @@ export default function RemoteFileManagement({ device }) {
     [addressPath, currentPath, platform]
   );
   const editorHasChanges = useMemo(() => editorContent !== editorOriginalContent, [editorContent, editorOriginalContent]);
+  const editorLargeFileWarning = editorFileSizeBytes > LARGE_TEXT_FILE_WARNING_BYTES;
+  const editorContentLargeWarning =
+    Math.max(editorContent.length, editorOriginalContent.length) > LARGE_TEXT_FILE_WARNING_BYTES;
+  const editorDiffDisabled = editorLoading || editorSaving || !editorHasChanges || editorContentLargeWarning;
+  const editorSearchQuery = useMemo(
+    () => {
+      try {
+        return new SearchQuery({
+          search: editorSearchValue,
+          replace: editorReplaceValue,
+          caseSensitive: editorSearchCaseSensitive,
+          regexp: editorSearchRegexp,
+          wholeWord: editorSearchWholeWord,
+        });
+      } catch {
+        return null;
+      }
+    },
+    [editorReplaceValue, editorSearchCaseSensitive, editorSearchRegexp, editorSearchValue, editorSearchWholeWord]
+  );
+  const editorSearchInvalid =
+    Boolean(editorSearchValue) && (!editorSearchQuery || !editorSearchQuery.valid);
+  const editorSearchActionsDisabled =
+    editorLoading || editorDiffOpen || editorSearchInvalid || !editorSearchValue;
   const currentUploadConflict = uploadConflicts[uploadConflictIndex] || null;
   const currentUploadConflictFile = useMemo(
     () =>
@@ -1526,20 +2074,31 @@ export default function RemoteFileManagement({ device }) {
     };
   }, [activeTransfers, hostname, notifyOperator, refreshBaseView, triggerDownload]);
 
-  const highlightCode = useCallback((code, language) => {
-    try {
-      return Prism.highlight(code ?? "", Prism.languages[language] || Prism.languages.markup, language || "markup");
-    } catch {
-      return String(code || "");
-    }
-  }, []);
-
   const handleCloseEditor = useCallback(() => {
     setEditorOpen(false);
     setEditorLoading(false);
     setEditorSaving(false);
     setEditorError("");
+    setEditorFileSizeBytes(0);
+    setEditorDiffOpen(false);
+    setEditorCloseConfirmOpen(false);
+    setEditorSearchOpen(false);
+    setEditorToolsMenuAnchor(null);
+    setEditorSearchValue("");
+    setEditorReplaceValue("");
+    setEditorSearchCaseSensitive(false);
+    setEditorSearchRegexp(false);
+    setEditorSearchWholeWord(false);
+    editorViewRef.current = null;
   }, []);
+
+  const requestCloseEditor = useCallback(() => {
+    if (editorHasChanges && !editorSaving) {
+      setEditorCloseConfirmOpen(true);
+      return;
+    }
+    handleCloseEditor();
+  }, [editorHasChanges, editorSaving, handleCloseEditor]);
 
   const handleOpenEditor = useCallback(
     async (entryOverride = null) => {
@@ -1557,6 +2116,17 @@ export default function RemoteFileManagement({ device }) {
       setEditorLanguage(detectEditorLanguage(targetPath));
       setEditorEncoding("utf-8");
       setEditorLineEnding("lf");
+      setEditorFileSizeBytes(Number(entry?.size_bytes || 0));
+      setEditorDiffOpen(false);
+      setEditorCloseConfirmOpen(false);
+      setEditorSearchOpen(false);
+      setEditorToolsMenuAnchor(null);
+      setEditorSearchValue("");
+      setEditorReplaceValue("");
+      setEditorSearchCaseSensitive(false);
+      setEditorSearchRegexp(false);
+      setEditorSearchWholeWord(false);
+      editorViewRef.current = null;
       try {
         const response = await fetch(
           `/api/device/files/${encodeURIComponent(hostname)}/text?path=${encodeURIComponent(targetPath)}`,
@@ -1632,6 +2202,7 @@ export default function RemoteFileManagement({ device }) {
       setEditorOriginalContent(editorContent);
       setEditorEncoding(normalizeText(data?.encoding) || editorEncoding);
       setEditorLineEnding(normalizeText(data?.line_ending) || editorLineEnding);
+      setEditorDiffOpen(false);
       await notifyOperator({
         title: "File Saved",
         message: `Saved ${targetPath}.`,
@@ -1662,6 +2233,86 @@ export default function RemoteFileManagement({ device }) {
     notifyOperator,
     refreshBaseView,
   ]);
+
+  useEffect(() => {
+    handleSaveEditorRef.current = handleSaveEditor;
+  }, [handleSaveEditor]);
+
+  const runEditorCommand = useCallback((command) => {
+    const view = editorViewRef.current;
+    if (!view || typeof command !== "function") return;
+    view.focus();
+    command(view);
+  }, []);
+
+  const openEditorSearch = useCallback(() => {
+    if (editorLoading || editorDiffOpen) return;
+    setEditorSearchOpen(true);
+    window.setTimeout(() => {
+      editorSearchInputRef.current?.focus?.();
+      editorSearchInputRef.current?.select?.();
+    }, 0);
+  }, [editorDiffOpen, editorLoading]);
+
+  useEffect(() => {
+    if (!editorSearchOpen) return undefined;
+    const focusTimer = window.setTimeout(() => {
+      editorSearchInputRef.current?.focus?.();
+      editorSearchInputRef.current?.select?.();
+    }, 0);
+    return () => {
+      window.clearTimeout(focusTimer);
+    };
+  }, [editorSearchOpen]);
+
+  const applyEditorSearchQuery = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view || !editorSearchQuery || editorSearchInvalid) return null;
+    view.dispatch({ effects: setSearchQuery.of(editorSearchQuery) });
+    return view;
+  }, [editorSearchInvalid, editorSearchQuery]);
+
+  useEffect(() => {
+    if (!editorSearchOpen || editorDiffOpen) return;
+    applyEditorSearchQuery();
+  }, [applyEditorSearchQuery, editorDiffOpen, editorSearchOpen]);
+
+  const runEditorSearchCommand = useCallback(
+    (command) => {
+      if (editorSearchActionsDisabled || typeof command !== "function") return;
+      const view = applyEditorSearchQuery();
+      if (!view) return;
+      command(view);
+    },
+    [applyEditorSearchQuery, editorSearchActionsDisabled]
+  );
+
+  const editorExtensions = useMemo(
+    () => [
+      ...getEditorLanguageExtensions(editorLanguage, { lintJson: true }),
+      search({ top: true }),
+      ...(editorWordWrap ? [EditorView.lineWrapping] : []),
+      Prec.high(keymap.of([
+        {
+          key: "Mod-f",
+          preventDefault: true,
+          run: () => {
+            openEditorSearch();
+            return true;
+          },
+        },
+        {
+          key: "Mod-s",
+          preventDefault: true,
+          run: () => {
+            void handleSaveEditorRef.current?.();
+            return true;
+          },
+        },
+      ])),
+    ],
+    [editorLanguage, editorWordWrap, openEditorSearch]
+  );
 
   const clearUploadConflictState = useCallback(() => {
     setPendingUploadFiles([]);
@@ -3170,24 +3821,33 @@ export default function RemoteFileManagement({ device }) {
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <Drawer
+        anchor="right"
         open={editorOpen}
-        onClose={handleCloseEditor}
-        fullWidth
-        maxWidth={false}
+        onClose={requestCloseEditor}
+        ModalProps={{ keepMounted: true }}
         PaperProps={{
           sx: {
             ...DIALOG_PAPER_SX,
             display: "flex",
             flexDirection: "column",
-            width: "92vw",
-            maxWidth: "92vw",
-            height: "88vh",
-            maxHeight: "88vh",
+            width: { xs: "100vw", sm: "75vw" },
+            maxWidth: { xs: "100vw", sm: "75vw" },
+            height: "100vh",
+            maxHeight: "100vh",
+            borderRadius: 0,
+            borderTop: 0,
+            borderRight: 0,
+            borderBottom: 0,
+            borderLeft: `1px solid ${MAGIC_UI.panelBorder}`,
+            background:
+              "radial-gradient(120% 120% at 0% 0%, rgba(76,186,255,0.12), transparent 56%), " +
+              "radial-gradient(100% 100% at 100% 0%, rgba(192,132,252,0.14), transparent 62%), rgba(5,8,20,0.98)",
+            boxShadow: "-32px 0 80px rgba(2,6,23,0.72)",
           },
         }}
       >
-        <DialogTitle sx={DIALOG_TITLE_SX}>
+        <Box sx={{ ...DIALOG_TITLE_SX, flexShrink: 0 }}>
           <Box
             sx={{
               display: "flex",
@@ -3211,13 +3871,24 @@ export default function RemoteFileManagement({ device }) {
               >
                 {editorSaving ? "Saving..." : "Save"}
               </Button>
-              <Button onClick={handleCloseEditor} sx={DIALOG_BUTTON_SX}>
+              <Button onClick={requestCloseEditor} sx={DIALOG_BUTTON_SX}>
                 Close
               </Button>
             </Stack>
           </Box>
-        </DialogTitle>
-        <DialogContent
+        </Box>
+        {(editorLoading || editorSaving) && (
+          <LinearProgress
+            sx={{
+              height: 2,
+              backgroundColor: "rgba(30,41,59,0.72)",
+              "& .MuiLinearProgress-bar": {
+                background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+              },
+            }}
+          />
+        )}
+        <Box
           sx={{
             ...DIALOG_CONTENT_SX,
             display: "flex",
@@ -3228,20 +3899,288 @@ export default function RemoteFileManagement({ device }) {
             overflow: "hidden",
           }}
         >
-          <Stack direction="row" spacing={1.5} flexWrap="wrap" sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem" }}>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Syntax: {formatEditorLanguage(editorLanguage)}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Encoding: {normalizeText(editorEncoding) || "utf-8"}
-            </Typography>
-            <Typography variant="caption" sx={{ color: "inherit" }}>
-              Line Endings: {formatLineEndingLabel(editorLineEnding)}
-            </Typography>
-          </Stack>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: { xs: "column", md: "row" },
+              alignItems: { xs: "stretch", md: "center" },
+              justifyContent: "space-between",
+              gap: 1,
+            }}
+          >
+            <Stack
+              direction="row"
+              spacing={1.5}
+              useFlexGap
+              flexWrap="wrap"
+              sx={{ color: MAGIC_UI.textMuted, fontSize: "0.8rem", minWidth: 0 }}
+            >
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Syntax: {formatEditorLanguage(editorLanguage)}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Encoding: {normalizeText(editorEncoding) || "utf-8"}
+              </Typography>
+              <Typography variant="caption" sx={{ color: "inherit" }}>
+                Line Endings: {formatLineEndingLabel(editorLineEnding)}
+              </Typography>
+            </Stack>
+            <Box sx={{ display: "flex", justifyContent: { xs: "flex-start", md: "flex-end" } }}>
+              <Box sx={EDITOR_TOOL_RAIL_SX}>
+                <Tooltip title={editorWordWrap ? "Disable Word Wrap" : "Enable Word Wrap"} arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Toggle word wrap"
+                      onClick={() => setEditorWordWrap((current) => !current)}
+                      disabled={editorLoading}
+                      sx={editorWordWrap ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <Icon baseClassName="material-symbols-outlined" sx={EDITOR_SYMBOL_ICON_SX}>
+                        wrap_text
+                      </Icon>
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Search And Replace" arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Open search and replace"
+                      onClick={openEditorSearch}
+                      disabled={editorLoading || editorDiffOpen}
+                      sx={editorSearchOpen ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <SearchRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    editorDiffDisabled
+                      ? editorContentLargeWarning
+                        ? "Diff disabled for files over 10 MB."
+                        : "Make change before opening diff view."
+                      : editorDiffOpen
+                        ? "Hide Diff"
+                        : "Show Diff"
+                  }
+                  arrow
+                >
+                  <span>
+                    <IconButton
+                      aria-label={editorDiffOpen ? "Hide diff" : "Show diff"}
+                      onClick={() => {
+                        if (!editorDiffOpen) setEditorSearchOpen(false);
+                        setEditorDiffOpen((current) => !current);
+                      }}
+                      disabled={editorDiffDisabled}
+                      sx={editorDiffOpen ? EDITOR_ICON_BUTTON_ACTIVE_SX : EDITOR_ICON_BUTTON_SX}
+                    >
+                      <CompareArrowsRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="More Editor Actions" arrow>
+                  <span>
+                    <IconButton
+                      aria-label="Open editor actions"
+                      onClick={(event) => setEditorToolsMenuAnchor(event.currentTarget)}
+                      disabled={editorLoading}
+                      sx={EDITOR_ICON_BUTTON_SX}
+                    >
+                      <MoreVertRoundedIcon sx={{ fontSize: 20 }} />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            </Box>
+          </Box>
+          <Menu
+            anchorEl={editorToolsMenuAnchor}
+            open={Boolean(editorToolsMenuAnchor)}
+            onClose={() => setEditorToolsMenuAnchor(null)}
+            PaperProps={{ sx: { ...ACTION_MENU_PAPER_SX, minWidth: 236 } }}
+          >
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(gotoLine);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <SearchRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Go To Line</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Jump inside current document.</Typography>
+              </Box>
+            </MenuItem>
+            <Divider sx={ACTION_MENU_DIVIDER_SX} />
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(foldAll);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <UnfoldLessRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Fold All</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Collapse foldable sections.</Typography>
+              </Box>
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setEditorToolsMenuAnchor(null);
+                runEditorCommand(unfoldAll);
+              }}
+              disabled={editorLoading || editorDiffOpen}
+              sx={ACTION_MENU_ITEM_SX}
+            >
+              <UnfoldMoreRoundedIcon sx={ACTION_MENU_ROW_ICON_SX} />
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={ACTION_MENU_LABEL_SX}>Unfold All</Typography>
+                <Typography sx={ACTION_MENU_DESCRIPTION_SX}>Expand folded sections.</Typography>
+              </Box>
+            </MenuItem>
+          </Menu>
+          <Collapse in={editorSearchOpen && !editorDiffOpen} timeout={170} unmountOnExit>
+            <Box sx={EDITOR_SEARCH_PANEL_SX}>
+              <Stack
+                direction={{ xs: "column", lg: "row" }}
+                spacing={1}
+                useFlexGap
+                alignItems={{ xs: "stretch", lg: "flex-start" }}
+              >
+                <TextField
+                  inputRef={editorSearchInputRef}
+                  label="Find"
+                  value={editorSearchValue}
+                  onChange={(event) => setEditorSearchValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    runEditorSearchCommand(event.shiftKey ? findPrevious : findNext);
+                  }}
+                  error={editorSearchInvalid}
+                  autoComplete="off"
+                  sx={EDITOR_SEARCH_FIELD_SX}
+                />
+                <TextField
+                  label="Replace"
+                  value={editorReplaceValue}
+                  onChange={(event) => setEditorReplaceValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    runEditorSearchCommand(replaceNext);
+                  }}
+                  autoComplete="off"
+                  sx={EDITOR_SEARCH_FIELD_SX}
+                />
+                <Stack
+                  direction="row"
+                  spacing={0.65}
+                  useFlexGap
+                  flexWrap="wrap"
+                  alignItems="center"
+                  sx={{ pt: { xs: 0, lg: 0.35 }, minWidth: { xs: "100%", lg: "auto" } }}
+                >
+                  <Button
+                    onClick={() => runEditorSearchCommand(findPrevious)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    onClick={() => runEditorSearchCommand(findNext)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Next
+                  </Button>
+                  <Button
+                    startIcon={<FindReplaceRoundedIcon />}
+                    onClick={() => runEditorSearchCommand(replaceNext)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Replace
+                  </Button>
+                  <Button
+                    onClick={() => runEditorSearchCommand(replaceAll)}
+                    disabled={editorSearchActionsDisabled}
+                    sx={EDITOR_TOOL_BUTTON_SX}
+                  >
+                    Replace All
+                  </Button>
+                  <Tooltip title="Close Search" arrow>
+                    <IconButton
+                      aria-label="Close search"
+                      onClick={() => setEditorSearchOpen(false)}
+                      sx={EDITOR_ICON_BUTTON_SX}
+                    >
+                      <CloseRoundedIcon sx={{ fontSize: 19 }} />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+              </Stack>
+              <Stack direction="row" spacing={1.4} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 1 }}>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchCaseSensitive}
+                      onChange={(event) => setEditorSearchCaseSensitive(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Match Case"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchRegexp}
+                      onChange={(event) => setEditorSearchRegexp(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Regex"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={editorSearchWholeWord}
+                      onChange={(event) => setEditorSearchWholeWord(event.target.checked)}
+                      size="small"
+                    />
+                  }
+                  label="Whole Word"
+                  sx={EDITOR_SEARCH_OPTION_SX}
+                />
+                {editorSearchInvalid ? (
+                  <Typography sx={{ color: "#fecaca", fontSize: "0.8rem" }}>
+                    Invalid regular expression
+                  </Typography>
+                ) : null}
+              </Stack>
+            </Box>
+          </Collapse>
           {editorError ? (
             <Alert severity="error" sx={{ borderRadius: 2 }}>
               {editorError}
+            </Alert>
+          ) : null}
+          {editorLargeFileWarning ? (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              This file is {formatBytes(editorFileSizeBytes)}. Loading, editing, search, replace, and diff actions may take longer.
+            </Alert>
+          ) : null}
+          {editorContentLargeWarning ? (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              Diff view is disabled because the loaded text is over {formatBytes(LARGE_TEXT_FILE_WARNING_BYTES)}.
             </Alert>
           ) : null}
           {editorLoading ? (
@@ -3259,56 +4198,78 @@ export default function RemoteFileManagement({ device }) {
               flexDirection: "column",
               flex: 1,
               minHeight: 0,
-              overflow: "auto",
+              overflow: "hidden",
               overscrollBehavior: "contain",
-              scrollbarGutter: "stable both-edges",
-              "&::-webkit-scrollbar": {
-                width: 10,
-                height: 10,
-              },
-              "&::-webkit-scrollbar-track": {
-                background: "rgba(15,23,42,0.45)",
-                borderRadius: 999,
-              },
-              "&::-webkit-scrollbar-thumb": {
-                background: "rgba(125,183,255,0.35)",
-                borderRadius: 999,
-                border: "2px solid rgba(15,23,42,0.45)",
-              },
-              "& textarea, & pre": {
-                minHeight: "100% !important",
-                whiteSpace: "pre !important",
-                overflowWrap: "normal !important",
-                wordBreak: "normal !important",
+              "& .cm-theme, & .cm-editor": {
+                width: "100%",
+                height: "100%",
               },
             }}
           >
             {!editorLoading ? (
-              <Editor
-                value={editorContent}
-                onValueChange={setEditorContent}
-                highlight={(code) => highlightCode(code, editorLanguage)}
-                padding={12}
-                spellCheck={false}
-                wrap="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                autoComplete="off"
-                style={{
-                  fontFamily:
-                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-                  fontSize: 12,
-                  color: "#e6edf3",
-                  minHeight: "100%",
-                  whiteSpace: "pre",
-                  overflowWrap: "normal",
-                  wordBreak: "normal",
-                  backgroundColor: "transparent",
-                }}
-              />
+              editorDiffOpen ? (
+                <SideBySideDiffView
+                  originalContent={editorOriginalContent}
+                  currentContent={editorContent}
+                  language={editorLanguage}
+                  wordWrap={editorWordWrap}
+                />
+              ) : (
+                <CodeMirror
+                  value={editorContent}
+                  height="100%"
+                  theme={BOREALIS_CODEMIRROR_THEME}
+                  basicSetup={CODEMIRROR_BASIC_SETUP}
+                  extensions={editorExtensions}
+                  onCreateEditor={(view) => {
+                    editorViewRef.current = view;
+                  }}
+                  onChange={(value) => setEditorContent(value)}
+                  readOnly={editorSaving}
+                  editable={!editorSaving}
+                  autoFocus
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  autoComplete="off"
+                  style={{
+                    width: "100%",
+                    minHeight: "100%",
+                    backgroundColor: "transparent",
+                  }}
+                />
+              )
             ) : null}
           </Box>
+        </Box>
+      </Drawer>
+
+      <Dialog
+        open={editorCloseConfirmOpen}
+        onClose={() => setEditorCloseConfirmOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Discard Unsaved Changes?"
+            subtitle={editorPath || "This file has unsaved edits."}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={{ color: MAGIC_UI.textMuted, lineHeight: 1.6 }}>
+            Closing editor now will discard current changes.
+          </Typography>
         </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setEditorCloseConfirmOpen(false)} sx={DIALOG_BUTTON_SX}>
+            Keep Editing
+          </Button>
+          <Button onClick={handleCloseEditor} sx={DIALOG_DANGER_BUTTON_SX}>
+            Discard Changes
+          </Button>
+        </DialogActions>
       </Dialog>
 
       <Dialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} fullWidth maxWidth="xs" PaperProps={{ sx: DIALOG_PAPER_SX }}>
