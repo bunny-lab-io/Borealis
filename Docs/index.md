@@ -1,3 +1,4 @@
+# Overview
 <figure class="bo-screenshot">
   <img src="Reference/Branding/Borealis_Logo_Full.png" alt="Borealis Automation Platform" loading="lazy">
 </figure>
