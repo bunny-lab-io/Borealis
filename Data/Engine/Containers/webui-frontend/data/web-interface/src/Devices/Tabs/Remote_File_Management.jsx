@@ -4,14 +4,18 @@ import CodeMirror from "@uiw/react-codemirror";
 import { css as cssLanguage } from "@codemirror/lang-css";
 import { html as htmlLanguage } from "@codemirror/lang-html";
 import { javascript as javascriptLanguage } from "@codemirror/lang-javascript";
-import { json as jsonLanguage } from "@codemirror/lang-json";
+import { json as jsonLanguage, jsonParseLinter } from "@codemirror/lang-json";
 import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
 import { python as pythonLanguage } from "@codemirror/lang-python";
 import { sql as sqlLanguage } from "@codemirror/lang-sql";
 import { xml as xmlLanguage } from "@codemirror/lang-xml";
 import { yaml as yamlLanguage } from "@codemirror/lang-yaml";
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
-import { EditorView } from "@codemirror/view";
+import { HighlightStyle, StreamLanguage, foldAll, syntaxHighlighting, unfoldAll } from "@codemirror/language";
+import { EditorState } from "@codemirror/state";
+import { EditorView, keymap } from "@codemirror/view";
+import { linter, lintGutter } from "@codemirror/lint";
+import { MergeView } from "@codemirror/merge";
+import { findNext, findPrevious, gotoLine, openSearchPanel, replaceAll, replaceNext } from "@codemirror/search";
 import { c, cpp, csharp, java } from "@codemirror/legacy-modes/mode/clike";
 import { diff } from "@codemirror/legacy-modes/mode/diff";
 import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
@@ -72,6 +76,9 @@ import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import ContentCutRoundedIcon from "@mui/icons-material/ContentCutRounded";
 import ContentPasteRoundedIcon from "@mui/icons-material/ContentPasteRounded";
 import DriveFolderUploadRoundedIcon from "@mui/icons-material/DriveFolderUploadRounded";
+import FindReplaceRoundedIcon from "@mui/icons-material/FindReplaceRounded";
+import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
+import UnfoldMoreRoundedIcon from "@mui/icons-material/UnfoldMoreRounded";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -93,6 +100,7 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
 const ROOTS_SENTINEL = "__borealis_roots__";
 const TRANSFER_POLL_INTERVAL_MS = 2000;
+const LARGE_TEXT_FILE_WARNING_BYTES = 10 * 1024 * 1024;
 
 const REFRESH_ICON_BUTTON_SX = {
   width: 42,
@@ -288,6 +296,26 @@ const TRANSFER_CANCEL_BUTTON_SX = {
     borderColor: "rgba(148,163,184,0.2)",
     background: "rgba(15,23,42,0.26)",
   },
+};
+
+const EDITOR_TOOL_BUTTON_SX = {
+  ...DIALOG_BUTTON_SX,
+  minHeight: 32,
+  px: 1.25,
+  fontSize: "0.78rem",
+  "& .MuiButton-startIcon": {
+    mr: 0.55,
+    "& > *:nth-of-type(1)": {
+      fontSize: 16,
+    },
+  },
+};
+
+const EDITOR_TOOL_BUTTON_ACTIVE_SX = {
+  ...EDITOR_TOOL_BUTTON_SX,
+  borderColor: "rgba(125,211,252,0.5)",
+  background: "rgba(14,116,144,0.2)",
+  color: "#e6f7ff",
 };
 
 const ACTION_MENU_HEADER_SX = {
@@ -570,7 +598,10 @@ const CODEMIRROR_LANGUAGE_FACTORIES = {
   ini: () => [StreamLanguage.define(properties)],
   java: () => [StreamLanguage.define(java)],
   javascript: () => [javascriptLanguage()],
-  json: () => [jsonLanguage()],
+  json: ({ lintJson = false } = {}) => [
+    jsonLanguage(),
+    ...(lintJson ? [linter(jsonParseLinter(), { delay: 500 }), lintGutter()] : []),
+  ],
   jsx: () => [javascriptLanguage({ jsx: true })],
   markdown: () => [markdownLanguage()],
   nginx: () => [StreamLanguage.define(nginx)],
@@ -1044,11 +1075,11 @@ function formatEditorLanguage(language) {
   return CODEMIRROR_LANGUAGE_LABELS[normalized] || "Plain Text";
 }
 
-function getEditorLanguageExtensions(language) {
+function getEditorLanguageExtensions(language, options = {}) {
   const normalized = normalizeText(language).toLowerCase() || "plaintext";
   const factory = CODEMIRROR_LANGUAGE_FACTORIES[normalized] || CODEMIRROR_LANGUAGE_FACTORIES.plaintext;
   try {
-    return factory();
+    return factory(options);
   } catch {
     return [];
   }
@@ -1208,6 +1239,116 @@ function TransferBanner({ transfers = {}, onCancel = null, actionBusy = "" }) {
   );
 }
 
+function SideBySideDiffView({ originalContent = "", currentContent = "", language = "plaintext", wordWrap = false }) {
+  const containerRef = useRef(null);
+  const diffExtensions = useMemo(
+    () => [
+      BOREALIS_CODEMIRROR_THEME,
+      ...getEditorLanguageExtensions(language),
+      ...(wordWrap ? [EditorView.lineWrapping] : []),
+      EditorState.readOnly.of(true),
+      EditorView.editable.of(false),
+    ],
+    [language, wordWrap]
+  );
+
+  useEffect(() => {
+    const parent = containerRef.current;
+    if (!parent) return undefined;
+    const mergeView = new MergeView({
+      a: {
+        doc: originalContent || "",
+        extensions: diffExtensions,
+      },
+      b: {
+        doc: currentContent || "",
+        extensions: diffExtensions,
+      },
+      parent,
+      orientation: "a-b",
+      revertControls: false,
+      highlightChanges: true,
+      gutter: true,
+      collapseUnchanged: {
+        margin: 4,
+        minSize: 10,
+      },
+      diffConfig: {
+        scanLimit: 10000,
+        timeout: 1000,
+      },
+    });
+    return () => {
+      mergeView.destroy();
+    };
+  }, [currentContent, diffExtensions, originalContent]);
+
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Stack
+        direction="row"
+        sx={{
+          flexShrink: 0,
+          borderBottom: "1px solid rgba(148,163,184,0.18)",
+          background: "rgba(3,7,18,0.62)",
+        }}
+      >
+        {["Original", "Current Edits"].map((label) => (
+          <Box
+            key={label}
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              px: 1.35,
+              py: 0.8,
+              color: label === "Original" ? MAGIC_UI.textMuted : MAGIC_UI.textBright,
+              fontSize: "0.76rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              borderRight: label === "Original" ? "1px solid rgba(148,163,184,0.18)" : 0,
+            }}
+          >
+            {label}
+          </Box>
+        ))}
+      </Stack>
+      <Box
+        ref={containerRef}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
+          "& .cm-mergeView": {
+            height: "100%",
+            overflow: "auto",
+            background: "transparent",
+          },
+          "& .cm-mergeViewEditors": {
+            height: "100%",
+            gap: "1px",
+          },
+          "& .cm-mergeViewEditor": {
+            minWidth: 0,
+            borderRight: "1px solid rgba(148,163,184,0.18)",
+          },
+          "& .cm-mergeViewEditor:last-of-type": {
+            borderRight: 0,
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
 export default function RemoteFileManagement({ device }) {
   const notifyOperator = useAppNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -1219,6 +1360,8 @@ export default function RemoteFileManagement({ device }) {
   const loadSuccessTimersRef = useRef({});
   const hydratedWorkingDirectoryRef = useRef("");
   const pendingScrollPathRef = useRef("");
+  const editorViewRef = useRef(null);
+  const handleSaveEditorRef = useRef(null);
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [platform, setPlatform] = useState("");
@@ -1252,6 +1395,10 @@ export default function RemoteFileManagement({ device }) {
   const [editorLanguage, setEditorLanguage] = useState("plaintext");
   const [editorEncoding, setEditorEncoding] = useState("utf-8");
   const [editorLineEnding, setEditorLineEnding] = useState("lf");
+  const [editorFileSizeBytes, setEditorFileSizeBytes] = useState(0);
+  const [editorWordWrap, setEditorWordWrap] = useState(false);
+  const [editorDiffOpen, setEditorDiffOpen] = useState(false);
+  const [editorCloseConfirmOpen, setEditorCloseConfirmOpen] = useState(false);
   const [inlineEditingUnsupported, setInlineEditingUnsupported] = useState(false);
   const [pendingUploadFiles, setPendingUploadFiles] = useState([]);
   const [pendingUploadManifest, setPendingUploadManifest] = useState([]);
@@ -1293,7 +1440,10 @@ export default function RemoteFileManagement({ device }) {
     [addressPath, currentPath, platform]
   );
   const editorHasChanges = useMemo(() => editorContent !== editorOriginalContent, [editorContent, editorOriginalContent]);
-  const editorExtensions = useMemo(() => getEditorLanguageExtensions(editorLanguage), [editorLanguage]);
+  const editorLargeFileWarning = editorFileSizeBytes > LARGE_TEXT_FILE_WARNING_BYTES;
+  const editorContentLargeWarning =
+    Math.max(editorContent.length, editorOriginalContent.length) > LARGE_TEXT_FILE_WARNING_BYTES;
+  const editorDiffDisabled = editorLoading || editorSaving || !editorHasChanges || editorContentLargeWarning;
   const currentUploadConflict = uploadConflicts[uploadConflictIndex] || null;
   const currentUploadConflictFile = useMemo(
     () =>
@@ -1819,7 +1969,19 @@ export default function RemoteFileManagement({ device }) {
     setEditorLoading(false);
     setEditorSaving(false);
     setEditorError("");
+    setEditorFileSizeBytes(0);
+    setEditorDiffOpen(false);
+    setEditorCloseConfirmOpen(false);
+    editorViewRef.current = null;
   }, []);
+
+  const requestCloseEditor = useCallback(() => {
+    if (editorHasChanges && !editorSaving) {
+      setEditorCloseConfirmOpen(true);
+      return;
+    }
+    handleCloseEditor();
+  }, [editorHasChanges, editorSaving, handleCloseEditor]);
 
   const handleOpenEditor = useCallback(
     async (entryOverride = null) => {
@@ -1837,6 +1999,10 @@ export default function RemoteFileManagement({ device }) {
       setEditorLanguage(detectEditorLanguage(targetPath));
       setEditorEncoding("utf-8");
       setEditorLineEnding("lf");
+      setEditorFileSizeBytes(Number(entry?.size_bytes || 0));
+      setEditorDiffOpen(false);
+      setEditorCloseConfirmOpen(false);
+      editorViewRef.current = null;
       try {
         const response = await fetch(
           `/api/device/files/${encodeURIComponent(hostname)}/text?path=${encodeURIComponent(targetPath)}`,
@@ -1912,6 +2078,7 @@ export default function RemoteFileManagement({ device }) {
       setEditorOriginalContent(editorContent);
       setEditorEncoding(normalizeText(data?.encoding) || editorEncoding);
       setEditorLineEnding(normalizeText(data?.line_ending) || editorLineEnding);
+      setEditorDiffOpen(false);
       await notifyOperator({
         title: "File Saved",
         message: `Saved ${targetPath}.`,
@@ -1942,6 +2109,35 @@ export default function RemoteFileManagement({ device }) {
     notifyOperator,
     refreshBaseView,
   ]);
+
+  useEffect(() => {
+    handleSaveEditorRef.current = handleSaveEditor;
+  }, [handleSaveEditor]);
+
+  const runEditorCommand = useCallback((command) => {
+    const view = editorViewRef.current;
+    if (!view || typeof command !== "function") return;
+    view.focus();
+    command(view);
+  }, []);
+
+  const editorExtensions = useMemo(
+    () => [
+      ...getEditorLanguageExtensions(editorLanguage, { lintJson: true }),
+      ...(editorWordWrap ? [EditorView.lineWrapping] : []),
+      keymap.of([
+        {
+          key: "Mod-s",
+          preventDefault: true,
+          run: () => {
+            void handleSaveEditorRef.current?.();
+            return true;
+          },
+        },
+      ]),
+    ],
+    [editorLanguage, editorWordWrap]
+  );
 
   const clearUploadConflictState = useCallback(() => {
     setPendingUploadFiles([]);
@@ -3453,7 +3649,7 @@ export default function RemoteFileManagement({ device }) {
       <Drawer
         anchor="right"
         open={editorOpen}
-        onClose={handleCloseEditor}
+        onClose={requestCloseEditor}
         ModalProps={{ keepMounted: true }}
         PaperProps={{
           sx: {
@@ -3500,7 +3696,7 @@ export default function RemoteFileManagement({ device }) {
               >
                 {editorSaving ? "Saving..." : "Save"}
               </Button>
-              <Button onClick={handleCloseEditor} sx={DIALOG_BUTTON_SX}>
+              <Button onClick={requestCloseEditor} sx={DIALOG_BUTTON_SX}>
                 Close
               </Button>
             </Stack>
@@ -3539,9 +3735,93 @@ export default function RemoteFileManagement({ device }) {
               Line Endings: {formatLineEndingLabel(editorLineEnding)}
             </Typography>
           </Stack>
+          <Stack direction="row" spacing={0.85} useFlexGap flexWrap="wrap" alignItems="center">
+            <Button
+              onClick={() => setEditorWordWrap((current) => !current)}
+              disabled={editorLoading}
+              sx={editorWordWrap ? EDITOR_TOOL_BUTTON_ACTIVE_SX : EDITOR_TOOL_BUTTON_SX}
+            >
+              Word Wrap
+            </Button>
+            <Button
+              startIcon={<SearchRoundedIcon />}
+              onClick={() => runEditorCommand(openSearchPanel)}
+              disabled={editorLoading || editorDiffOpen}
+              sx={EDITOR_TOOL_BUTTON_SX}
+            >
+              Search
+            </Button>
+            <Button onClick={() => runEditorCommand(findPrevious)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
+              Previous
+            </Button>
+            <Button onClick={() => runEditorCommand(findNext)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
+              Next
+            </Button>
+            <Button
+              startIcon={<FindReplaceRoundedIcon />}
+              onClick={() => runEditorCommand(replaceNext)}
+              disabled={editorLoading || editorDiffOpen}
+              sx={EDITOR_TOOL_BUTTON_SX}
+            >
+              Replace
+            </Button>
+            <Button onClick={() => runEditorCommand(replaceAll)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
+              Replace All
+            </Button>
+            <Button onClick={() => runEditorCommand(gotoLine)} disabled={editorLoading || editorDiffOpen} sx={EDITOR_TOOL_BUTTON_SX}>
+              Go To Line
+            </Button>
+            <Button
+              startIcon={<UnfoldLessRoundedIcon />}
+              onClick={() => runEditorCommand(foldAll)}
+              disabled={editorLoading || editorDiffOpen}
+              sx={EDITOR_TOOL_BUTTON_SX}
+            >
+              Fold All
+            </Button>
+            <Button
+              startIcon={<UnfoldMoreRoundedIcon />}
+              onClick={() => runEditorCommand(unfoldAll)}
+              disabled={editorLoading || editorDiffOpen}
+              sx={EDITOR_TOOL_BUTTON_SX}
+            >
+              Unfold All
+            </Button>
+            <Tooltip
+              title={
+                editorDiffDisabled
+                  ? editorContentLargeWarning
+                    ? "Diff is disabled for files over 10 MB."
+                    : "Make a change before opening diff view."
+                  : "Compare original content against current edits."
+              }
+              arrow
+            >
+              <span>
+                <Button
+                  startIcon={<CompareArrowsRoundedIcon />}
+                  onClick={() => setEditorDiffOpen((current) => !current)}
+                  disabled={editorDiffDisabled}
+                  sx={editorDiffOpen ? EDITOR_TOOL_BUTTON_ACTIVE_SX : EDITOR_TOOL_BUTTON_SX}
+                >
+                  {editorDiffOpen ? "Hide Diff" : "Show Diff"}
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
           {editorError ? (
             <Alert severity="error" sx={{ borderRadius: 2 }}>
               {editorError}
+            </Alert>
+          ) : null}
+          {editorLargeFileWarning ? (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              This file is {formatBytes(editorFileSizeBytes)}. Loading, editing, search, replace, and diff actions may take longer.
+            </Alert>
+          ) : null}
+          {editorContentLargeWarning ? (
+            <Alert severity="warning" sx={{ borderRadius: 2 }}>
+              Diff view is disabled because the loaded text is over {formatBytes(LARGE_TEXT_FILE_WARNING_BYTES)}.
             </Alert>
           ) : null}
           {editorLoading ? (
@@ -3568,30 +3848,70 @@ export default function RemoteFileManagement({ device }) {
             }}
           >
             {!editorLoading ? (
-              <CodeMirror
-                value={editorContent}
-                height="100%"
-                theme={BOREALIS_CODEMIRROR_THEME}
-                basicSetup={CODEMIRROR_BASIC_SETUP}
-                extensions={editorExtensions}
-                onChange={(value) => setEditorContent(value)}
-                readOnly={editorSaving}
-                editable={!editorSaving}
-                autoFocus
-                spellCheck={false}
-                autoCapitalize="off"
-                autoCorrect="off"
-                autoComplete="off"
-                style={{
-                  width: "100%",
-                  minHeight: "100%",
-                  backgroundColor: "transparent",
-                }}
-              />
+              editorDiffOpen ? (
+                <SideBySideDiffView
+                  originalContent={editorOriginalContent}
+                  currentContent={editorContent}
+                  language={editorLanguage}
+                  wordWrap={editorWordWrap}
+                />
+              ) : (
+                <CodeMirror
+                  value={editorContent}
+                  height="100%"
+                  theme={BOREALIS_CODEMIRROR_THEME}
+                  basicSetup={CODEMIRROR_BASIC_SETUP}
+                  extensions={editorExtensions}
+                  onCreateEditor={(view) => {
+                    editorViewRef.current = view;
+                  }}
+                  onChange={(value) => setEditorContent(value)}
+                  readOnly={editorSaving}
+                  editable={!editorSaving}
+                  autoFocus
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  autoComplete="off"
+                  style={{
+                    width: "100%",
+                    minHeight: "100%",
+                    backgroundColor: "transparent",
+                  }}
+                />
+              )
             ) : null}
           </Box>
         </Box>
       </Drawer>
+
+      <Dialog
+        open={editorCloseConfirmOpen}
+        onClose={() => setEditorCloseConfirmOpen(false)}
+        fullWidth
+        maxWidth="xs"
+        PaperProps={{ sx: DIALOG_PAPER_SX }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Discard Unsaved Changes?"
+            subtitle={editorPath || "This file has unsaved edits."}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <Typography sx={{ color: MAGIC_UI.textMuted, lineHeight: 1.6 }}>
+            Closing editor now will discard current changes.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setEditorCloseConfirmOpen(false)} sx={DIALOG_BUTTON_SX}>
+            Keep Editing
+          </Button>
+          <Button onClick={handleCloseEditor} sx={DIALOG_DANGER_BUTTON_SX}>
+            Discard Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={newFolderOpen} onClose={() => setNewFolderOpen(false)} fullWidth maxWidth="xs" PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>

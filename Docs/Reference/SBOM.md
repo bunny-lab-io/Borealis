@@ -87,6 +87,9 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - @codemirror/lang-yaml - MIT - https://spdx.org/licenses/MIT.html
 - @codemirror/language - MIT - https://spdx.org/licenses/MIT.html
 - @codemirror/legacy-modes - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/lint - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/merge - MIT - https://spdx.org/licenses/MIT.html
+- @codemirror/search - MIT - https://spdx.org/licenses/MIT.html
 - @codemirror/state - MIT - https://spdx.org/licenses/MIT.html
 - @codemirror/theme-one-dark - MIT - https://spdx.org/licenses/MIT.html
 - @codemirror/view - MIT - https://spdx.org/licenses/MIT.html
