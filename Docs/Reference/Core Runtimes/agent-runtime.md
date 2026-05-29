@@ -54,7 +54,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
     ### Related documentation
 
-    - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+    - [Security and Trust](../../Reference/security-and-trust.md)
     - [Device Management](../../Using%20the%20Platform/device-management.md)
     - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
 

@@ -91,11 +91,11 @@ After deployment finishes:
 
     ### Related documentation
 
-    - [Architecture Overview](architecture-overview.md)
+    - [Architecture Overview](../Reference/architecture-overview.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](security-and-trust.md)
+    - [Security and Trust](../Reference/security-and-trust.md)
     - [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
 
     ### Bootstrap and runtime separation

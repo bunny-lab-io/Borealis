@@ -22,7 +22,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
     ### Related documentation
 
-    - [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
+    - [Architecture Overview](../../Reference/architecture-overview.md)
     - [Docker Stack Breakdown](Stack_Breakdown.md)
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
     - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)

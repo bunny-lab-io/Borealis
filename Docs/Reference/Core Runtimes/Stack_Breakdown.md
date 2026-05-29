@@ -540,7 +540,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     ### Related documentation
 
-    - [Getting Started](../../Engine%20Deployment/index.md)
+    - [Getting Started](../../Engine/deploying-the-engine.md)
     - [Engine Runtime](engine-runtime.md)
     - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
     - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
