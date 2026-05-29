@@ -37,10 +37,10 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
 
 ## Related Documentation
-- [Architecture Overview](../Start%20Here/architecture-overview.md)
+- [Architecture Overview](../Engine%20Deployment/architecture-overview.md)
 - [Docker Stack Breakdown](Stack_Breakdown.md)
 - [Database Reference](../Data%20and%20Schema/db-reference.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [Logging and Operations](../Operations%20and%20Remote%20Access/logging-and-operations.md)
 - [VPN and Remote Access](../Operations%20and%20Remote%20Access/vpn-and-remote-access.md)

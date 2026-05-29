@@ -97,7 +97,7 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 ## Related Documentation
 - [Flow Editor and Nodes](flow-editor-and-nodes.md)
 - [Scheduled Jobs](scheduled-jobs.md)
-- [Security and Trust](../Start%20Here/security-and-trust.md)
+- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 - [SSH Connection Logic](SSH_Connection_Logic.md)
 - [Watchdogs](watchdogs.md)

@@ -110,7 +110,7 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
 - [Device Alerts](../Operations%20and%20Remote%20Access/device-alerts.md)
 - [Device Management](../Operations%20and%20Remote%20Access/device-management.md)
 - [Assemblies and Quick Jobs](assemblies.md)
-- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
+- [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
 - [API Reference](../Data%20and%20Schema/api-reference.md)
 
 ??? example "Detailed Codex Breakdown"

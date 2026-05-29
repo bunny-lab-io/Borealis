@@ -56,7 +56,7 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 ## Related Documentation
 - [Assemblies and Quick Jobs](assemblies.md)
 - [Scheduled Jobs](scheduled-jobs.md)
-- [UI and Notifications](../Start%20Here/ui-and-notifications.md)
+- [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
 
 ??? example "Detailed Codex Breakdown"
 
