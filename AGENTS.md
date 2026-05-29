@@ -25,6 +25,7 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
   - `??? example "Detailed Codex Breakdown"` for Codex-only details and hidden reference material.
 - Add short comments inside code blocks when commands need context. Prefer one complete, copyable command path before listing variants.
 - Keep screenshots on `Docs/Engine Deployment/screenshots.md` by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless the operator intentionally adds one.
+- Do not manually maintain page navigation in `zensical.toml`. Zensical auto-discovers Markdown folders and pages from `Docs/`; place pages in the right folder and use `index.md` for folder landing pages.
 
 ## Interacting with the Codebase
 - When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.

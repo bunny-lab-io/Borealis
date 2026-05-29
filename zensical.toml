@@ -8,68 +8,7 @@ repo_name = "bunny-lab-io/Borealis"
 edit_uri = "edit/main/Docs/"
 docs_dir = "Docs"
 site_dir = "site"
-copyright = "Copyright &copy; 2026 Bunny Lab"
 extra_css = ["stylesheets/extra.css"]
-
-nav = [
-  { "Home" = "index.md" },
-  { "Engine Deployment" = [
-    { "Overview" = "Engine Deployment/index.md" },
-    "Engine Deployment/architecture-overview.md",
-    "Engine Deployment/security-and-trust.md",
-    "Engine Deployment/ui-and-notifications.md",
-    "Engine Deployment/screenshots.md",
-  ] },
-  { "Operations" = [
-    { "Overview" = "Operations and Remote Access/index.md" },
-    "Operations and Remote Access/device-management.md",
-    "Operations and Remote Access/device-alerts.md",
-    "Operations and Remote Access/vpn-and-remote-access.md",
-    "Operations and Remote Access/logging-and-operations.md",
-    { "Software Management" = [
-      { "Overview" = "Software Management/index.md" },
-      "Software Management/adding-software-to-icon-overrides.md",
-      "Software Management/adding-software-to-uninstall-blocklist.md",
-      "Software Management/adding-software-to-uninstall-overrides.md",
-    ] },
-  ] },
-  { "Automation" = [
-    { "Overview" = "Automation and Execution/index.md" },
-    "Automation and Execution/assemblies.md",
-    "Automation and Execution/flow-editor-and-nodes.md",
-    "Automation and Execution/scheduled-jobs.md",
-    "Automation and Execution/SSH_Connection_Logic.md",
-    "Automation and Execution/watchdogs.md",
-  ] },
-  { "Reference" = [
-    { "Core Runtimes" = [
-      { "Overview" = "Core Runtimes/index.md" },
-      "Core Runtimes/engine-runtime.md",
-      "Core Runtimes/agent-runtime.md",
-      "Core Runtimes/Stack_Breakdown.md",
-    ] },
-    { "Data and Schema" = [
-      { "Overview" = "Data and Schema/index.md" },
-      "Data and Schema/db-reference.md",
-      "Data and Schema/api-reference.md",
-      "Data and Schema/integrations.md",
-      "SBOM.md",
-    ] },
-  ] },
-  { "Development" = [
-    "Engine Deployment/Unit_Testing.md",
-    "Engine Deployment/testing.md",
-    "Engine Deployment/testing-regressions.md",
-    { "Migration Paths" = [
-      { "Overview" = "Migration Paths/index.md" },
-      "Migration Paths/migrating-pages-to-react-router.md",
-    ] },
-  ] },
-  { "Roadmap" = [
-    { "Overview" = "Future_Roadmaps/index.md" },
-    "Future_Roadmaps/competitive-feature-gap-analysis.md",
-  ] },
-]
 
 [project.theme]
 variant = "classic"
@@ -107,7 +46,7 @@ toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
-scheme = "slate"
+scheme = "indigo"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
 
