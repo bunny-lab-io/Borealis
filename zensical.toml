@@ -1,5 +1,5 @@
 [project]
-site_name = "Documentation"
+site_name = "Borealis Automation Platform"
 site_description = "Borealis operator, runtime, API, and contributor documentation."
 site_author = "Bunny Lab"
 site_url = "https://bunny-lab-io.github.io/Borealis/"
