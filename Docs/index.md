@@ -1,8 +1,6 @@
 <figure class="bo-screenshot">
   <img src="Reference/Branding/Borealis_Logo_Full.png" alt="Borealis Automation Platform" loading="lazy">
 </figure>
-
-# Overview
 Borealis is a self-hosted remote management, monitoring, and visual automation platform built around a Linux-hosted management Engine and a cross-platform Agent runtime. It replaces separate homelab and real-world operations tools with one cohesive operator interface.
 
 Borealis combines useful parts of RMM platforms, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop and interactive shell access, file/software/process/service management, and credential-backed infrastructure execution.
