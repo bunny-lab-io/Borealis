@@ -234,7 +234,7 @@ sequenceDiagram
 
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-    - [Device Management](../Using%20the%20Platform/device-management.md)
+    - [Device Approvals](../Using%20the%20Platform/device-approvals.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 

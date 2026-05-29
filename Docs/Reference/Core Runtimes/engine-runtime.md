@@ -27,10 +27,10 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
     - [Security and Trust](../../Reference/security-and-trust.md)
     - [API Reference](../Data%20and%20Schema/api-reference.md)
-    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
-    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-    - [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
-    - [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
+    - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
+    - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
+    - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)
+    - [Alerts](../../Using%20the%20Platform/alerts.md)
 
     ### Source vs runtime
     - Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
@@ -193,7 +193,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys unrecoverable operator auth secrets, clears the Aegis state row, marks existing users for recovery, marks affected credentials and the GitHub token for re-entry, and disables scheduled jobs that still point at wiped credentials.
 
     #### Reverse VPN tunnels
-    - WireGuard reverse VPN design and lifecycle are documented in `Docs/Using the Platform/vpn-and-remote-access.md`.
+    - WireGuard reverse VPN design and lifecycle are documented in `Docs/Using the Platform/remote-shell.md` and `Docs/Using the Platform/remote-desktop.md`.
     - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
     - Engine orchestrator: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py` with WireGuard manager `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
     - UI shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`.

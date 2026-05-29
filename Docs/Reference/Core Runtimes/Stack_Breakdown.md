@@ -542,8 +542,8 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     - [Getting Started](../../Engine/deploying-the-engine.md)
     - [Engine Runtime](engine-runtime.md)
-    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
-    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
+    - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
+    - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
 
     ### Source and runtime layout
 

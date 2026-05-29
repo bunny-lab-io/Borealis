@@ -20,7 +20,7 @@ Document external integrations used by Borealis, primarily the GitHub repository
 
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
     - [API Reference](api-reference.md)
-    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
+    - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
 
     ### Integration implementation
     - `Data/Engine/Containers/api-backend/data/integrations/github.py` implements `GitHubIntegration`.

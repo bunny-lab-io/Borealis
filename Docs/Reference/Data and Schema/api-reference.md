@@ -234,15 +234,15 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
     - [Database Reference](db-reference.md)
-    - [Device Management](../../Using%20the%20Platform/device-management.md)
-    - [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
-    - [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
-    - [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
-    - [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
-    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-    - [Software Icon Overrides](../../Using%20the%20Platform/Software%20Management/adding-software-to-icon-overrides.md)
-    - [Software Uninstall Overrides](../../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-overrides.md)
-    - [Software Uninstall Blocklist](../../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-blocklist.md)
+    - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
+    - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)
+    - [Alerts](../../Using%20the%20Platform/alerts.md)
+    - [Assemblies](../../Using%20the%20Platform/Assemblies/assemblies.md)
+    - [Scheduled Jobs](../../Using%20the%20Platform/scheduled-jobs.md)
+    - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
+    - [Software Icon Overrides](../software-icon-overrides.md)
+    - [Software Uninstall Overrides](../software-uninstall-overrides.md)
+    - [Software Uninstall Blocklist](../software-uninstall-blocklist.md)
 
     ### Where endpoints are defined
     - Each API module begins with a header listing endpoints.
@@ -253,7 +253,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - When you add or remove a route, update:
       1) The module header comment in the source file.
       2) This `api-reference.md` page.
-      3) The domain page (example: `device-management.md`).
+      3) The domain page (example: `device-auditing.md`).
 
     ### Quick discovery workflow
     - Use `rg "# - (GET|POST|PUT|DELETE)" Data/Engine/Containers/api-backend/data/services/API` to list endpoints.
@@ -270,4 +270,4 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - You add `POST /api/devices/retire`:
       - Update `Data/Engine/Containers/api-backend/data/services/API/devices/management.py` header.
       - Add the endpoint under the Devices and Inventory section here.
-      - Update `device-management.md` with behavior and UI impact.
+      - Update `device-auditing.md` with behavior and UI impact.

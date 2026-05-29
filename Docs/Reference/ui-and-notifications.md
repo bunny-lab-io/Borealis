@@ -46,7 +46,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 ## Styling and Layout
 - Borealis uses a MagicUI styling language with glass panels, gradients, and Quartz-themed AG Grid tables.
 - The full MagicUI and AG Grid specification is embedded in the Codex Agent section below.
-- Workflow Runtime v1 node-shell and port-row styling rules live in [Flow Editor and Nodes](../Using%20the%20Platform/Automation%20and%20Execution/flow-editor-and-nodes.md) under `Workflow Runtime Node Port Standard V1`. Use that document as the source of truth for workflow node title sizing, status badges, named port rows, and Action-vs-data edge behavior.
+- Workflow Runtime v1 node-shell and port-row styling rules live in [Workflows](../Using%20the%20Platform/Assemblies/workflows.md). Use that document as the source of truth for workflow node title sizing, status badges, named port rows, and Action-vs-data edge behavior.
 - Workflow Runtime v1 naming and edge-label behavior also live there. In particular, use `Device Filter` and `List of Devices` for the targeting nodes, keep workflow data edges dashed Borealis blue, and let target edges auto-label with device counts when available.
 - Workflow node inspection also follows that document: the node sidebar `Debug Info` tab is available in both authoring mode and run-snapshot mode, with authoring previews clearly treated as pre-runtime estimates rather than executed results.
 
@@ -120,15 +120,15 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
     - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
-    - [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
-    - [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
-    - [Flow Editor and Nodes](../Using%20the%20Platform/Automation%20and%20Execution/flow-editor-and-nodes.md)
+    - [Engine Log Management](../Using%20the%20Platform/engine-log-management.md)
+    - [Remote Shell](../Using%20the%20Platform/remote-shell.md)
+    - [Workflows](../Using%20the%20Platform/Assemblies/workflows.md)
     - [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
-    - [Watchdogs](../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
-    - [Device Alerts](../Using%20the%20Platform/device-alerts.md)
-    - [Software Icon Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-icon-overrides.md)
-    - [Software Uninstall Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-overrides.md)
-    - [Software Uninstall Blocklist](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-blocklist.md)
+    - [Watchdogs](../Using%20the%20Platform/watchdogs.md)
+    - [Alerts](../Using%20the%20Platform/alerts.md)
+    - [Software Icon Overrides](software-icon-overrides.md)
+    - [Software Uninstall Overrides](software-uninstall-overrides.md)
+    - [Software Uninstall Blocklist](software-uninstall-blocklist.md)
 
     ### Shared Conventions (Full)
     - Cross-cutting guidance that applies to both Agent and Engine work.

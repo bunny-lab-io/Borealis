@@ -158,8 +158,8 @@ function openQuickJob(hostnames) {
 
     - [UI and Notifications](../../Reference/ui-and-notifications.md)
     - [Architecture Overview](../../Reference/architecture-overview.md)
-    - [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
-    - [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
+    - [Scheduled Jobs](../../Using%20the%20Platform/scheduled-jobs.md)
+    - [Assemblies](../../Using%20the%20Platform/Assemblies/assemblies.md)
 
     ### Default migration sequence for future agents
     - Start by reading `Docs/Reference/ui-and-notifications.md` and this guide.

@@ -55,8 +55,8 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
     ### Related documentation
 
     - [Security and Trust](../../Reference/security-and-trust.md)
-    - [Device Management](../../Using%20the%20Platform/device-management.md)
-    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
+    - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
+    - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
 
     ### Source vs runtime
     - Edit only in `Data/Agent/`.
@@ -179,7 +179,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
     - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
     #### Reverse VPN tunnels
-    - WireGuard reverse VPN design and lifecycle are documented in `vpn-and-remote-access.md`.
+    - WireGuard reverse VPN design and lifecycle are documented in `remote-shell.md` and `remote-desktop.md`.
     - The original references were `REVERSE_TUNNELS.md` and `Reverse_VPN_Tunnel_Deployment.md` (now consolidated into this knowledgebase).
     - Agent roles:
       - `Data/Agent/internal/roles/wireguard_tunnel` (Go tunnel lifecycle)

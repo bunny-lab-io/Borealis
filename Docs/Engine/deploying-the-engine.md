@@ -96,7 +96,7 @@ After deployment finishes:
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Security and Trust](../Reference/security-and-trust.md)
-    - [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
+    - [Engine Log Management](../Using%20the%20Platform/engine-log-management.md)
 
     ### Bootstrap and runtime separation
 
@@ -144,7 +144,7 @@ After deployment finishes:
     ### Agent install and enrollment notes
 
     - Windows Agent must run elevated to create the `BorealisAgent` service plus AutoUpdater/Watchdog scheduled tasks.
-    - Enrollment requires an install code and operator approval. See [Device Management](../Using%20the%20Platform/device-management.md).
+    - Enrollment requires a site enrollment code and operator approval. See [Device Approvals](../Using%20the%20Platform/device-approvals.md).
     - If enrollment fails, inspect `Agent/Logs/Agent/agent.log` and `Engine/Services/api-backend/logs/engine.log`.
 
     ### Health verification
