@@ -74,7 +74,7 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20
     - Use ASCII unless existing file already uses Unicode.
     - Avoid duplicating long source code; link to files and summarize behavior.
     - Document UI and backend components together when both change.
-    - Follow `Docs/Engine Deployment/index.md` for page shape: short opening explanation, clear requirements, normal path first, optional paths collapsed, and Codex detail hidden.
+    - Follow `Docs/Engine Deployment/deploying-the-engine.md` for page shape: short opening explanation, clear requirements, normal path first, optional paths collapsed, and Codex detail hidden.
     - Do not add visible `Purpose`, `API Endpoints`, `Related Documentation`, source map, or implementation-note sections. Put that material inside final `??? example "Detailed Codex Breakdown"` sections.
     - Keep screenshots on [Screenshots](screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
     - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
