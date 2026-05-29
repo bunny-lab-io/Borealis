@@ -14,17 +14,23 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 - Follow domain docs found through index. Where docs overlap, domain page wins. `Detailed Codex Breakdown` admonitions inside each page are authoritative agent guidance.
 
 ## Documentation Authoring Style
-- Keep operator-facing docs beginner-first: purpose, prerequisites, happy-path workflow, verification, then troubleshooting.
-- Keep visible sections clean and task-focused. Avoid exposing API endpoint lists, source path maps, implementation notes, and dense cross-link lists to operators unless they need them to complete the task.
-- Put API endpoints, related documentation, source file references, implementation details, and Codex-only reasoning inside final `??? example "Detailed Codex Breakdown"` sections.
+- Write operator-facing docs like `Docs/Engine Deployment/index.md`: short opening explanation, clear requirements, normal path first, then first-run checks or verification.
+- Do not add a visible `Purpose` section. Put the plain-language purpose directly under the page title so the page starts quickly.
+- Keep visible sections friendly and task-focused. Explain what an operator should do, what they should expect, and what can go wrong.
+- Keep implementation detail out of the operator path. API endpoints, related documentation, source paths, database tables, implementation notes, debug flow, and Codex-only reasoning belong inside a final `??? example "Detailed Codex Breakdown"` section.
+- Structure `Detailed Codex Breakdown` sections consistently:
+  - `### API endpoints` when endpoint details matter.
+  - `### Related documentation` for cross-links and reading order.
+  - `### Source map`, `### Runtime behavior`, `### Debug flow`, or similarly precise headings for dense implementation detail.
 - Use contextual admonitions for optional or advanced material:
   - `!!! tip` for beginner guidance or recommended choices.
   - `!!! warning` for destructive, risky, or environment-sensitive actions.
   - `!!! info` for short operational context that helps without requiring code knowledge.
   - `??? note` for optional advanced commands, alternate install paths, and deeper configuration.
   - `??? example "Detailed Codex Breakdown"` for Codex-only details and hidden reference material.
+- Use tabs for profile choices and sizing tables when options are mutually exclusive. Use collapsed notes for branch installs, dev paths, alternate commands, and advanced recovery.
 - Add short comments inside code blocks when commands need context. Prefer one complete, copyable command path before listing variants.
-- Keep screenshots on `Docs/Engine Deployment/screenshots.md` by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless the operator intentionally adds one.
+- Keep screenshots on `Docs/screenshots.md` by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless the operator intentionally adds one.
 - Do not manually maintain page navigation in `zensical.toml`. Zensical auto-discovers Markdown folders and pages from `Docs/`; place pages in the right folder and use `index.md` for folder landing pages.
 
 ## Interacting with the Codebase

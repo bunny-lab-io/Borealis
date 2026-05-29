@@ -1,6 +1,5 @@
 # Security and Trust
 
-## Purpose
 Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.
 
 ## Security Model Summary
@@ -193,49 +192,51 @@ sequenceDiagram
     Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, protected agent.json secrets, and helper-local IPC defend against tampering and replay
 ```
 
-## API Endpoints
-- `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
-- `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
-- `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
-- `GET /api/bootstrap/state` (No Authentication) - return the public bootstrap phase (`aegis_setup_required`, `aegis_unlock_required`, `admin_setup_required`, `admin_recovery_required`, `login_required`).
-- `POST /api/bootstrap/aegis/setup` (No Authentication) - configure Aegis before any login UI is available.
-- `POST /api/bootstrap/aegis/unlock` (No Authentication) - unlock Aegis after restart before any login UI is available.
-- `POST /api/bootstrap/admin/setup` (No Authentication, bootstrap only) - create the first administrator after Aegis setup.
-- `POST /api/bootstrap/admin/recover` (No Authentication, bootstrap only) - recover an existing administrator after Aegis force reset.
-- `POST /api/bootstrap/admin/mfa/verify` (No Authentication, bootstrap MFA pending) - finalize first-admin setup or admin recovery and issue the normal operator session.
-- `POST /api/auth/login` (No Authentication, bootstrap phase `login_required` only) - operator login.
-- `POST /api/auth/logout` (Token Authenticated) - operator logout.
-- `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new Aegis-protected password hash.
-- `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending, bootstrap phase `login_required` only) - verify MFA.
-- `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's authenticator-app secret so MFA setup is required on the next password login. Passkeys remain available for direct sign-in.
-- `POST /api/auth/passkeys/register/options` (Token Authenticated) - start a passkey registration ceremony.
-- `POST /api/auth/passkeys/register/verify` (Token Authenticated) - verify a passkey registration response and store the credential.
-- `POST /api/auth/passkeys/authenticate/options` (No Authentication, bootstrap phase `login_required` only) - start a passkey sign-in ceremony.
-- `POST /api/auth/passkeys/authenticate/verify` (No Authentication, bootstrap phase `login_required` only) - verify a passkey sign-in response and complete login.
-- `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's passkeys.
-- `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
-- `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
-- `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state, auth source, and passkey count.
-- `GET /api/directory/providers` (Admin) - list directory providers.
-- `POST /api/directory/providers` (Admin) - create a directory provider.
-- `PATCH /api/directory/providers/<int:provider_id>` (Admin) - update or enable/disable a directory provider.
-- `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete an unused directory provider.
-- `POST /api/directory/providers/<int:provider_id>/test` (Admin) - test provider connectivity.
-- `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - sync cached directory users.
-- `POST /api/users/<username>/directory-cache` (Admin) - disable or re-enable a cached directory user.
-- MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
-- `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
-- `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
-- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-
-## Related Documentation
-- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-- [Device Management](../Using%20the%20Platform/device-management.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
+    - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
+    - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
+    - `GET /api/bootstrap/state` (No Authentication) - return the public bootstrap phase (`aegis_setup_required`, `aegis_unlock_required`, `admin_setup_required`, `admin_recovery_required`, `login_required`).
+    - `POST /api/bootstrap/aegis/setup` (No Authentication) - configure Aegis before any login UI is available.
+    - `POST /api/bootstrap/aegis/unlock` (No Authentication) - unlock Aegis after restart before any login UI is available.
+    - `POST /api/bootstrap/admin/setup` (No Authentication, bootstrap only) - create the first administrator after Aegis setup.
+    - `POST /api/bootstrap/admin/recover` (No Authentication, bootstrap only) - recover an existing administrator after Aegis force reset.
+    - `POST /api/bootstrap/admin/mfa/verify` (No Authentication, bootstrap MFA pending) - finalize first-admin setup or admin recovery and issue the normal operator session.
+    - `POST /api/auth/login` (No Authentication, bootstrap phase `login_required` only) - operator login.
+    - `POST /api/auth/logout` (Token Authenticated) - operator logout.
+    - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new Aegis-protected password hash.
+    - `POST /api/auth/mfa/verify` (Token Authenticated, MFA pending, bootstrap phase `login_required` only) - verify MFA.
+    - `POST /api/auth/mfa/reset` (Token Authenticated) - clear the current operator's authenticator-app secret so MFA setup is required on the next password login. Passkeys remain available for direct sign-in.
+    - `POST /api/auth/passkeys/register/options` (Token Authenticated) - start a passkey registration ceremony.
+    - `POST /api/auth/passkeys/register/verify` (Token Authenticated) - verify a passkey registration response and store the credential.
+    - `POST /api/auth/passkeys/authenticate/options` (No Authentication, bootstrap phase `login_required` only) - start a passkey sign-in ceremony.
+    - `POST /api/auth/passkeys/authenticate/verify` (No Authentication, bootstrap phase `login_required` only) - verify a passkey sign-in response and complete login.
+    - `GET /api/auth/passkeys` (Token Authenticated) - list the current operator's passkeys.
+    - `PATCH /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - rename one of the current operator's passkeys.
+    - `DELETE /api/auth/passkeys/<int:passkey_id>` (Token Authenticated) - remove one of the current operator's passkeys.
+    - `GET /api/auth/me` (Token Authenticated) - current operator profile, including MFA-enabled state, auth source, and passkey count.
+    - `GET /api/directory/providers` (Admin) - list directory providers.
+    - `POST /api/directory/providers` (Admin) - create a directory provider.
+    - `PATCH /api/directory/providers/<int:provider_id>` (Admin) - update or enable/disable a directory provider.
+    - `DELETE /api/directory/providers/<int:provider_id>` (Admin) - delete an unused directory provider.
+    - `POST /api/directory/providers/<int:provider_id>/test` (Admin) - test provider connectivity.
+    - `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - sync cached directory users.
+    - `POST /api/users/<username>/directory-cache` (Admin) - disable or re-enable a cached directory user.
+    - MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
+    - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
+    - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
+    - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
+
+    ### Related documentation
+
+    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Device Management](../Using%20the%20Platform/device-management.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+    - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
     ### Key material locations (Engine)
     - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.

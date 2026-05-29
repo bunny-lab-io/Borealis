@@ -1,6 +1,5 @@
 # Borealis Unit Testing
 
-## Purpose
 This page is the testing entrypoint for humans and Codex agents. Use the documented lane scripts first. They set the expected environment, write reports to one location, and keep Borealis-authored test entrypoints inside `Unit_Tests` folders.
 
 ## What Unit Tests Mean Here
@@ -126,13 +125,14 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 - Add or update `Docs/testing-regressions.md` when a test protects known production, operator, or PR-review regression.
 - Use status labels from `Docs/testing-regressions.md`: `open`, `fixed`, `stale-test`, `environment-gap`, or `flaky`.
 
-## Related Documentation
-- [Testing Regressions](testing-regressions.md)
-- [Architecture Overview](architecture-overview.md)
-- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Testing Regressions](testing-regressions.md)
+    - [Architecture Overview](architecture-overview.md)
+    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
 
     - Read this page before choosing validation for codebase changes.
     - Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.

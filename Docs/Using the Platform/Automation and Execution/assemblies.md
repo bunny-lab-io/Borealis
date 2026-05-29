@@ -1,6 +1,5 @@
 # Assemblies and Quick Jobs
 
-## Purpose
 Explain Borealis assemblies (script definitions), how they are stored, and how quick jobs execute them.
 
 ## Assemblies at a Glance
@@ -76,34 +75,36 @@ Explain Borealis assemblies (script definitions), how they are stored, and how q
 - Remote SSH/WinRM runs ensure the active WireGuard session allows the requested transport port before inventory execution. Standard SSH `22` is already part of the default shell/VNC/SSH allowlist, while non-default SSH or WinRM ports are widened in addition to that baseline. For scheduled jobs in `execution_context = ssh` and `ssh_individual`, Borealis now lets Ansible itself own SSH reachability and authentication outcomes instead of running scheduler-side SSH banner/session probes first. Engine-side SSH runs also isolate their SSH control sockets to a short per-run directory under `/tmp/ansible_controlplane`, and now default the file transfer method to `scp` with `-O` because some peers first hung in the SFTP subsystem and then also stalled in the `piped`/`dd` upload path. Override those transfer behaviors with `BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD` and `BOREALIS_SHARED_ANSIBLE_SCP_EXTRA_ARGS` if an environment needs a different transport mix. WinRM still keeps a lightweight Engine-side TCP preflight and excludes targets that fail it before launch. If none remain eligible, Borealis skips the affected run instead of waiting on Ansible transport retries.
 - Individual scheduled Ansible fan-out is bounded by persisted runner settings stored under `Engine/Services/api-backend/config/ansible_runner_settings.json` by default and surfaced through Server Info. Borealis enforces both a per-job limit and a shared global limit whenever scheduled jobs dispatch Engine-side Ansible runners.
 
-## API Endpoints
-- `GET /api/assemblies` (Token Authenticated) - list assemblies.
-- `GET /api/assemblies/<assembly_guid>` (Token Authenticated) - assembly details.
-- `POST /api/assemblies` (Token Authenticated) - create assembly.
-- `PUT /api/assemblies/<assembly_guid>` (Token Authenticated) - update assembly.
-- `DELETE /api/assemblies/<assembly_guid>` (Token Authenticated) - delete assembly.
-- `POST /api/assemblies/<assembly_guid>/clone` (Admin + Dev Mode for protected domains) - clone assembly.
-- `POST /api/assemblies/dev-mode/switch` (Admin) - toggle dev mode.
-- `POST /api/assemblies/dev-mode/write` (Admin + Dev Mode) - flush queued writes.
-- `POST /api/assemblies/import` (Domain write permissions) - import legacy JSON.
-- `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
-- `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
-- `POST /api/assemblies/official/update-all` (Admin) - sync official assemblies from the active catalog, including brand-new Aurora entries that are not yet installed locally.
-- `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime), with optional current-user `session_target` and `target_session_id`.
-- `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
-- `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear history.
-- `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record.
-
-## Related Documentation
-- [Flow Editor and Nodes](flow-editor-and-nodes.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-- [SSH Connection Logic](SSH_Connection_Logic.md)
-- [Watchdogs](watchdogs.md)
-- [Device Alerts](../device-alerts.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/assemblies` (Token Authenticated) - list assemblies.
+    - `GET /api/assemblies/<assembly_guid>` (Token Authenticated) - assembly details.
+    - `POST /api/assemblies` (Token Authenticated) - create assembly.
+    - `PUT /api/assemblies/<assembly_guid>` (Token Authenticated) - update assembly.
+    - `DELETE /api/assemblies/<assembly_guid>` (Token Authenticated) - delete assembly.
+    - `POST /api/assemblies/<assembly_guid>/clone` (Admin + Dev Mode for protected domains) - clone assembly.
+    - `POST /api/assemblies/dev-mode/switch` (Admin) - toggle dev mode.
+    - `POST /api/assemblies/dev-mode/write` (Admin + Dev Mode) - flush queued writes.
+    - `POST /api/assemblies/import` (Domain write permissions) - import legacy JSON.
+    - `GET /api/assemblies/<assembly_guid>/export` (Token Authenticated) - export legacy JSON.
+    - `POST /api/assemblies/<assembly_guid>/official-update` (Admin) - update one official assembly from the active catalog.
+    - `POST /api/assemblies/official/update-all` (Admin) - sync official assemblies from the active catalog, including brand-new Aurora entries that are not yet installed locally.
+    - `POST /api/scripts/quick_run` (Token Authenticated) - quick agent-side script job (`powershell`, `batch`, or `bash`, depending on the target agent platform/runtime), with optional current-user `session_target` and `target_session_id`.
+    - `GET /api/device/activity/<hostname>` (Token Authenticated) - device activity history.
+    - `DELETE /api/device/activity/<hostname>` (Token Authenticated) - clear history.
+    - `GET /api/device/activity/job/<int:job_id>` (Token Authenticated) - activity record.
+
+    ### Related documentation
+
+    - [Flow Editor and Nodes](flow-editor-and-nodes.md)
+    - [Scheduled Jobs](scheduled-jobs.md)
+    - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
+    - [SSH Connection Logic](SSH_Connection_Logic.md)
+    - [Watchdogs](watchdogs.md)
+    - [Device Alerts](../device-alerts.md)
 
     ### Storage layout and caching
     - Aurora (`https://github.com/bunny-lab-io/Aurora`) is the official assembly authoring source of truth.

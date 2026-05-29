@@ -1,6 +1,5 @@
 # Agent Runtime
 
-## Purpose
 Describe the Borealis agent runtime, its roles, service modes, and how it communicates with the Engine.
 
 ## Runtime Summary
@@ -33,29 +32,31 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename and serialized across processes through a sibling `agent.json.lock` file. Each write increments `agent.state.revision` and stamps `agent.state.writer` plus `agent.state.last_write_at` so stale writer/debug cases are visible.
 
-## API Endpoints (Engine-facing)
-- `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
-- `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
-- `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
-- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
-- `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded Engine metadata field for local Agent CLI.
-- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
-- `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
-- `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
-- `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
-- `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise VNC readiness and reconcile always-on VNC state without returning the VNC password.
-- `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
-- `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
-- `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
-- `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
-
-## Related Documentation
-- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
-- [Device Management](../../Using%20the%20Platform/device-management.md)
-- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints (Engine-facing)
+
+    - `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
+    - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
+    - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
+    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
+    - `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded Engine metadata field for local Agent CLI.
+    - `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for `system:system_heartbeat`.
+    - `POST /api/agent/details` (Device Authenticated) - hardware, inventory, and cached service payloads.
+    - `POST /api/agent/script/request` (Device Authenticated) - request work or receive idle signal.
+    - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
+    - `POST /api/agent/vpn/ready` (Device Authenticated) - active WireGuard tunnel readiness after service/config/firewall apply.
+    - `POST /api/agent/vnc/ensure` (Device Authenticated) - advertise VNC readiness and reconcile always-on VNC state without returning the VNC password.
+    - `GET /api/agent/files/transfers/<transfer_id>/upload-item/<item_id>` (Device Authenticated) - fetch one Engine-staged upload item for the File Management role.
+    - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancel requests mid-transfer.
+    - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
+    - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
+
+    ### Related documentation
+
+    - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+    - [Device Management](../../Using%20the%20Platform/device-management.md)
+    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
 
     ### Source vs runtime
     - Edit only in `Data/Agent/`.

@@ -1,6 +1,5 @@
 # Software Icon Overrides
 
-## Purpose
 Explain how to add file-backed icon-location overrides for installed software when registry `DisplayIcon` metadata is missing or points at the wrong asset.
 
 ## Override File
@@ -93,13 +92,14 @@ Clear-icon rules are also supported:
 }
 ```
 
-## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-- [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
-- [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Device Management](../device-management.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
+    - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
+    - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
 
     ### Codex workflow
     - Prefer the operator-created hotloaded rule in `software_icons_overrides.json` as the source of truth when asked to make an icon override official.

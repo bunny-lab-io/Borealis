@@ -1,6 +1,5 @@
 # Software Uninstall Overrides
 
-## Purpose
 Explain how to provide file-backed custom uninstall plans when Windows registry uninstall metadata cannot be trusted or is incomplete.
 
 ## Override File
@@ -100,13 +99,14 @@ Explain how to provide file-backed custom uninstall plans when Windows registry 
 }
 ```
 
-## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-- [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
-- [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Device Management](../device-management.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
+    - [Adding Software to Uninstall Blocklist](adding-software-to-uninstall-blocklist.md)
+    - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
     ### Codex workflow
     - Prefer the operator-created hotloaded rule in `software_uninstall_overrides.json` as the source of truth when asked to make an uninstall override official.

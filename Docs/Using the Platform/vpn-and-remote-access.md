@@ -1,6 +1,5 @@
 # VPN and Remote Access
 
-## Purpose
 Document Borealis remote access features: WireGuard reverse VPN tunnels, remote PowerShell, and VNC via Apache Guacamole.
 
 ## WireGuard Reverse VPN (High Level)
@@ -67,28 +66,30 @@ Borealis expects the public HTTPS identity to live on the embedded Traefik insta
 - WireGuard remains a separate direct UDP service on port `30000`; it is not terminated or proxied through the HTTPS edge.
 - Do not configure a separate public VNC endpoint. Borealis VNC stays same-origin at `/remote-desktop/vnc`.
 
-## API Endpoints
-- `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
-- `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent, including `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
-- `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
-- `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
-- `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness and return active session metadata without returning the VNC password.
-- `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
-- `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session.
-- `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
-- `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside a shared VNC collaboration session.
-- `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions.
-- `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
-- `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
-
-## Related Documentation
-- [Device Management](device-management.md)
-- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `POST /api/tunnel/connect` (Token Authenticated) - ensure WireGuard tunnel material for an agent.
+    - `GET /api/tunnel/status` (Token Authenticated) - tunnel status by agent, including `listener_healthy`, `recovery_in_progress`, `last_recovery_attempt_at`, and `last_recovery_attempt_at_iso`.
+    - `GET /api/tunnel/active` (Token Authenticated) - list active tunnels with the same listener-health fields.
+    - `POST /api/agent/vpn/ensure` (Device Authenticated) - agent-side persistent tunnel bootstrap.
+    - `POST /api/agent/vnc/ensure` (Device Authenticated) - ensure VNC readiness and return active session metadata without returning the VNC password.
+    - `GET /api/vnc/viewers` (Token Authenticated) - report Apache Guacamole VNC availability.
+    - `POST /api/vnc/establish` (Token Authenticated) - establish or join an Apache Guacamole VNC collaboration session.
+    - `POST /api/vnc/disconnect` (Token Authenticated) - leave or close a VNC collaboration session.
+    - `POST /api/vnc/handoff` (Token Authenticated) - reassign session-owner metadata inside a shared VNC collaboration session.
+    - `GET /api/vnc/sessions` (Token Authenticated) - list active VNC collaboration sessions.
+    - `POST /api/shell/establish` (Token Authenticated) - establish remote shell session.
+    - `POST /api/shell/disconnect` (Token Authenticated) - disconnect remote shell session.
+
+    ### Related documentation
+
+    - [Device Management](device-management.md)
+    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+    - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+    - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
     ### Core Engine files
     - Tunnel service: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py`.

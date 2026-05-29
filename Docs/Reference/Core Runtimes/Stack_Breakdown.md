@@ -1,6 +1,5 @@
 # Borealis Docker Stack Breakdown
 
-## Purpose
 Explain the Borealis Engine Docker Compose stack, service ownership, startup order, runtime paths, and common operator commands.
 
 ## Scope
@@ -10,56 +9,6 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 - Compose project name: `borealis-engine`.
 - Compose source of truth: `Data/Engine/Containers/compose.yaml`.
 - Runtime state: `Engine/`.
-
-## Source And Runtime Layout
-Committed source lives under:
-```text
-Data/Engine/Containers/
-```
-
-Runtime output lives under:
-```text
-Engine/
-```
-
-Deploy state:
-```text
-Engine/Deploy/compose.env
-Engine/Deploy/runtime.env
-Engine/Deploy/webui-frontend.env
-Engine/Deploy/image-manifest.json
-Engine/Deploy/deploy-manifest.json
-Engine/Deploy/build.log
-```
-
-Service runtime state is intentionally sparse:
-```text
-Engine/Services/api-backend/config
-Engine/Services/api-backend/logs
-Engine/Services/api-backend/secrets
-Engine/Services/api-backend/cache/Ansible
-Engine/Services/api-backend/cache/Aurora
-Engine/Services/postgres-db/state
-Engine/Services/postgres-db/logs
-Engine/Services/postgres-db/run
-Engine/Services/traefik-edge/config
-Engine/Services/traefik-edge/env
-Engine/Services/traefik-edge/logs
-Engine/Services/traefik-edge/state
-Engine/Services/webui-frontend/data/web-interface
-Engine/Services/remote-desktop-guacd/logs
-Engine/Services/wireguard-tunnel/config
-Engine/Services/wireguard-tunnel/logs
-Engine/Services/wireguard-tunnel/secrets
-Engine/Services/wireguard-tunnel/run
-```
-
-Build cache, when Docker Buildx is available, lives under:
-```text
-Engine/Deploy/cache/buildkit/<service>/
-```
-
-Operators should treat `Engine/` as generated runtime state. Edit committed source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`. For live WebUI dev/HMR work, edit the seeded runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/`.
 
 ## Stack Services
 | Service | Container | Main responsibility | Host network endpoint |
@@ -507,31 +456,6 @@ Guacd logs:
 Engine/Services/remote-desktop-guacd/logs/guacd.log
 ```
 
-## Manifest Files
-`Engine/Deploy/image-manifest.json` records:
-- image tag
-- input hash
-- Dockerfile path
-- build context
-- mode
-- timestamp
-
-`Engine/Deploy/deploy-manifest.json` records:
-- Compose project name
-- deploy mode
-- Compose file
-- Compose file hash
-- env file
-- env file hash
-- env settings hash excluding image tag and mode-scoped lines
-- service image tags and input hashes
-- changed services for the last deploy action
-- Compose action (`up`, `up-scoped`, or `skipped`)
-- service list
-- deploy timestamp
-
-Use these files to confirm whether source changes are actually deployed.
-
 ## Common Scenarios
 API code changed:
 ```sh
@@ -612,13 +536,91 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 3. Check `Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log`.
 4. Check target agent VPN logs.
 
-## Related Documentation
-- [Getting Started](../../Engine%20Deployment/index.md)
-- [Engine Runtime](engine-runtime.md)
-- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
-- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Getting Started](../../Engine%20Deployment/index.md)
+    - [Engine Runtime](engine-runtime.md)
+    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
+    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
+
+    ### Source and runtime layout
+
+    Committed source lives under:
+    ```text
+    Data/Engine/Containers/
+    ```
+
+    Runtime output lives under:
+    ```text
+    Engine/
+    ```
+
+    Deploy state:
+    ```text
+    Engine/Deploy/compose.env
+    Engine/Deploy/runtime.env
+    Engine/Deploy/webui-frontend.env
+    Engine/Deploy/image-manifest.json
+    Engine/Deploy/deploy-manifest.json
+    Engine/Deploy/build.log
+    ```
+
+    Service runtime state is intentionally sparse:
+    ```text
+    Engine/Services/api-backend/config
+    Engine/Services/api-backend/logs
+    Engine/Services/api-backend/secrets
+    Engine/Services/api-backend/cache/Ansible
+    Engine/Services/api-backend/cache/Aurora
+    Engine/Services/postgres-db/state
+    Engine/Services/postgres-db/logs
+    Engine/Services/postgres-db/run
+    Engine/Services/traefik-edge/config
+    Engine/Services/traefik-edge/env
+    Engine/Services/traefik-edge/logs
+    Engine/Services/traefik-edge/state
+    Engine/Services/webui-frontend/data/web-interface
+    Engine/Services/remote-desktop-guacd/logs
+    Engine/Services/wireguard-tunnel/config
+    Engine/Services/wireguard-tunnel/logs
+    Engine/Services/wireguard-tunnel/secrets
+    Engine/Services/wireguard-tunnel/run
+    ```
+
+    Build cache, when Docker Buildx is available, lives under:
+    ```text
+    Engine/Deploy/cache/buildkit/<service>/
+    ```
+
+    Operators should treat `Engine/` as generated runtime state. Edit committed source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`. For live WebUI dev/HMR work, edit the seeded runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/`.
+
+    ### Manifest files
+
+    `Engine/Deploy/image-manifest.json` records:
+    - image tag
+    - input hash
+    - Dockerfile path
+    - build context
+    - mode
+    - timestamp
+
+    `Engine/Deploy/deploy-manifest.json` records:
+    - Compose project name
+    - deploy mode
+    - Compose file
+    - Compose file hash
+    - env file
+    - env file hash
+    - env settings hash excluding image tag and mode-scoped lines
+    - service image tags and input hashes
+    - changed services for the last deploy action
+    - Compose action (`up`, `up-scoped`, or `skipped`)
+    - service list
+    - deploy timestamp
+
+    Use these files to confirm whether source changes are actually deployed.
 
     - Edit Docker/Compose source under `Data/Engine/Containers/`.
     - Do not edit generated runtime under `Engine/` except when reading logs/manifests.

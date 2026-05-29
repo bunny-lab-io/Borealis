@@ -1,6 +1,5 @@
 # Integrations
 
-## Purpose
 Document external integrations used by Borealis, primarily the GitHub repository hash service.
 
 ## GitHub Integration (Repository Hash)
@@ -9,17 +8,19 @@ Document external integrations used by Borealis, primarily the GitHub repository
 - Admins can store a GitHub API token via the WebUI.
 - The Sites install menu uses that stored token to list Borealis GitHub branches for branch-specific Agent bootstrap commands.
 
-## API Endpoints
-- `GET /api/github/token` (Admin) - GitHub token status.
-- `POST /api/github/token` (Admin) - update GitHub token.
-- `GET /api/repo/current_hash` (Device or Token Authenticated) - current repo hash.
-
-## Related Documentation
-- [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-- [API Reference](api-reference.md)
-- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/github/token` (Admin) - GitHub token status.
+    - `POST /api/github/token` (Admin) - update GitHub token.
+    - `GET /api/repo/current_hash` (Device or Token Authenticated) - current repo hash.
+
+    ### Related documentation
+
+    - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
+    - [API Reference](api-reference.md)
+    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
 
     ### Integration implementation
     - `Data/Engine/Containers/api-backend/data/integrations/github.py` implements `GitHubIntegration`.

@@ -1,6 +1,5 @@
 # Borealis SSH Connection Logic
 
-## Purpose
 Define standard SSH handshake, probing, credential selection, and Ansible inventory behavior for Borealis Engine-side SSH connections. This page documents the strategy proven by scheduled Ansible jobs 8 and 9 on the Bunny Lab mixed SSH fleet, and should be reused for future SSH-based Borealis features instead of reinventing per-feature connection logic.
 
 ## Scope
@@ -8,13 +7,6 @@ Define standard SSH handshake, probing, credential selection, and Ansible invent
 - Current implementation is in scheduled Ansible playbook dispatch.
 - Intended future consumers include remote shell-like SSH execution, SSH file transfer, watchdog remediation, ad hoc SSH commands, and any feature that needs Engine-to-device SSH.
 - Does not replace WinRM, Agent socket jobs, or browser-facing remote shell.
-
-## Current Code References
-- Credential host-var rendering: `Data/Engine/Containers/api-backend/data/services/ansible/ssh_auth.py`
-- Scheduled Ansible SSH decision logic: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
-- Ansible workspace/config generation: `Data/Engine/Containers/api-backend/data/services/ansible/runner.py`
-- Workflow Ansible target rendering: `Data/Engine/Containers/api-backend/data/services/workflows/runtime.py`
-- Unit coverage: `Data/Engine/Unit_Tests/test_scheduled_jobs_api.py`, `Data/Engine/Unit_Tests/test_ansible_runner.py`, `Data/Engine/Unit_Tests/test_workflow_runtime.py`
 
 ## Design Goals
 - Prefer deterministic auth mode per target instead of asking OpenSSH/Ansible to guess.
@@ -357,12 +349,23 @@ Do not let future features:
 - log secret-bearing command lines
 - infer password support from sshd config alone
 
-## Related Documentation
-- [Scheduled Jobs](scheduled-jobs.md)
-- [VPN and Remote Access](../vpn-and-remote-access.md)
-- [Logging and Operations](../logging-and-operations.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Scheduled Jobs](scheduled-jobs.md)
+    - [VPN and Remote Access](../vpn-and-remote-access.md)
+    - [Logging and Operations](../logging-and-operations.md)
+
+    ### Source map
+
+    - Credential host-var rendering: `Data/Engine/Containers/api-backend/data/services/ansible/ssh_auth.py`
+    - Scheduled Ansible SSH decision logic: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+    - Ansible workspace/config generation: `Data/Engine/Containers/api-backend/data/services/ansible/runner.py`
+    - Workflow Ansible target rendering: `Data/Engine/Containers/api-backend/data/services/workflows/runtime.py`
+    - Unit coverage: `Data/Engine/Unit_Tests/test_scheduled_jobs_api.py`, `Data/Engine/Unit_Tests/test_ansible_runner.py`, `Data/Engine/Unit_Tests/test_workflow_runtime.py`
+
+    ### Implementation guardrails
 
     - Reuse `apply_ssh_credential_host_vars(...)` for Ansible inventory rendering.
     - Keep `_resolve_mixed_ssh_auth_mode(...)` behavior as source of truth until a shared SSH auth service is extracted.

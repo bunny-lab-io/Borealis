@@ -1,6 +1,5 @@
 # Competitive Feature Gap Analysis
 
-## Purpose
 Turn the provided RMM competitor CSV into a Borealis roadmap analysis that is grounded in current Borealis repo truth, not aspirational parity.
 
 ## Scope and Rules

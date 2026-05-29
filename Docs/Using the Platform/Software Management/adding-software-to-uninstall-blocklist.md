@@ -1,6 +1,5 @@
 # Software Uninstall Blocklist
 
-## Purpose
 Explain how to block installed software whose registry-provided `QuietUninstallString` still prompts, hangs, or otherwise cannot be trusted for unattended Borealis uninstall.
 
 ## Blocklist File
@@ -79,13 +78,14 @@ Explain how to block installed software whose registry-provided `QuietUninstallS
 }
 ```
 
-## Related Documentation
-- [Device Management](../device-management.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-- [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
-- [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Device Management](../device-management.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
+    - [Adding Software to Uninstall Overrides](adding-software-to-uninstall-overrides.md)
+    - [Adding Software to Icon Overrides](adding-software-to-icon-overrides.md)
 
     ### How to decide between blocklist vs override
     - Use the blocklist when the existing quiet metadata is unsafe and no verified unattended replacement command is available yet.

@@ -1,6 +1,5 @@
 # Scheduled Jobs
 
-## Purpose
 Explain how Borealis schedules recurring jobs, targets devices, and records run history.
 
 ## Scheduler Overview
@@ -107,29 +106,31 @@ Supported schedule types (from the scheduler core):
 - The job editor's Historical Runs tab groups `scheduled_job_runs` rows by occurrence timestamp, lists `Ran On` plus the overall summary status, and hydrates the standard device/output grid by calling `GET /api/scheduled_jobs/<job_id>/devices?occurrence=<timestamp>`.
 - Old runs are purged during scheduler ticks.
 
-## API Endpoints
-- `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs.
-- `POST /api/scheduled_jobs` (Token Authenticated) - create scheduled job.
-- `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get scheduled job.
-- `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update scheduled job.
-- `POST /api/scheduled_jobs/<int:job_id>/toggle` (Token Authenticated) - enable/disable.
-- `POST /api/scheduled_jobs/<int:job_id>/rerun` (Token Authenticated) - queue a fresh immediate occurrence for an enabled job using the saved configuration.
-- `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
-- `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
-- `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
-- `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
-- `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
-- `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including approval context and persistent per-target timeline events with sanitized output snippets when available.
-- `GET /api/server/workers?history_seconds=60` (Admin) - active and recent job-scheduler site worker state plus recent work items for visualizers.
-
-## Related Documentation
-- [Assemblies and Quick Jobs](assemblies.md)
-- [Ansible SSH Connection Logic](SSH_Connection_Logic.md)
-- [Device Management](../device-management.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-- [SSH Connection Logic](SSH_Connection_Logic.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/scheduled_jobs` (Token Authenticated) - list scheduled jobs.
+    - `POST /api/scheduled_jobs` (Token Authenticated) - create scheduled job.
+    - `GET /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - get scheduled job.
+    - `PUT /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - update scheduled job.
+    - `POST /api/scheduled_jobs/<int:job_id>/toggle` (Token Authenticated) - enable/disable.
+    - `POST /api/scheduled_jobs/<int:job_id>/rerun` (Token Authenticated) - queue a fresh immediate occurrence for an enabled job using the saved configuration.
+    - `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
+    - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
+    - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
+    - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
+    - `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - clear onboarding job history and start a fresh immediate onboarding run.
+    - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - onboarding target attempts for an occurrence, including approval context and persistent per-target timeline events with sanitized output snippets when available.
+    - `GET /api/server/workers?history_seconds=60` (Admin) - active and recent job-scheduler site worker state plus recent work items for visualizers.
+
+    ### Related documentation
+
+    - [Assemblies and Quick Jobs](assemblies.md)
+    - [Ansible SSH Connection Logic](SSH_Connection_Logic.md)
+    - [Device Management](../device-management.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
+    - [SSH Connection Logic](SSH_Connection_Logic.md)
 
     ### Scheduler entry points
     - API registration: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/management.py`.

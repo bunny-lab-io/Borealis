@@ -1,6 +1,5 @@
 # Watchdogs
 
-## Purpose
 Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing device data, explain why they matched, and optionally launch native remediation.
 
 ## Watchdogs at a Glance
@@ -97,23 +96,25 @@ Describe Borealis Watchdogs: reusable monitoring policies that evaluate existing
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/route-modules/watchdogRoutes.jsx`
 - Device pages can launch a prefilled watchdog draft through the Device Summary `Actions` menu and the device-level `Watchdogs` tab.
 
-## API Endpoints
-- `GET /api/watchdogs` (Token Authenticated) - list watchdogs within the current operator scope.
-- `GET /api/watchdogs/metadata` (Token Authenticated) - watchdog editor metadata for site modes, match modes, rule types, action types, and severities.
-- `POST /api/watchdogs/preview` (Token Authenticated) - resolve targets and preview the current watchdog outcome.
-- `GET /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - get one watchdog.
-- `POST /api/watchdogs` (Token Authenticated) - create one watchdog.
-- `PUT /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - update one watchdog.
-- `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete one watchdog and its runtime state.
-
-## Related Documentation
-- [Device Alerts](../device-alerts.md)
-- [Device Management](../device-management.md)
-- [Assemblies and Quick Jobs](assemblies.md)
-- [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
-- [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/watchdogs` (Token Authenticated) - list watchdogs within the current operator scope.
+    - `GET /api/watchdogs/metadata` (Token Authenticated) - watchdog editor metadata for site modes, match modes, rule types, action types, and severities.
+    - `POST /api/watchdogs/preview` (Token Authenticated) - resolve targets and preview the current watchdog outcome.
+    - `GET /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - get one watchdog.
+    - `POST /api/watchdogs` (Token Authenticated) - create one watchdog.
+    - `PUT /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - update one watchdog.
+    - `DELETE /api/watchdogs/<int:watchdog_id>` (Token Authenticated) - delete one watchdog and its runtime state.
+
+    ### Related documentation
+
+    - [Device Alerts](../device-alerts.md)
+    - [Device Management](../device-management.md)
+    - [Assemblies and Quick Jobs](assemblies.md)
+    - [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
+    - [API Reference](../../Reference/Data%20and%20Schema/api-reference.md)
 
     ### Main implementation files
     - API registration: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`

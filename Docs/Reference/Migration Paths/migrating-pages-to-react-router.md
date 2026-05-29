@@ -1,6 +1,5 @@
 # Migrating Pages to React Router
 
-## Purpose
 Document the Borealis WebUI router architecture and provide a repeatable migration runbook for moving legacy pages onto the shared React Router app shell.
 
 ## When To Use This Guide
@@ -153,13 +152,14 @@ function openQuickJob(hostnames) {
 - Do not keep both the adapter bridge and route-native hooks active for the same page logic longer than necessary.
 - Do not create legacy redirects unless product intent explicitly requires them.
 
-## Related Documentation
-- [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
-- [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
-- [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
-- [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
+    - [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
+    - [Scheduled Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
+    - [Assemblies and Quick Jobs](../../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
 
     ### Default migration sequence for future agents
     - Start by reading `Docs/Engine Deployment/ui-and-notifications.md` and this guide.

@@ -1,6 +1,5 @@
 # Architecture Overview
 
-## Purpose
 Explain how Borealis is structured and how the core components interact end to end.
 
 ## Platform Shape
@@ -35,35 +34,38 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 - VNC: operator calls `/api/vnc/establish`, Engine creates or joins a collaboration session, waits for agent listener readiness, then proxies Apache Guacamole WebSocket traffic through local `guacd` to the agent VNC server.
 - Notifications: operator or services call `/api/notifications/notify`, WebUI receives `borealis_notification` events.
 
-## Directory Map (High Level)
-- `Data/Engine/` - Engine package shim, unit tests, and container source roots.
-- `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
-- `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
-- `Data/Agent/` - Agent source (authoritative).
-- `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
-- `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
-- `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
-- `Agent/` - Agent runtime copy (regenerated each launch).
-- `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.
-- `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
-- `Engine/Services/api-backend/logs/` and `Agent/Logs/` - runtime logs.
-- `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
-
-## API Endpoints
-None on this page. See [API Reference](../Reference/Data%20and%20Schema/api-reference.md).
-
-## Related Documentation
-- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-- [Security and Trust](security-and-trust.md)
-- [Device Management](../Using%20the%20Platform/device-management.md)
-- [Assemblies and Quick Jobs](../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
-- [Scheduled Jobs](../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
-- [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
-- [UI and Notifications](ui-and-notifications.md)
-- [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    None on this page. See [API Reference](../Reference/Data%20and%20Schema/api-reference.md).
+
+    ### Related documentation
+
+    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+    - [Security and Trust](security-and-trust.md)
+    - [Device Management](../Using%20the%20Platform/device-management.md)
+    - [Assemblies and Quick Jobs](../Using%20the%20Platform/Automation%20and%20Execution/assemblies.md)
+    - [Scheduled Jobs](../Using%20the%20Platform/Automation%20and%20Execution/scheduled-jobs.md)
+    - [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
+    - [UI and Notifications](ui-and-notifications.md)
+    - [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
+
+    ### Source map
+
+    - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
+    - `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
+    - `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
+    - `Data/Agent/` - Agent source (authoritative).
+    - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
+    - `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
+    - `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
+    - `Agent/` - Agent runtime copy (regenerated each launch).
+    - `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.
+    - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` - Flow Editor domain folder. Owns the workflow editor controller/compositor, canvas, sidebars, edge/node configuration panels, runtime wiring helpers, and the shared workflow node registry.
+    - `Engine/Services/api-backend/logs/` and `Agent/Logs/` - runtime logs.
+    - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
     ### Service map by folder
     - Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).

@@ -1,4 +1,4 @@
-# Using the Platform
+# Overview
 
 Use this section for daily fleet operations: inventory, device details, alerts, logs, remote shell, remote desktop, and WireGuard transport.
 

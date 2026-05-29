@@ -1,6 +1,5 @@
 # Logging and Operations
 
-## Purpose
 Describe Borealis operational logging, retention, and core runtime checks.
 
 ## Log Locations
@@ -33,25 +32,27 @@ Describe Borealis operational logging, retention, and core runtime checks.
 - `POST /api/server/wireguard/recover` triggers a Borealis-managed WireGuard listener recovery attempt when live tunnels exist.
 - Watchdog evaluator activity and remediation dispatch are logged through the `watchdogs` service log domain.
 
-## API Endpoints
-- `GET /health` (No Authentication) - liveness probe.
-- `GET /api/server/time` (Operator Session) - server time.
-- `GET /api/server/overview` (Admin) - aggregated server/admin dashboard snapshot.
-- `POST /api/server/services/<service_key>/restart` (Admin) - queue safe detached service restart.
-- `POST /api/server/wireguard/recover` (Admin) - recover Borealis WireGuard listener when active sessions exist.
-- `GET /api/server/logs` (Admin) - list logs and retention metadata.
-- `GET /api/server/logs/<log_name>/entries` (Admin) - tail log entries.
-- `PUT /api/server/logs/retention` (Admin) - update retention policies.
-- `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
-
-## Related Documentation
-- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](device-alerts.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /health` (No Authentication) - liveness probe.
+    - `GET /api/server/time` (Operator Session) - server time.
+    - `GET /api/server/overview` (Admin) - aggregated server/admin dashboard snapshot.
+    - `POST /api/server/services/<service_key>/restart` (Admin) - queue safe detached service restart.
+    - `POST /api/server/wireguard/recover` (Admin) - recover Borealis WireGuard listener when active sessions exist.
+    - `GET /api/server/logs` (Admin) - list logs and retention metadata.
+    - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log entries.
+    - `PUT /api/server/logs/retention` (Admin) - update retention policies.
+    - `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
+
+    ### Related documentation
+
+    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+    - [Watchdogs](Automation%20and%20Execution/watchdogs.md)
+    - [Device Alerts](device-alerts.md)
 
     ### Engine log formatting
     - Service logs are written via `service_log` in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`.

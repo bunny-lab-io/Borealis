@@ -1,4 +1,4 @@
-# Software Management
+# Overview
 
 Use this section for installed software inventory and operator-controlled uninstall behavior.
 

@@ -1,6 +1,5 @@
 # UI and Notifications
 
-## Purpose
 Describe the Borealis WebUI architecture, styling conventions, and the toast notification system.
 Treat this document as the single source of truth for Borealis WebUI design rules. Product pages may be referenced as example implementations, but when a page and this document disagree, this document wins and the page should be updated.
 
@@ -87,47 +86,49 @@ Treat this document as the single source of truth for Borealis WebUI design rule
   - duplicate upload conflicts should use an explorer-style `Replace or Skip Files` decision dialog rather than a generic confirmation modal
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
-## API Endpoints
-- `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
-- `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
-- `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
-- `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
-- `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
-- `GET /api/server/ansible-runner-settings` (Operator Admin Session) - returns the persisted scheduled-Ansible per-job and global runner limits shown in Server Info.
-- `PUT /api/server/ansible-runner-settings` (Operator Admin Session) - updates the persisted scheduled-Ansible per-job and global runner limits from Server Info.
-- `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
-- `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
-- `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
-- `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
-- `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.
-- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Alerts or a device page.
-- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the Alerts `Open` and `Suppressed` queues.
-- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
-- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
-- `GET /api/device/files/<hostname>/roots` (Token Authenticated) - hydrate the Device Summary `File Management` roots view.
-- `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - lazy-load one File Management directory.
-- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - start a File Management upload transfer.
-- `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
-- `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
-- `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
-- `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.
-
-## Related Documentation
-- [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
-- [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
-- [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
-- [Flow Editor and Nodes](../Using%20the%20Platform/Automation%20and%20Execution/flow-editor-and-nodes.md)
-- [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
-- [Watchdogs](../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](../Using%20the%20Platform/device-alerts.md)
-- [Software Icon Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-blocklist.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
+    - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
+    - `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
+    - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
+    - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
+    - `GET /api/server/ansible-runner-settings` (Operator Admin Session) - returns the persisted scheduled-Ansible per-job and global runner limits shown in Server Info.
+    - `PUT /api/server/ansible-runner-settings` (Operator Admin Session) - updates the persisted scheduled-Ansible per-job and global runner limits from Server Info.
+    - `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
+    - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
+    - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
+    - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
+    - `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
+    - `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.
+    - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an incident from Alerts or a device page.
+    - `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the Alerts `Open` and `Suppressed` queues.
+    - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - hydrate the device-level Watchdogs tab.
+    - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - apply or clear a device-specific watchdog suppression.
+    - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - hydrate the Device Summary `File Management` roots view.
+    - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - lazy-load one File Management directory.
+    - `POST /api/device/files/<hostname>/upload` (Token Authenticated) - start a File Management upload transfer.
+    - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
+    - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
+    - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
+    - `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.
+
+    ### Related documentation
+
+    - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+    - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
+    - [Logging and Operations](../Using%20the%20Platform/logging-and-operations.md)
+    - [VPN and Remote Access](../Using%20the%20Platform/vpn-and-remote-access.md)
+    - [Flow Editor and Nodes](../Using%20the%20Platform/Automation%20and%20Execution/flow-editor-and-nodes.md)
+    - [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)
+    - [Watchdogs](../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
+    - [Device Alerts](../Using%20the%20Platform/device-alerts.md)
+    - [Software Icon Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-icon-overrides.md)
+    - [Software Uninstall Overrides](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-overrides.md)
+    - [Software Uninstall Blocklist](../Using%20the%20Platform/Software%20Management/adding-software-to-uninstall-blocklist.md)
 
     ### Shared Conventions (Full)
     - Cross-cutting guidance that applies to both Agent and Engine work.

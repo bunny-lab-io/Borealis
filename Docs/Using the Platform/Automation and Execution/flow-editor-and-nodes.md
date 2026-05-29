@@ -1,6 +1,5 @@
 # Flow Editor and Nodes
 
-## Purpose
 Document the Borealis visual flow editor (React Flow) and how nodes are defined, grouped, and rendered.
 
 ## Core UI Components
@@ -40,25 +39,27 @@ Document the Borealis visual flow editor (React Flow) and how nodes are defined,
 ## Scheduling Flow Usage
 - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx` uses React Flow for job status and dependency visualization.
 
-## API Endpoints
-- `GET /api/assemblies/<assembly_guid>/export` - load a saved workflow assembly into the editor.
-- `POST /api/assemblies/import` - save the current workflow document.
-- `DELETE /api/assemblies/<assembly_guid>` - delete a saved User-domain workflow.
-- `GET /api/workflows/<workflow_guid>/editor-access` - verify site-scope access before opening a saved workflow.
-- `POST /api/workflows/run` - trigger a saved workflow run.
-- `GET /api/workflows/runs/<run_id>` - load an immutable workflow run snapshot.
-- `GET /api/workflows/runs/<run_id>/nodes/<node_id>` - hydrate selected node run details in run mode.
-- `GET /api/workflows/<workflow_guid>/webhooks` - list workflow webhooks.
-- `POST /api/workflows/<workflow_guid>/webhooks` - create a workflow webhook.
-- `DELETE /api/workflows/<workflow_guid>/webhooks/<webhook_id>` - delete a workflow webhook.
-- `GET /api/device_filters/<filter_id>` - enrich Device Filter nodes with matching-device counts when the count is not already embedded in the saved workflow document.
-
-## Related Documentation
-- [Assemblies and Quick Jobs](assemblies.md)
-- [Scheduled Jobs](scheduled-jobs.md)
-- [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/assemblies/<assembly_guid>/export` - load a saved workflow assembly into the editor.
+    - `POST /api/assemblies/import` - save the current workflow document.
+    - `DELETE /api/assemblies/<assembly_guid>` - delete a saved User-domain workflow.
+    - `GET /api/workflows/<workflow_guid>/editor-access` - verify site-scope access before opening a saved workflow.
+    - `POST /api/workflows/run` - trigger a saved workflow run.
+    - `GET /api/workflows/runs/<run_id>` - load an immutable workflow run snapshot.
+    - `GET /api/workflows/runs/<run_id>/nodes/<node_id>` - hydrate selected node run details in run mode.
+    - `GET /api/workflows/<workflow_guid>/webhooks` - list workflow webhooks.
+    - `POST /api/workflows/<workflow_guid>/webhooks` - create a workflow webhook.
+    - `DELETE /api/workflows/<workflow_guid>/webhooks/<webhook_id>` - delete a workflow webhook.
+    - `GET /api/device_filters/<filter_id>` - enrich Device Filter nodes with matching-device counts when the count is not already embedded in the saved workflow document.
+
+    ### Related documentation
+
+    - [Assemblies and Quick Jobs](assemblies.md)
+    - [Scheduled Jobs](scheduled-jobs.md)
+    - [UI and Notifications](../../Engine%20Deployment/ui-and-notifications.md)
 
     ### How node modules are structured
     - A node file exports a descriptor object, for example:

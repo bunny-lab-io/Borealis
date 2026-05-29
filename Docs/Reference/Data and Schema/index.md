@@ -1,4 +1,4 @@
-# Data and Schema
+# Overview
 
 Use this section before changing PostgreSQL access, API contracts, integration behavior, or third-party dependency inventory.
 

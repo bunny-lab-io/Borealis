@@ -1,6 +1,5 @@
 # Device Alerts
 
-## Purpose
 Describe the runtime incident side of Watchdogs: the Alerts queue, incident lifecycle, and per-device alert handling workflow.
 
 ## Alerts Queue
@@ -47,21 +46,23 @@ Describe the runtime incident side of Watchdogs: the Alerts queue, incident life
   - `device_watchdogs_changed`
 - Borealis uses those socket events to refresh the Watchdog list, Alerts queue, and the device-level Watchdogs tab without waiting for a full poll cycle.
 
-## API Endpoints
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list incidents by runtime state and return queue counts for `open`, `suppressed`, and `resolved`.
-- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
-- `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the `open` and `suppressed` queues.
-- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the current device watchdog view, including incidents, assignments, and overrides.
-- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
-
-## Related Documentation
-- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
-- [Device Management](device-management.md)
-- [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
-- [Logging and Operations](logging-and-operations.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /api/watchdogs/incidents` (Token Authenticated) - list incidents by runtime state and return queue counts for `open`, `suppressed`, and `resolved`.
+    - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
+    - `POST /api/watchdogs/incidents/<int:incident_id>/state` (Token Authenticated) - move an incident between the `open` and `suppressed` queues.
+    - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the current device watchdog view, including incidents, assignments, and overrides.
+    - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a per-device watchdog override.
+
+    ### Related documentation
+
+    - [Watchdogs](Automation%20and%20Execution/watchdogs.md)
+    - [Device Management](device-management.md)
+    - [UI and Notifications](../Engine%20Deployment/ui-and-notifications.md)
+    - [Logging and Operations](logging-and-operations.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
 
     ### Main implementation files
     - Alerts page: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`

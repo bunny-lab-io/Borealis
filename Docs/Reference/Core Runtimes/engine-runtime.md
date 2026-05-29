@@ -1,6 +1,5 @@
 # Engine Runtime
 
-## Purpose
 Describe the Borealis Engine runtime, its services, configuration, and operational responsibilities.
 
 ## Runtime Summary
@@ -14,46 +13,37 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Assemblies: `Data/Engine/Containers/api-backend/data/assembly_management/` and `Data/Engine/Containers/api-backend/data/services/assemblies/`.
 - Watchdog runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/`.
 
-## Runtime Paths
-- Engine package shim and tests: `Data/Engine/`.
-- API backend source: `Data/Engine/Containers/api-backend/data/` (edit here).
-- WebUI frontend committed source: `Data/Engine/Containers/webui-frontend/data/web-interface/` (edit here for durable repo changes).
-- WebUI dev/HMR runtime source: `Engine/Services/webui-frontend/data/web-interface/` (edit here for live Vite dev-mode testing).
-- Container source: `Data/Engine/Containers/` (Compose, Dockerfiles, build manifest, service entrypoints, and service-owned source trees).
-- Runtime state: `Engine/` (generated each deployment and ignored by git).
-- Deploy state: `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
-- Service state: `Engine/Services/<role>/` with only directories used by that service.
-- Database: PostgreSQL via `BOREALIS_DATABASE_URL`.
-- Compose-generated env: `Engine/Deploy/compose.env` (Compose interpolation, including image tags and stable env-file paths), `Engine/Deploy/runtime.env` (shared container runtime settings, excluding image tags and mode flips), plus `Engine/Deploy/webui-frontend.env` for WebUI mode-scoped settings.
-- Logs: `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
-- Ansible runtime: `Engine/Services/api-backend/cache/Ansible/` (staged manifest, installed collections, generated execution workspaces).
-- Certificates: `Engine/Services/api-backend/secrets/Certificates/` (TLS bundle + code signing keys).
-- WebUI source is packaged into the `webui-frontend` image and seeded into `Engine/Services/webui-frontend/data/web-interface/` for dev-mode host editing. Normal deploys do not overwrite an existing runtime copy; set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` to reseed from committed source.
-- Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot).
-- Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`.
-
-## API Endpoints
-- `GET /health` (No Authentication) - Engine liveness probe.
-- The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
-
-## Related Documentation
-- [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
-- [Docker Stack Breakdown](Stack_Breakdown.md)
-- [Database Reference](../Data%20and%20Schema/db-reference.md)
-- [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
-- [API Reference](../Data%20and%20Schema/api-reference.md)
-- [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
-- [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
-- [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `GET /health` (No Authentication) - Engine liveness probe.
+    - The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
+
+    ### Related documentation
+
+    - [Architecture Overview](../../Engine%20Deployment/architecture-overview.md)
+    - [Docker Stack Breakdown](Stack_Breakdown.md)
+    - [Database Reference](../Data%20and%20Schema/db-reference.md)
+    - [Security and Trust](../../Engine%20Deployment/security-and-trust.md)
+    - [API Reference](../Data%20and%20Schema/api-reference.md)
+    - [Logging and Operations](../../Using%20the%20Platform/logging-and-operations.md)
+    - [VPN and Remote Access](../../Using%20the%20Platform/vpn-and-remote-access.md)
+    - [Watchdogs](../../Using%20the%20Platform/Automation%20and%20Execution/watchdogs.md)
+    - [Device Alerts](../../Using%20the%20Platform/device-alerts.md)
 
     ### Source vs runtime
     - Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
     - Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/` for committed source changes. For rapid dev-mode HMR edits, use `Engine/Services/webui-frontend/data/web-interface/`.
     - Keep `Data/Engine/` for package shims, unit tests, and container roots.
+    - Container source lives under `Data/Engine/Containers/` for Compose, Dockerfiles, build manifests, service entrypoints, and service-owned source trees.
     - `Engine/` is generated runtime state. Do not edit it directly.
+    - Deploy state lives in `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
+    - Service state lives in `Engine/Services/<role>/` with only directories used by that service.
+    - Logs live under `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
+    - Ansible runtime lives under `Engine/Services/api-backend/cache/Ansible/`.
+    - TLS and signing certificates live under `Engine/Services/api-backend/secrets/Certificates/`.
+    - Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/`; managed Aurora checkout lives under `Engine/Services/api-backend/cache/Aurora/`.
     - The Compose project name is `borealis-engine`.
     - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.

@@ -1,6 +1,5 @@
 # Device Management
 
-## Purpose
 Explain how Borealis tracks devices, ingests inventory, manages sites and filters, and handles enrollment approvals.
 
 ## Inventory and Status
@@ -109,102 +108,104 @@ Explain how Borealis tracks devices, ingests inventory, manages sites and filter
 - If the same machine is approved again later, enrollment recreates the device row at or above the barrier token version and then clears the barrier so the device can return through normal approval.
 - After the purge transaction commits, the Engine best-effort disconnects active VPN transport and revokes cached VNC sessions for the purged agent ID.
 
-## API Endpoints
-- `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
-- `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for the Agent Health tab.
-- `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
-- `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed icon override rules used by the agent software-management inventory path.
-- `GET /api/agents` (Token Authenticated) - online collectors keyed by agent identity, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record instead of registering a second Borealis socket.
-- `GET /api/devices` (Token Authenticated) - device summary list.
-- `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
-- `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
-- `GET /api/metadata_fields` (Token Authenticated) - list global metadata field definitions.
-- `PUT /api/metadata_fields/<field_number>` (Admin) - update a global metadata field description.
-- `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all metadata fields for an in-scope device.
-- `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one metadata field value for an in-scope device.
-- `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
-- `POST /api/devices/<guid>/purge` (Admin) - holistically purge a device, its trust records, and scheduled-job references.
-- `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
-- `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
-- `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
-- `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
-- `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
-- `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh on the device.
-- `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - create or replace a hotloaded global icon override for a software row.
-- `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - create or replace a hotloaded global uninstall override for a software row.
-- `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - create or replace a hotloaded global uninstall block rule for a software row.
-- `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded uninstall block rules for a software row.
-- `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
-- `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
-- `POST /api/devices/agent-maintenance` (Token Authenticated) - queue Agent updates or Agent branch/channel switches for one or more devices through scheduled-job history and site-worker fan-out.
-- `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the File Management tab roots view for an in-scope device.
-- `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
-- `POST /api/device/files/<hostname>/upload/conflicts` (Token Authenticated) - preflight upload name conflicts in one remote directory for an in-scope device.
-- `GET /api/device/files/<hostname>/text?path=<absolute-path>` (Token Authenticated) - read one lightweight-editable remote text file for the File Management editor.
-- `POST /api/device/files/<hostname>/text` (Token Authenticated) - save one lightweight-editable remote text file back in place on an in-scope device.
-- `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
-- `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
-- `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
-- `POST /api/device/files/<hostname>/paste` (Token Authenticated) - paste copied or cut remote file-system items into a destination directory on an in-scope device.
-- `POST /api/device/files/<hostname>/delete` (Token Authenticated) - delete remote file-system items on an in-scope device.
-- `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files for transfer to an in-scope device.
-- `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
-- `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
-- `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
-- `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
-- `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
-- `GET /api/device_list_views` (Token Authenticated) - list saved views.
-- `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
-- `POST /api/device_list_views` (Token Authenticated) - create saved view.
-- `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
-- `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-- `GET /api/sites` (Token Authenticated) - list sites plus public engine URL metadata used for copy-ready agent install commands.
-- `POST /api/sites` (Admin) - create site.
-- `POST /api/sites/delete` (Admin) - delete sites.
-- `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
-- `POST /api/sites/assign` (Admin) - assign devices to site.
-- `POST /api/sites/rename` (Admin) - rename site.
-- `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level device auto-approval.
-- `POST /api/user_site_assignments/selection` (Admin) - load selected-operator site assignments.
-- `POST /api/user_site_assignments/assign` (Admin) - replace selected-operator site assignments.
-- `GET /api/device_filters` (Token Authenticated) - list filters.
-- `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata, including metadata-field definitions for the field picker.
-- `POST /api/device_filters/preview` (Token Authenticated) - preview filter matches.
-- `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
-- `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - list scheduled jobs referencing a filter.
-- `POST /api/device_filters` (Token Authenticated) - create filter.
-- `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
-- `POST /api/device_filters/<filter_id>/clone` (Token Authenticated) - clone filter.
-- `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
-- `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
-- `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
-- `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the device Watchdogs tab payload.
-- `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a device-specific watchdog override.
-- `GET /api/watchdogs/incidents` (Token Authenticated) - list current watchdog incidents.
-- `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
-- `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
-- `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
-- `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
-- `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
-- `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
-- `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
-- `POST /api/onboarding/jobs/<job_id>/redeploy` (Token Authenticated) - clear onboarding history for a job and start a fresh run.
-- `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence, including current approval context when available.
-
-## Related Documentation
-- [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-- [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
-- [Security and Trust](../Engine%20Deployment/security-and-trust.md)
-- [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md)
-- [Watchdogs](Automation%20and%20Execution/watchdogs.md)
-- [Device Alerts](device-alerts.md)
-- [VPN and Remote Access](vpn-and-remote-access.md)
-- [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-- [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
-- [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
-- [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
-
 ??? example "Detailed Codex Breakdown"
+
+    ### API endpoints
+
+    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
+    - `POST /api/agent/status` (Device Authenticated) - startup phase, boot ID, milestone timeline, and last-error telemetry for the Agent Health tab.
+    - `POST /api/agent/details` (Device Authenticated) - inventory and cached service payloads.
+    - `GET /api/agent/software-management/overrides` (Device Authenticated) - file-backed icon override rules used by the agent software-management inventory path.
+    - `GET /api/agents` (Token Authenticated) - online collectors keyed by agent identity, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record instead of registering a second Borealis socket.
+    - `GET /api/devices` (Token Authenticated) - device summary list.
+    - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - site-scoped hostname search for the shared header search UI.
+    - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID.
+    - `GET /api/metadata_fields` (Token Authenticated) - list global metadata field definitions.
+    - `PUT /api/metadata_fields/<field_number>` (Admin) - update a global metadata field description.
+    - `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all metadata fields for an in-scope device.
+    - `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one metadata field value for an in-scope device.
+    - `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
+    - `POST /api/devices/<guid>/purge` (Admin) - holistically purge a device, its trust records, and scheduled-job references.
+    - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details.
+    - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory.
+    - `POST /api/device/services/<hostname>/action` (Token Authenticated) - start, stop, or restart a named service.
+    - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - return a live process snapshot for an in-scope device, optionally forcing a fresher agent snapshot for live polling.
+    - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - request process termination on an in-scope device.
+    - `POST /api/device/software/<hostname>/refresh` (Token Authenticated) - request an immediate software inventory refresh on the device.
+    - `POST /api/device/software/<hostname>/icon-override` (Token Authenticated) - create or replace a hotloaded global icon override for a software row.
+    - `POST /api/device/software/<hostname>/uninstall-override` (Token Authenticated) - create or replace a hotloaded global uninstall override for a software row.
+    - `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - create or replace a hotloaded global uninstall block rule for a software row.
+    - `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded uninstall block rules for a software row.
+    - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
+    - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask a device to start its local AutoUpdater task immediately.
+    - `POST /api/devices/agent-maintenance` (Token Authenticated) - queue Agent updates or Agent branch/channel switches for one or more devices through scheduled-job history and site-worker fan-out.
+    - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the File Management tab roots view for an in-scope device.
+    - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
+    - `POST /api/device/files/<hostname>/upload/conflicts` (Token Authenticated) - preflight upload name conflicts in one remote directory for an in-scope device.
+    - `GET /api/device/files/<hostname>/text?path=<absolute-path>` (Token Authenticated) - read one lightweight-editable remote text file for the File Management editor.
+    - `POST /api/device/files/<hostname>/text` (Token Authenticated) - save one lightweight-editable remote text file back in place on an in-scope device.
+    - `POST /api/device/files/<hostname>/mkdir` (Token Authenticated) - create a remote directory on an in-scope device.
+    - `POST /api/device/files/<hostname>/rename` (Token Authenticated) - rename one remote file-system item on an in-scope device.
+    - `POST /api/device/files/<hostname>/move` (Token Authenticated) - move remote file-system items on an in-scope device.
+    - `POST /api/device/files/<hostname>/paste` (Token Authenticated) - paste copied or cut remote file-system items into a destination directory on an in-scope device.
+    - `POST /api/device/files/<hostname>/delete` (Token Authenticated) - delete remote file-system items on an in-scope device.
+    - `POST /api/device/files/<hostname>/upload` (Token Authenticated) - stage browser-uploaded files for transfer to an in-scope device.
+    - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
+    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
+    - `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
+    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
+    - `POST /api/device/description/<hostname>` (Token Authenticated) - update description.
+    - `GET /api/device_list_views` (Token Authenticated) - list saved views.
+    - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
+    - `POST /api/device_list_views` (Token Authenticated) - create saved view.
+    - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
+    - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
+    - `GET /api/sites` (Token Authenticated) - list sites plus public engine URL metadata used for copy-ready agent install commands.
+    - `POST /api/sites` (Admin) - create site.
+    - `POST /api/sites/delete` (Admin) - delete sites.
+    - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map.
+    - `POST /api/sites/assign` (Admin) - assign devices to site.
+    - `POST /api/sites/rename` (Admin) - rename site.
+    - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level device auto-approval.
+    - `POST /api/user_site_assignments/selection` (Admin) - load selected-operator site assignments.
+    - `POST /api/user_site_assignments/assign` (Admin) - replace selected-operator site assignments.
+    - `GET /api/device_filters` (Token Authenticated) - list filters.
+    - `GET /api/device_filters/metadata` (Token Authenticated) - filter metadata, including metadata-field definitions for the field picker.
+    - `POST /api/device_filters/preview` (Token Authenticated) - preview filter matches.
+    - `GET /api/device_filters/<filter_id>` (Token Authenticated) - get filter.
+    - `GET /api/device_filters/<filter_id>/usage` (Token Authenticated) - list scheduled jobs referencing a filter.
+    - `POST /api/device_filters` (Token Authenticated) - create filter.
+    - `PUT /api/device_filters/<filter_id>` (Token Authenticated) - update filter.
+    - `POST /api/device_filters/<filter_id>/clone` (Token Authenticated) - clone filter.
+    - `POST /api/device_filters/<filter_id>/archive` (Token Authenticated) - archive filter.
+    - `POST /api/device_filters/<filter_id>/unarchive` (Token Authenticated) - unarchive filter.
+    - `DELETE /api/device_filters/<filter_id>` (Token Authenticated) - delete filter.
+    - `GET /api/devices/<device_id>/watchdogs` (Token Authenticated) - load the device Watchdogs tab payload.
+    - `POST /api/devices/<device_id>/watchdogs/overrides` (Token Authenticated) - create, update, or clear a device-specific watchdog override.
+    - `GET /api/watchdogs/incidents` (Token Authenticated) - list current watchdog incidents.
+    - `POST /api/watchdogs/incidents/<int:incident_id>/acknowledge` (Token Authenticated) - acknowledge an open incident.
+    - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
+    - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
+    - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
+    - `GET /api/admin/device-approvals` (Token Authenticated) - approval queue scoped to the current operator's assigned sites unless the operator is an admin. Admins can use `status=wrong_code` for recent invalid enrollment-code attempts.
+    - `POST /api/admin/device-approvals/<approval_id>/approve` (Token Authenticated) - approve an in-scope device.
+    - `POST /api/admin/device-approvals/<approval_id>/deny` (Token Authenticated) - deny an in-scope device.
+    - `POST /api/onboarding/jobs/<job_id>/redeploy` (Token Authenticated) - clear onboarding history for a job and start a fresh run.
+    - `GET /api/onboarding/jobs/<job_id>/targets` (Token Authenticated) - per-target automatic onboarding attempts for a scheduled job occurrence, including current approval context when available.
+
+    ### Related documentation
+
+    - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
+    - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
+    - [Security and Trust](../Engine%20Deployment/security-and-trust.md)
+    - [Scheduled Jobs](Automation%20and%20Execution/scheduled-jobs.md)
+    - [Watchdogs](Automation%20and%20Execution/watchdogs.md)
+    - [Device Alerts](device-alerts.md)
+    - [VPN and Remote Access](vpn-and-remote-access.md)
+    - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
+    - [Software Icon Overrides](Software%20Management/adding-software-to-icon-overrides.md)
+    - [Software Uninstall Overrides](Software%20Management/adding-software-to-uninstall-overrides.md)
+    - [Software Uninstall Blocklist](Software%20Management/adding-software-to-uninstall-blocklist.md)
 
     ### Key files and services
     - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/` (management, approval, services, tunnel, vnc, routes).

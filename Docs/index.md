@@ -15,7 +15,7 @@ Borealis is maintained by one person while working a full-time IT job. Progress 
 Borealis has two main runtime sides: a Linux-hosted Engine server and cross-platform Agent clients. See [Architecture Overview](Engine%20Deployment/architecture-overview.md) for component roles, runtime boundaries, data flow, and debugging entrypoints.
 
 ## Feature Support Matrix
-Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply. 
+Status means productized support in current Borealis codebase and docs, not long-term intent. `Full` means supported on that endpoint path today. `Partial` means useful implementation exists but gaps or validation remain. `-` means no productized endpoint support or OS scope does not apply.
 
 === "Agent (Client)"
 
@@ -76,14 +76,16 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine%20
     - Use ASCII unless existing file already uses Unicode.
     - Avoid duplicating long source code; link to files and summarize behavior.
     - Document UI and backend components together when both change.
-    - Keep screenshots on [Screenshots](Engine%20Deployment/screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
+    - Follow `Docs/Engine Deployment/index.md` for page shape: short opening explanation, clear requirements, normal path first, optional paths collapsed, and Codex detail hidden.
+    - Do not add visible `Purpose`, `API Endpoints`, `Related Documentation`, source map, or implementation-note sections. Put that material inside final `??? example "Detailed Codex Breakdown"` sections.
+    - Keep screenshots on [Screenshots](screenshots.md) by default. Landing pages may carry one high-signal screenshot; topic pages should stay screenshot-free unless an operator intentionally adds one.
     - Put Codex-only guidance at the end of each page in `??? example "Detailed Codex Breakdown"`.
     - Use GitHub issues labeled `Technical Debt` for workarounds, non-standard build steps, or dev/prod drift.
 
     Documentation Map:
 
     - [Engine Deployment](Engine%20Deployment/index.md) - install path, architecture, security, UI rules, and testing entrypoints.
-    - [Screenshots](Engine%20Deployment/screenshots.md) - visual tour of Borealis operator surfaces.
+    - [Screenshots](screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - device inventory, alerts, remote access, logs, and software management.
     - [Automation](Using%20the%20Platform/Automation%20and%20Execution/index.md) - assemblies, flows, scheduled jobs, SSH logic, and watchdogs.
     - [Reference](Reference/index.md) - runtime, Docker stack, API, database, integration, and SBOM references.
