@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M2: Traefik Dynamic Worker Routing` |
 | Last updated | 2026-05-30 |
-| Latest implementation commit | `35e8e2e0` (`Implement Traefik dynamic route directory`) |
+| Latest implementation commit | `c52b5317` (`Implement Traefik dynamic route directory`) |
 | Current state | `M2` implementation is committed locally. Traefik now watches a dynamic route directory, core routes render to `dynamic/core.yml`, and per-site-worker route files can be added or removed without recreating Traefik. |
 | Next safe step | Redeploy branch head with the `M2` Traefik changes, smoke the file-provider hotload path, then mark `M2` done before starting `M3`. |
 
@@ -329,7 +329,7 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after `35e8e2e0`, "Implement Traefik dynamic route directory".
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after `c52b5317`, "Implement Traefik dynamic route directory".
 
 M1 is Done. Continue M2 only. Do not start M3 until M2 post-redeploy hotload smoke passes and this tracker marks M2 Done.
 
