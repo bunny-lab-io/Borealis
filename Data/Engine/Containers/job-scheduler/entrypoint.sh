@@ -34,7 +34,10 @@ export BOREALIS_API_LOG_FILE="${BOREALIS_API_LOG_FILE:-${API_ROOT}/logs/api.log}
 export BOREALIS_VPN_TUNNEL_LOG_FILE="${BOREALIS_VPN_TUNNEL_LOG_FILE:-${API_ROOT}/logs/VPN_Tunnel/tunnel.log}"
 export BOREALIS_WIREGUARD_LOG_FILE="${BOREALIS_WIREGUARD_LOG_FILE:-${BOREALIS_VPN_TUNNEL_LOG_FILE}}"
 export BOREALIS_INTERNAL_API_BASE_URL="${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}"
+export ANSIBLE_COLLECTIONS_PATH="${BOREALIS_ANSIBLE_RUNTIME_ROOT}/collections"
+export ANSIBLE_COLLECTIONS_PATHS="${ANSIBLE_COLLECTIONS_PATH}"
 export PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent:${PYTHONPATH:-}"
 
 cd /opt/Borealis
+python -m Data.Engine.services.ansible.collections
 exec python -m Data.Engine.services.job_scheduler.manager

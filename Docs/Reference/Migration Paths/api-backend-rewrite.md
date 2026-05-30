@@ -8,9 +8,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M1: Runtime Dependency Split` |
+| Active milestone | `M2: Traefik Dynamic Worker Routing` |
 | Last updated | 2026-05-30 |
-| Next safe step | Start `M1` by mapping `api-backend`, `site-worker`, and scheduler dependency ownership. |
+| Next safe step | Start `M2` by converting Traefik dynamic config output to a watched directory with stable core routes and per-worker route files. |
 
 ## Tracker Rules
 
@@ -34,8 +34,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Milestone | Status | Core migration |
 | --- | --- | --- |
 | `M0: Tracker + PR Setup` | `Done` | Create branch, tracker, index link, and draft PR. |
-| `M1: Runtime Dependency Split` | `In Progress` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
-| `M2: Traefik Dynamic Worker Routing` | `Not Started` | Hotload per-site-worker routes without Traefik recreate. |
+| `M1: Runtime Dependency Split` | `Done` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
+| `M2: Traefik Dynamic Worker Routing` | `In Progress` | Hotload per-site-worker routes without Traefik recreate. |
 | `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
 | `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
 | `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
@@ -67,19 +67,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Stop `api-backend` from carrying Ansible and execution-heavy runtime dependencies. |
 | Migrates | Ansible-only packages, execution helpers, and related container install burden from `api-backend` to worker runtime ownership. |
 | Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
 | Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
 | Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
-| Handoff Note | Record exact dependency files changed and any skipped packages before starting `M2`. |
+| Handoff Note | Ansible Python deps now live in `engine-worker-requirements.txt`; `api-backend` keeps Docker CLI, WireGuard tools, and Tesseract until later milestones remove current server-info, VPN, and OCR/runtime callers. |
 
 ### M2: Traefik Dynamic Worker Routing
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Let Traefik hotload per-site-worker route files without recreating Traefik. |
 | Migrates | Direct routing setup for worker-owned remote-operation endpoints. |
 | Out Of Scope | Worker registry schema, operation-token authorization, Agent route cutover, remote-op feature migration. |
@@ -235,6 +235,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Split base API requirements from worker Ansible requirements, removed Ansible collection staging from api-backend bootstrap, moved collection staging to job-scheduler/site-worker entrypoints, and mounted shared Ansible cache into dynamic site-workers. | `bash -n` entrypoints passed; `docker compose -f Data/Engine/Containers/compose.yaml config` passed; `git diff --check` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T010620Z` |
+| 2026-05-30 | `M1` | Updated SBOM source list for new worker requirement file. | Documentation inspection. | `Docs/Reference/SBOM.md` |
+| 2026-05-30 | `M1` | Tried broader scheduler/core validation. Scheduler run was stopped after long-running `test_scheduled_jobs_api.py` showed many failures; core still has unrelated local edge-runtime expectation for dev UI port 5173 vs current 8000 default. | Not counted as M1 gate. | `Unit_Test_Results/engine-20260530T005538Z`, `Unit_Test_Results/engine-20260530T010410Z` |
 | 2026-05-30 | `M0` | Opened draft PR and marked `M1` as next active milestone. | PR created from pushed branch. | [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | 2026-05-30 | `M0` | Created tracker document and migration-path index link. | Markdown inspected; `git diff --check` passed. | This branch. |
 | 2026-05-30 | Planning | Re-evaluated issue #226 and selected worker-first migration before Go rewrite. | Repository inspection only. | Issue #226 and planning notes. |
@@ -244,10 +247,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Issue #226 reviewed. Decision: move remote-operation execution paths into `site-worker` before rewriting `api-backend` in Go.
 - Milestone tracker drafted with quota-sized work chunks.
 - Branch `feature/rewrite-api-backend-in-golang` created and draft [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) opened.
+- `M1` complete: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
 
 ## Remaining Work
 
-- Complete active `M1`, then `M2` and `M3`, to prepare worker runtime and routing foundation.
+- Complete active `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
@@ -259,8 +263,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- | --- | --- |
 | Markdown and index link inspection | `M0` | `Done` | Doc-only validation. |
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
-| `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Not Started` | Required after container or Traefik changes. |
-| Focused Engine tests | `M1`-`M14` | `Not Started` | Use domain flags while iterating. |
+| `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` | Required after container or Traefik changes. |
+| Focused Engine tests | `M1`-`M14` | `Done` for `M1` | `ansible` domain passed with local test secret env. |
 | Full affected Engine lane | `M1`-`M14` | `Not Started` | Run before handoff when practical. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |

@@ -570,6 +570,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
         return
 
     project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
+    api_cache_root = project_root / "Engine" / "Services" / "api-backend" / "cache"
+    api_cache_root.mkdir(parents=True, exist_ok=True)
     env_file = _compose_env_file()
     image = _worker_image()
     args = [
@@ -618,6 +620,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             f"{project_root}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro",
             "-v",
             f"{project_root}/Engine/Services/api-backend/config:/opt/Borealis/Engine/Services/api-backend/config:ro",
+            "-v",
+            f"{api_cache_root}:/opt/Borealis/Engine/Services/api-backend/cache",
             image,
         ]
     )

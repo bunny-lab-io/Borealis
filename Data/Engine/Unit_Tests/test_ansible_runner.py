@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import types
 
-import Data.Engine.bootstrapper as bootstrapper_module
+import Data.Engine.services.ansible.collections as ansible_collections_module
 from Data.Engine.db import dbapi as sqlite3
 import Data.Engine.services.ansible.runner as ansible_runner_module
 from Data.Engine.services.ansible.runner import EngineAnsibleRunner, RUN_STATUS_TIMED_OUT
@@ -98,7 +98,7 @@ def _mark_collection_installed(collections_root: Path, name: str) -> None:
     (collections_root / "ansible_collections" / namespace / collection).mkdir(parents=True, exist_ok=True)
 
 
-def test_bootstrap_stages_and_installs_missing_ansible_collections(tmp_path: Path, monkeypatch) -> None:
+def test_ansible_collections_stage_and_install_missing_collections(tmp_path: Path, monkeypatch) -> None:
     source_manifest = _write_ansible_collections_manifest(tmp_path)
     runtime_root = tmp_path / "runtime" / "Ansible"
     calls: list[dict[str, object]] = []
@@ -118,12 +118,12 @@ def test_bootstrap_stages_and_installs_missing_ansible_collections(tmp_path: Pat
             _mark_collection_installed(runtime_root / "collections", name)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(bootstrapper_module, "_project_root", lambda: tmp_path)
-    monkeypatch.setattr(bootstrapper_module, "_resolve_ansible_galaxy_command", lambda: ["/usr/bin/ansible-galaxy"])
-    monkeypatch.setattr(bootstrapper_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(ansible_collections_module, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(ansible_collections_module, "_resolve_ansible_galaxy_command", lambda: ["/usr/bin/ansible-galaxy"])
+    monkeypatch.setattr(ansible_collections_module.subprocess, "run", fake_run)
     monkeypatch.setenv("BOREALIS_ANSIBLE_RUNTIME_ROOT", str(runtime_root))
 
-    staged_manifest = bootstrapper_module._stage_ansible_collections(logger=logging.getLogger("test.bootstrap.ansible"))
+    staged_manifest = ansible_collections_module.stage_ansible_collections(logger=logging.getLogger("test.ansible.collections"))
 
     assert staged_manifest == runtime_root / "collections.yml"
     assert staged_manifest.read_text(encoding="utf-8") == source_manifest.read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_bootstrap_stages_and_installs_missing_ansible_collections(tmp_path: Pat
     assert calls[0]["env"]["ANSIBLE_COLLECTIONS_PATHS"] == str(runtime_root / "collections")
 
 
-def test_bootstrap_skips_ansible_galaxy_when_collections_present(tmp_path: Path, monkeypatch) -> None:
+def test_ansible_collections_skip_galaxy_when_collections_present(tmp_path: Path, monkeypatch) -> None:
     source_manifest = _write_ansible_collections_manifest(tmp_path)
     runtime_root = tmp_path / "runtime" / "Ansible"
     collections_root = runtime_root / "collections"
@@ -152,11 +152,29 @@ def test_bootstrap_skips_ansible_galaxy_when_collections_present(tmp_path: Path,
     def fake_run(*_args, **_kwargs):  # noqa: ANN002, ANN003
         raise AssertionError("ansible-galaxy should not run when collections are already installed")
 
-    monkeypatch.setattr(bootstrapper_module, "_project_root", lambda: tmp_path)
-    monkeypatch.setattr(bootstrapper_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(ansible_collections_module, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(ansible_collections_module.subprocess, "run", fake_run)
     monkeypatch.setenv("BOREALIS_ANSIBLE_RUNTIME_ROOT", str(runtime_root))
 
-    staged_manifest = bootstrapper_module._stage_ansible_collections(logger=logging.getLogger("test.bootstrap.ansible"))
+    staged_manifest = ansible_collections_module.stage_ansible_collections(logger=logging.getLogger("test.ansible.collections"))
+
+    assert staged_manifest == runtime_root / "collections.yml"
+    assert staged_manifest.read_text(encoding="utf-8") == source_manifest.read_text(encoding="utf-8")
+
+
+def test_ansible_collections_skip_install_when_galaxy_unavailable(tmp_path: Path, monkeypatch) -> None:
+    source_manifest = _write_ansible_collections_manifest(tmp_path)
+    runtime_root = tmp_path / "runtime" / "Ansible"
+
+    def fake_run(*_args, **_kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("ansible-galaxy should not run when unavailable")
+
+    monkeypatch.setattr(ansible_collections_module, "_project_root", lambda: tmp_path)
+    monkeypatch.setattr(ansible_collections_module, "_resolve_ansible_galaxy_command", lambda: None)
+    monkeypatch.setattr(ansible_collections_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("BOREALIS_ANSIBLE_RUNTIME_ROOT", str(runtime_root))
+
+    staged_manifest = ansible_collections_module.stage_ansible_collections(logger=logging.getLogger("test.ansible.collections"))
 
     assert staged_manifest == runtime_root / "collections.yml"
     assert staged_manifest.read_text(encoding="utf-8") == source_manifest.read_text(encoding="utf-8")

@@ -29,9 +29,10 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/borealis-engine-requirements.txt
+COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/engine-requirements.txt
+COPY Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt /tmp/engine-worker-requirements.txt
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r /tmp/borealis-engine-requirements.txt
+    && python -m pip install -r /tmp/engine-worker-requirements.txt
 
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 RUN mkdir -p /opt/Borealis/Data/Engine/Containers

@@ -1,0 +1,9 @@
+#////////// PROJECT FILE SEPARATION LINE ////////// CODE AFTER THIS LINE ARE FROM: <ProjectRoot>/Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt
+-r engine-requirements.txt
+
+ansible-core
+ansible-runner
+jmespath
+pywinrm[credssp]>=0.4.0
+pypsrp[credssp]>=0.4.0,<1.0.0
+impacket>=0.12.0
