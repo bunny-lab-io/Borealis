@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Fixed operator-found Job 90 regression: stopped/lost site-workers now release claimed work back to `queued`, clear stale leases, and record requeue reason so scheduler can spawn/claim instead of leaving runs in limbo. | `python3 -m py_compile` passed; `Data/Engine/Unit_Tests/test_job_scheduler_queue.py` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T015406Z` |
 | 2026-05-30 | `M1` | Fixed operator-found worker lifecycle regression: site-worker now waits for scheduled run terminal status before completing work item or entering idle TTL, so Ansible daemon threads are not killed mid-run. | `py_compile` passed; `git diff --check` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T013150Z` |
 | 2026-05-30 | `M1` | Split base API requirements from worker Ansible requirements, removed Ansible collection staging from api-backend bootstrap, moved collection staging to job-scheduler/site-worker entrypoints, and mounted shared Ansible cache into dynamic site-workers. | `bash -n` entrypoints passed; `docker compose -f Data/Engine/Containers/compose.yaml config` passed; `git diff --check` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T010620Z` |
 | 2026-05-30 | `M1` | Updated SBOM source list for new worker requirement file. | Documentation inspection. | `Docs/Reference/SBOM.md` |
@@ -250,6 +251,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Branch `feature/rewrite-api-backend-in-golang` created and draft [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) opened.
 - `M1` complete: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
 - `M1` stabilized after operator smoke test: site-worker no longer exits on idle TTL while scheduled Ansible run remains `Running`.
+- `M1` stabilized after Job 90 smoke test: stopped/lost site-workers now requeue claimed work immediately instead of leaving work items leased to dead workers.
 
 ## Remaining Work
 
@@ -266,7 +268,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Markdown and index link inspection | `M0` | `Done` | Doc-only validation. |
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` | Required after container or Traefik changes. |
-| Focused Engine tests | `M1`-`M14` | `Done` for `M1` | `ansible` domain passed with local test secret env. |
+| Focused Engine tests | `M1`-`M14` | `Done` for `M1` | `ansible` domain and scheduler queue regression tests passed with local test secret env. |
 | Full affected Engine lane | `M1`-`M14` | `Not Started` | Run before handoff when practical. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |

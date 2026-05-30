@@ -555,6 +555,45 @@ def complete_work_item(conn: sqlite3.Connection, *, work_id: int, status: str, e
     )
 
 
+def _release_worker_running_work_items(
+    conn: sqlite3.Connection,
+    *,
+    worker_guids: Sequence[str],
+    reason: str,
+) -> int:
+    guids = [str(item or "").strip() for item in worker_guids or [] if str(item or "").strip()]
+    if not guids:
+        return 0
+    now = _now_ts()
+    placeholders = ",".join("?" for _ in guids)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        UPDATE job_scheduler_work_items
+           SET status=?,
+               lease_owner=NULL,
+               lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
+               updated_at=?
+         WHERE status=?
+           AND worker_guid IN ({placeholders})
+        """,
+        (
+            WORK_STATUS_QUEUED,
+            str(reason or "site worker stopped before work completed")[:2000],
+            now,
+            now,
+            WORK_STATUS_RUNNING,
+            *guids,
+        ),
+    )
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
 def heartbeat_work_item(conn: sqlite3.Connection, *, work_id: int, lease_owner: str, lease_seconds: int = 300) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
@@ -581,14 +620,53 @@ def expire_stale_leases(conn: sqlite3.Connection) -> int:
            SET status=?,
                lease_owner=NULL,
                lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
                updated_at=?
          WHERE status=?
            AND lease_expires_at IS NOT NULL
            AND lease_expires_at<?
         """,
-        (WORK_STATUS_QUEUED, now, WORK_STATUS_RUNNING, now),
+        (
+            WORK_STATUS_QUEUED,
+            "requeued after work lease expired",
+            now,
+            now,
+            WORK_STATUS_RUNNING,
+            now,
+        ),
     )
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    expired_count = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    cur.execute(
+        """
+        SELECT DISTINCT w.worker_guid
+          FROM job_scheduler_work_items i
+          JOIN job_scheduler_workers w ON w.worker_guid=i.worker_guid
+         WHERE i.status=?
+           AND COALESCE(i.site_id, 0)>0
+           AND w.status IN (?, ?)
+        """,
+        (WORK_STATUS_RUNNING, *WORKER_TERMINAL_STATUSES),
+    )
+    terminal_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    terminal_count = _release_worker_running_work_items(
+        conn,
+        worker_guids=terminal_guids,
+        reason="requeued after site worker stopped before work completed",
+    )
+    return expired_count + terminal_count
+
+
+def release_worker_running_work_items(conn: sqlite3.Connection, *, worker_guid: str, reason: str = "") -> int:
+    ensure_job_scheduler_tables(conn)
+    return _release_worker_running_work_items(
+        conn,
+        worker_guids=[str(worker_guid or "")],
+        reason=reason or "requeued after site worker stopped before work completed",
+    )
 
 
 def queued_site_ids(conn: sqlite3.Connection) -> List[int]:
@@ -699,6 +777,12 @@ def heartbeat_worker(
 def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WORKER_STATUS_STOPPED) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
+    normalized_guid = str(worker_guid or "").strip()
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=[normalized_guid],
+        reason="requeued after site worker stopped before work completed",
+    )
     cur = conn.cursor()
     cur.execute(
         """
@@ -709,7 +793,7 @@ def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WOR
                updated_at=?
          WHERE worker_guid=?
         """,
-        (str(status or WORKER_STATUS_STOPPED), now, now, now, str(worker_guid or "")),
+        (str(status or WORKER_STATUS_STOPPED), now, now, now, normalized_guid),
     )
 
 
@@ -771,16 +855,34 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
     cur = conn.cursor()
     cur.execute(
         """
+        SELECT worker_guid
+          FROM job_scheduler_workers
+         WHERE status IN (?,?,?)
+           AND last_seen_at<?
+        """,
+        (*WORKER_ACTIVE_STATUSES, cutoff),
+    )
+    lost_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    if not lost_guids:
+        return 0
+    placeholders = ",".join("?" for _ in lost_guids)
+    cur.execute(
+        f"""
         UPDATE job_scheduler_workers
            SET status=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
-         WHERE status IN (?,?,?)
-           AND last_seen_at<?
+         WHERE worker_guid IN ({placeholders})
         """,
-        (WORKER_STATUS_LOST, now, now, *WORKER_ACTIVE_STATUSES, cutoff),
+        (WORKER_STATUS_LOST, now, now, *lost_guids),
     )
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=lost_guids,
+        reason="requeued after site worker heartbeat expired",
+    )
+    return updated
 
 
 def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Sequence[str]) -> int:
@@ -788,22 +890,41 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     now = _now_ts()
     live = [str(item or "").strip() for item in live_worker_guids or [] if str(item or "").strip()]
     cur = conn.cursor()
+    select_sql = """
+        SELECT worker_guid
+          FROM job_scheduler_workers
+         WHERE status IN (?,?,?)
+           AND COALESCE(site_id, 0)>0
+    """
+    select_params: List[Any] = [*WORKER_ACTIVE_STATUSES]
+    if live:
+        placeholders = ",".join("?" for _ in live)
+        select_sql += f" AND worker_guid NOT IN ({placeholders})"
+        select_params.extend(live)
+    cur.execute(select_sql, tuple(select_params))
+    missing_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    if not missing_guids:
+        return 0
+    missing_placeholders = ",".join("?" for _ in missing_guids)
     base_sql = """
         UPDATE job_scheduler_workers
            SET status=?,
                docker_state=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
-         WHERE status IN (?,?,?)
-           AND COALESCE(site_id, 0)>0
+         WHERE worker_guid IN ({missing_placeholders})
     """
-    params: List[Any] = [WORKER_STATUS_LOST, "missing", now, now, *WORKER_ACTIVE_STATUSES]
-    if live:
-        placeholders = ",".join("?" for _ in live)
-        base_sql += f" AND worker_guid NOT IN ({placeholders})"
-        params.extend(live)
-    cur.execute(base_sql, tuple(params))
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    cur.execute(
+        base_sql.format(missing_placeholders=missing_placeholders),
+        (WORKER_STATUS_LOST, "missing", now, now, *missing_guids),
+    )
+    updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=missing_guids,
+        reason="requeued after site worker container disappeared",
+    )
+    return updated
 
 
 def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 60) -> int:
