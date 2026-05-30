@@ -7,9 +7,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from Data.Engine.edge_runtime import LetsEncryptSettings, write_runtime_artifacts
+from Data.Engine.edge_runtime import LetsEncryptSettings, load_settings, write_runtime_artifacts
 
 
 def _build_settings(tmp_path: Path) -> LetsEncryptSettings:
@@ -31,7 +32,7 @@ def _build_settings(tmp_path: Path) -> LetsEncryptSettings:
         runtime_env_path=str(tmp_path / "Engine" / "LetsEncrypt" / "runtime.env"),
         acme_storage_path=str(tmp_path / "Engine" / "LetsEncrypt" / "acme.json"),
         traefik_static_config_path=str(tmp_path / "Engine" / "Traefik" / "traefik.yml"),
-        traefik_dynamic_config_path=str(tmp_path / "Engine" / "Traefik" / "dynamic.yml"),
+        traefik_dynamic_config_path=str(tmp_path / "Engine" / "Traefik" / "dynamic" / "core.yml"),
         logs_directory=str(tmp_path / "Engine" / "Logs"),
     )
 
@@ -58,6 +59,33 @@ def test_static_config_trusts_configured_reverse_proxy_for_client_ip(tmp_path: P
     assert '        - "10.42.0.0/16"' in static_config
 
 
+def test_static_config_watches_dynamic_directory(tmp_path: Path) -> None:
+    settings = _build_settings(tmp_path)
+
+    artifacts = write_runtime_artifacts(settings)
+    static_config = Path(artifacts["traefik_static_config_path"]).read_text(encoding="utf-8")
+
+    assert f'    directory: "{tmp_path / "Engine" / "Traefik" / "dynamic"}"' in static_config
+    assert "    watch: true" in static_config
+    assert "    filename:" not in static_config
+    assert artifacts["traefik_dynamic_config_directory"].endswith("/Engine/Traefik/dynamic")
+
+
+def test_legacy_dynamic_file_setting_moves_to_watched_core_file(tmp_path: Path) -> None:
+    settings_path = tmp_path / "Engine" / "LetsEncrypt" / "Settings.json"
+    legacy_settings = _build_settings(tmp_path).as_json_dict()
+    legacy_settings["settings_path"] = str(settings_path)
+    legacy_settings["traefik_dynamic_config_path"] = str(tmp_path / "Engine" / "Traefik" / "dynamic.yml")
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(legacy_settings), encoding="utf-8")
+
+    settings = load_settings(settings_path)
+    artifacts = write_runtime_artifacts(settings)
+
+    assert settings.traefik_dynamic_config_path.endswith("/Engine/Traefik/dynamic/core.yml")
+    assert Path(artifacts["traefik_dynamic_config_path"]).is_file()
+
+
 def test_dynamic_config_routes_dev_ui_to_vite_and_keeps_api_on_engine(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -71,5 +99,5 @@ def test_dynamic_config_routes_dev_ui_to_vite_and_keeps_api_on_engine(
     assert 'PathPrefix(`/api`) || PathPrefix(`/socket.io`)' in dynamic_config
     assert "borealis-ui-dev:" in dynamic_config
     assert 'service: borealis-vite' in dynamic_config
-    assert 'url: "http://127.0.0.1:5173"' in dynamic_config
+    assert 'url: "http://127.0.0.1:8000"' in dynamic_config
     assert "borealis-https:" not in dynamic_config

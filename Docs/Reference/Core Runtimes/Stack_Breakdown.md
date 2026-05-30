@@ -104,6 +104,8 @@ Engine/Services/postgres-db/run   -> /var/run/borealis
 Engine/Services/traefik-edge -> /opt/Borealis/Engine/Services/traefik-edge
 ```
 
+Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory.
+
 `remote-desktop-guacd`:
 ```text
 Engine/Services/remote-desktop-guacd/logs -> /opt/borealis/logs

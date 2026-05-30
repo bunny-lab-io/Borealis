@@ -240,7 +240,7 @@ sequenceDiagram
 
     ### Key material locations (Engine)
     - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
-    - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic.yml`.
+    - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.
     - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
     - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
 

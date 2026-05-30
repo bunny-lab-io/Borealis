@@ -544,6 +544,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/postgres-db/logs" \
     "${RUNTIME_ROOT}/Services/postgres-db/run" \
     "${RUNTIME_ROOT}/Services/traefik-edge/config" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" \
     "${RUNTIME_ROOT}/Services/traefik-edge/env" \
     "${RUNTIME_ROOT}/Services/traefik-edge/logs" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state" \
@@ -973,7 +974,8 @@ BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/S
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
 BOREALIS_TRAEFIK_RUNTIME_ENV_PATH=${RUNTIME_ROOT}/Services/traefik-edge/env/runtime.env
 BOREALIS_TRAEFIK_STATIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/traefik.yml
-BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic.yml
+BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic
+BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/core.yml
 BOREALIS_TRAEFIK_HEALTH_PORT=${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}
 BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=${traefik_trusted_proxy_ips}
 BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=${traefik_forwarded_headers_trusted_ips}

@@ -53,7 +53,8 @@ DEFAULT_RUNTIME_ENV_PATH = Path(
 )
 DEFAULT_TRAEFIK_ROOT = DEFAULT_TRAEFIK_SERVICE_ROOT / "config"
 DEFAULT_TRAEFIK_STATIC_CONFIG_PATH = DEFAULT_TRAEFIK_ROOT / "traefik.yml"
-DEFAULT_TRAEFIK_DYNAMIC_CONFIG_PATH = DEFAULT_TRAEFIK_ROOT / "dynamic.yml"
+DEFAULT_TRAEFIK_DYNAMIC_CONFIG_DIR = DEFAULT_TRAEFIK_ROOT / "dynamic"
+DEFAULT_TRAEFIK_DYNAMIC_CONFIG_PATH = DEFAULT_TRAEFIK_DYNAMIC_CONFIG_DIR / "core.yml"
 DEFAULT_TRAEFIK_LOG_ROOT = DEFAULT_TRAEFIK_SERVICE_ROOT / "logs"
 DEFAULT_ENGINE_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_ENGINE_UPSTREAM_PORT = 5000
@@ -139,6 +140,13 @@ def _normalize_path(value: Any, *, default: str, ensure_leading_slash: bool = Fa
         if len(text) > 1 and text.endswith("/"):
             text = text.rstrip("/")
     return text
+
+
+def _normalize_dynamic_config_path(value: Any, *, default: Path) -> Path:
+    path = Path(_normalize_text(value) or str(default)).expanduser()
+    if path.name in {"dynamic.yml", "dynamic.yaml"}:
+        return path.parent / "dynamic" / "core.yml"
+    return path
 
 
 def _normalize_fqdn(value: Any, *, default: str = "") -> str:
@@ -287,7 +295,12 @@ def load_settings(
         runtime_env_path=str(Path(_normalize_text(raw.get("runtime_env_path")) or defaults.runtime_env_path).expanduser()),
         acme_storage_path=str(Path(_normalize_text(raw.get("acme_storage_path")) or defaults.acme_storage_path).expanduser()),
         traefik_static_config_path=str(Path(_normalize_text(raw.get("traefik_static_config_path")) or defaults.traefik_static_config_path).expanduser()),
-        traefik_dynamic_config_path=str(Path(_normalize_text(raw.get("traefik_dynamic_config_path")) or defaults.traefik_dynamic_config_path).expanduser()),
+        traefik_dynamic_config_path=str(
+            _normalize_dynamic_config_path(
+                raw.get("traefik_dynamic_config_path"),
+                default=Path(defaults.traefik_dynamic_config_path),
+            )
+        ),
         logs_directory=str(Path(_normalize_text(raw.get("logs_directory")) or defaults.logs_directory).expanduser()),
     )
     return settings
@@ -316,6 +329,7 @@ def _render_runtime_env(settings: LetsEncryptSettings) -> str:
         "BOREALIS_LETSENCRYPT_SETTINGS_PATH": settings.settings_path,
         "BOREALIS_TRAEFIK_STATIC_CONFIG_PATH": settings.traefik_static_config_path,
         "BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH": settings.traefik_dynamic_config_path,
+        "BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR": str(Path(settings.traefik_dynamic_config_path).parent),
         "BOREALIS_TRAEFIK_ACME_STORAGE_PATH": settings.acme_storage_path,
         "BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS": os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS", ""),
         "BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS": os.environ.get(
@@ -351,7 +365,7 @@ def _render_static_config(settings: LetsEncryptSettings) -> str:
         [
             "providers:",
             "  file:",
-            f'    filename: "{settings.traefik_dynamic_config_path}"',
+            f'    directory: "{Path(settings.traefik_dynamic_config_path).parent}"',
             "    watch: true",
             "certificatesResolvers:",
             "  letsencrypt:",
@@ -496,6 +510,7 @@ def write_runtime_artifacts(settings: LetsEncryptSettings) -> Dict[str, str]:
         "runtime_env_path": settings.runtime_env_path,
         "acme_storage_path": settings.acme_storage_path,
         "traefik_static_config_path": settings.traefik_static_config_path,
+        "traefik_dynamic_config_directory": str(dynamic_config_path.parent),
         "traefik_dynamic_config_path": settings.traefik_dynamic_config_path,
         "public_base_url": settings.public_base_url,
         "public_hostname": settings.public_hostname,

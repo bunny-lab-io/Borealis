@@ -4,6 +4,8 @@ set -eu
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 SERVICE_ROOT="${PROJECT_ROOT}/Engine/Services/traefik-edge"
 CONFIG_DIR="${SERVICE_ROOT}/config"
+DYNAMIC_CONFIG_DIR="${BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR:-${CONFIG_DIR}/dynamic}"
+CORE_DYNAMIC_CONFIG_PATH="${BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH:-${DYNAMIC_CONFIG_DIR}/core.yml}"
 LOG_DIR="${SERVICE_ROOT}/logs"
 STATE_DIR="${SERVICE_ROOT}/state"
 HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
@@ -13,6 +15,11 @@ HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
 FORWARDED_HEADERS_TRUSTED_IPS="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
 PROXY_PROTOCOL_TRUSTED_IPS="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
+
+case "${CORE_DYNAMIC_CONFIG_PATH}" in
+  "${DYNAMIC_CONFIG_DIR}"/*) ;;
+  *) CORE_DYNAMIC_CONFIG_PATH="${DYNAMIC_CONFIG_DIR}/core.yml" ;;
+esac
 
 append_trusted_ips_section() {
   section_name="$1"
@@ -36,7 +43,7 @@ EOF
   IFS="${old_ifs}"
 }
 
-mkdir -p "${CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
+mkdir -p "${CONFIG_DIR}" "${DYNAMIC_CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
 touch "${STATE_DIR}/acme.json"
 chmod 600 "${STATE_DIR}/acme.json" 2>/dev/null || true
 
@@ -62,7 +69,9 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "runtime_env_path": "${SERVICE_ROOT}/env/runtime.env",
   "acme_storage_path": "${STATE_DIR}/acme.json",
   "traefik_static_config_path": "${CONFIG_DIR}/traefik.yml",
-  "traefik_dynamic_config_path": "${CONFIG_DIR}/dynamic.yml",
+  "traefik_dynamic_config_path": "${CORE_DYNAMIC_CONFIG_PATH}",
+  "traefik_dynamic_config_directory": "${DYNAMIC_CONFIG_DIR}",
+  "traefik_site_worker_route_pattern": "${DYNAMIC_CONFIG_DIR}/site-worker-<worker_guid>.yml",
   "logs_directory": "${LOG_DIR}"
 }
 EOF
@@ -86,7 +95,7 @@ ping:
   entryPoint: borealis-health
 providers:
   file:
-    filename: "${CONFIG_DIR}/dynamic.yml"
+    directory: "${DYNAMIC_CONFIG_DIR}"
     watch: true
 log:
   level: INFO
@@ -110,7 +119,7 @@ else
   TLS_BLOCK="      tls: {}"
 fi
 
-cat > "${CONFIG_DIR}/dynamic.yml" <<EOF
+cat > "${CORE_DYNAMIC_CONFIG_PATH}" <<EOF
 http:
   middlewares:
     redirect-to-https:
