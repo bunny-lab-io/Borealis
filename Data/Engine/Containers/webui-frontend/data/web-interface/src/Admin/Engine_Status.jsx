@@ -18,7 +18,7 @@ import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 
 const WORKER_HISTORY_SECONDS = 60;
 const WORKER_CLOSE_SECONDS = 60;
-const TASK_CLOSE_SECONDS = 60;
+const TASK_CLOSE_SECONDS = 30;
 const POLL_INTERVAL_MS = 3000;
 
 const COLORS = {
@@ -110,7 +110,7 @@ export function statusTone(status) {
   const normalized = String(status || "").toLowerCase();
   if (["healthy"].includes(normalized)) return "success";
   if (["critical", "unhealthy"].includes(normalized)) return "failed";
-  if (["warning", "starting", "restarting", "reassigning"].includes(normalized)) return "queued";
+  if (["warning", "starting", "restarting", "reassigning", "re-deploying", "redeploying"].includes(normalized)) return "queued";
   if (["succeeded", "success", "completed"].includes(normalized)) return "success";
   if (["failed", "lost", "error"].includes(normalized)) return "failed";
   if (["running", "starting"].includes(normalized)) return "running";
@@ -142,6 +142,11 @@ function statusLabel(status) {
   return titleCase(status || "unknown");
 }
 
+function countdownLabel(label, remainingSeconds) {
+  const remaining = Math.max(0, Math.ceil(Number(remainingSeconds || 0)));
+  return `${label} - ${remaining}s`;
+}
+
 export function taskStatusPillLabel(status) {
   const normalized = String(status || "").toLowerCase();
   if (["succeeded", "success", "completed"].includes(normalized)) return "Success";
@@ -155,17 +160,24 @@ export function taskStatusPillLabel(status) {
 function displayStatusLabel(data) {
   const status = data?.visualStatus || data?.status;
   const tone = statusTone(status);
-  if (data?.isTask) return data?.statusDisplayLabel || taskStatusPillLabel(status);
-  if (data?.visualStatusLabel) return data.visualStatusLabel;
+  if (data?.isTask) {
+    const taskLabelText = data?.statusDisplayLabel || taskStatusPillLabel(status);
+    if (["success", "failed", "stopped"].includes(tone) && data?.closeRemainingSeconds != null) {
+      return countdownLabel(taskLabelText, data.closeRemainingSeconds);
+    }
+    return taskLabelText;
+  }
+  if (data?.visualStatusLabel) {
+    if (data?.statusCountdown && data?.closeRemainingSeconds != null) {
+      return countdownLabel(data.visualStatusLabel, data.closeRemainingSeconds);
+    }
+    return data.visualStatusLabel;
+  }
   if (tone === "idle" && !data?.isManager && data?.idleRemainingSeconds != null) {
     const remaining = Number(data?.idleRemainingSeconds ?? 0);
     return `Idle - Teardown in ${Math.max(0, Math.ceil(remaining))}s`;
   }
   if (!data?.isTask && !data?.isManager && ["failed", "stopped"].includes(tone) && data?.closeRemainingSeconds != null) {
-    const remaining = Number(data.closeRemainingSeconds || 0);
-    return `${statusLabel(data?.status)} - Closing in ${Math.max(0, Math.ceil(remaining))}s`;
-  }
-  if (data?.isTask && ["success", "failed", "stopped"].includes(tone) && data?.closeRemainingSeconds != null) {
     const remaining = Number(data.closeRemainingSeconds || 0);
     return `${statusLabel(data?.status)} - Closing in ${Math.max(0, Math.ceil(remaining))}s`;
   }
@@ -365,36 +377,42 @@ const TaskNode = memo(({ data }) => {
                 {data.statusDetail}
               </Typography>
             ) : null}
-            {canOpen ? (
-              <Typography
-                component="button"
-                type="button"
-                onClick={data.onOpen}
-                sx={{
-                  mt: 0.35,
-                  p: 0,
-                  border: 0,
-                  background: "transparent",
-                  color: COLORS.blue,
-                  cursor: "pointer",
-                  fontSize: "0.69rem",
-                  fontWeight: 700,
-                  lineHeight: 1.1,
-                  textDecoration: "none",
-                  maxWidth: "100%",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  display: "block",
-                  textAlign: "left",
-                  "&:hover": {
-                    color: "#bae6fd",
+            {data.taskName ? (
+              canOpen ? (
+                <Typography
+                  component="button"
+                  type="button"
+                  onClick={data.onOpen}
+                  sx={{
+                    mt: 0.35,
+                    p: 0,
+                    border: 0,
+                    background: "transparent",
+                    color: COLORS.blue,
+                    cursor: "pointer",
+                    fontSize: "0.69rem",
+                    fontWeight: 700,
+                    lineHeight: 1.1,
                     textDecoration: "none",
-                  },
-                }}
-              >
-                {data.taskName}
-              </Typography>
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    display: "block",
+                    textAlign: "left",
+                    "&:hover": {
+                      color: "#bae6fd",
+                      textDecoration: "none",
+                    },
+                  }}
+                >
+                  {data.taskName}
+                </Typography>
+              ) : (
+                <Typography sx={{ mt: 0.35, color: COLORS.blue, fontSize: "0.69rem", fontWeight: 700, lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {data.taskName}
+                </Typography>
+              )
             ) : null}
           </Box>
         </WorkflowLikeCard>
@@ -576,6 +594,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   const nodeIdByGuid = new Map();
   const nodeIdBySite = new Map();
   const activeNodeIdBySite = new Map();
+  const terminalNodeIdBySite = new Map();
   const workerToneByNodeId = new Map();
   siteWorkers.forEach((worker, index) => {
     const nodeId = workerNodeId(worker, index + 1);
@@ -590,6 +609,16 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     if (siteId > 0 && !isTerminalWorkerTone(tone) && !activeNodeIdBySite.has(siteId)) {
       activeNodeIdBySite.set(siteId, nodeId);
     }
+    if (siteId > 0 && isTerminalWorkerTone(tone) && !terminalNodeIdBySite.has(siteId)) {
+      terminalNodeIdBySite.set(siteId, nodeId);
+    }
+  });
+
+  const redeployingSiteIds = new Set();
+  recentWorkRaw.forEach((work) => {
+    const siteId = Number(work?.site_id || 0);
+    if (siteId <= 0 || activeNodeIdBySite.has(siteId) || !terminalNodeIdBySite.has(siteId)) return;
+    if (!isTerminalWorkTone(statusTone(work?.status))) redeployingSiteIds.add(siteId);
   });
 
   const workerRows = [...siteWorkers];
@@ -608,6 +637,9 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     }
     if (siteId > 0 && activeNodeIdBySite.has(siteId)) {
       return { anchorId: activeNodeIdBySite.get(siteId), reassigning };
+    }
+    if (siteId > 0 && redeployingSiteIds.has(siteId) && terminalNodeIdBySite.has(siteId) && !terminalWork) {
+      return { anchorId: terminalNodeIdBySite.get(siteId), reassigning: true };
     }
     if (siteId > 0 && terminalWork && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
     if (siteId <= 0) return managerNodeId;
@@ -648,13 +680,16 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     if (!anchorId) return;
     const reassigning = Boolean(typeof anchorResult === "object" && anchorResult?.reassigning);
     const taskLink = work?.task_link || {};
-    const jobPart = work?.job_id || taskLink?.job_id || work?.run_id || work?.id;
+    const terminalBucket = isTerminalWorkTone(tone) && !reassigning;
+    const statusPart = reassigning ? "reassigning" : work?.status || "";
+    const jobPart = terminalBucket ? "terminal" : work?.job_id || taskLink?.job_id || work?.run_id || work?.id;
+    const linkPart = terminalBucket ? "" : taskLink?.path || taskLink?.label || "";
     const stableKey = [
       anchorId,
       work?.kind || "work",
       jobPart || work?.id,
-      taskLink?.path || taskLink?.label || "",
-      reassigning ? "reassigning" : work?.status || "",
+      linkPart,
+      statusPart,
     ].join(":");
     const existing = groupedWork.get(stableKey);
     if (!existing) {
@@ -662,6 +697,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
         anchorId,
         work: { ...work },
         reassigning,
+        terminalBucket,
         count: 1,
         targetCount: Number(work?.target_count || 0),
         started_at: work?.started_at,
@@ -671,7 +707,8 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     }
     existing.count += 1;
     existing.reassigning = existing.reassigning || reassigning;
-    existing.targetCount = Math.max(Number(existing.targetCount || 0), Number(work?.target_count || 0));
+    existing.terminalBucket = existing.terminalBucket || terminalBucket;
+    existing.targetCount += Number(work?.target_count || 0);
     const existingFinished = Number(existing.work?.finished_at || existing.work?.updated_at || 0);
     const nextFinished = Number(work?.finished_at || work?.updated_at || 0);
     if (nextFinished >= existingFinished) {
@@ -756,6 +793,9 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const siteId = Number(worker?.site_id || 0);
     const siteName = String(worker?.site_name || siteNameFor(payload, siteId)).trim();
     const id = workerIdForRow.get(worker) || workerNodeId(worker, index + 1);
+    const workerStatus = worker?.status || "unknown";
+    const workerTone = statusTone(workerStatus);
+    const isRedeployingWorker = siteId > 0 && redeployingSiteIds.has(siteId) && isTerminalWorkerTone(workerTone);
     workerNodes.push({
       id,
       type: "worker",
@@ -763,15 +803,18 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       data: {
         label: "Site Worker",
         startedLabel: epochLabel(worker?.started_at),
-        status: worker?.status || "unknown",
+        status: workerStatus,
+        visualStatus: isRedeployingWorker ? "re-deploying" : "",
+        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : "",
+        statusCountdown: isRedeployingWorker,
         isManager: false,
         siteLabel: siteName || `Site ${siteId}`,
         idleRemainingSeconds:
-          dismissInactive && statusTone(worker?.status) === "idle"
+          dismissInactive && workerTone === "idle"
             ? idleTtlSeconds - Math.max(0, nowSeconds - Number(worker?.idle_since || nowSeconds))
             : null,
         closeRemainingSeconds:
-          dismissInactive && ["failed", "stopped"].includes(statusTone(worker?.status))
+          dismissInactive && (isRedeployingWorker || ["failed", "stopped"].includes(workerTone))
             ? WORKER_CLOSE_SECONDS - terminalAgeSeconds(worker, nowSeconds, dismissStartedAt)
             : null,
       },
@@ -784,7 +827,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   workerNodes
     .filter((node) => node.id !== managerNodeId)
     .forEach((workerNode) => {
-      const tone = statusTone(workerNode.data.status);
+      const tone = statusTone(workerNode.data.visualStatus || workerNode.data.status);
       const color = edgeColor(tone === "stopped" ? "queued" : tone);
       edges.push({
         id: `edge:${managerNodeId}:${workerNode.id}`,
@@ -811,12 +854,12 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       const taskLink = work?.task_link || {};
       const deviceCount = taskDeviceCount(entry, work);
       const label = taskLabel(deviceCount);
-      const taskNameBase = taskLink?.label || titleCase(work?.kind || "task");
-      const taskName = taskNameBase;
-      const duration = elapsedLabel(entry.started_at || work?.started_at, entry.finished_at || work?.finished_at);
       const visualStatus = entry.reassigning ? "pending" : "";
       const statusDetail = entry.reassigning ? "Reassigning to New Worker" : "";
       const statusDisplayLabel = taskStatusPillLabel(visualStatus || work?.status);
+      const taskNameBase = taskLink?.label || titleCase(work?.kind || "task");
+      const taskName = entry.terminalBucket && entry.count > 1 ? `${statusDisplayLabel} Tasks` : taskNameBase;
+      const duration = elapsedLabel(entry.started_at || work?.started_at, entry.finished_at || work?.finished_at);
       const tone = statusTone(visualStatus || work?.status);
       const terminalFinishedAt = Number(entry.finished_at || work?.finished_at || work?.updated_at || 0);
       const closeRemainingSeconds =
@@ -841,8 +884,8 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
           isTask: true,
           closeRemainingSeconds,
           error: work?.error || "",
-          path: taskLink?.path || "",
-          onOpen: taskLink?.path ? () => navigate(String(taskLink.path)) : undefined,
+          path: entry.terminalBucket && entry.count > 1 ? "" : taskLink?.path || "",
+          onOpen: !entry.terminalBucket || entry.count <= 1 ? (taskLink?.path ? () => navigate(String(taskLink.path)) : undefined) : undefined,
         },
         draggable: false,
       });

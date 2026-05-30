@@ -10,9 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Latest implementation commit | `4792865d` (`Restore profile based engine tuning`) |
-| Current state | `M1` implementation is deployed and operator smoke is mostly positive. Do not start `M2` until Jobs 102/103 terminal results are confirmed and the tracker is marked `M1 Done`. |
-| Next safe step | Confirm terminal results for Jobs 102 and 103. Treat the screenshot as expected slot behavior unless database rows show more than `12` active scheduled work items on one site-worker. The visible `Task (8 Devices)` labels are device counts, not scheduler slot counts. |
+| Latest implementation commit | `cc8c90c0` (`Add Engine Status terminal countdowns`) |
+| Current state | `M1` implementation is deployed and operator smoke is mostly positive. Engine Status has an additional visual fix pending redeploy. Do not start `M2` until Jobs 102/103 terminal results are confirmed and the tracker is marked `M1 Done`. |
+| Next safe step | Redeploy latest branch head. Confirm terminal task buckets show 30-second countdowns and reset when matching terminal work arrives. Confirm orphaned worker handoff shows `Re-Deploying` on the worker lane and `Reassigning to New Worker` on pending task groups. |
 
 ## Tracker Rules
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Fixed Engine Status terminal task visibility. Success, failed, and skipped task buckets now show a 30-second countdown in the status pill, aggregate matching terminal work into the same bucket, and reset the timer when newer terminal work arrives. Orphaned queued/running work with no active same-site worker now marks the worker lane `Re-Deploying` while task groups show `Reassigning to New Worker`. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. | `Unit_Test_Results/engine-20260530T221946Z` |
 | 2026-05-30 | `M1` | Recorded post-redeploy smoke: Server Info shows read-only Site Worker Scheduled Tasks, Engine appears healthy, and Jobs 102/103 produced two running `Task (8 Devices)` cards on the same site-worker. Code review confirms this is not automatically a `12`-slot violation because Engine Status labels target count separately from scheduled work-item count. Shared Ansible uses one slot for a multi-device batch; individual Ansible one-target runs can be grouped visually. | Documentation update and source review. Direct DB verification was blocked locally because runtime env files are root-owned and Docker socket access is not available to this shell. | Operator screenshot for Jobs 102/103. |
 | 2026-05-30 | `M1` | Refreshed tracker for fresh Codex handoff. Added branch head, M1 handoff state, explicit post-redeploy smoke gates, and fresh-session prompt so next agent can resume without replaying the full conversation. | Documentation update; `git diff --check` passed. | This branch. |
 | 2026-05-30 | `M1` | Restored profile-based Engine tuning. `Engine.sh deploy` now detects host vCPU/RAM, writes deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled task concurrency. Server Info now shows scheduled-lane capacity as read-only profile data; site-worker settings `PUT` route was removed. | `bash -n Engine.sh`, `python3 -m py_compile` for Server Info API, Compose config with example env, and `git diff --check` passed. Official `server` and `ansible` test lanes could not run on this host because local Python is missing `pytest`; runtime compose-env config could not run because `Engine/Deploy/compose.env` is root-owned. | `Unit_Test_Results/engine-server-profile-tuning`, `Unit_Test_Results/engine-ansible-profile-tuning` |
@@ -288,10 +289,14 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - `M1` SSH auth behavior corrected: mixed credentials now follow documented key-first probe order.
 - Engine Status graph corrected for issue #233: active task groups no longer render as downstream work owned by stopped/lost site-workers, and orphaned active groups now show `Reassigning to New Worker`.
 - Engine Status task groups now use scheduler-style count/status buckets: `Task (n Devices)` plus `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
+- Engine Status terminal task groups now show a 30-second countdown, aggregate matching terminal work, and reset the timer when newer matching terminal work arrives. Worker lanes now show `Re-Deploying` while orphaned same-site work waits for replacement worker claim.
 
 ## Remaining Work
 
+- Redeploy latest branch head so Engine Status visual timer changes are live.
 - Confirm terminal results for Jobs 102 and 103 from runtime data. If both succeed or fail only for endpoint-specific reasons, `M1` smoke is acceptable.
+- Confirm terminal task cards show visible 30-second countdowns and reset when another matching success/failure/skipped event arrives.
+- Confirm orphaned worker handoff shows worker status `Re-Deploying` before replacement worker is active.
 - Useful runtime query while the jobs are active: count `running` rows in `job_scheduler_work_items` grouped by `worker_guid` for `job_id in (102, 103)`. The active work-item count, not summed target count, must stay at or below `12` on the current host.
 - If exact slot verification is needed, inspect queued/running `job_scheduler_work_items` for Jobs 102/103 and confirm one site-worker never has more than `12` active scheduled work items at once.
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item before `M2`: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
@@ -332,6 +337,8 @@ Current M1 state:
 - stopped/lost site-workers requeue claimed work instead of leaving jobs in limbo.
 - Engine Status task groups now aggregate as Task (n Devices) with Success/Running/Pending/Failed/Skipped pills.
 - orphaned active work shows Reassigning to New Worker instead of appearing owned by stopped/lost workers.
+- terminal task buckets show a 30-second countdown and reset when matching terminal work arrives.
+- orphaned worker lanes show Re-Deploying until replacement worker claim is visible.
 - SSH mixed credentials follow ssh-connection-logic.md: key-only probe first, password-only fallback only after key failure/timeout, failed password fallback keeps key-only final auth.
 - scheduler ignores legacy Ansible per-job/global runner limits for dispatch.
 - site-worker scheduled lane is the visible throughput gate for scheduled work items, not raw device count.
@@ -340,11 +347,13 @@ Current M1 state:
 - Engine Status `Task (n Devices)` cards show represented target count. A shared Ansible batch can be one scheduled work item with multiple devices; individual Ansible can group several one-target work items into one card when job/status/worker match.
 
 Next work:
-1. Confirm terminal results for Jobs 102 and 103.
-2. If exact verification is needed while the jobs are active, query job_scheduler_work_items for Jobs 102/103 and count `running` scheduled work items per site-worker; do not infer slot usage only from `Task (n Devices)` labels.
-3. Confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers.
-4. If smoke passes, update Docs/Reference/Migration Paths/api-backend-rewrite.md: mark M1 Done, add work-log row with validation, and set next safe step to M2.
-5. If operator wants a raw device-level cap across shared plus individual Ansible, design that as a follow-up before M2 because current implementation intentionally caps work items and leaves shared Ansible internal forks at default.
+1. Redeploy latest branch head.
+2. Confirm terminal task countdown behavior and Re-Deploying worker handoff in Engine Status.
+3. Confirm terminal results for Jobs 102 and 103.
+4. If exact verification is needed while the jobs are active, query job_scheduler_work_items for Jobs 102/103 and count `running` scheduled work items per site-worker; do not infer slot usage only from `Task (n Devices)` labels.
+5. Confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers unless the worker lane is explicitly `Re-Deploying`.
+6. If smoke passes, update Docs/Reference/Migration Paths/api-backend-rewrite.md: mark M1 Done, add work-log row with validation, and set next safe step to M2.
+7. If operator wants a raw device-level cap across shared plus individual Ansible, design that as a follow-up before M2 because current implementation intentionally caps work items and leaves shared Ansible internal forks at default.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.

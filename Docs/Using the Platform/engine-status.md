@@ -24,8 +24,8 @@ The React Flow canvas uses left-to-right topology:
 - Active workers are currently heartbeating.
 - Recent workers may show stopped, lost, completed, or failed state briefly for handoff visibility.
 - Task groups render as `Task (n Devices)` with scheduler-style pills: `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
-- Terminal task groups stay visible for the 60-second worker history window, so recent success and failure buckets remain readable while pending work drains.
-- Running or queued task groups attach only to active site workers or queued site placeholders. If their previous worker stopped or was lost, the task group stays `Pending` and shows `Reassigning to New Worker` while the scheduler hands it to another same-site worker.
+- Terminal task groups show a countdown in the status pill and disappear after 30 seconds. If another task lands in the same terminal bucket before the countdown expires, the bucket count updates and the countdown resets.
+- Running or queued task groups attach to active site workers, queued site placeholders, or a terminal site-worker node marked `Re-Deploying`. If their previous worker stopped or was lost, the task group stays `Pending` and shows `Reassigning to New Worker` while the scheduler hands it to another same-site worker.
 
 ## Use Actions
 
@@ -65,3 +65,4 @@ The React Flow canvas uses left-to-right topology:
     - Worker rows live in `job_scheduler_workers`.
     - Work rows live in `job_scheduler_work_items`.
     - Terminal worker records are short-lived lifecycle hints, not durable job history.
+    - Terminal task cards are grouped by worker, kind, and terminal status. The UI uses the newest terminal work item in each group to reset the visible 30-second countdown.
