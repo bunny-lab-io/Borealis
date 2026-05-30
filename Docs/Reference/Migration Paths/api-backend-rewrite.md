@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Latest implementation commit | `cc8c90c0` (`Add Engine Status terminal countdowns`) |
+| Latest implementation commit | `65ba85c6` (`Add Engine Status terminal countdowns`) |
 | Current state | `M1` implementation is deployed and operator smoke is mostly positive. Engine Status has an additional visual fix pending redeploy. Do not start `M2` until Jobs 102/103 terminal results are confirmed and the tracker is marked `M1 Done`. |
 | Next safe step | Redeploy latest branch head. Confirm terminal task buckets show 30-second countdowns and reset when matching terminal work arrives. Confirm orphaned worker handoff shows `Re-Deploying` on the worker lane and `Reassigning to New Worker` on pending task groups. |
 
