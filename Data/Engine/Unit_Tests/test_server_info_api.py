@@ -459,7 +459,7 @@ def test_server_ansible_runner_settings_round_trip(
     initial_response = client.get("/api/server/ansible-runner-settings")
     assert initial_response.status_code == 200
     assert initial_response.get_json() == {
-        "job_concurrency_limit": 20,
+        "job_concurrency_limit": 5,
         "global_concurrency_limit": 50,
     }
 

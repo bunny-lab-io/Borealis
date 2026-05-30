@@ -26,9 +26,11 @@ Use service actions for focused restart, rebuild, reload, or WireGuard reconcile
 Admins can adjust:
 
 - Engine timezone.
-- Scheduled Ansible per-job concurrency.
-- Scheduled Ansible global concurrency.
+- Scheduled Ansible per-job concurrency. Default: `5` running Ansible runs per job.
+- Scheduled Ansible global concurrency. Default: `50` running Ansible runs across the Engine.
 - Agent release channel targets.
+
+Site workers also cap scheduled-job work in their own lane. Default: `5` scheduled work items per site worker at one time. Onboarding and other worker lanes keep their separate lane rules.
 
 !!! warning
 

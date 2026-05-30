@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Watch Job 97 final target (`lab-fog-01`). If it fails from WireGuard readiness while stable Ubuntu/Rocky targets stay successful, treat remaining issue as endpoint transport health and mark `M1` done before starting `M2`. |
+| Next safe step | Redeploy Engine/job-scheduler/site-worker so source defaults apply, then rerun Ubuntu/Rocky Ansible Quick Job smoke with per-job runner limit `5` and site-worker scheduled lane concurrency `5`. |
 
 ## Tracker Rules
 
@@ -73,7 +73,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
 | Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
 | Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
-| Handoff Note | Operator smoke after Job 96/97 shows stable Ubuntu/Rocky Ansible Quick Job targets succeeding through site-workers. Remaining failures are isolated to targets with WireGuard readiness or credential availability issues, not hidden worker-queue skips. |
+| Handoff Note | Operator smoke after Job 96/97 shows stable Ubuntu/Rocky Ansible Quick Job targets succeeding through site-workers. Default per-job Ansible runner limit and site-worker scheduled lane concurrency are both set to `5`; rerun smoke after redeploy before starting `M2`. |
 
 ### M2: Traefik Dynamic Worker Routing
 
@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Set default scheduled Ansible per-job runner limit to `5` and default site-worker scheduled-job lane concurrency to `5`. Left global Ansible runner default at `50` and left onboarding/other worker lane behavior unchanged. Updated Server Info and Ansible playbook docs with concurrency defaults. | `python3 -m py_compile` passed; focused server-info/queue/scheduler pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T113906Z` |
 | 2026-05-30 | `M1` | Reviewed operator Job 96/97 smoke. Job 96 produced 11 successes and 6 visible failures, with transient WireGuard failures no longer hidden as skipped/succeeded. Job 97 focused on Ubuntu/Rocky targets and reached 12 successes with only `lab-fog-01` still retrying WireGuard readiness. Confirmed Create Job only selects execution mode; Server Info Ansible runner limits gate scheduler dispatch; site-worker concurrency gates per-site worker claims. | Live PostgreSQL inspection. No source change needed. | Jobs 96 and 97 runtime rows. |
 | 2026-05-30 | `M1` | Investigated operator-found Job 95 split result: 7 successes, 9 transient WireGuard skips, and 1 real SSH route failure. Confirmed Quick Job credential now persisted (`credential_id=1`) and retries helped some targets, but per-site worker concurrency of 7 flooded tunnel preparation and a 4-attempt retry budget let final WireGuard skips complete as successful work items. Reduced default site-worker scheduled concurrency to 3, increased transient retry budget to 8 attempts with 30 second delay, and changed exhausted transient tunnel-prep skips into failed runs/work items with visible errors. | `python3 -m py_compile` passed for touched scheduler files and queue test; focused queue/API pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T041923Z` |
 | 2026-05-30 | `M1` | Fixed operator-found Job 91/93 and Job 94 regressions. Ansible Quick Job now requires an SSH credential in the dialog and API create/update validation rejects SSH Ansible without a stored credential. Site-worker now retries transient WireGuard preparation skips (`wireguard_unavailable`, `wireguard_not_ready`, `remote_preflight_failed`) instead of completing those work items as success. Dynamic site-worker logs now persist under host `Engine/Services/api-backend/logs/site-workers/`. | `python3 -m py_compile` passed; `git diff --check` passed; focused queue/API pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. Full scheduler domain did not pass due unrelated existing onboarding test failure: `scheduled_job_module._onboarding_raw_input_map` missing. | `Unit_Test_Results/engine-20260530T023400Z`, `Unit_Test_Results/engine-20260530T023421Z` |
@@ -259,6 +260,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - `M1` staged fix after Job 94 smoke test: transient WireGuard readiness skips are requeued for retry instead of marked complete.
 - `M1` staged fix after Job 95 smoke test: broad Quick Job Ansible runs now use lower per-worker concurrency, longer transient tunnel retry window, and fail visibly if WireGuard preparation never becomes ready.
 - `M1` smoke after Job 96/97: stable Ubuntu/Rocky Ansible Quick Job targets are succeeding through site-workers; remaining concern is endpoint WireGuard readiness on specific experimental/unstable targets.
+- `M1` concurrency defaults adjusted: scheduled Ansible per-job default is `5`; site-worker scheduled-job lane default is `5`; global Ansible runner default remains `50`.
 
 ## Remaining Work
 

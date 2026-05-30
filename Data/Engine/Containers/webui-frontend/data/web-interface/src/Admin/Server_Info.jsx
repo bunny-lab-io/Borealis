@@ -1062,7 +1062,7 @@ export default function ServerInfo() {
 
   const openAnsibleRunnerDialog = useCallback(() => {
     const currentSettings = overview?.ansible_runner || {};
-    setAnsibleRunnerJobLimit(String(Number(currentSettings?.job_concurrency_limit || 20)));
+    setAnsibleRunnerJobLimit(String(Number(currentSettings?.job_concurrency_limit || 5)));
     setAnsibleRunnerGlobalLimit(String(Number(currentSettings?.global_concurrency_limit || 50)));
     setAnsibleRunnerError("");
     setAnsibleRunnerDialogOpen(true);
@@ -1505,7 +1505,7 @@ export default function ServerInfo() {
       {
         id: "ansible_runner_limits",
         name: "Scheduled Ansible Runner",
-        value: `${Number(ansibleRunner?.job_concurrency_limit || 20)} / ${Number(ansibleRunner?.global_concurrency_limit || 50)}`,
+        value: `${Number(ansibleRunner?.job_concurrency_limit || 5)} / ${Number(ansibleRunner?.global_concurrency_limit || 50)}`,
         details: "Per-job / global runner limits for scheduled Ansible execution on this engine",
         actions: [
           {

@@ -27,7 +27,7 @@ Ansible playbook assemblies run from the Linux Engine against remote devices ove
 5. Select credential or service account path where applicable.
 6. Save.
 
-New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling.
+New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. Default dispatch limit is `5` running Ansible runs per job and `50` running Ansible runs across the Engine. Site workers default to `5` scheduled-job work items at one time in the scheduled-job lane.
 
 ## Read Recap
 
@@ -67,4 +67,5 @@ SSH credentials may include password, private key, become method, and become pas
     - Shared contexts run one inventory per playbook component.
     - Individual contexts create one-host inventories and one run row per target.
     - SSH/WinRM target admission depends on WireGuard readiness and credential/service-account resolution.
-    - Individual runner fan-out is bounded by persisted per-job and global limits exposed in Server Info.
+    - Individual runner fan-out is bounded by persisted per-job and global limits exposed in Server Info. Defaults are `5` per job and `50` globally.
+    - Site-worker scheduled-job lane concurrency is a lower-level worker claim limit. Default is `5` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
