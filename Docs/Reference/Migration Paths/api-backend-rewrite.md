@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M1: Runtime Dependency Split` |
+| Active milestone | `M2: Traefik Dynamic Worker Routing` |
 | Last updated | 2026-05-30 |
 | Latest implementation commit | `65ba85c6` (`Add Engine Status terminal countdowns`) |
-| Current state | `M1` implementation is deployed and operator smoke is mostly positive. Engine Status has an additional visual fix pending redeploy. Do not start `M2` until Jobs 102/103 terminal results are confirmed and the tracker is marked `M1 Done`. |
-| Next safe step | Redeploy latest branch head. Confirm terminal task buckets show 30-second countdowns and reset when matching terminal work arrives. Confirm orphaned worker handoff shows `Re-Deploying` on the worker lane and `Reassigning to New Worker` on pending task groups. |
+| Current state | `M1` is done. Latest redeploy image manifest matches branch source, served WebUI bundle includes Engine Status countdown/handoff code, runtime DB confirms Jobs 102/103 terminal states, and endpoint-specific Job 103 SSH auth failure is outside M1 ownership. |
+| Next safe step | Start `M2`: add watched Traefik dynamic file-provider routing support for per-site-worker route files while preserving current static core routes. |
 
 ## Tracker Rules
 
@@ -36,8 +36,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Milestone | Status | Core migration |
 | --- | --- | --- |
 | `M0: Tracker + PR Setup` | `Done` | Create branch, tracker, index link, and draft PR. |
-| `M1: Runtime Dependency Split` | `In Progress` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
-| `M2: Traefik Dynamic Worker Routing` | `Not Started` | Hotload per-site-worker routes without Traefik recreate. |
+| `M1: Runtime Dependency Split` | `Done` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
+| `M2: Traefik Dynamic Worker Routing` | `In Progress` | Hotload per-site-worker routes without Traefik recreate. |
 | `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
 | `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
 | `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
@@ -69,18 +69,18 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Stop `api-backend` from carrying Ansible and execution-heavy runtime dependencies. |
 | Migrates | Ansible-only packages, execution helpers, and related container install burden from `api-backend` to worker runtime ownership. |
 | Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
 | Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
 | Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
-| Handoff Note | Operator smoke after Job 98/99 shows shared and individual Ansible modes succeeding on stable targets. Post-redeploy smoke confirms Server Info read-only scheduled slots and expected Engine behavior. Finish Jobs 102/103 terminal-result check before marking `M1` done and starting `M2`. |
+| Handoff Note | `M1` completed after post-redeploy checks. API, scheduler, site-worker, and WebUI image hashes match current source; served WebUI `adminRoutes` bundle includes Engine Status countdown and handoff code; Jobs 102/103 reached terminal results through site-workers. `M2` is now active. |
 
 ### M1 Current Handoff State
 
-- Source state: branch `feature/rewrite-api-backend-in-golang`, PR [#232](https://github.com/bunny-lab-io/Borealis/pull/232), latest implementation commit `4792865d`.
-- Implementation state: code for M1 is pushed and redeployed. Operator smoke is positive so far; Jobs 102/103 terminal results still need confirmation.
+- Source state: branch `feature/rewrite-api-backend-in-golang`, PR [#232](https://github.com/bunny-lab-io/Borealis/pull/232), branch head `71c3dfb8`, latest implementation commit `65ba85c6`.
+- Implementation state: API, scheduler, site-worker, and WebUI image hashes match current source after redeploy. The served WebUI `adminRoutes` bundle contains `Re-Deploying`, `Reassigning to New Worker`, terminal bucket text, and close countdown text. Jobs 102/103 terminal results are confirmed from PostgreSQL.
 - Expected current-host profile: `MSP / Production` from `16` vCPU and `32.3 GiB` RAM.
 - Expected tuned scheduled-lane capacity: `12` active scheduled work items per site-worker.
 - Slot semantics: site-worker capacity limits active scheduled work items, not raw devices. Shared Ansible batches consume one slot per site/component batch and may include several devices inside one Ansible process. Individual Ansible consumes one slot per target while active, but Engine Status may group same-job, same-status runs into one `Task (n Devices)` card.
@@ -93,7 +93,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Let Traefik hotload per-site-worker route files without recreating Traefik. |
 | Migrates | Direct routing setup for worker-owned remote-operation endpoints. |
 | Out Of Scope | Worker registry schema, operation-token authorization, Agent route cutover, remote-op feature migration. |
@@ -249,6 +249,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Closed M1 after redeploy. Runtime image manifest now matches current source for `api-backend`, `job-scheduler`, `site-worker`, and `webui-frontend`. Served WebUI `adminRoutes` bundle contains Engine Status terminal countdown and orphaned worker handoff strings. Jobs 102/103 remain terminal in PostgreSQL: Job 102 `Success`; Job 103 seven `Success` runs plus one endpoint-specific SSH auth `Failed` run on `lab-mail-02`. | `git diff --check` passed. Live API `/health` returned `ok`. `./Engine_Unit_Tests.sh --domain webui` remains blocked because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`, but prod WebUI image hash and served bundle were validated. | `Engine/Deploy/image-manifest.json`; served `/assets/adminRoutes-C4ohTIET.js`; `Unit_Test_Results/engine-20260530T232746Z`; runtime DB rows for Jobs 102/103. |
+| 2026-05-30 | `M1` | Pulled branch head `71c3dfb8` and checked runtime state. API, job-scheduler, and site-worker service hashes match current source, but deployed WebUI hash/source does not include latest Engine Status countdown/handoff changes. PostgreSQL confirms Job 102 finished `Success`; Job 103 finished with 7 `Success` runs and 1 endpoint-specific SSH auth `Failed` run on `lab-mail-02`. No Jobs 102/103 work items remain queued, claimed, or running. | `git diff --check` passed before edit. `./Engine_Unit_Tests.sh --domain webui` remained blocked because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. Live API `/health` returned `ok`; DB reads were short-lived. Local redeploy attempt failed because Docker daemon access is denied to this shell and sudo requires a password. | `Unit_Test_Results/engine-20260530T223324Z`; runtime DB rows for Jobs 102/103; `./Engine.sh deploy prod` blocked locally. |
 | 2026-05-30 | `M1` | Fixed Engine Status terminal task visibility. Success, failed, and skipped task buckets now show a 30-second countdown in the status pill, aggregate matching terminal work into the same bucket, and reset the timer when newer terminal work arrives. Orphaned queued/running work with no active same-site worker now marks the worker lane `Re-Deploying` while task groups show `Reassigning to New Worker`. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. | `Unit_Test_Results/engine-20260530T221946Z` |
 | 2026-05-30 | `M1` | Recorded post-redeploy smoke: Server Info shows read-only Site Worker Scheduled Tasks, Engine appears healthy, and Jobs 102/103 produced two running `Task (8 Devices)` cards on the same site-worker. Code review confirms this is not automatically a `12`-slot violation because Engine Status labels target count separately from scheduled work-item count. Shared Ansible uses one slot for a multi-device batch; individual Ansible one-target runs can be grouped visually. | Documentation update and source review. Direct DB verification was blocked locally because runtime env files are root-owned and Docker socket access is not available to this shell. | Operator screenshot for Jobs 102/103. |
 | 2026-05-30 | `M1` | Refreshed tracker for fresh Codex handoff. Added branch head, M1 handoff state, explicit post-redeploy smoke gates, and fresh-session prompt so next agent can resume without replaying the full conversation. | Documentation update; `git diff --check` passed. | This branch. |
@@ -275,7 +277,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Issue #226 reviewed. Decision: move remote-operation execution paths into `site-worker` before rewriting `api-backend` in Go.
 - Milestone tracker drafted with quota-sized work chunks.
 - Branch `feature/rewrite-api-backend-in-golang` created and draft [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) opened.
-- `M1` implementation complete pending post-redeploy smoke: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
+- `M1` complete: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
 - `M1` stabilized after operator smoke test: site-worker no longer exits on idle TTL while scheduled Ansible run remains `Running`.
 - `M1` stabilized after Job 90 smoke test: stopped/lost site-workers now requeue claimed work immediately instead of leaving work items leased to dead workers.
 - `M1` staged fix after Job 91/93 smoke test: Ansible Quick Job now carries an SSH credential instead of creating `credential_id=NULL` jobs.
@@ -290,17 +292,12 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Engine Status graph corrected for issue #233: active task groups no longer render as downstream work owned by stopped/lost site-workers, and orphaned active groups now show `Reassigning to New Worker`.
 - Engine Status task groups now use scheduler-style count/status buckets: `Task (n Devices)` plus `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
 - Engine Status terminal task groups now show a 30-second countdown, aggregate matching terminal work, and reset the timer when newer matching terminal work arrives. Worker lanes now show `Re-Deploying` while orphaned same-site work waits for replacement worker claim.
+- Jobs 102/103 terminal results were confirmed from PostgreSQL: Job 102 succeeded; Job 103 succeeded on seven targets and failed on `lab-mail-02` due SSH authentication, not scheduler/runtime ownership.
+- M1 post-redeploy close check passed: current WebUI image hash is deployed and served `adminRoutes` bundle includes Engine Status countdown/handoff code.
 
 ## Remaining Work
 
-- Redeploy latest branch head so Engine Status visual timer changes are live.
-- Confirm terminal results for Jobs 102 and 103 from runtime data. If both succeed or fail only for endpoint-specific reasons, `M1` smoke is acceptable.
-- Confirm terminal task cards show visible 30-second countdowns and reset when another matching success/failure/skipped event arrives.
-- Confirm orphaned worker handoff shows worker status `Re-Deploying` before replacement worker is active.
-- Useful runtime query while the jobs are active: count `running` rows in `job_scheduler_work_items` grouped by `worker_guid` for `job_id in (102, 103)`. The active work-item count, not summed target count, must stay at or below `12` on the current host.
-- If exact slot verification is needed, inspect queued/running `job_scheduler_work_items` for Jobs 102/103 and confirm one site-worker never has more than `12` active scheduled work items at once.
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item before `M2`: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- If Jobs 102/103 checks pass, mark `M1` `Done` in this tracker and start `M2`.
 - Complete `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
@@ -315,7 +312,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` | Required after container or Traefik changes. |
 | Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes | Queue retry tests, server-info settings tests, scheduled job credential validation tests, and affected scheduler validation cases passed. |
-| WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. |
+| WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. M1 close used prod WebUI image hash plus served bundle inspection instead. |
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler domain | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
@@ -327,11 +324,11 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch should include implementation commit 4792865d, "Restore profile based engine tuning", commit 119f6600, "Update API backend rewrite handoff tracker", and later documentation updates that clarify site-worker scheduled slot semantics.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after 71c3dfb8. Latest M1 implementation commit is 65ba85c6, "Add Engine Status terminal countdowns".
 
-Continue M1 only. Do not start M2 until M1 post-redeploy smoke passes and the tracker marks M1 Done.
+M1 is Done. Continue M2 only.
 
-Current M1 state:
+Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
 - site-worker owns scheduled Ansible execution dependencies and shared Ansible cache.
 - stopped/lost site-workers requeue claimed work instead of leaving jobs in limbo.
@@ -347,13 +344,10 @@ Current M1 state:
 - Engine Status `Task (n Devices)` cards show represented target count. A shared Ansible batch can be one scheduled work item with multiple devices; individual Ansible can group several one-target work items into one card when job/status/worker match.
 
 Next work:
-1. Redeploy latest branch head.
-2. Confirm terminal task countdown behavior and Re-Deploying worker handoff in Engine Status.
-3. Confirm terminal results for Jobs 102 and 103.
-4. If exact verification is needed while the jobs are active, query job_scheduler_work_items for Jobs 102/103 and count `running` scheduled work items per site-worker; do not infer slot usage only from `Task (n Devices)` labels.
-5. Confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers unless the worker lane is explicitly `Re-Deploying`.
-6. If smoke passes, update Docs/Reference/Migration Paths/api-backend-rewrite.md: mark M1 Done, add work-log row with validation, and set next safe step to M2.
-7. If operator wants a raw device-level cap across shared plus individual Ansible, design that as a follow-up before M2 because current implementation intentionally caps work items and leaves shared Ansible internal forks at default.
+1. Implement M2: Traefik watched dynamic file-provider route support for per-site-worker routes.
+2. Preserve existing core Traefik static behavior and route names.
+3. Document route directory, route filename pattern, and rollback command in this tracker before handoff.
+4. Validate with `docker compose -f Data/Engine/Containers/compose.yaml config` and generated Traefik YAML parse check if available.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
