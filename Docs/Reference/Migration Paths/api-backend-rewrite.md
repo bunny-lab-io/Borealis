@@ -7,10 +7,10 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Field | Value |
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
-| PR | Pending |
-| Active milestone | `M0: Tracker + PR Setup` |
+| PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
+| Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Commit tracker, open draft PR, then mark `M0` complete with PR link. |
+| Next safe step | Start `M1` by mapping `api-backend`, `site-worker`, and scheduler dependency ownership. |
 
 ## Tracker Rules
 
@@ -33,8 +33,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Milestone | Status | Core migration |
 | --- | --- | --- |
-| `M0: Tracker + PR Setup` | `In Progress` | Create branch, tracker, index link, and draft PR. |
-| `M1: Runtime Dependency Split` | `Not Started` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
+| `M0: Tracker + PR Setup` | `Done` | Create branch, tracker, index link, and draft PR. |
+| `M1: Runtime Dependency Split` | `In Progress` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
 | `M2: Traefik Dynamic Worker Routing` | `Not Started` | Hotload per-site-worker routes without Traefik recreate. |
 | `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
 | `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
@@ -55,19 +55,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Create the long-lived branch, draft PR, tracker document, and migration-path index link. |
 | Migrates | Nothing. This milestone creates the coordination surface for later migration work. |
 | Out Of Scope | Runtime behavior changes, dependency changes, route changes, Agent changes, Go code. |
 | Done When | Branch exists, draft PR exists, tracker is linked from the migration-path index, and initial roadmap is committed. |
 | Validation | Inspect Markdown, verify index link, run `git diff --check`. |
-| Handoff Note | Start `M1` only after PR link replaces the pending PR value above. |
+| Handoff Note | `M1` is now active. Start with dependency ownership inventory before editing container requirements. |
 
 ### M1: Runtime Dependency Split
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Stop `api-backend` from carrying Ansible and execution-heavy runtime dependencies. |
 | Migrates | Ansible-only packages, execution helpers, and related container install burden from `api-backend` to worker runtime ownership. |
 | Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M0` | Opened draft PR and marked `M1` as next active milestone. | PR created from pushed branch. | [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | 2026-05-30 | `M0` | Created tracker document and migration-path index link. | Markdown inspected; `git diff --check` passed. | This branch. |
 | 2026-05-30 | Planning | Re-evaluated issue #226 and selected worker-first migration before Go rewrite. | Repository inspection only. | Issue #226 and planning notes. |
 
@@ -242,11 +243,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 - Issue #226 reviewed. Decision: move remote-operation execution paths into `site-worker` before rewriting `api-backend` in Go.
 - Milestone tracker drafted with quota-sized work chunks.
+- Branch `feature/rewrite-api-backend-in-golang` created and draft [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) opened.
 
 ## Remaining Work
 
-- Complete `M0` by opening draft PR and recording PR link above.
-- Complete `M1` through `M3` to prepare worker runtime and routing foundation.
+- Complete active `M1`, then `M2` and `M3`, to prepare worker runtime and routing foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
