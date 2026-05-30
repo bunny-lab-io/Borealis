@@ -138,7 +138,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
 8. Resolve public hostname and ACME email.
-9. Render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation.
+9. Detect deployment profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
 10. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
 11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
 12. Write `Engine/Deploy/image-manifest.json`.
@@ -178,7 +178,7 @@ Build cache:
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
-- `compose.env` carries image tags and stable env-file paths for Compose interpolation.
+- `compose.env` carries image tags, stable env-file paths, deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled task concurrency.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; production preview and Vite HMR both bind that same loopback port.
@@ -617,6 +617,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     - service image tags and input hashes
     - changed services for the last deploy action
     - Compose action (`up`, `up-scoped`, or `skipped`)
+    - selected deployment profile and tuned values
     - service list
     - deploy timestamp
 

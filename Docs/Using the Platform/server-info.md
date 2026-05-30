@@ -26,10 +26,9 @@ Use service actions for focused restart, rebuild, reload, or WireGuard reconcile
 Admins can adjust:
 
 - Engine timezone.
-- Site Worker Scheduled Task Concurrency. Default: `5` active scheduled-lane work items per site worker. Range: `1`-`32`.
 - Agent release channel targets.
 
-This setting controls scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work that uses the scheduled lane. Onboarding keeps its separate lane behavior.
+Server Info also shows Site Worker Scheduled Task Concurrency as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
 
 !!! warning
 
@@ -44,8 +43,7 @@ This setting controls scheduled jobs, scheduled workflows, scheduled Ansible wor
     - `GET /api/server/timezones` - timezone options.
     - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
-    - `GET /api/server/site-worker-settings` - read site-worker scheduled-lane capacity.
-    - `PUT /api/server/site-worker-settings` - update site-worker scheduled-lane capacity.
+    - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane capacity.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
     - `POST /api/server/wireguard/recover` - recover WireGuard listener.
@@ -68,4 +66,5 @@ This setting controls scheduled jobs, scheduled workflows, scheduled Ansible wor
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
     - Service actions queue work items so API request can return before service changes interrupt runtime.
+    - Site Worker Scheduled Task Concurrency controls scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work that uses the scheduled lane. Onboarding keeps its separate lane behavior.
     - Server Info is informational first; raw log inspection belongs in Engine Log Management.

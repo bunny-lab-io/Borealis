@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Redeploy WebUI/Engine/job-scheduler/site-worker. First confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers, then rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. Confirm individual fan-out never exceeds `5` active scheduled work items per site-worker. |
+| Next safe step | Redeploy WebUI/Engine/job-scheduler/site-worker. First confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers, then rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. On current MSP / Production-sized host, confirm individual fan-out never exceeds `12` active scheduled work items per site-worker after profile tuning. |
 
 ## Tracker Rules
 
@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Restored profile-based Engine tuning. `Engine.sh deploy` now detects host vCPU/RAM, writes deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled task concurrency. Server Info now shows scheduled-lane capacity as read-only profile data; site-worker settings `PUT` route was removed. | `bash -n Engine.sh`, `python3 -m py_compile` for Server Info API, Compose config with example env, and `git diff --check` passed. Official `server` and `ansible` test lanes could not run on this host because local Python is missing `pytest`; runtime compose-env config could not run because `Engine/Deploy/compose.env` is root-owned. | `Unit_Test_Results/engine-server-profile-tuning`, `Unit_Test_Results/engine-ansible-profile-tuning` |
 | 2026-05-30 | `M1` | Updated Engine Status task group presentation to match scheduler status buckets: `Task (n Devices)` headers with `Success`, `Running`, `Pending`, `Failed`, or `Skipped` pills. Terminal task groups now remain visible for the 60-second worker history window. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit-test cache is missing on this host. | `Unit_Test_Results/engine-20260530T195346Z` |
 | 2026-05-30 | `M1` | Fixed Engine Status visual inconsistency from issue #233. Running/queued work no longer anchors to stopped/lost site-worker nodes; stale active work rows are dropped during held-inactive payload merges while terminal rows remain available for close-out context. Orphaned active task groups now show `Reassigning to New Worker` while anchored to another same-site worker or queued placeholder. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit-test cache is missing on this host. | `Unit_Test_Results/engine-20260530T193850Z` |
 | 2026-05-30 | `M1` | Corrected mixed SSH credential probing to match `ssh-connection-logic.md`: key-only probe runs first, password-only probe runs only after key probe failure/timeout, and failed password fallback keeps key-only final auth. | `python3 -m py_compile` passed; focused mixed-auth scheduler pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T123048Z` |
@@ -265,7 +266,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - `M1` staged fix after Job 95 smoke test: broad Quick Job Ansible runs now use lower per-worker concurrency, longer transient tunnel retry window, and fail visibly if WireGuard preparation never becomes ready.
 - `M1` smoke after Job 96/97: stable Ubuntu/Rocky Ansible Quick Job targets are succeeding through site-workers; remaining concern is endpoint WireGuard readiness on specific experimental/unstable targets.
 - `M1` smoke after Job 98/99: shared Ansible and individual Ansible both completed successfully against stable target sets, except the same known skipped device.
-- `M1` concurrency ownership simplified: site-worker scheduled-lane capacity is the single operator-facing scheduler throttle, default `5`. Legacy Ansible per-job/global settings remain API-compatible but no longer gate scheduler dispatch.
+- `M1` concurrency ownership simplified: site-worker scheduled-lane capacity is the single operator-facing scheduler throttle, profile-tuned to `5`, `8`, `12`, or `16` per site worker. Legacy Ansible per-job/global settings remain API-compatible but no longer gate scheduler dispatch.
+- `M1` profile tuning restored: `Engine.sh deploy` now writes profile metadata, DB pool values, PostgreSQL settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`; Server Info displays tuned capacity read-only.
 - `M1` SSH auth behavior corrected: mixed credentials now follow documented key-first probe order.
 - Engine Status graph corrected for issue #233: active task groups no longer render as downstream work owned by stopped/lost site-workers, and orphaned active groups now show `Reassigning to New Worker`.
 - Engine Status task groups now use scheduler-style count/status buckets: `Task (n Devices)` plus `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
@@ -273,7 +275,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 ## Remaining Work
 
 - Redeploy WebUI and visually confirm issue #233 is gone on the Engine Status canvas.
-- Redeploy and revalidate `M1` operator smoke tests with Server Info Site Worker Scheduled Tasks set to `5`, then mark `M1` done again.
+- Redeploy and revalidate `M1` operator smoke tests with Server Info Site Worker Scheduled Tasks showing the detected profile value (`12` on current MSP / Production host), then mark `M1` done again.
 - Complete `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.

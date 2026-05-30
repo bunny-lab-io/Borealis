@@ -27,7 +27,7 @@ Ansible playbook assemblies run from the Linux Engine against remote devices ove
 5. Select credential or service account path where applicable.
 6. Save.
 
-New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. Site Worker Scheduled Task Concurrency is the visible throttle for scheduled Ansible execution. Default: `5` active scheduled-lane work items per site worker.
+New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. Site Worker Scheduled Task Concurrency is the visible throttle for scheduled Ansible execution. `Engine.sh deploy` tunes that value from the detected Engine deployment profile.
 
 ## Read Recap
 
@@ -43,8 +43,7 @@ SSH credentials may include password, private key, become method, and become pas
 
     - Playbook execution is scheduled through [Scheduled Jobs](../scheduled-jobs.md).
     - Assembly CRUD endpoints are listed in [Assemblies](assemblies.md).
-    - `GET /api/server/site-worker-settings` - read scheduled-lane worker capacity.
-    - `PUT /api/server/site-worker-settings` - update scheduled-lane worker capacity.
+    - `GET /api/server/site-worker-settings` - read profile-managed scheduled-lane worker capacity.
 
     ### Related documentation
 
@@ -68,4 +67,4 @@ SSH credentials may include password, private key, become method, and become pas
     - Individual contexts create one-host inventories and one run row per target/component pair. Each queued run consumes one scheduled-lane worker slot while active.
     - SSH/WinRM target admission depends on WireGuard readiness and credential/service-account resolution.
     - Legacy Ansible runner limit endpoints remain API-compatible but scheduler dispatch no longer uses them as active gates.
-    - Site-worker scheduled-lane concurrency is the active claim limit. Default is `5` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
+    - Site-worker scheduled-lane concurrency is the active claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.

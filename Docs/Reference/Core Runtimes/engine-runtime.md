@@ -116,8 +116,10 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
     ### PostgreSQL profile notes
-    - Container deployment starts PostgreSQL with conservative defaults from `compose.env`; legacy profile auto-tuning is not maintained in the container launcher.
-    - Adjust DB pool values in `Engine/Deploy/compose.env` before redeploy when larger installations need explicit tuning.
+    - `Engine.sh deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
+    - Site-worker scheduled-lane concurrency values are Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.
+    - PostgreSQL settings are applied through the `postgres-db` Compose command. Operators should not run manual PostgreSQL tuning steps for normal profile-managed deployments.
 
     ### WireGuard and VNC wiring
     - WireGuard server manager: `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
@@ -207,7 +209,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
 
     #### Ansible support (shared state)
-    - The Linux Engine now packages Ansible control-node tooling inside the `api-backend` image and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections`.
+    - The Linux Engine now packages Ansible control-node tooling inside worker runtimes and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections` for shared worker access.
     - Scheduled jobs support Engine-side shared Ansible execution for `local`, `ssh`, and `winrm` contexts.
     - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
     - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.

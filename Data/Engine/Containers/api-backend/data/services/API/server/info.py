@@ -10,8 +10,7 @@
 # - POST /api/server/services/<service_key>/action (Operator Admin Session) - Queues a Compose-backed Engine.sh service action in container mode.
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
-# - GET /api/server/site-worker-settings (Operator Admin Session) - Returns persisted site-worker scheduled-lane capacity.
-# - PUT /api/server/site-worker-settings (Operator Admin Session) - Updates persisted site-worker scheduled-lane capacity.
+# - GET /api/server/site-worker-settings (Operator Admin Session) - Returns profile-managed site-worker scheduled-lane capacity.
 # ======================================================
 
 from __future__ import annotations
@@ -58,7 +57,6 @@ from ...job_scheduler.runtime_settings import (
     DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY,
     MAX_SITE_WORKER_SCHEDULED_CONCURRENCY,
     load_site_worker_settings,
-    save_site_worker_settings,
 )
 from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
@@ -1312,6 +1310,7 @@ def _collect_host_payload(context: Any) -> Dict[str, Any]:
         "public_base_url": str(getattr(context, "public_base_url", "") or "").strip(),
         "public_hostname": str(resolve_public_hostname(context) or "").strip(),
         "public_https_port": int(getattr(context, "public_https_port", 443) or 443),
+        "deployment_profile": _deployment_profile_payload(),
     }
 
 
@@ -1437,6 +1436,19 @@ def _collect_ansible_runner_payload() -> Dict[str, Any]:
     }
 
 
+def _deployment_profile_payload() -> Dict[str, Any]:
+    name = str(os.environ.get("BOREALIS_DEPLOYMENT_PROFILE") or "").strip()
+    return {
+        "name": name or "Unprofiled",
+        "rank": _safe_int(os.environ.get("BOREALIS_DEPLOYMENT_PROFILE_RANK"), 0),
+        "cpu_rank": _safe_int(os.environ.get("BOREALIS_DEPLOYMENT_CPU_RANK"), 0),
+        "memory_rank": _safe_int(os.environ.get("BOREALIS_DEPLOYMENT_MEMORY_RANK"), 0),
+        "host_vcpu": _safe_int(os.environ.get("BOREALIS_DEPLOYMENT_HOST_VCPU"), 0),
+        "host_memory_mib": _safe_int(os.environ.get("BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB"), 0),
+        "host_memory_gib": str(os.environ.get("BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB") or "").strip(),
+    }
+
+
 def _collect_site_worker_settings_payload() -> Dict[str, Any]:
     try:
         settings = load_site_worker_settings()
@@ -1456,6 +1468,9 @@ def _collect_site_worker_settings_payload() -> Dict[str, Any]:
             ),
         ),
         "max_scheduled_task_concurrency_limit": MAX_SITE_WORKER_SCHEDULED_CONCURRENCY,
+        "editable": False,
+        "managed_by": "deployment_profile",
+        "deployment_profile": _deployment_profile_payload(),
     }
 
 
@@ -1867,36 +1882,6 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if admin_error:
             return jsonify(admin_error[0]), admin_error[1]
         return jsonify(_collect_site_worker_settings_payload())
-
-    @blueprint.route("/api/server/site-worker-settings", methods=["PUT"])
-    def update_site_worker_settings() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        body = request.get_json(silent=True) or {}
-        raw_value = body.get("scheduled_task_concurrency_limit")
-        if raw_value is None or raw_value == "":
-            return _error_response(
-                "invalid_site_worker_settings",
-                "Scheduled task concurrency is required.",
-                400,
-            )
-        try:
-            parsed_value = int(raw_value)
-        except Exception:
-            return _error_response(
-                "invalid_site_worker_settings",
-                "Scheduled task concurrency must be a whole number between 1 and 32.",
-                400,
-            )
-        if parsed_value < 1 or parsed_value > MAX_SITE_WORKER_SCHEDULED_CONCURRENCY:
-            return _error_response(
-                "invalid_site_worker_settings",
-                "Scheduled task concurrency must be a whole number between 1 and 32.",
-                400,
-            )
-        save_site_worker_settings({"scheduled_task_concurrency_limit": parsed_value})
-        return jsonify({"status": "ok", "site_worker_settings": _collect_site_worker_settings_payload()})
 
     @blueprint.route("/api/server/services/<service_key>/action", methods=["POST"])
     def run_service_action(service_key: str) -> Any:

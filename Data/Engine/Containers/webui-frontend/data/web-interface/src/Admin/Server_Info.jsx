@@ -790,10 +790,6 @@ export default function ServerInfo() {
   const [timezoneSaving, setTimezoneSaving] = useState(false);
   const [timezoneError, setTimezoneError] = useState("");
   const [selectedTimezone, setSelectedTimezone] = useState("");
-  const [siteWorkerDialogOpen, setSiteWorkerDialogOpen] = useState(false);
-  const [siteWorkerSaving, setSiteWorkerSaving] = useState(false);
-  const [siteWorkerError, setSiteWorkerError] = useState("");
-  const [siteWorkerScheduledLimit, setSiteWorkerScheduledLimit] = useState("5");
   const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
   const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
   const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
@@ -1059,19 +1055,6 @@ export default function ServerInfo() {
     setTimezoneError("");
   }, [timezoneSaving]);
 
-  const openSiteWorkerDialog = useCallback(() => {
-    const currentSettings = overview?.site_worker_settings || {};
-    setSiteWorkerScheduledLimit(String(Number(currentSettings?.scheduled_task_concurrency_limit || 5)));
-    setSiteWorkerError("");
-    setSiteWorkerDialogOpen(true);
-  }, [overview]);
-
-  const closeSiteWorkerDialog = useCallback(() => {
-    if (siteWorkerSaving) return;
-    setSiteWorkerDialogOpen(false);
-    setSiteWorkerError("");
-  }, [siteWorkerSaving]);
-
   const openReleaseChannelsDialog = useCallback(() => {
     const currentSettings = overview?.agent_release_channels || {};
     setReleaseDefaultChannel(String(currentSettings?.default_channel || "stable").toLowerCase());
@@ -1170,53 +1153,6 @@ export default function ServerInfo() {
       setReleaseChannelsRefreshing(false);
     }
   }, [fetchOverview, sendScopedNotification]);
-
-  const applySiteWorkerSettings = useCallback(async () => {
-    const scheduledLimit = Number(siteWorkerScheduledLimit);
-    if (!Number.isFinite(scheduledLimit) || scheduledLimit < 1 || scheduledLimit > 32 || !Number.isInteger(scheduledLimit)) {
-      setSiteWorkerError("Scheduled task concurrency must be a whole number between 1 and 32.");
-      return;
-    }
-    setSiteWorkerSaving(true);
-    setSiteWorkerError("");
-    try {
-      const response = await fetch("/api/server/site-worker-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          scheduled_task_concurrency_limit: scheduledLimit,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setSiteWorkerDialogOpen(false);
-      await sendScopedNotification({
-        title: "Site Worker Limit Updated",
-        message: `Site workers can run ${scheduledLimit} scheduled tasks at once.`,
-        icon: "settings",
-        variant: "info",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not update site-worker settings.";
-      setSiteWorkerError(message);
-      await sendScopedNotification({
-        title: "Site Worker Update Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setSiteWorkerSaving(false);
-    }
-  }, [fetchOverview, sendScopedNotification, siteWorkerScheduledLimit]);
 
   const applyTimezoneChange = useCallback(async () => {
     const timezoneId = String(selectedTimezone || "").trim();
@@ -1362,6 +1298,8 @@ export default function ServerInfo() {
   const wireguard = overview?.wireguard || {};
   const publicEdge = overview?.public_edge || {};
   const siteWorkerSettings = overview?.site_worker_settings || {};
+  const deploymentProfile = siteWorkerSettings?.deployment_profile || host?.deployment_profile || {};
+  const deploymentProfileName = String(deploymentProfile?.name || "Deployment Profile").trim();
   const agentReleaseChannels = overview?.agent_release_channels || {};
   const workerPayload = overview?.workers || {};
   const workers = Array.isArray(workerPayload?.workers) ? workerPayload.workers : [];
@@ -1498,15 +1436,8 @@ export default function ServerInfo() {
         id: "site_worker_scheduled_tasks",
         name: "Site Worker Scheduled Tasks",
         value: Number(siteWorkerSettings?.scheduled_task_concurrency_limit || 5),
-        details: "Maximum scheduled-lane tasks each site worker can run at once",
-        actions: [
-          {
-            id: "edit_site_worker_limits",
-            label: siteWorkerSaving ? "Saving..." : "Edit Limit",
-            disabled: siteWorkerSaving,
-            onClick: openSiteWorkerDialog,
-          },
-        ],
+        details: `${deploymentProfileName} profile-managed scheduled-lane capacity per site worker`,
+        actions: [],
       },
       {
         id: "site_workers",
@@ -1563,15 +1494,14 @@ export default function ServerInfo() {
     [
       agentReleaseChannels,
       clockValue,
+      deploymentProfileName,
       host,
       loadAverageCaption,
       loadAverageValue,
-      openSiteWorkerDialog,
       openReleaseChannelsDialog,
       openTimezoneDialog,
       releaseChannelsRefreshing,
       releaseChannelsSaving,
-      siteWorkerSaving,
       siteWorkerSettings,
       stableChannel,
       timezoneChangeSupported,
@@ -2014,47 +1944,6 @@ export default function ServerInfo() {
           </Button>
           <Button onClick={applyTimezoneChange} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={timezoneSaving || timezoneLoading}>
             {timezoneSaving ? "Applying..." : "Apply Timezone"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={siteWorkerDialogOpen} onClose={closeSiteWorkerDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock
-            title="Site Worker Scheduled Tasks"
-            subtitle="Tune how many scheduled-lane tasks each site worker can run at once."
-          />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis uses this limit as the main scheduler throttle for site-worker scheduled work. Individual Ansible jobs consume one slot per one-host playbook run; shared Ansible jobs consume one slot per site batch.
-          </Typography>
-          <Stack spacing={2} sx={{ mt: 2 }}>
-            <TextField
-              label="Scheduled_Task_Concurrency_Limit"
-              type="number"
-              value={siteWorkerScheduledLimit}
-              onChange={(event) => {
-                setSiteWorkerScheduledLimit(event.target.value);
-                if (siteWorkerError) setSiteWorkerError("");
-              }}
-              inputProps={{ min: 1, max: 32, step: 1 }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Maximum active scheduled-lane work items per site worker. Range: 1-32."
-            />
-          </Stack>
-          {siteWorkerError ? (
-            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {siteWorkerError}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeSiteWorkerDialog} sx={DIALOG_BUTTON_SX} disabled={siteWorkerSaving}>
-            Cancel
-          </Button>
-          <Button onClick={applySiteWorkerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={siteWorkerSaving}>
-            {siteWorkerSaving ? "Saving..." : "Save Limit"}
           </Button>
         </DialogActions>
       </Dialog>

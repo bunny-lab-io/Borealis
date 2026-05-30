@@ -83,17 +83,18 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
 ## Engine Tuning Profiles
-- Legacy systemd deployments auto-detected the Engine host profile during deployment and re-deployment.
-- Container deployments render conservative DB pool values into `Engine/Deploy/compose.env`; tune those values explicitly for larger installations until profile-aware container tuning is added.
+- Container deployments auto-detect the Engine host profile during every `Engine.sh deploy` and redeploy.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
-- The launcher writes the selected profile metadata and tuning values into `Engine/database.env` and then applies the PostgreSQL settings with launcher-managed `ALTER SYSTEM` statements.
+- The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled task concurrency into `Engine/Deploy/compose.env`.
+- Docker Compose applies PostgreSQL tuning through the `postgres-db` container startup command, so operators do not run manual `ALTER SYSTEM` steps for normal profile tuning.
 - The current auto-selected single-node profiles are:
   - `Homelab`
   - `Small Business`
   - `MSP / Production`
   - `Enterprise`
-- The roadmap-only `Enterprise Clustered` profile in `README.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+- The roadmap-only `Enterprise Clustered` profile in `Docs/Engine/deploying-the-engine.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+- Site-worker scheduled task concurrency is profile-managed and exposed as read-only in Server Info.
 
 ### Profile selection thresholds
 - Borealis scores CPU and RAM separately, then uses the lower of the two ranks as the effective profile so an unbalanced host does not get over-tuned.
@@ -129,6 +130,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 10`
   - `BOREALIS_DB_MAX_OVERFLOW = 10`
   - effective pooled Engine connection burst capacity: `20`
+- Site-worker scheduled task concurrency:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 5`
 - PostgreSQL connection ceiling:
   - `max_connections = 80`
 - PostgreSQL memory and cache:
@@ -156,6 +159,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 12`
   - `BOREALIS_DB_MAX_OVERFLOW = 16`
   - effective pooled Engine connection burst capacity: `28`
+- Site-worker scheduled task concurrency:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 8`
 - PostgreSQL connection ceiling:
   - `max_connections = 120`
 - PostgreSQL memory and cache:
@@ -183,6 +188,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 20`
   - `BOREALIS_DB_MAX_OVERFLOW = 20`
   - effective pooled Engine connection burst capacity: `40`
+- Site-worker scheduled task concurrency:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 12`
 - PostgreSQL connection ceiling:
   - `max_connections = 150`
 - PostgreSQL memory and cache:
@@ -210,6 +217,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 24`
   - `BOREALIS_DB_MAX_OVERFLOW = 24`
   - effective pooled Engine connection burst capacity: `48`
+- Site-worker scheduled task concurrency:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 16`
 - PostgreSQL connection ceiling:
   - `max_connections = 180`
 - PostgreSQL memory and cache:

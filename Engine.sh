@@ -727,6 +727,197 @@ write_webui_mode_env_file() {
   ' "${RUNTIME_ENV}" > "${target}"
 }
 
+clamp_mib() {
+  local value="$1"
+  local minimum="$2"
+  local maximum="$3"
+  if (( value < minimum )); then
+    printf '%s\n' "${minimum}"
+    return 0
+  fi
+  if (( value > maximum )); then
+    printf '%s\n' "${maximum}"
+    return 0
+  fi
+  printf '%s\n' "${value}"
+}
+
+format_pg_memory_mib() {
+  local mib="$1"
+  if (( mib >= 1024 && mib % 1024 == 0 )); then
+    printf '%sGB\n' "$((mib / 1024))"
+    return 0
+  fi
+  printf '%sMB\n' "${mib}"
+}
+
+detect_host_vcpu() {
+  local count=""
+  if command_exists nproc; then
+    count="$(nproc 2>/dev/null || true)"
+  fi
+  if [[ -z "${count}" ]] && command_exists getconf; then
+    count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  [[ "${count}" =~ ^[0-9]+$ && "${count}" -gt 0 ]] || count="1"
+  printf '%s\n' "${count}"
+}
+
+detect_host_memory_mib() {
+  local mem_mib=""
+  if [[ -r /proc/meminfo ]]; then
+    mem_mib="$(awk '/^MemTotal:/ {printf "%d", $2 / 1024}' /proc/meminfo 2>/dev/null || true)"
+  fi
+  [[ "${mem_mib}" =~ ^[0-9]+$ && "${mem_mib}" -gt 0 ]] || mem_mib="1024"
+  printf '%s\n' "${mem_mib}"
+}
+
+profile_rank_for_cpu() {
+  local vcpu="$1"
+  if (( vcpu >= 24 )); then
+    printf '3\n'
+  elif (( vcpu >= 16 )); then
+    printf '2\n'
+  elif (( vcpu >= 8 )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+profile_rank_for_memory() {
+  local mem_mib="$1"
+  if (( mem_mib >= 65536 )); then
+    printf '3\n'
+  elif (( mem_mib >= 32768 )); then
+    printf '2\n'
+  elif (( mem_mib >= 16384 )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+profile_name_for_rank() {
+  case "$1" in
+    3) printf '%s\n' "Enterprise" ;;
+    2) printf '%s\n' "MSP / Production" ;;
+    1) printf '%s\n' "Small Business" ;;
+    *) printf '%s\n' "Homelab" ;;
+  esac
+}
+
+load_profile_tuning() {
+  local vcpu="$1"
+  local mem_mib="$2"
+  local cpu_rank
+  local memory_rank
+  local profile_rank
+  cpu_rank="$(profile_rank_for_cpu "${vcpu}")"
+  memory_rank="$(profile_rank_for_memory "${mem_mib}")"
+  profile_rank="${cpu_rank}"
+  if (( memory_rank < profile_rank )); then
+    profile_rank="${memory_rank}"
+  fi
+
+  PROFILE_RANK="${profile_rank}"
+  PROFILE_NAME="$(profile_name_for_rank "${profile_rank}")"
+  PROFILE_CPU_RANK="${cpu_rank}"
+  PROFILE_MEMORY_RANK="${memory_rank}"
+  PROFILE_HOST_VCPU="${vcpu}"
+  PROFILE_HOST_MEMORY_MIB="${mem_mib}"
+  PROFILE_HOST_MEMORY_GIB="$(awk -v mib="${mem_mib}" 'BEGIN { printf "%.1f", mib / 1024 }')"
+
+  local shared_mib
+  local cache_mib
+  case "${profile_rank}" in
+    3)
+      PROFILE_DB_POOL_SIZE=24
+      PROFILE_DB_MAX_OVERFLOW=24
+      PROFILE_SITE_WORKER_CONCURRENCY=16
+      PROFILE_POSTGRES_MAX_CONNECTIONS=180
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 12288 24576)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 32768 65536)"
+      PROFILE_POSTGRES_WORK_MEM="16MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="1GB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=16
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=16
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=6
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=2500
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="15s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="12GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="2GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+    2)
+      PROFILE_DB_POOL_SIZE=20
+      PROFILE_DB_MAX_OVERFLOW=20
+      PROFILE_SITE_WORKER_CONCURRENCY=12
+      PROFILE_POSTGRES_MAX_CONNECTIONS=150
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 8192 16384)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 20480 32768)"
+      PROFILE_POSTGRES_WORK_MEM="8MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=12
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=12
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=5
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=2000
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="15s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="8GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="1GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+    1)
+      PROFILE_DB_POOL_SIZE=12
+      PROFILE_DB_MAX_OVERFLOW=16
+      PROFILE_SITE_WORKER_CONCURRENCY=8
+      PROFILE_POSTGRES_MAX_CONNECTIONS=120
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 4096 8192)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 8192 16384)"
+      PROFILE_POSTGRES_WORK_MEM="8MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=4
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=1500
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="20s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="6GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="1GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=32
+      ;;
+    *)
+      PROFILE_DB_POOL_SIZE=10
+      PROFILE_DB_MAX_OVERFLOW=10
+      PROFILE_SITE_WORKER_CONCURRENCY=5
+      PROFILE_POSTGRES_MAX_CONNECTIONS=80
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 1024 4096)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 4096 12288)"
+      PROFILE_POSTGRES_WORK_MEM="4MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="256MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=3
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=1000
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="30s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="4GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="512MB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=16
+      ;;
+  esac
+  PROFILE_POSTGRES_SHARED_BUFFERS="$(format_pg_memory_mib "${shared_mib}")"
+  PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE="$(format_pg_memory_mib "${cache_mib}")"
+  PROFILE_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR="0.02"
+  PROFILE_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR="0.01"
+  PROFILE_POSTGRES_WAL_COMPRESSION="on"
+  PROFILE_POSTGRES_CHECKPOINT_TIMEOUT="15min"
+  PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET="0.9"
+  PROFILE_POSTGRES_RANDOM_PAGE_COST="1.1"
+}
+
 write_compose_env() {
   local mode="$1"
   local public_host="$2"
@@ -757,6 +948,8 @@ write_compose_env() {
   fi
   traefik_forwarded_headers_trusted_ips="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)}"
   traefik_proxy_protocol_trusted_ips="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)}"
+  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
+  log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
 
   cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
@@ -786,15 +979,43 @@ BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=${traefik_trusted_proxy_ips}
 BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=${traefik_forwarded_headers_trusted_ips}
 BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS=${traefik_proxy_protocol_trusted_ips}
 
+BOREALIS_DEPLOYMENT_PROFILE=${PROFILE_NAME}
+BOREALIS_DEPLOYMENT_PROFILE_RANK=${PROFILE_RANK}
+BOREALIS_DEPLOYMENT_CPU_RANK=${PROFILE_CPU_RANK}
+BOREALIS_DEPLOYMENT_MEMORY_RANK=${PROFILE_MEMORY_RANK}
+BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
+BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
+BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
+
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
 POSTGRES_PASSWORD=${postgres_password}
 BOREALIS_DATABASE_URL=postgresql://${db_user}:${postgres_password}@127.0.0.1:5432/${db_name}
 BOREALIS_DB_SSLMODE=disable
-BOREALIS_DB_POOL_SIZE=${BOREALIS_DB_POOL_SIZE:-10}
-BOREALIS_DB_MAX_OVERFLOW=${BOREALIS_DB_MAX_OVERFLOW:-10}
+BOREALIS_DB_POOL_SIZE=${PROFILE_DB_POOL_SIZE}
+BOREALIS_DB_MAX_OVERFLOW=${PROFILE_DB_MAX_OVERFLOW}
 BOREALIS_DB_CONNECT_TIMEOUT=${BOREALIS_DB_CONNECT_TIMEOUT:-15}
 BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS=${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS:-60000}
+BOREALIS_POSTGRES_MAX_CONNECTIONS=${PROFILE_POSTGRES_MAX_CONNECTIONS}
+BOREALIS_POSTGRES_SHARED_BUFFERS=${PROFILE_POSTGRES_SHARED_BUFFERS}
+BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE=${PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE}
+BOREALIS_POSTGRES_WORK_MEM=${PROFILE_POSTGRES_WORK_MEM}
+BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM=${PROFILE_POSTGRES_MAINTENANCE_WORK_MEM}
+BOREALIS_POSTGRES_MAX_WORKER_PROCESSES=${PROFILE_POSTGRES_MAX_WORKER_PROCESSES}
+BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS=${PROFILE_POSTGRES_MAX_PARALLEL_WORKERS}
+BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=${PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER}
+BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS=${PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS}
+BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=${PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT}
+BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME=${PROFILE_POSTGRES_AUTOVACUUM_NAPTIME}
+BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR=${PROFILE_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR}
+BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR=${PROFILE_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR}
+BOREALIS_POSTGRES_MAX_WAL_SIZE=${PROFILE_POSTGRES_MAX_WAL_SIZE}
+BOREALIS_POSTGRES_MIN_WAL_SIZE=${PROFILE_POSTGRES_MIN_WAL_SIZE}
+BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY=${PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY}
+BOREALIS_POSTGRES_WAL_COMPRESSION=${PROFILE_POSTGRES_WAL_COMPRESSION}
+BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT=${PROFILE_POSTGRES_CHECKPOINT_TIMEOUT}
+BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET=${PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET}
+BOREALIS_POSTGRES_RANDOM_PAGE_COST=${PROFILE_POSTGRES_RANDOM_PAGE_COST}
 
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
@@ -820,6 +1041,8 @@ BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certifica
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
 BOREALIS_ANSIBLE_RUNTIME_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache/Ansible
 BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/ansible_runner_settings.json
+BOREALIS_SITE_WORKER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/site_worker_settings.json
+BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}
 BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
@@ -1378,6 +1601,21 @@ def env_settings_hash(path: pathlib.Path) -> str:
         lines.append(raw)
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
 
+def env_values(path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw or raw.lstrip().startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
+    try:
+        return int(str(values.get(key, "")).strip())
+    except Exception:
+        return default
+
 services = [
     "docker-proxy",
     "api-backend",
@@ -1403,6 +1641,7 @@ if image_path.is_file():
             "hash": record.get("hash") or "",
         }
 
+env = env_values(env_file)
 payload = {
     "schema_version": 2,
     "project": project,
@@ -1416,6 +1655,40 @@ payload = {
     "service_images": service_images,
     "changed_services": changed_services,
     "compose_action": compose_action,
+    "deployment_profile": {
+        "name": env.get("BOREALIS_DEPLOYMENT_PROFILE", ""),
+        "rank": env_int(env, "BOREALIS_DEPLOYMENT_PROFILE_RANK"),
+        "cpu_rank": env_int(env, "BOREALIS_DEPLOYMENT_CPU_RANK"),
+        "memory_rank": env_int(env, "BOREALIS_DEPLOYMENT_MEMORY_RANK"),
+        "host_vcpu": env_int(env, "BOREALIS_DEPLOYMENT_HOST_VCPU"),
+        "host_memory_mib": env_int(env, "BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB"),
+        "host_memory_gib": env.get("BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB", ""),
+        "site_worker_scheduled_concurrency": env_int(env, "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"),
+        "db_pool_size": env_int(env, "BOREALIS_DB_POOL_SIZE"),
+        "db_max_overflow": env_int(env, "BOREALIS_DB_MAX_OVERFLOW"),
+        "postgres": {
+            "max_connections": env_int(env, "BOREALIS_POSTGRES_MAX_CONNECTIONS"),
+            "shared_buffers": env.get("BOREALIS_POSTGRES_SHARED_BUFFERS", ""),
+            "effective_cache_size": env.get("BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE", ""),
+            "work_mem": env.get("BOREALIS_POSTGRES_WORK_MEM", ""),
+            "maintenance_work_mem": env.get("BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM", ""),
+            "max_worker_processes": env_int(env, "BOREALIS_POSTGRES_MAX_WORKER_PROCESSES"),
+            "max_parallel_workers": env_int(env, "BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS"),
+            "max_parallel_workers_per_gather": env_int(env, "BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER"),
+            "autovacuum_max_workers": env_int(env, "BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS"),
+            "autovacuum_vacuum_cost_limit": env_int(env, "BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT"),
+            "autovacuum_naptime": env.get("BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME", ""),
+            "autovacuum_vacuum_scale_factor": env.get("BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR", ""),
+            "autovacuum_analyze_scale_factor": env.get("BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR", ""),
+            "max_wal_size": env.get("BOREALIS_POSTGRES_MAX_WAL_SIZE", ""),
+            "min_wal_size": env.get("BOREALIS_POSTGRES_MIN_WAL_SIZE", ""),
+            "effective_io_concurrency": env_int(env, "BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY"),
+            "wal_compression": env.get("BOREALIS_POSTGRES_WAL_COMPRESSION", ""),
+            "checkpoint_timeout": env.get("BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT", ""),
+            "checkpoint_completion_target": env.get("BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET", ""),
+            "random_page_cost": env.get("BOREALIS_POSTGRES_RANDOM_PAGE_COST", ""),
+        },
+    },
     "deployed_at": datetime.now(timezone.utc).isoformat(),
     "services": services,
 }

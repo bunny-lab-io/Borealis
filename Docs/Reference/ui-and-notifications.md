@@ -95,8 +95,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
     - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
     - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
-    - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns the persisted site-worker scheduled-lane task concurrency shown in Server Info.
-    - `PUT /api/server/site-worker-settings` (Operator Admin Session) - updates the persisted site-worker scheduled-lane task concurrency from Server Info.
+    - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns profile-managed site-worker scheduled-lane task concurrency shown in Server Info.
     - `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
     - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
     - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
@@ -154,7 +153,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `AppShell.jsx` plus `PageChromeProvider` own the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
     - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
     - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
-    - Server Info includes a runtime row for Site Worker Scheduled Tasks so operators can adjust per-worker scheduled-lane capacity without restarting the engine or editing env files.
+    - Server Info includes a runtime row for Site Worker Scheduled Tasks so operators can see profile-managed per-worker scheduled-lane capacity. Operators change it by changing host sizing/profile inputs and redeploying, not by editing a UI field.
     - Sites includes an `Active Site Workers` tab backed by ReactFlow. It polls `/api/server/workers?history_seconds=60` and renders a left-to-right scheduler -> site-worker -> task pyramid using Flow Editor-style node cards, circular ports, animated dashed edges, site display names, and aggregated recent task cards.
     - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
     - The body shell keeps that outer inset, but the main page content should bleed to the inside edge of the shell rather than sitting inside a second shared padding layer.
