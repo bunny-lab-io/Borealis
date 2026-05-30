@@ -24,6 +24,7 @@ The React Flow canvas uses left-to-right topology:
 - Active workers are currently heartbeating.
 - Recent workers may show stopped, lost, completed, or failed state briefly for handoff visibility.
 - Task groups show work kind, site, claimed counts, and recent status.
+- Running or queued task groups attach only to active site workers or queued site placeholders. Stopped or lost workers may retain terminal task groups briefly, but they do not own active task edges.
 
 ## Use Actions
 

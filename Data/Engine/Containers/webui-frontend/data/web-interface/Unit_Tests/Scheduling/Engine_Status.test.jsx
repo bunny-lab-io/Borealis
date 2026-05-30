@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph, buildGraphAt, statusTone } from "@/Admin/Engine_Status.jsx";
+import { buildGraph, buildGraphAt, mergeWorkerPayload, statusTone } from "@/Admin/Engine_Status.jsx";
 
 describe("active site workers canvas mapping", () => {
   it("renders engine service topology nodes and edges", () => {
@@ -289,6 +289,94 @@ describe("active site workers canvas mapping", () => {
     expect(taskNode).toBeTruthy();
     expect(graph.edges.some((edge) => edge.source === placeholder?.id && edge.target === taskNode?.id && edge.animated)).toBe(true);
     expect(statusTone("failed")).toBe("failed");
+  });
+
+  it("moves active work away from terminal site workers", () => {
+    const now = 1000;
+    const graph = buildGraphAt(
+      {
+        workers: [
+          {
+            worker_guid: "old-worker",
+            site_id: 7,
+            status: "stopped",
+            started_at: now - 80,
+            stopped_at: now - 5,
+          },
+        ],
+        recent_work: [
+          {
+            id: 71,
+            kind: "scheduled_run",
+            lane: "scheduled_job",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 71,
+            status: "running",
+            started_at: now - 15,
+          },
+        ],
+      },
+      () => {},
+      now,
+      { dismissInactive: true, dismissStartedAt: now - 5 }
+    );
+
+    const stoppedWorker = graph.nodes.find((node) => node.id === "worker:old-worker");
+    const placeholder = graph.nodes.find((node) => node.id === "worker:queued-site-7");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.status === "running");
+    const taskEdge = graph.edges.find((edge) => edge.target === taskNode?.id);
+
+    expect(stoppedWorker).toBeTruthy();
+    expect(placeholder).toBeTruthy();
+    expect(taskNode).toBeTruthy();
+    expect(taskEdge?.source).toBe(placeholder?.id);
+    expect(taskEdge?.source).not.toBe(stoppedWorker?.id);
+  });
+
+  it("does not retain stale active work rows when holding inactive workers", () => {
+    const merged = mergeWorkerPayload(
+      {
+        workers: [],
+        recent_work: [
+          {
+            id: 81,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 81,
+            status: "running",
+          },
+          {
+            id: 82,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 82,
+            status: "succeeded",
+          },
+        ],
+      },
+      {
+        workers: [],
+        recent_work: [
+          {
+            id: 81,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 81,
+            status: "succeeded",
+          },
+        ],
+      },
+      true
+    );
+
+    expect(merged.recent_work).toHaveLength(2);
+    expect(merged.recent_work.find((work) => work.id === 81)?.status).toBe("succeeded");
+    expect(merged.recent_work.some((work) => work.id === 81 && work.status === "running")).toBe(false);
+    expect(merged.recent_work.find((work) => work.id === 82)?.status).toBe("succeeded");
   });
 
   it("collapses repeated task rows by worker job and status", () => {

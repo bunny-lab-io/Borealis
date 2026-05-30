@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Redeploy Engine/job-scheduler/site-worker so Server Info exposes only Site Worker Scheduled Tasks, then rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. Confirm individual fan-out never exceeds `5` active scheduled work items per site-worker. |
+| Next safe step | Redeploy WebUI/Engine/job-scheduler/site-worker. First confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers, then rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. Confirm individual fan-out never exceeds `5` active scheduled work items per site-worker. |
 
 ## Tracker Rules
 
@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Fixed Engine Status visual inconsistency from issue #233. Running/queued work no longer anchors to stopped/lost site-worker nodes; stale active work rows are dropped during held-inactive payload merges while terminal rows remain available for close-out context. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit-test cache is missing on this host. | `Unit_Test_Results/engine-20260530T124323Z` |
 | 2026-05-30 | `M1` | Corrected mixed SSH credential probing to match `ssh-connection-logic.md`: key-only probe runs first, password-only probe runs only after key probe failure/timeout, and failed password fallback keeps key-only final auth. | `python3 -m py_compile` passed; focused mixed-auth scheduler pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T123048Z` |
 | 2026-05-30 | `M1` | Implemented worker-owned scheduled task concurrency. Added persisted `site_worker_settings.json` with `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY` override, replaced Server Info UI with Site Worker Scheduled Tasks, removed Ansible per-job/global limits from scheduler dispatch gates, and made site-workers reload scheduled-lane capacity each loop. Legacy Ansible runner endpoints remain API-compatible but are no longer operator-visible or used for dispatch. | `python3 -m py_compile` passed; focused server-info/queue/scheduler pytest passed; `bash -n` entrypoints passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T121325Z` |
 | 2026-05-30 | `M1` | Set default scheduled Ansible per-job runner limit to `5` and default site-worker scheduled-job lane concurrency to `5`. Left global Ansible runner default at `50` and left onboarding/other worker lane behavior unchanged. Updated Server Info and Ansible playbook docs with concurrency defaults. | `python3 -m py_compile` passed; focused server-info/queue/scheduler pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. | `Unit_Test_Results/engine-20260530T113906Z` |
@@ -265,9 +266,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - `M1` smoke after Job 98/99: shared Ansible and individual Ansible both completed successfully against stable target sets, except the same known skipped device.
 - `M1` concurrency ownership simplified: site-worker scheduled-lane capacity is the single operator-facing scheduler throttle, default `5`. Legacy Ansible per-job/global settings remain API-compatible but no longer gate scheduler dispatch.
 - `M1` SSH auth behavior corrected: mixed credentials now follow documented key-first probe order.
+- Engine Status graph corrected for issue #233: active task groups no longer render as downstream work owned by stopped/lost site-workers.
 
 ## Remaining Work
 
+- Redeploy WebUI and visually confirm issue #233 is gone on the Engine Status canvas.
 - Redeploy and revalidate `M1` operator smoke tests with Server Info Site Worker Scheduled Tasks set to `5`, then mark `M1` done again.
 - Complete `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
@@ -283,6 +286,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` | Required after container or Traefik changes. |
 | Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes | Queue retry tests, server-info settings tests, scheduled job credential validation tests, and affected scheduler validation cases passed. |
+| WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. |
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler domain | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |

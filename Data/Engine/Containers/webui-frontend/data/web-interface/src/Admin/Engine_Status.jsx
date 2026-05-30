@@ -415,6 +415,14 @@ function taskEntryTone(entry) {
   return statusTone(entry?.work?.status);
 }
 
+function isTerminalWorkTone(tone) {
+  return ["success", "failed", "stopped"].includes(tone);
+}
+
+function isTerminalWorkerTone(tone) {
+  return tone === "failed" || tone === "stopped";
+}
+
 function workerLaneRank(worker, taskEntries = []) {
   const taskTones = new Set((taskEntries || []).map((entry) => taskEntryTone(entry)));
   if (taskTones.has("running")) return 0;
@@ -427,18 +435,22 @@ function workerLaneRank(worker, taskEntries = []) {
   return 6;
 }
 
-function workCacheKey(work) {
+function workIdentityKey(work) {
+  const id = String(work?.id ?? "").trim();
+  if (id) return `id:${id}`;
+  const taskLink = work?.task_link || {};
   return [
-    work?.id || "",
-    work?.worker_guid || work?.lease_owner || "",
+    "fallback",
     work?.kind || "work",
+    work?.site_id || "",
     work?.job_id || "",
     work?.run_id || "",
-    work?.status || "",
+    work?.target_id || work?.device_id || work?.hostname || "",
+    taskLink?.path || taskLink?.label || "",
   ].join(":");
 }
 
-function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
+export function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
   if (!holdInactive) return nextPayload;
   const nextWorkers = Array.isArray(nextPayload?.workers) ? nextPayload.workers : [];
   const currentWorkers = Array.isArray(currentPayload?.workers) ? currentPayload.workers : [];
@@ -449,8 +461,12 @@ function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
   const nextWork = Array.isArray(nextPayload?.recent_work) ? nextPayload.recent_work : [];
   const currentWork = Array.isArray(currentPayload?.recent_work) ? currentPayload.recent_work : [];
   const workMap = new Map();
-  currentWork.forEach((work) => workMap.set(workCacheKey(work), work));
-  nextWork.forEach((work) => workMap.set(workCacheKey(work), work));
+  currentWork.forEach((work) => {
+    if (isTerminalWorkTone(statusTone(work?.status))) {
+      workMap.set(workIdentityKey(work), work);
+    }
+  });
+  nextWork.forEach((work) => workMap.set(workIdentityKey(work), work));
 
   return {
     ...currentPayload,
@@ -539,26 +555,39 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   const siteWorkers = visibleWorkers.filter((worker) => Number(worker?.site_id || 0) > 0);
   const nodeIdByGuid = new Map();
   const nodeIdBySite = new Map();
+  const activeNodeIdBySite = new Map();
+  const workerToneByNodeId = new Map();
   siteWorkers.forEach((worker, index) => {
     const nodeId = workerNodeId(worker, index + 1);
+    const tone = statusTone(worker?.status);
     const guid = String(worker?.worker_guid || "").trim();
     const leaseOwner = String(worker?.lease_owner || "").trim();
     if (guid) nodeIdByGuid.set(guid, nodeId);
     if (leaseOwner) nodeIdByGuid.set(leaseOwner, nodeId);
+    workerToneByNodeId.set(nodeId, tone);
     const siteId = Number(worker?.site_id || 0);
     if (siteId > 0 && !nodeIdBySite.has(siteId)) nodeIdBySite.set(siteId, nodeId);
+    if (siteId > 0 && !isTerminalWorkerTone(tone) && !activeNodeIdBySite.has(siteId)) {
+      activeNodeIdBySite.set(siteId, nodeId);
+    }
   });
 
   const workerRows = [...siteWorkers];
   const placeholderBySite = new Map();
   const anchorForWork = (work) => {
-    const workerGuid = String(work?.worker_guid || work?.lease_owner || "").trim();
-    if (workerGuid && nodeIdByGuid.has(workerGuid)) return nodeIdByGuid.get(workerGuid);
-    const siteId = Number(work?.site_id || 0);
-    if (siteId > 0 && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
-    if (siteId <= 0) return managerNodeId;
     const tone = statusTone(work?.status);
-    if (dismissInactive && ["success", "failed", "stopped"].includes(tone)) return null;
+    const terminalWork = isTerminalWorkTone(tone);
+    const siteId = Number(work?.site_id || 0);
+    const workerGuid = String(work?.worker_guid || work?.lease_owner || "").trim();
+    if (workerGuid && nodeIdByGuid.has(workerGuid)) {
+      const nodeId = nodeIdByGuid.get(workerGuid);
+      const workerTone = workerToneByNodeId.get(nodeId);
+      if (terminalWork || !isTerminalWorkerTone(workerTone)) return nodeId;
+    }
+    if (siteId > 0 && activeNodeIdBySite.has(siteId)) return activeNodeIdBySite.get(siteId);
+    if (siteId > 0 && terminalWork && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
+    if (siteId <= 0) return managerNodeId;
+    if (dismissInactive && terminalWork) return null;
     if (!placeholderBySite.has(siteId)) {
       const placeholder = {
         worker_guid: `queued-site-${siteId}`,
@@ -573,6 +602,8 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       const nodeId = workerNodeId(placeholder, workerRows.length + 1);
       placeholderBySite.set(siteId, nodeId);
       nodeIdBySite.set(siteId, nodeId);
+      activeNodeIdBySite.set(siteId, nodeId);
+      workerToneByNodeId.set(nodeId, statusTone(placeholder.status));
       workerRows.push(placeholder);
     }
     return placeholderBySite.get(siteId);
@@ -583,7 +614,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const tone = statusTone(work?.status);
     if (
       dismissInactive &&
-      ["success", "failed", "stopped"].includes(tone) &&
+      isTerminalWorkTone(tone) &&
       terminalAgeSeconds(work, nowSeconds, dismissStartedAt) >= TASK_CLOSE_SECONDS
     ) {
       return;
@@ -758,7 +789,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       const tone = statusTone(work?.status);
       const terminalFinishedAt = Number(entry.finished_at || work?.finished_at || work?.updated_at || 0);
       const closeRemainingSeconds =
-        dismissInactive && ["success", "failed", "stopped"].includes(tone) && terminalFinishedAt > 0
+        dismissInactive && isTerminalWorkTone(tone) && terminalFinishedAt > 0
           ? TASK_CLOSE_SECONDS - terminalAgeSeconds(work, nowSeconds, dismissStartedAt)
           : null;
       const nodeId = `task:${workerNode.id}:${taskIndex}:${work?.id || work?.job_id || work?.run_id || "work"}`;
