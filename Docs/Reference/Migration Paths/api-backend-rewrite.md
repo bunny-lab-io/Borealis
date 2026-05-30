@@ -10,7 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Redeploy WebUI/Engine/job-scheduler/site-worker. First confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers, then rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. On current MSP / Production-sized host, confirm individual fan-out never exceeds `12` active scheduled work items per site-worker after profile tuning. |
+| Latest implementation commit | `4792865d` (`Restore profile based engine tuning`) |
+| Current state | `M1` implementation is staged and pushed. Do not start `M2` until post-redeploy smoke confirms worker dependency split, Engine Status behavior, and profile-managed concurrency. |
+| Next safe step | Redeploy current branch. Confirm Server Info shows profile-managed Site Worker Scheduled Tasks as read-only and tuned to `12` on current `MSP / Production` host. Confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers. Rerun Job 98-style shared Ansible and Job 99-style individual Ansible smoke. Confirm individual fan-out never exceeds `12` active scheduled work items per site-worker after profile tuning. |
 
 ## Tracker Rules
 
@@ -74,6 +76,17 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
 | Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
 | Handoff Note | Operator smoke after Job 98/99 shows shared and individual Ansible modes succeeding on stable targets. Scheduler now ignores legacy Ansible runner per-job/global limits; site-worker scheduled-lane capacity is the single visible throttle. Rerun shared and individual smoke after redeploy before starting `M2`. |
+
+### M1 Current Handoff State
+
+- Source state: branch `feature/rewrite-api-backend-in-golang`, PR [#232](https://github.com/bunny-lab-io/Borealis/pull/232), latest implementation commit `4792865d`.
+- Implementation state: code for M1 is pushed. Runtime redeploy and operator smoke are still pending.
+- Expected current-host profile: `MSP / Production` from `16` vCPU and `32.3 GiB` RAM.
+- Expected tuned scheduled-lane capacity: `12` active scheduled work items per site-worker.
+- Server Info expected behavior: Site Worker Scheduled Tasks row is read-only, shows deployment-profile managed value, and no longer provides edit/save controls.
+- Removed API behavior: `PUT /api/server/site-worker-settings` is removed. `GET /api/server/site-worker-settings` remains and returns read-only profile-managed payload.
+- Scheduler expectation: legacy Ansible per-job/global runner limits remain API-compatible but no longer gate dispatch. Site-worker scheduled lane owns task throughput.
+- M1 close condition: post-redeploy smoke confirms Ansible still runs through site-worker, Engine Status nodegraph is readable/accurate, and profile-tuned concurrency behaves as expected.
 
 ### M2: Traefik Dynamic Worker Routing
 
@@ -235,6 +248,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Refreshed tracker for fresh Codex handoff. Added branch head, M1 handoff state, explicit post-redeploy smoke gates, and fresh-session prompt so next agent can resume without replaying the full conversation. | Documentation update; `git diff --check` passed. | This branch. |
 | 2026-05-30 | `M1` | Restored profile-based Engine tuning. `Engine.sh deploy` now detects host vCPU/RAM, writes deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled task concurrency. Server Info now shows scheduled-lane capacity as read-only profile data; site-worker settings `PUT` route was removed. | `bash -n Engine.sh`, `python3 -m py_compile` for Server Info API, Compose config with example env, and `git diff --check` passed. Official `server` and `ansible` test lanes could not run on this host because local Python is missing `pytest`; runtime compose-env config could not run because `Engine/Deploy/compose.env` is root-owned. | `Unit_Test_Results/engine-server-profile-tuning`, `Unit_Test_Results/engine-ansible-profile-tuning` |
 | 2026-05-30 | `M1` | Updated Engine Status task group presentation to match scheduler status buckets: `Task (n Devices)` headers with `Success`, `Running`, `Pending`, `Failed`, or `Skipped` pills. Terminal task groups now remain visible for the 60-second worker history window. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit-test cache is missing on this host. | `Unit_Test_Results/engine-20260530T195346Z` |
 | 2026-05-30 | `M1` | Fixed Engine Status visual inconsistency from issue #233. Running/queued work no longer anchors to stopped/lost site-worker nodes; stale active work rows are dropped during held-inactive payload merges while terminal rows remain available for close-out context. Orphaned active task groups now show `Reassigning to New Worker` while anchored to another same-site worker or queued placeholder. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` could not run because runtime WebUI unit-test cache is missing on this host. | `Unit_Test_Results/engine-20260530T193850Z` |
@@ -258,7 +272,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Issue #226 reviewed. Decision: move remote-operation execution paths into `site-worker` before rewriting `api-backend` in Go.
 - Milestone tracker drafted with quota-sized work chunks.
 - Branch `feature/rewrite-api-backend-in-golang` created and draft [PR #232](https://github.com/bunny-lab-io/Borealis/pull/232) opened.
-- `M1` complete: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
+- `M1` implementation complete pending post-redeploy smoke: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
 - `M1` stabilized after operator smoke test: site-worker no longer exits on idle TTL while scheduled Ansible run remains `Running`.
 - `M1` stabilized after Job 90 smoke test: stopped/lost site-workers now requeue claimed work immediately instead of leaving work items leased to dead workers.
 - `M1` staged fix after Job 91/93 smoke test: Ansible Quick Job now carries an SSH credential instead of creating `credential_id=NULL` jobs.
@@ -274,8 +288,12 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 ## Remaining Work
 
-- Redeploy WebUI and visually confirm issue #233 is gone on the Engine Status canvas.
-- Redeploy and revalidate `M1` operator smoke tests with Server Info Site Worker Scheduled Tasks showing the detected profile value (`12` on current MSP / Production host), then mark `M1` done again.
+- Redeploy current branch from commit `4792865d`.
+- Confirm Server Info Site Worker Scheduled Tasks is read-only and shows `12` on the current `MSP / Production` host.
+- Confirm issue #233 is gone on the Engine Status canvas: running/queued task groups must not remain attached to stopped site-workers; orphaned active work should read as `Reassigning to New Worker` or attach to a same-site active/queued placeholder.
+- Rerun Job 98-style shared Ansible smoke against stable targets. Expected: one shared work item per site batch, successful recap except known endpoint issues.
+- Rerun Job 99-style individual Ansible smoke against stable targets. Expected: up to `12` active scheduled work items per site-worker on this host, pending queue drains into running, no api-backend Ansible execution.
+- If those checks pass, mark `M1` `Done` in this tracker and start `M2`.
 - Complete `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
@@ -294,6 +312,45 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler domain | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
+
+## Fresh Codex Prompt
+
+Use this prompt when starting a new Codex conversation:
+
+```text
+Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
+
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch should include implementation commit 4792865d, "Restore profile based engine tuning", plus later tracker-only handoff updates.
+
+Continue M1 only. Do not start M2 until M1 post-redeploy smoke passes.
+
+Current M1 state:
+- api-backend Ansible/runtime-heavy dependency split has been implemented.
+- site-worker owns scheduled Ansible execution dependencies and shared Ansible cache.
+- stopped/lost site-workers requeue claimed work instead of leaving jobs in limbo.
+- Engine Status task groups now aggregate as Task (n Devices) with Success/Running/Pending/Failed/Skipped pills.
+- orphaned active work shows Reassigning to New Worker instead of appearing owned by stopped/lost workers.
+- SSH mixed credentials follow ssh-connection-logic.md: key-only probe first, password-only fallback only after key failure/timeout, failed password fallback keeps key-only final auth.
+- scheduler ignores legacy Ansible per-job/global runner limits for dispatch.
+- site-worker scheduled lane is the visible throughput gate.
+- Engine.sh profile tuning has been restored. Current host detected as 16 vCPU and 32.3 GiB RAM, so expected profile is MSP / Production and expected site-worker scheduled concurrency is 12.
+- Server Info should show Site Worker Scheduled Tasks as read-only profile-managed value. PUT /api/server/site-worker-settings was removed; GET remains.
+
+Next work:
+1. Redeploy current branch.
+2. Confirm Server Info shows read-only Site Worker Scheduled Tasks = 12.
+3. Confirm Engine Status no longer shows running/queued task groups attached to stopped site-workers.
+4. Rerun Job 98-style shared Ansible smoke against stable targets.
+5. Rerun Job 99-style individual Ansible smoke against stable targets.
+6. Confirm individual fan-out never exceeds 12 active scheduled work items per site-worker.
+7. If smoke passes, update Docs/Reference/Migration Paths/api-backend-rewrite.md: mark M1 Done, add work-log row with validation, and set next safe step to M2.
+
+Validation constraints from prior session:
+- Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
+- Official server/ansible unit lanes could not run locally because /usr/bin/python3 lacked pytest.
+- Runtime Engine/Deploy/compose.env compose config could not run locally because the file was root-owned.
+- Do not run npm/vite from staging source under Data/Engine/Containers/*/data.
+```
 
 ??? example "Detailed Codex Breakdown"
 
