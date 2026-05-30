@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and Ansible concurrency.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and site-worker scheduled task capacity.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -26,11 +26,10 @@ Use service actions for focused restart, rebuild, reload, or WireGuard reconcile
 Admins can adjust:
 
 - Engine timezone.
-- Scheduled Ansible per-job concurrency. Default: `5` running Ansible runs per job.
-- Scheduled Ansible global concurrency. Default: `50` running Ansible runs across the Engine.
+- Site Worker Scheduled Task Concurrency. Default: `5` active scheduled-lane work items per site worker. Range: `1`-`32`.
 - Agent release channel targets.
 
-Site workers also cap scheduled-job work in their own lane. Default: `5` scheduled work items per site worker at one time. Onboarding and other worker lanes keep their separate lane rules.
+This setting controls scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work that uses the scheduled lane. Onboarding keeps its separate lane behavior.
 
 !!! warning
 
@@ -45,8 +44,8 @@ Site workers also cap scheduled-job work in their own lane. Default: `5` schedul
     - `GET /api/server/timezones` - timezone options.
     - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
-    - `GET /api/server/ansible-runner-settings` - read Ansible runner limits.
-    - `PUT /api/server/ansible-runner-settings` - update Ansible runner limits.
+    - `GET /api/server/site-worker-settings` - read site-worker scheduled-lane capacity.
+    - `PUT /api/server/site-worker-settings` - update site-worker scheduled-lane capacity.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
     - `POST /api/server/wireguard/recover` - recover WireGuard listener.

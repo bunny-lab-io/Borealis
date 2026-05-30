@@ -4474,7 +4474,6 @@ def test_tick_persists_activity_links_for_individual_ansible_runs(
         conn.close()
 
     monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **_kwargs: 1_773_782_700)
-    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 20, "global_concurrency_limit": 50})
     monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
     monkeypatch.setattr(
         scheduler._filter_matcher,
@@ -4802,7 +4801,7 @@ def test_shared_ansible_dispatch_uses_configured_scp_transfer_method(
     assert target_specifications[0]["host_vars"]["ansible_scp_extra_args"] == "-O"
 
 
-def test_tick_respects_individual_ansible_job_concurrency_limit(
+def test_tick_enqueues_individual_ansible_runs_despite_legacy_job_limit(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -4889,7 +4888,6 @@ def test_tick_respects_individual_ansible_job_concurrency_limit(
         conn.close()
 
     monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **_kwargs: 1_773_782_701)
-    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 1, "global_concurrency_limit": 50})
     monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
     monkeypatch.setattr(
         scheduler._filter_matcher,
@@ -5007,13 +5005,13 @@ def test_tick_respects_individual_ansible_job_concurrency_limit(
 
     assert run_rows == [
         ("test-device", "Running"),
-        ("test-device-02", "Pending"),
+        ("test-device-02", "Running"),
     ]
-    assert captured
-    assert all(call["hostname"] == "test-device" for call in captured)
+    assert len(captured) == 2
+    assert {call["hostname"] for call in captured} == {"test-device", "test-device-02"}
 
 
-def test_tick_respects_individual_ansible_global_concurrency_limit(
+def test_tick_enqueues_individual_ansible_runs_despite_legacy_global_limit(
     engine_harness: EngineTestHarness,
     monkeypatch,
 ) -> None:
@@ -5118,7 +5116,6 @@ def test_tick_respects_individual_ansible_global_concurrency_limit(
         conn.close()
 
     monkeypatch.setattr(scheduler, "_resolve_occurrence_for_tick", lambda **kwargs: 1_773_782_702)
-    monkeypatch.setattr(scheduled_job_module, "load_ansible_runner_settings", lambda: {"job_concurrency_limit": 20, "global_concurrency_limit": 1})
     monkeypatch.setattr(scheduler, "_online_lookup", lambda: ["test-device", "test-device-02"])
     monkeypatch.setattr(
         scheduler._filter_matcher,
@@ -5230,10 +5227,10 @@ def test_tick_respects_individual_ansible_global_concurrency_limit(
 
     assert run_rows == [
         (72, "test-device", "Running"),
-        (73, "test-device-02", "Pending"),
+        (73, "test-device-02", "Running"),
     ]
-    assert captured
-    assert all(call["hostname"] == "test-device" for call in captured)
+    assert len(captured) == 2
+    assert {call["hostname"] for call in captured} == {"test-device", "test-device-02"}
 
 
 class _FakeSigner:

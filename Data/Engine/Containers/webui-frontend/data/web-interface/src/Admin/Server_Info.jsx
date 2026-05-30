@@ -790,11 +790,10 @@ export default function ServerInfo() {
   const [timezoneSaving, setTimezoneSaving] = useState(false);
   const [timezoneError, setTimezoneError] = useState("");
   const [selectedTimezone, setSelectedTimezone] = useState("");
-  const [ansibleRunnerDialogOpen, setAnsibleRunnerDialogOpen] = useState(false);
-  const [ansibleRunnerSaving, setAnsibleRunnerSaving] = useState(false);
-  const [ansibleRunnerError, setAnsibleRunnerError] = useState("");
-  const [ansibleRunnerJobLimit, setAnsibleRunnerJobLimit] = useState("20");
-  const [ansibleRunnerGlobalLimit, setAnsibleRunnerGlobalLimit] = useState("50");
+  const [siteWorkerDialogOpen, setSiteWorkerDialogOpen] = useState(false);
+  const [siteWorkerSaving, setSiteWorkerSaving] = useState(false);
+  const [siteWorkerError, setSiteWorkerError] = useState("");
+  const [siteWorkerScheduledLimit, setSiteWorkerScheduledLimit] = useState("5");
   const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
   const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
   const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
@@ -1060,19 +1059,18 @@ export default function ServerInfo() {
     setTimezoneError("");
   }, [timezoneSaving]);
 
-  const openAnsibleRunnerDialog = useCallback(() => {
-    const currentSettings = overview?.ansible_runner || {};
-    setAnsibleRunnerJobLimit(String(Number(currentSettings?.job_concurrency_limit || 5)));
-    setAnsibleRunnerGlobalLimit(String(Number(currentSettings?.global_concurrency_limit || 50)));
-    setAnsibleRunnerError("");
-    setAnsibleRunnerDialogOpen(true);
+  const openSiteWorkerDialog = useCallback(() => {
+    const currentSettings = overview?.site_worker_settings || {};
+    setSiteWorkerScheduledLimit(String(Number(currentSettings?.scheduled_task_concurrency_limit || 5)));
+    setSiteWorkerError("");
+    setSiteWorkerDialogOpen(true);
   }, [overview]);
 
-  const closeAnsibleRunnerDialog = useCallback(() => {
-    if (ansibleRunnerSaving) return;
-    setAnsibleRunnerDialogOpen(false);
-    setAnsibleRunnerError("");
-  }, [ansibleRunnerSaving]);
+  const closeSiteWorkerDialog = useCallback(() => {
+    if (siteWorkerSaving) return;
+    setSiteWorkerDialogOpen(false);
+    setSiteWorkerError("");
+  }, [siteWorkerSaving]);
 
   const openReleaseChannelsDialog = useCallback(() => {
     const currentSettings = overview?.agent_release_channels || {};
@@ -1173,37 +1171,31 @@ export default function ServerInfo() {
     }
   }, [fetchOverview, sendScopedNotification]);
 
-  const applyAnsibleRunnerSettings = useCallback(async () => {
-    const jobLimit = Number(ansibleRunnerJobLimit);
-    const globalLimit = Number(ansibleRunnerGlobalLimit);
-    if (!Number.isFinite(jobLimit) || jobLimit < 1 || !Number.isInteger(jobLimit)) {
-      setAnsibleRunnerError("Per-job concurrency must be a whole number greater than 0.");
+  const applySiteWorkerSettings = useCallback(async () => {
+    const scheduledLimit = Number(siteWorkerScheduledLimit);
+    if (!Number.isFinite(scheduledLimit) || scheduledLimit < 1 || scheduledLimit > 32 || !Number.isInteger(scheduledLimit)) {
+      setSiteWorkerError("Scheduled task concurrency must be a whole number between 1 and 32.");
       return;
     }
-    if (!Number.isFinite(globalLimit) || globalLimit < 1 || !Number.isInteger(globalLimit)) {
-      setAnsibleRunnerError("Global concurrency must be a whole number greater than 0.");
-      return;
-    }
-    setAnsibleRunnerSaving(true);
-    setAnsibleRunnerError("");
+    setSiteWorkerSaving(true);
+    setSiteWorkerError("");
     try {
-      const response = await fetch("/api/server/ansible-runner-settings", {
+      const response = await fetch("/api/server/site-worker-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          job_concurrency_limit: jobLimit,
-          global_concurrency_limit: globalLimit,
+          scheduled_task_concurrency_limit: scheduledLimit,
         }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       }
-      setAnsibleRunnerDialogOpen(false);
+      setSiteWorkerDialogOpen(false);
       await sendScopedNotification({
-        title: "Ansible Limits Updated",
-        message: `Scheduled Ansible concurrency updated to ${jobLimit} per job and ${globalLimit} globally.`,
+        title: "Site Worker Limit Updated",
+        message: `Site workers can run ${scheduledLimit} scheduled tasks at once.`,
         icon: "settings",
         variant: "info",
       });
@@ -1213,18 +1205,18 @@ export default function ServerInfo() {
       const message =
         requestError instanceof Error && requestError.message
           ? requestError.message
-          : "Borealis could not update Ansible runner settings.";
-      setAnsibleRunnerError(message);
+          : "Borealis could not update site-worker settings.";
+      setSiteWorkerError(message);
       await sendScopedNotification({
-        title: "Ansible Limits Update Failed",
+        title: "Site Worker Update Failed",
         message,
         icon: "warning",
         variant: "error",
       });
     } finally {
-      setAnsibleRunnerSaving(false);
+      setSiteWorkerSaving(false);
     }
-  }, [ansibleRunnerGlobalLimit, ansibleRunnerJobLimit, fetchOverview, sendScopedNotification]);
+  }, [fetchOverview, sendScopedNotification, siteWorkerScheduledLimit]);
 
   const applyTimezoneChange = useCallback(async () => {
     const timezoneId = String(selectedTimezone || "").trim();
@@ -1369,7 +1361,7 @@ export default function ServerInfo() {
   const operatorSessionCount = Math.max(0, Number(overview?.operator_session_count || 0));
   const wireguard = overview?.wireguard || {};
   const publicEdge = overview?.public_edge || {};
-  const ansibleRunner = overview?.ansible_runner || {};
+  const siteWorkerSettings = overview?.site_worker_settings || {};
   const agentReleaseChannels = overview?.agent_release_channels || {};
   const workerPayload = overview?.workers || {};
   const workers = Array.isArray(workerPayload?.workers) ? workerPayload.workers : [];
@@ -1503,16 +1495,16 @@ export default function ServerInfo() {
         actions: [],
       },
       {
-        id: "ansible_runner_limits",
-        name: "Scheduled Ansible Runner",
-        value: `${Number(ansibleRunner?.job_concurrency_limit || 5)} / ${Number(ansibleRunner?.global_concurrency_limit || 50)}`,
-        details: "Per-job / global runner limits for scheduled Ansible execution on this engine",
+        id: "site_worker_scheduled_tasks",
+        name: "Site Worker Scheduled Tasks",
+        value: Number(siteWorkerSettings?.scheduled_task_concurrency_limit || 5),
+        details: "Maximum scheduled-lane tasks each site worker can run at once",
         actions: [
           {
-            id: "edit_ansible_runner_limits",
-            label: ansibleRunnerSaving ? "Saving..." : "Edit Limits",
-            disabled: ansibleRunnerSaving,
-            onClick: openAnsibleRunnerDialog,
+            id: "edit_site_worker_limits",
+            label: siteWorkerSaving ? "Saving..." : "Edit Limit",
+            disabled: siteWorkerSaving,
+            onClick: openSiteWorkerDialog,
           },
         ],
       },
@@ -1570,17 +1562,17 @@ export default function ServerInfo() {
     ],
     [
       agentReleaseChannels,
-      ansibleRunner,
-      ansibleRunnerSaving,
       clockValue,
       host,
       loadAverageCaption,
       loadAverageValue,
-      openAnsibleRunnerDialog,
+      openSiteWorkerDialog,
       openReleaseChannelsDialog,
       openTimezoneDialog,
       releaseChannelsRefreshing,
       releaseChannelsSaving,
+      siteWorkerSaving,
+      siteWorkerSettings,
       stableChannel,
       timezoneChangeSupported,
       timezoneDisplayValue,
@@ -2026,55 +2018,43 @@ export default function ServerInfo() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={ansibleRunnerDialogOpen} onClose={closeAnsibleRunnerDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
+      <Dialog open={siteWorkerDialogOpen} onClose={closeSiteWorkerDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
-            title="Scheduled Ansible Concurrency"
-            subtitle="Tune how many scheduled Ansible runners Borealis can execute at once."
+            title="Site Worker Scheduled Tasks"
+            subtitle="Tune how many scheduled-lane tasks each site worker can run at once."
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis enforces both the per-job cap and the shared global cap whenever scheduled Ansible jobs dispatch Engine-side runners. Individual modes fan out across targets, while shared modes still consume runner slots per playbook component.
+            Borealis uses this limit as the main scheduler throttle for site-worker scheduled work. Individual Ansible jobs consume one slot per one-host playbook run; shared Ansible jobs consume one slot per site batch.
           </Typography>
           <Stack spacing={2} sx={{ mt: 2 }}>
             <TextField
-              label="Ansible_Runner_Job_Concurrency_Limit"
+              label="Scheduled_Task_Concurrency_Limit"
               type="number"
-              value={ansibleRunnerJobLimit}
+              value={siteWorkerScheduledLimit}
               onChange={(event) => {
-                setAnsibleRunnerJobLimit(event.target.value);
-                if (ansibleRunnerError) setAnsibleRunnerError("");
+                setSiteWorkerScheduledLimit(event.target.value);
+                if (siteWorkerError) setSiteWorkerError("");
               }}
-              inputProps={{ min: 1, step: 1 }}
+              inputProps={{ min: 1, max: 32, step: 1 }}
               sx={DIALOG_INPUT_SX}
-              helperText="Maximum concurrent scheduled Ansible runners allowed per job occurrence."
-            />
-            <TextField
-              label="Ansible_Runner_Global_Concurrency_Limit"
-              type="number"
-              value={ansibleRunnerGlobalLimit}
-              onChange={(event) => {
-                setAnsibleRunnerGlobalLimit(event.target.value);
-                if (ansibleRunnerError) setAnsibleRunnerError("");
-              }}
-              inputProps={{ min: 1, step: 1 }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Maximum concurrent scheduled Ansible runners allowed across all scheduled jobs on this engine."
+              helperText="Maximum active scheduled-lane work items per site worker. Range: 1-32."
             />
           </Stack>
-          {ansibleRunnerError ? (
+          {siteWorkerError ? (
             <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {ansibleRunnerError}
+              {siteWorkerError}
             </Typography>
           ) : null}
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeAnsibleRunnerDialog} sx={DIALOG_BUTTON_SX} disabled={ansibleRunnerSaving}>
+          <Button onClick={closeSiteWorkerDialog} sx={DIALOG_BUTTON_SX} disabled={siteWorkerSaving}>
             Cancel
           </Button>
-          <Button onClick={applyAnsibleRunnerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={ansibleRunnerSaving}>
-            {ansibleRunnerSaving ? "Saving..." : "Save Limits"}
+          <Button onClick={applySiteWorkerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={siteWorkerSaving}>
+            {siteWorkerSaving ? "Saving..." : "Save Limit"}
           </Button>
         </DialogActions>
       </Dialog>

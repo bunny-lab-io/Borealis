@@ -37,10 +37,9 @@ from .queue import (
     requeue_work_item,
     stop_worker,
 )
+from .runtime_settings import load_site_worker_settings
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
-DEFAULT_SCHEDULED_WORK_CONCURRENCY = 5
-MAX_SCHEDULED_WORK_CONCURRENCY = 32
 DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
 DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
 DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 30
@@ -300,10 +299,11 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
 
 def _site_worker_scheduled_concurrency() -> int:
     try:
-        value = int(str(os.environ.get("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY") or DEFAULT_SCHEDULED_WORK_CONCURRENCY).strip())
+        settings = load_site_worker_settings()
+        value = int(settings.get("scheduled_task_concurrency_limit") or 5)
     except Exception:
-        value = DEFAULT_SCHEDULED_WORK_CONCURRENCY
-    return min(MAX_SCHEDULED_WORK_CONCURRENCY, max(1, value))
+        value = 5
+    return min(32, max(1, value))
 
 
 def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: threading.Lock) -> list[Dict[str, Any]]:
@@ -807,7 +807,6 @@ def main() -> None:
         conn.close()
     idle_since = None
     claimed_count = 0
-    scheduled_concurrency = _site_worker_scheduled_concurrency()
     active_items: Dict[int, Dict[str, Any]] = {}
     active_lock = threading.Lock()
 
@@ -840,6 +839,7 @@ def main() -> None:
     try:
         while True:
             prune_active_items()
+            scheduled_concurrency = _site_worker_scheduled_concurrency()
             active_scheduled, active_onboarding, active_lanes = active_lane_state()
             claim_lanes = []
             if active_onboarding <= 0:

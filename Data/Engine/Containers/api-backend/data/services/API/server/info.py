@@ -10,6 +10,8 @@
 # - POST /api/server/services/<service_key>/action (Operator Admin Session) - Queues a Compose-backed Engine.sh service action in container mode.
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
+# - GET /api/server/site-worker-settings (Operator Admin Session) - Returns persisted site-worker scheduled-lane capacity.
+# - PUT /api/server/site-worker-settings (Operator Admin Session) - Updates persisted site-worker scheduled-lane capacity.
 # ======================================================
 
 from __future__ import annotations
@@ -51,6 +53,12 @@ from ...job_scheduler.queue import (
     list_recent_work_items,
     list_service_snapshots,
     list_worker_snapshots,
+)
+from ...job_scheduler.runtime_settings import (
+    DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY,
+    MAX_SITE_WORKER_SCHEDULED_CONCURRENCY,
+    load_site_worker_settings,
+    save_site_worker_settings,
 )
 from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
@@ -1429,6 +1437,28 @@ def _collect_ansible_runner_payload() -> Dict[str, Any]:
     }
 
 
+def _collect_site_worker_settings_payload() -> Dict[str, Any]:
+    try:
+        settings = load_site_worker_settings()
+    except Exception:
+        settings = {
+            "scheduled_task_concurrency_limit": DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY,
+        }
+    return {
+        "scheduled_task_concurrency_limit": min(
+            MAX_SITE_WORKER_SCHEDULED_CONCURRENCY,
+            max(
+                1,
+                _safe_int(
+                    settings.get("scheduled_task_concurrency_limit"),
+                    DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY,
+                ),
+            ),
+        ),
+        "max_scheduled_task_concurrency_limit": MAX_SITE_WORKER_SCHEDULED_CONCURRENCY,
+    }
+
+
 def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
     return {
         "collected_at": datetime.now(timezone.utc).isoformat(),
@@ -1439,6 +1469,7 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
         "public_edge": _collect_public_edge_payload(adapters.context),
         "security": _collect_security_payload(adapters),
         "ansible_runner": _collect_ansible_runner_payload(),
+        "site_worker_settings": _collect_site_worker_settings_payload(),
         "agent_release_channels": _collect_agent_release_channels_payload(adapters),
         "remote_desktop": _collect_vnc_session_payload(adapters),
         "operator_session_count": _collect_operator_session_count(adapters),
@@ -1829,6 +1860,43 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             normalized
         )
         return jsonify({"status": "ok", "ansible_runner": _collect_ansible_runner_payload()})
+
+    @blueprint.route("/api/server/site-worker-settings", methods=["GET"])
+    def get_site_worker_settings() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        return jsonify(_collect_site_worker_settings_payload())
+
+    @blueprint.route("/api/server/site-worker-settings", methods=["PUT"])
+    def update_site_worker_settings() -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        body = request.get_json(silent=True) or {}
+        raw_value = body.get("scheduled_task_concurrency_limit")
+        if raw_value is None or raw_value == "":
+            return _error_response(
+                "invalid_site_worker_settings",
+                "Scheduled task concurrency is required.",
+                400,
+            )
+        try:
+            parsed_value = int(raw_value)
+        except Exception:
+            return _error_response(
+                "invalid_site_worker_settings",
+                "Scheduled task concurrency must be a whole number between 1 and 32.",
+                400,
+            )
+        if parsed_value < 1 or parsed_value > MAX_SITE_WORKER_SCHEDULED_CONCURRENCY:
+            return _error_response(
+                "invalid_site_worker_settings",
+                "Scheduled task concurrency must be a whole number between 1 and 32.",
+                400,
+            )
+        save_site_worker_settings({"scheduled_task_concurrency_limit": parsed_value})
+        return jsonify({"status": "ok", "site_worker_settings": _collect_site_worker_settings_payload()})
 
     @blueprint.route("/api/server/services/<service_key>/action", methods=["POST"])
     def run_service_action(service_key: str) -> Any:

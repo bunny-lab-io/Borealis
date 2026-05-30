@@ -21,6 +21,7 @@ from cryptography.x509.oid import NameOID
 from Data.Engine.services.API.server import info as server_info_api
 from Data.Engine.services.RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from Data.Engine.services.ansible import runtime_settings as ansible_runtime_settings
+from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import ensure_job_scheduler_tables, prune_worker_history
 from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
@@ -488,6 +489,62 @@ def test_server_ansible_runner_settings_round_trip(
     assert overview_payload["ansible_runner"] == {
         "job_concurrency_limit": 12,
         "global_concurrency_limit": 37,
+    }
+
+
+def test_server_site_worker_settings_round_trip(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    client = _admin_client(engine_harness)
+    settings_path = tmp_path / "site_worker_settings.json"
+    monkeypatch.delenv(site_worker_runtime_settings.SITE_WORKER_SCHEDULED_CONCURRENCY_ENV, raising=False)
+
+    monkeypatch.setattr(
+        server_info_api,
+        "load_site_worker_settings",
+        lambda: site_worker_runtime_settings.load_site_worker_settings(settings_path),
+    )
+    monkeypatch.setattr(
+        server_info_api,
+        "save_site_worker_settings",
+        lambda mapping: site_worker_runtime_settings.save_site_worker_settings(mapping, settings_path),
+    )
+
+    initial_response = client.get("/api/server/site-worker-settings")
+    assert initial_response.status_code == 200
+    assert initial_response.get_json() == {
+        "scheduled_task_concurrency_limit": 5,
+        "max_scheduled_task_concurrency_limit": 32,
+    }
+
+    for invalid_value in (0, -1, "abc", 33):
+        invalid_response = client.put(
+            "/api/server/site-worker-settings",
+            json={"scheduled_task_concurrency_limit": invalid_value},
+        )
+        assert invalid_response.status_code == 400
+        invalid_payload = invalid_response.get_json()
+        assert invalid_payload["error"] == "invalid_site_worker_settings"
+
+    update_response = client.put(
+        "/api/server/site-worker-settings",
+        json={"scheduled_task_concurrency_limit": 7},
+    )
+    assert update_response.status_code == 200
+    update_payload = update_response.get_json()
+    assert update_payload["site_worker_settings"] == {
+        "scheduled_task_concurrency_limit": 7,
+        "max_scheduled_task_concurrency_limit": 32,
+    }
+
+    overview_response = client.get("/api/server/overview")
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.get_json()
+    assert overview_payload["site_worker_settings"] == {
+        "scheduled_task_concurrency_limit": 7,
+        "max_scheduled_task_concurrency_limit": 32,
     }
 
 

@@ -7,6 +7,7 @@ PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
 
 mkdir -p \
+  "${API_ROOT}/config" \
   "${API_ROOT}/cache/Ansible/collections" \
   "${API_ROOT}/cache/Ansible/Generated/Runtime"
 
@@ -21,6 +22,7 @@ export BOREALIS_API_LOG_FILE="${BOREALIS_API_LOG_FILE:-/tmp/borealis-site-worker
 export BOREALIS_VPN_TUNNEL_LOG_FILE="${BOREALIS_VPN_TUNNEL_LOG_FILE:-/tmp/borealis-site-worker-vpn.log}"
 export BOREALIS_WIREGUARD_LOG_FILE="${BOREALIS_WIREGUARD_LOG_FILE:-${BOREALIS_VPN_TUNNEL_LOG_FILE}}"
 export BOREALIS_ANSIBLE_RUNTIME_ROOT="${BOREALIS_ANSIBLE_RUNTIME_ROOT:-${API_ROOT}/cache/Ansible}"
+export BOREALIS_SITE_WORKER_SETTINGS_PATH="${BOREALIS_SITE_WORKER_SETTINGS_PATH:-${API_ROOT}/config/site_worker_settings.json}"
 export ANSIBLE_COLLECTIONS_PATH="${BOREALIS_ANSIBLE_RUNTIME_ROOT}/collections"
 export ANSIBLE_COLLECTIONS_PATHS="${ANSIBLE_COLLECTIONS_PATH}"
 export PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent:${PYTHONPATH:-}"

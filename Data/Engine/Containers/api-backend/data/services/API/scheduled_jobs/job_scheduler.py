@@ -35,7 +35,6 @@ from urllib.parse import quote as url_quote
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ...ansible.runtime_settings import load_ansible_runner_settings
 from ...ansible.ssh_auth import apply_ssh_credential_host_vars
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import (
@@ -79,9 +78,6 @@ _DEFAULT_SHARED_ANSIBLE_SSH_RETRIES = 3
 _DEFAULT_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS = 20
 _DEFAULT_SHARED_ANSIBLE_SSH_TRANSFER_METHOD = "scp"
 _DEFAULT_SHARED_ANSIBLE_SCP_EXTRA_ARGS = "-O"
-_DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT = 5
-_DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT = 50
-
 RUN_STATUS_PENDING = "Pending"
 RUN_STATUS_RUNNING = "Running"
 RUN_STATUS_SUCCESS = "Success"
@@ -2974,72 +2970,6 @@ class JobScheduler(OnboardingSchedulerMixin):
             "winrm",
         }
 
-    def _individual_ansible_runner_limits(self) -> Dict[str, int]:
-        defaults = {
-            "job_concurrency_limit": _DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
-            "global_concurrency_limit": _DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
-        }
-        try:
-            settings = load_ansible_runner_settings()
-        except Exception:
-            return defaults
-        return {
-            "job_concurrency_limit": max(
-                1,
-                int(settings.get("job_concurrency_limit") or defaults["job_concurrency_limit"]),
-            ),
-            "global_concurrency_limit": max(
-                1,
-                int(settings.get("global_concurrency_limit") or defaults["global_concurrency_limit"]),
-            ),
-        }
-
-    def _running_ansible_run_counts(self) -> Tuple[int, Dict[int, int]]:
-        conn = self._conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT job_id, COUNT(*)
-                  FROM scheduled_job_runs
-                 WHERE status=? AND LOWER(COALESCE(component_kind, ''))='ansible'
-              GROUP BY job_id
-                """,
-                (RUN_STATUS_RUNNING,),
-            )
-            per_job: Dict[int, int] = {}
-            total = 0
-            for job_id, count_value in cur.fetchall():
-                try:
-                    normalized_job_id = int(job_id)
-                    normalized_count = max(0, int(count_value or 0))
-                except Exception:
-                    continue
-                per_job[normalized_job_id] = normalized_count
-                total += normalized_count
-            return total, per_job
-        finally:
-            conn.close()
-
-    def _can_dispatch_ansible_run(
-        self,
-        *,
-        job_id: int,
-        global_running: int,
-        running_by_job: Mapping[int, int],
-        limits: Mapping[str, int],
-    ) -> bool:
-        job_limit = max(1, int(limits.get("job_concurrency_limit") or _DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT))
-        global_limit = max(
-            1,
-            int(limits.get("global_concurrency_limit") or _DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT),
-        )
-        if int(global_running) >= global_limit:
-            return False
-        if int(running_by_job.get(int(job_id), 0) or 0) >= job_limit:
-            return False
-        return True
-
     def _load_run_targets(self, run_id: int) -> List[Dict[str, Any]]:
         conn = self._conn()
         try:
@@ -5478,9 +5408,6 @@ class JobScheduler(OnboardingSchedulerMixin):
 
         now_min = _now_minute()
         device_inventory_cache: Optional[List[Dict[str, Any]]] = None
-        ansible_runner_limits = self._individual_ansible_runner_limits()
-        global_running_ansible, running_ansible_by_job = self._running_ansible_run_counts()
-
         for (
             job_id,
             components_json,
@@ -5717,16 +5644,8 @@ class JobScheduler(OnboardingSchedulerMixin):
                             finally:
                                 conn2.close()
                             continue
-                        if not self._can_dispatch_ansible_run(
-                            job_id=int(job_id),
-                            global_running=global_running_ansible,
-                            running_by_job=running_ansible_by_job,
-                            limits=ansible_runner_limits,
-                        ):
-                            continue
-                        dispatched_shared = False
                         for site_id_for_run, target_row_ids in self._site_ids_for_run_targets(int(run["id"])).items():
-                            dispatched_shared = self._enqueue_or_dispatch_scheduled_run(
+                            self._enqueue_or_dispatch_scheduled_run(
                                 job_id=int(job_id),
                                 run_row_id=int(run["id"]),
                                 scheduled_ts=int(occurrence_ts),
@@ -5739,25 +5658,15 @@ class JobScheduler(OnboardingSchedulerMixin):
                                 component_index=component_index,
                                 target_row_ids=target_row_ids,
                                 site_id=site_id_for_run,
-                            ) or dispatched_shared
-                        if dispatched_shared:
-                            global_running_ansible += 1
-                            running_ansible_by_job[int(job_id)] = int(running_ansible_by_job.get(int(job_id), 0) or 0) + 1
+                            )
                         continue
                     host = str(run.get("target_hostname") or "").strip()
                     if not host:
                         continue
                     if host in online:
-                        if individual_ansible_mode and not self._can_dispatch_ansible_run(
-                            job_id=int(job_id),
-                            global_running=global_running_ansible,
-                            running_by_job=running_ansible_by_job,
-                            limits=ansible_runner_limits,
-                        ):
-                            continue
                         site_groups = self._site_ids_for_run_targets(int(run["id"]))
                         site_id_for_run = next(iter(site_groups.keys()), 0)
-                        dispatched = self._enqueue_or_dispatch_scheduled_run(
+                        self._enqueue_or_dispatch_scheduled_run(
                             job_id=int(job_id),
                             run_row_id=int(run["id"]),
                             scheduled_ts=int(occurrence_ts),
@@ -5769,9 +5678,6 @@ class JobScheduler(OnboardingSchedulerMixin):
                             component_index=run.get("component_index") if individual_ansible_mode else None,
                             site_id=site_id_for_run,
                         )
-                        if individual_ansible_mode and dispatched:
-                            global_running_ansible += 1
-                            running_ansible_by_job[int(job_id)] = int(running_ansible_by_job.get(int(job_id), 0) or 0) + 1
                         continue
                     if exp_seconds is not None and (int(occurrence_ts) + exp_seconds) <= now:
                         conn2 = self._conn()

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
+from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
     WORK_STATUS_QUEUED,
@@ -24,6 +25,7 @@ from Data.Engine.services.job_scheduler.queue import (
 from Data.Engine.services.job_scheduler.worker import (
     _fail_scheduled_run_after_transient_retries,
     _reset_scheduled_run_for_retry,
+    _site_worker_scheduled_concurrency,
     _transient_scheduled_run_retry_reason,
 )
 
@@ -129,6 +131,29 @@ def _seed_transient_skipped_run(conn, *, run_id: int = 42) -> None:
             "wireguard_unavailable",
         ),
     )
+
+
+def test_site_worker_scheduled_concurrency_uses_config_env_and_default(tmp_path: Path, monkeypatch) -> None:
+    settings_path = tmp_path / "site_worker_settings.json"
+    monkeypatch.setenv(site_worker_runtime_settings.SITE_WORKER_SETTINGS_PATH_ENV, str(settings_path))
+    monkeypatch.delenv(site_worker_runtime_settings.SITE_WORKER_SCHEDULED_CONCURRENCY_ENV, raising=False)
+
+    assert _site_worker_scheduled_concurrency() == 5
+
+    site_worker_runtime_settings.save_site_worker_settings(
+        {"scheduled_task_concurrency_limit": 7},
+        settings_path,
+    )
+    assert _site_worker_scheduled_concurrency() == 7
+
+    monkeypatch.setenv(site_worker_runtime_settings.SITE_WORKER_SCHEDULED_CONCURRENCY_ENV, "9")
+    assert _site_worker_scheduled_concurrency() == 9
+
+    monkeypatch.setenv(site_worker_runtime_settings.SITE_WORKER_SCHEDULED_CONCURRENCY_ENV, "99")
+    assert _site_worker_scheduled_concurrency() == 32
+
+    monkeypatch.setenv(site_worker_runtime_settings.SITE_WORKER_SCHEDULED_CONCURRENCY_ENV, "0")
+    assert _site_worker_scheduled_concurrency() == 1
 
 
 def test_stop_worker_requeues_running_work_item(tmp_path: Path) -> None:

@@ -51,9 +51,6 @@ from .queue import (
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
-DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY = 5
-MAX_SITE_WORKER_SCHEDULED_CONCURRENCY = 32
-
 
 class _TaskSchedulerApp:
     def __init__(self, *, logger, secret_key: str) -> None:
@@ -368,15 +365,6 @@ def _worker_image() -> str:
     return str(os.environ.get("BOREALIS_SITE_WORKER_IMAGE") or "borealis-engine/site-worker:local").strip()
 
 
-def _site_worker_scheduled_concurrency() -> int:
-    raw = str(os.environ.get("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY") or DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY).strip()
-    try:
-        value = int(raw)
-    except Exception:
-        value = DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY
-    return min(MAX_SITE_WORKER_SCHEDULED_CONCURRENCY, max(1, value))
-
-
 def _env_value(env_items: Sequence[Any], key: str) -> str:
     prefix = f"{key}="
     for item in env_items or []:
@@ -608,6 +596,7 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
     ]
     if env_file.is_file():
         args.extend(["--env-file", str(env_file)])
+    explicit_scheduled_concurrency = str(os.environ.get("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY") or "").strip()
     args.extend(
         [
             "-e",
@@ -619,8 +608,6 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             "-e",
             "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
             "-e",
-            f"BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY={_site_worker_scheduled_concurrency()}",
-            "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",
             f"BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}.log",
@@ -630,6 +617,12 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             f"BOREALIS_API_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}-api.log",
             "-e",
             f"BOREALIS_VPN_TUNNEL_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}-vpn.log",
+        ]
+    )
+    if explicit_scheduled_concurrency:
+        args.extend(["-e", f"BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY={explicit_scheduled_concurrency}"])
+    args.extend(
+        [
             "-v",
             f"{site_worker_log_root}:/opt/Borealis/Engine/Services/api-backend/logs/site-workers",
             "-v",
