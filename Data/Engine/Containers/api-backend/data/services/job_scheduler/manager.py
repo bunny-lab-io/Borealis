@@ -571,7 +571,9 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
 
     project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
     api_cache_root = project_root / "Engine" / "Services" / "api-backend" / "cache"
+    site_worker_log_root = project_root / "Engine" / "Services" / "api-backend" / "logs" / "site-workers"
     api_cache_root.mkdir(parents=True, exist_ok=True)
+    site_worker_log_root.mkdir(parents=True, exist_ok=True)
     env_file = _compose_env_file()
     image = _worker_image()
     args = [
@@ -609,13 +611,15 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",
-            "BOREALIS_LOG_FILE=/tmp/borealis-site-worker.log",
+            f"BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}.log",
             "-e",
-            "BOREALIS_ERROR_LOG_FILE=/tmp/borealis-site-worker-error.log",
+            f"BOREALIS_ERROR_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}-error.log",
             "-e",
-            "BOREALIS_API_LOG_FILE=/tmp/borealis-site-worker-api.log",
+            f"BOREALIS_API_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}-api.log",
             "-e",
-            "BOREALIS_VPN_TUNNEL_LOG_FILE=/tmp/borealis-site-worker-vpn.log",
+            f"BOREALIS_VPN_TUNNEL_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/{worker_guid}-vpn.log",
+            "-v",
+            f"{site_worker_log_root}:/opt/Borealis/Engine/Services/api-backend/logs/site-workers",
             "-v",
             f"{project_root}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro",
             "-v",

@@ -2457,6 +2457,37 @@ def test_scheduled_job_create_accepts_individual_ansible_contexts(
     assert payload["use_service_account"] is bool(use_service_account if "winrm" in execution_context else False)
 
 
+def test_scheduled_job_create_rejects_ssh_ansible_without_credential(
+    engine_harness: EngineTestHarness,
+) -> None:
+    client, _scheduler = _scheduled_jobs_client(engine_harness)
+
+    response = client.post(
+        "/api/scheduled_jobs",
+        json={
+            "name": "Missing SSH Credential",
+            "components": [
+                {"type": "ansible", "name": "Playbook A"},
+            ],
+            "targets": [
+                {
+                    "kind": "device",
+                    "device_guid": "GUID-TEST-0001",
+                    "hostname": "test-device",
+                    "site_id": 1,
+                    "site_name": "Main Lab",
+                }
+            ],
+            "schedule": {"type": "immediately"},
+            "execution_context": "ssh_individual",
+            "credential_id": None,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "SSH Ansible jobs require a stored credential."
+
+
 def test_scheduled_job_update_rejects_mixed_script_and_ansible_components(
     engine_harness: EngineTestHarness,
 ) -> None:

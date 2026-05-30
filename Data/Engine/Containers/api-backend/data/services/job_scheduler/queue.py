@@ -555,6 +555,36 @@ def complete_work_item(conn: sqlite3.Connection, *, work_id: int, status: str, e
     )
 
 
+def requeue_work_item(conn: sqlite3.Connection, *, work_id: int, delay_seconds: int = 0, error: str = "") -> None:
+    ensure_job_scheduler_tables(conn)
+    now = _now_ts()
+    available_at = now + max(0, int(delay_seconds or 0))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE job_scheduler_work_items
+           SET status=?,
+               lease_owner=NULL,
+               lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
+               finished_at=NULL,
+               updated_at=?
+         WHERE id=?
+        """,
+        (
+            WORK_STATUS_QUEUED,
+            str(error or "")[:2000],
+            available_at,
+            now,
+            int(work_id),
+        ),
+    )
+
+
 def _release_worker_running_work_items(
     conn: sqlite3.Connection,
     *,

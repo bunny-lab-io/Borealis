@@ -6230,6 +6230,30 @@ class JobScheduler(OnboardingSchedulerMixin):
                 return "Jobs using agent execution contexts must contain only script assemblies."
             return None
 
+        def _validate_remote_credential_for_context(
+            components: Sequence[Any],
+            execution_context: str,
+            credential_id: Any,
+            use_service_account: Any,
+        ) -> Optional[str]:
+            component_domains = {
+                _component_execution_domain(component)
+                for component in (components or [])
+                if _component_execution_domain(component)
+            }
+            if component_domains != {"ansible"}:
+                return None
+            transport = _normalize_ansible_transport(execution_context)
+            try:
+                has_credential = int(credential_id) > 0
+            except Exception:
+                has_credential = False
+            if transport == "ssh" and not has_credential:
+                return "SSH Ansible jobs require a stored credential."
+            if transport == "winrm" and not bool(use_service_account) and not has_credential:
+                return "WinRM Ansible jobs require a stored credential or service-account execution."
+            return None
+
         def _validate_workflow_job_configuration(
             components: Sequence[Any],
             targets: Sequence[Any],
@@ -6396,6 +6420,14 @@ class JobScheduler(OnboardingSchedulerMixin):
             component_error = _validate_components_for_context(components, execution_context)
             if component_error:
                 return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+            credential_error = _validate_remote_credential_for_context(
+                components,
+                execution_context,
+                credential_id,
+                bool(use_service_account),
+            )
+            if credential_error:
+                return json.dumps({"error": credential_error}), 400, {"Content-Type": "application/json"}
             credential_warning = None if (is_workflow_job or credential_id is None) else self._credential_reset_warning(credential_id)
             if credential_warning and enabled:
                 enabled = 0
@@ -6600,7 +6632,7 @@ class JobScheduler(OnboardingSchedulerMixin):
                     cur = conn.cursor()
                     cur.execute(
                         """
-                        SELECT credential_id, enabled, components_json, execution_context, targets_json, job_kind
+                        SELECT credential_id, enabled, components_json, execution_context, targets_json, job_kind, use_service_account
                           FROM scheduled_jobs
                          WHERE id=?
                         """,
@@ -6625,7 +6657,7 @@ class JobScheduler(OnboardingSchedulerMixin):
                     effective_targets = []
                 effective_context = fields.get("execution_context") or current_row[3] or "system"
                 effective_credential_id = fields.get("credential_id", current_row[0])
-                effective_use_service_account = fields.get("use_service_account", 0)
+                effective_use_service_account = fields.get("use_service_account", current_row[6] if len(current_row) > 6 else 0)
                 effective_job_kind = _normalize_job_kind(fields.get("job_kind", current_row[5] if len(current_row) > 5 else JOB_KIND_AUTOMATION))
                 workflow_job_error = None
                 is_workflow_job = False
@@ -6654,6 +6686,14 @@ class JobScheduler(OnboardingSchedulerMixin):
                     component_error = _validate_components_for_context(next_components or [], str(effective_context))
                     if component_error:
                         return json.dumps({"error": component_error}), 400, {"Content-Type": "application/json"}
+                    credential_error = _validate_remote_credential_for_context(
+                        next_components or [],
+                        str(effective_context),
+                        effective_credential_id,
+                        bool(effective_use_service_account),
+                    )
+                    if credential_error:
+                        return json.dumps({"error": credential_error}), 400, {"Content-Type": "application/json"}
                 effective_enabled = int(fields.get("enabled", current_row[1] or 0))
                 credential_warning = None if (is_workflow_job or effective_credential_id in (None, "", "null")) else self._credential_reset_warning(effective_credential_id)
                 if credential_warning and effective_enabled:

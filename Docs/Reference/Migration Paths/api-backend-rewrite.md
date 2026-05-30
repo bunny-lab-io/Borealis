@@ -8,9 +8,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M2: Traefik Dynamic Worker Routing` |
+| Active milestone | `M1: Runtime Dependency Split` |
 | Last updated | 2026-05-30 |
-| Next safe step | Start `M2` by converting Traefik dynamic config output to a watched directory with stable core routes and per-worker route files. |
+| Next safe step | Redeploy Engine/WebUI from this branch, rerun Quick Job Ansible and normal scheduled Ansible smoke tests, then mark `M1` done again before starting `M2`. |
 
 ## Tracker Rules
 
@@ -34,8 +34,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Milestone | Status | Core migration |
 | --- | --- | --- |
 | `M0: Tracker + PR Setup` | `Done` | Create branch, tracker, index link, and draft PR. |
-| `M1: Runtime Dependency Split` | `Done` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
-| `M2: Traefik Dynamic Worker Routing` | `In Progress` | Hotload per-site-worker routes without Traefik recreate. |
+| `M1: Runtime Dependency Split` | `In Progress` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
+| `M2: Traefik Dynamic Worker Routing` | `Not Started` | Hotload per-site-worker routes without Traefik recreate. |
 | `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
 | `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
 | `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
@@ -67,19 +67,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `Done` |
+| Status | `In Progress` |
 | Goal | Stop `api-backend` from carrying Ansible and execution-heavy runtime dependencies. |
 | Migrates | Ansible-only packages, execution helpers, and related container install burden from `api-backend` to worker runtime ownership. |
 | Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
 | Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
 | Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
-| Handoff Note | Ansible Python deps now live in `engine-worker-requirements.txt`; `api-backend` keeps Docker CLI, WireGuard tools, and Tesseract until later milestones remove current server-info, VPN, and OCR/runtime callers. |
+| Handoff Note | Operator smoke found post-split Quick Job credential and transient WireGuard readiness regressions. Code fixes are staged; redeploy and rerun Quick Job plus normal scheduled Ansible before reopening `M2`. |
 
 ### M2: Traefik Dynamic Worker Routing
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Not Started` |
 | Goal | Let Traefik hotload per-site-worker route files without recreating Traefik. |
 | Migrates | Direct routing setup for worker-owned remote-operation endpoints. |
 | Out Of Scope | Worker registry schema, operation-token authorization, Agent route cutover, remote-op feature migration. |
@@ -235,6 +235,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-30 | `M1` | Fixed operator-found Job 91/93 and Job 94 regressions. Ansible Quick Job now requires an SSH credential in the dialog and API create/update validation rejects SSH Ansible without a stored credential. Site-worker now retries transient WireGuard preparation skips (`wireguard_unavailable`, `wireguard_not_ready`, `remote_preflight_failed`) instead of completing those work items as success. Dynamic site-worker logs now persist under host `Engine/Services/api-backend/logs/site-workers/`. | `python3 -m py_compile` passed; `git diff --check` passed; focused queue/API pytest passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test token root. Full scheduler domain did not pass due unrelated existing onboarding test failure: `scheduled_job_module._onboarding_raw_input_map` missing. | `Unit_Test_Results/engine-20260530T023400Z`, `Unit_Test_Results/engine-20260530T023421Z` |
 | 2026-05-30 | `M1` | Fixed operator-found Job 90 regression: stopped/lost site-workers now release claimed work back to `queued`, clear stale leases, and record requeue reason so scheduler can spawn/claim instead of leaving runs in limbo. | `python3 -m py_compile` passed; `Data/Engine/Unit_Tests/test_job_scheduler_queue.py` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T015406Z` |
 | 2026-05-30 | `M1` | Fixed operator-found worker lifecycle regression: site-worker now waits for scheduled run terminal status before completing work item or entering idle TTL, so Ansible daemon threads are not killed mid-run. | `py_compile` passed; `git diff --check` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T013150Z` |
 | 2026-05-30 | `M1` | Split base API requirements from worker Ansible requirements, removed Ansible collection staging from api-backend bootstrap, moved collection staging to job-scheduler/site-worker entrypoints, and mounted shared Ansible cache into dynamic site-workers. | `bash -n` entrypoints passed; `docker compose -f Data/Engine/Containers/compose.yaml config` passed; `git diff --check` passed; `./Engine_Unit_Tests.sh --domain ansible` passed with test secret env. | `Unit_Test_Results/engine-20260530T010620Z` |
@@ -252,10 +253,13 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - `M1` complete: api-backend no longer installs Ansible-only Python packages or stages Ansible collections; worker runtimes install `engine-worker-requirements.txt`, stage collections at startup, and share the Ansible cache with dynamic site-workers.
 - `M1` stabilized after operator smoke test: site-worker no longer exits on idle TTL while scheduled Ansible run remains `Running`.
 - `M1` stabilized after Job 90 smoke test: stopped/lost site-workers now requeue claimed work immediately instead of leaving work items leased to dead workers.
+- `M1` staged fix after Job 91/93 smoke test: Ansible Quick Job now carries an SSH credential instead of creating `credential_id=NULL` jobs.
+- `M1` staged fix after Job 94 smoke test: transient WireGuard readiness skips are requeued for retry instead of marked complete.
 
 ## Remaining Work
 
-- Complete active `M2`, then `M3`, to prepare worker routing and registry foundation.
+- Redeploy and revalidate `M1` operator smoke tests, then mark `M1` done again.
+- Complete `M2`, then `M3`, to prepare worker routing and registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
@@ -268,8 +272,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Markdown and index link inspection | `M0` | `Done` | Doc-only validation. |
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` | Required after container or Traefik changes. |
-| Focused Engine tests | `M1`-`M14` | `Done` for `M1` | `ansible` domain and scheduler queue regression tests passed with local test secret env. |
-| Full affected Engine lane | `M1`-`M14` | `Not Started` | Run before handoff when practical. |
+| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes | Queue retry tests, scheduled job credential validation tests, and affected scheduler validation cases passed. |
+| Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler domain | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
 

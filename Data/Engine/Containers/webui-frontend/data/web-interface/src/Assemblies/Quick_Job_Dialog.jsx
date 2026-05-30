@@ -31,6 +31,17 @@ import {
 } from "../DialogStyles.jsx";
 
 const MAGIC_UI = "#8fd3ff";
+const QUICK_JOB_FIELD_SX = {
+  "& .MuiOutlinedInput-root": {
+    color: "#f5fbff",
+    background: "rgba(4, 16, 28, 0.72)",
+    "& fieldset": { borderColor: "rgba(143, 211, 255, 0.18)" },
+    "&:hover fieldset": { borderColor: "rgba(143, 211, 255, 0.38)" },
+    "&.Mui-focused fieldset": { borderColor: MAGIC_UI },
+  },
+  "& .MuiInputLabel-root": { color: "rgba(216, 236, 255, 0.72)" },
+  "& .MuiFormHelperText-root": { color: "rgba(216, 236, 255, 0.55)" },
+};
 
 function normalizeVariableDefinitions(vars) {
   if (!Array.isArray(vars)) return [];
@@ -127,6 +138,20 @@ function notify(notifyOperator, title, message, variant = "info") {
   });
 }
 
+function isSshCredential(credential) {
+  return String(credential?.connection_type || "").trim().toLowerCase() === "ssh";
+}
+
+function credentialNeedsReset(credential) {
+  if (!credential) return false;
+  if (Boolean(credential.secret_reset_required)) return true;
+  const state = String(credential?.metadata?.aegis_secret_state || "").trim().toLowerCase();
+  const lostFields = Array.isArray(credential?.lost_secret_fields)
+    ? credential.lost_secret_fields
+    : credential?.metadata?.aegis_lost_secret_fields;
+  return state === "reset_required" && Array.isArray(lostFields) && lostFields.length > 0;
+}
+
 export default function QuickJobDialog({
   open,
   onClose,
@@ -143,6 +168,10 @@ export default function QuickJobDialog({
   const [step, setStep] = useState("picker");
   const [exportState, setExportState] = useState({ loading: false, error: "", parsed: null });
   const [variables, setVariables] = useState([]);
+  const [credentials, setCredentials] = useState([]);
+  const [credentialLoading, setCredentialLoading] = useState(false);
+  const [credentialError, setCredentialError] = useState("");
+  const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const validHostnames = useMemo(
@@ -157,8 +186,12 @@ export default function QuickJobDialog({
     setSelectedRecord(null);
     setVariables([]);
     setExportState({ loading: false, error: "", parsed: null });
+    setCredentials([]);
+    setCredentialError("");
+    setSelectedCredentialId("");
     setAssembliesLoading(true);
     setAssembliesError("");
+    setCredentialLoading(true);
     fetch("/api/assemblies", { credentials: "include" })
       .then(async (response) => {
         const body = await response.json().catch(() => ({}));
@@ -177,6 +210,26 @@ export default function QuickJobDialog({
       .finally(() => {
         if (!cancelled) setAssembliesLoading(false);
       });
+    fetch("/api/credentials", { credentials: "include" })
+      .then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body?.error || body?.message || "Unable to load credentials");
+        return body;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        const list = Array.isArray(body?.credentials) ? [...body.credentials] : [];
+        list.sort((left, right) => String(left?.name || "").localeCompare(String(right?.name || "")));
+        setCredentials(list);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCredentials([]);
+        setCredentialError(error?.message || "Unable to load credentials");
+      })
+      .finally(() => {
+        if (!cancelled) setCredentialLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -184,6 +237,39 @@ export default function QuickJobDialog({
 
   const selectedGuid = String(selectedRecord?.assemblyGuid || "").toLowerCase();
   const selectedName = selectedRecord?.displayName || selectedRecord?.name || "Selected Assembly";
+  const selectedKind = useMemo(
+    () => (selectedRecord ? inferAssemblyKind(selectedRecord, exportState.parsed) : ""),
+    [exportState.parsed, selectedRecord],
+  );
+  const sshCredentials = useMemo(
+    () => credentials.filter(isSshCredential),
+    [credentials],
+  );
+  const selectedCredentialRecord = useMemo(
+    () => sshCredentials.find((credential) => String(credential.id) === String(selectedCredentialId)) || null,
+    [selectedCredentialId, sshCredentials],
+  );
+  const selectedCredentialResetRequired = credentialNeedsReset(selectedCredentialRecord);
+
+  useEffect(() => {
+    if (!open) return;
+    if (selectedKind !== "ansible") {
+      setSelectedCredentialId("");
+      return;
+    }
+    setSelectedCredentialId((current) => {
+      if (sshCredentials.some((credential) => String(credential.id) === String(current))) {
+        return current;
+      }
+      return sshCredentials.length ? String(sshCredentials[0].id) : "";
+    });
+  }, [open, selectedKind, sshCredentials]);
+
+  const handleAssemblySelection = useCallback((record) => {
+    setSelectedRecord(record);
+    setExportState({ loading: false, error: "", parsed: null });
+    setVariables([]);
+  }, []);
 
   const loadSelectedExport = useCallback(async () => {
     if (!selectedGuid) throw new Error("Choose an assembly");
@@ -241,6 +327,17 @@ export default function QuickJobDialog({
       }, {});
       const kind = inferAssemblyKind(selectedRecord, parsed);
       const executionContext = kind === "ansible" ? "ssh_individual" : "system";
+      const activeCredential = kind === "ansible"
+        ? sshCredentials.find((credential) => String(credential.id) === String(selectedCredentialId))
+        : null;
+      if (kind === "ansible" && !activeCredential) {
+        const message = credentialLoading
+          ? "SSH credentials are still loading."
+          : "Choose an SSH credential before running this Ansible quick job.";
+        setExportState((current) => ({ ...current, error: message }));
+        notify(notifyOperator, "Quick Job Failed", message, "error");
+        return;
+      }
       const componentPath = normalizeAssemblyPath(
         kind,
         selectedRecord.path || selectedRecord.folder_path || parsed.sourcePath || "",
@@ -251,7 +348,7 @@ export default function QuickJobDialog({
         description: "",
         enabled: true,
         execution_context: executionContext,
-        credential_id: null,
+        credential_id: activeCredential ? Number(activeCredential.id) : null,
         use_service_account: false,
         schedule: {
           type: "immediately",
@@ -315,9 +412,12 @@ export default function QuickJobDialog({
       notifyOperator,
       onClose,
       onQueued,
+      credentialLoading,
       selectedGuid,
       selectedName,
       selectedRecord,
+      selectedCredentialId,
+      sshCredentials,
       validHostnames,
       variables,
     ],
@@ -327,7 +427,8 @@ export default function QuickJobDialog({
     if (!selectedRecord || submitting || exportState.loading) return;
     try {
       const loaded = await loadSelectedExport();
-      if (loaded.variables.length) {
+      const kind = inferAssemblyKind(selectedRecord, loaded.parsed);
+      if (kind === "ansible" || loaded.variables.length) {
         setStep("variables");
         return;
       }
@@ -372,17 +473,6 @@ export default function QuickJobDialog({
         />
       );
     }
-    const commonSx = {
-      "& .MuiOutlinedInput-root": {
-        color: "#f5fbff",
-        background: "rgba(4, 16, 28, 0.72)",
-        "& fieldset": { borderColor: "rgba(143, 211, 255, 0.18)" },
-        "&:hover fieldset": { borderColor: "rgba(143, 211, 255, 0.38)" },
-        "&.Mui-focused fieldset": { borderColor: MAGIC_UI },
-      },
-      "& .MuiInputLabel-root": { color: "rgba(216, 236, 255, 0.72)" },
-      "& .MuiFormHelperText-root": { color: "rgba(216, 236, 255, 0.55)" },
-    };
     return (
       <TextField
         key={variable.key}
@@ -395,7 +485,7 @@ export default function QuickJobDialog({
         helperText={variable.description || " "}
         fullWidth
         size="small"
-        sx={commonSx}
+        sx={QUICK_JOB_FIELD_SX}
       >
         {variable.type === "select"
           ? variable.options.map((option) => (
@@ -407,6 +497,13 @@ export default function QuickJobDialog({
       </TextField>
     );
   };
+
+  const runDisabled =
+    !selectedRecord ||
+    !validHostnames.length ||
+    submitting ||
+    exportState.loading ||
+    (step === "variables" && selectedKind === "ansible" && (credentialLoading || !selectedCredentialId));
 
   return (
     <Dialog
@@ -438,7 +535,11 @@ export default function QuickJobDialog({
         >
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="h6" sx={{ color: "#f5fbff", fontWeight: 800, lineHeight: 1.2 }}>
-              {step === "variables" ? "Assembly Variables" : "Select Quick Job Assembly"}
+              {step === "variables"
+                ? selectedKind === "ansible"
+                  ? "Quick Job Options"
+                  : "Assembly Variables"
+                : "Select Quick Job Assembly"}
             </Typography>
             <Typography variant="caption" sx={{ color: "rgba(216, 236, 255, 0.62)" }}>
               {step === "variables" ? selectedName : "Choose an assembly to run against selected devices."}
@@ -462,7 +563,7 @@ export default function QuickJobDialog({
               onClick={step === "variables" ? () => queueJob() : handleNext}
               variant="contained"
               startIcon={submitting || exportState.loading ? <CircularProgress size={16} color="inherit" /> : <PlayArrowRoundedIcon />}
-              disabled={!selectedRecord || !validHostnames.length || submitting || exportState.loading}
+              disabled={runDisabled}
               sx={DIALOG_PRIMARY_BUTTON_SX}
             >
               {step === "variables" ? "Run Now" : "Next"}
@@ -499,8 +600,8 @@ export default function QuickJobDialog({
               error={assembliesError}
               allowedKinds={["script", "ansible"]}
               selectedAssemblyGuid={selectedGuid}
-              onSelectionChange={setSelectedRecord}
-              onChoose={setSelectedRecord}
+              onSelectionChange={handleAssemblySelection}
+              onChoose={handleAssemblySelection}
               height="100%"
             />
           </Box>
@@ -514,6 +615,44 @@ export default function QuickJobDialog({
                 {variables.length} custom field{variables.length === 1 ? "" : "s"}
               </Typography>
             </Box>
+            {selectedKind === "ansible" ? (
+              <Box sx={{ display: "grid", gap: 1 }}>
+                <Typography variant="subtitle2" sx={{ color: "#f5fbff", fontWeight: 800 }}>
+                  SSH Credential
+                </Typography>
+                <TextField
+                  select
+                  size="small"
+                  label="Credential"
+                  value={selectedCredentialId}
+                  onChange={(event) => setSelectedCredentialId(event.target.value)}
+                  disabled={credentialLoading || !sshCredentials.length}
+                  helperText={
+                    selectedCredentialResetRequired
+                      ? "Secret Re-Entry Required"
+                      : !credentialLoading && !credentialError && !sshCredentials.length
+                        ? "No SSH credentials available. Create one under Access Management > Credentials."
+                        : " "
+                  }
+                  fullWidth
+                  sx={QUICK_JOB_FIELD_SX}
+                >
+                  {sshCredentials.map((credential) => (
+                    <MenuItem key={credential.id} value={String(credential.id)}>
+                      {credential.name}
+                      {credentialNeedsReset(credential) ? " (Secret Re-Entry Required)" : ""}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                {credentialLoading ? (
+                  <Box sx={{ display: "flex", alignItems: "center", gap: 1, color: "rgba(216, 236, 255, 0.7)", fontSize: "0.84rem" }}>
+                    <CircularProgress size={16} sx={{ color: MAGIC_UI }} />
+                    Loading credentials
+                  </Box>
+                ) : null}
+                {!credentialLoading && credentialError ? <Alert severity="error">{credentialError}</Alert> : null}
+              </Box>
+            ) : null}
             <Box
               sx={{
                 display: "grid",
