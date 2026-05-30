@@ -27,7 +27,9 @@ Ansible playbook assemblies run from the Linux Engine against remote devices ove
 5. Select credential or service account path where applicable.
 6. Save.
 
-New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. Site Worker Scheduled Task Concurrency is the visible throttle for scheduled Ansible execution. `Engine.sh deploy` tunes that value from the detected Engine deployment profile.
+New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. The Site Worker Scheduled Tasks value is the visible throttle for scheduled Ansible execution. `Engine.sh deploy` tunes that value from the detected Engine deployment profile.
+
+The Site Worker Scheduled Tasks value limits active scheduled work items, not raw devices. Shared Ansible mode uses one work-item slot for a site batch and lets Ansible process the hosts inside that batch. Individual mode uses one work-item slot per target while active.
 
 ## Read Recap
 
@@ -63,8 +65,9 @@ SSH credentials may include password, private key, become method, and become pas
     ### Runtime behavior
 
     - Engine stages required Ansible collections into `Engine/Services/api-backend/cache/Ansible/collections`.
-    - Shared contexts run one inventory per playbook component and consume one scheduled-lane worker slot for that site batch.
-    - Individual contexts create one-host inventories and one run row per target/component pair. Each queued run consumes one scheduled-lane worker slot while active.
+    - Shared contexts run one inventory per playbook component and consume one scheduled-lane worker slot for that site batch. The nodegraph can show `Task (8 Devices)` for one shared work item because the label reports target count, not slot count.
+    - Individual contexts create one-host inventories and one run row per target/component pair. Each queued run consumes one scheduled-lane worker slot while active. The nodegraph can group several same-job, same-status runs into one `Task (n Devices)` card.
     - SSH/WinRM target admission depends on WireGuard readiness and credential/service-account resolution.
     - Legacy Ansible runner limit endpoints remain API-compatible but scheduler dispatch no longer uses them as active gates.
-    - Site-worker scheduled-lane concurrency is the active claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
+    - Site-worker scheduled-lane capacity is the active work-item claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
+    - Borealis does not currently pass `--forks` to Ansible. Shared batches use Ansible's default internal host fan-out inside the single claimed work item.

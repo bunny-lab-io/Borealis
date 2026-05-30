@@ -86,7 +86,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Container deployments auto-detect the Engine host profile during every `Engine.sh deploy` and redeploy.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
-- The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled task concurrency into `Engine/Deploy/compose.env`.
+- The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled work-item slots into `Engine/Deploy/compose.env`.
 - Docker Compose applies PostgreSQL tuning through the `postgres-db` container startup command, so operators do not run manual `ALTER SYSTEM` steps for normal profile tuning.
 - The current auto-selected single-node profiles are:
   - `Homelab`
@@ -94,7 +94,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `MSP / Production`
   - `Enterprise`
 - The roadmap-only `Enterprise Clustered` profile in `Docs/Engine/deploying-the-engine.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
-- Site-worker scheduled task concurrency is profile-managed and exposed as read-only in Server Info.
+- Site-worker scheduled work-item slots are profile-managed and exposed as read-only in Server Info.
 
 ### Profile selection thresholds
 - Borealis scores CPU and RAM separately, then uses the lower of the two ranks as the effective profile so an unbalanced host does not get over-tuned.
@@ -130,7 +130,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 10`
   - `BOREALIS_DB_MAX_OVERFLOW = 10`
   - effective pooled Engine connection burst capacity: `20`
-- Site-worker scheduled task concurrency:
+- Site-worker scheduled work-item slots:
   - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 5`
 - PostgreSQL connection ceiling:
   - `max_connections = 80`
@@ -159,7 +159,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 12`
   - `BOREALIS_DB_MAX_OVERFLOW = 16`
   - effective pooled Engine connection burst capacity: `28`
-- Site-worker scheduled task concurrency:
+- Site-worker scheduled work-item slots:
   - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 8`
 - PostgreSQL connection ceiling:
   - `max_connections = 120`
@@ -188,7 +188,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 20`
   - `BOREALIS_DB_MAX_OVERFLOW = 20`
   - effective pooled Engine connection burst capacity: `40`
-- Site-worker scheduled task concurrency:
+- Site-worker scheduled work-item slots:
   - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 12`
 - PostgreSQL connection ceiling:
   - `max_connections = 150`
@@ -217,7 +217,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 24`
   - `BOREALIS_DB_MAX_OVERFLOW = 24`
   - effective pooled Engine connection burst capacity: `48`
-- Site-worker scheduled task concurrency:
+- Site-worker scheduled work-item slots:
   - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 16`
 - PostgreSQL connection ceiling:
   - `max_connections = 180`

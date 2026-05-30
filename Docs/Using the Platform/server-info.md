@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and site-worker scheduled task capacity.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and site-worker scheduled task slots.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -28,7 +28,9 @@ Admins can adjust:
 - Engine timezone.
 - Agent release channel targets.
 
-Server Info also shows Site Worker Scheduled Task Concurrency as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
+Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
+
+This value is active scheduled-lane work-item capacity per site worker, not raw device concurrency. Shared Ansible batches, scheduled workflows, scheduled jobs, and agent-maintenance items each consume scheduled slots while active according to their work-item shape.
 
 !!! warning
 
@@ -43,7 +45,7 @@ Server Info also shows Site Worker Scheduled Task Concurrency as read-only profi
     - `GET /api/server/timezones` - timezone options.
     - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
-    - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane capacity.
+    - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
     - `POST /api/server/wireguard/recover` - recover WireGuard listener.
@@ -66,5 +68,6 @@ Server Info also shows Site Worker Scheduled Task Concurrency as read-only profi
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
     - Service actions queue work items so API request can return before service changes interrupt runtime.
-    - Site Worker Scheduled Task Concurrency controls scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work that uses the scheduled lane. Onboarding keeps its separate lane behavior.
+    - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
+    - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
     - Server Info is informational first; raw log inspection belongs in Engine Log Management.

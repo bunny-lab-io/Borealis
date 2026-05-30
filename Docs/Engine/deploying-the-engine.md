@@ -18,32 +18,36 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
-The Engine container deployment system auto-detects host vCPU and RAM on every `Engine.sh deploy` or redeploy. Borealis scores CPU and RAM separately, selects the lower profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker task-concurrency settings through Docker Compose.
+The Engine container deployment system auto-detects host vCPU and RAM on every `Engine.sh deploy` or redeploy. Borealis scores CPU and RAM separately, selects the lower profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through Docker Compose.
 
 === "Homelab"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Task Concurrency | NVMe storage |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
 
 === "Small Business"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Task Concurrency | NVMe storage |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
 
 === "MSP / Production"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Task Concurrency | NVMe storage |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
 
 === "Enterprise"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Task Concurrency | NVMe storage |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
 
 === "Enterprise Clustered"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | Task Concurrency | NVMe storage |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
     | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 16 per node | 500 GiB-1 TiB per node |
+
+!!! info "Scheduled task slots"
+
+    Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
 
 ## Install the Engine
 Use the following one-line installer command when starting from a fresh Linux host:
