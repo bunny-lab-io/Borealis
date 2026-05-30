@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 import requests
 
@@ -40,6 +40,7 @@ from .security import INTERNAL_TOKEN_HEADER, internal_token
 
 DEFAULT_SCHEDULED_WORK_CONCURRENCY = 7
 MAX_SCHEDULED_WORK_CONCURRENCY = 32
+DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
 
 
 class _WorkerApp:
@@ -60,6 +61,16 @@ class _NoopSocketIO:
 
 def _now_ts() -> int:
     return int(time.time())
+
+
+def _non_negative_float_env(name: str, default: float) -> float:
+    raw = str(os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.0, float(raw))
+    except Exception:
+        return default
 
 
 def _db_factory(database_url: str):
@@ -379,6 +390,72 @@ def _run_agent_maintenance_item(settings, db_factory, item: Mapping[str, Any]) -
     return WORK_STATUS_SUCCEEDED
 
 
+def _work_status_for_scheduled_run(status: str) -> str:
+    normalized = str(status or "").strip()
+    if normalized in {
+        job_scheduler.RUN_STATUS_FAILED,
+        job_scheduler.RUN_STATUS_EXPIRED,
+        job_scheduler.RUN_STATUS_TIMED_OUT,
+    }:
+        return WORK_STATUS_FAILED
+    return WORK_STATUS_SUCCEEDED
+
+
+def _wait_for_scheduled_run_completion(
+    db_factory,
+    *,
+    run_id: int,
+    logger,
+    poll_seconds: Optional[float] = None,
+) -> str:
+    if int(run_id or 0) <= 0:
+        return WORK_STATUS_FAILED
+    poll_interval = poll_seconds
+    if poll_interval is None:
+        poll_interval = _non_negative_float_env(
+            "BOREALIS_SITE_WORKER_RUN_WAIT_POLL_SECONDS",
+            DEFAULT_RUN_WAIT_POLL_SECONDS,
+        )
+    poll_interval = max(0.1, float(poll_interval or DEFAULT_RUN_WAIT_POLL_SECONDS))
+    last_status = ""
+    while True:
+        conn = db_factory()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT status, finished_ts, error
+                  FROM scheduled_job_runs
+                 WHERE id=?
+                """,
+                (int(run_id),),
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            logger.error("scheduled run disappeared while site-worker waited run_id=%s", run_id)
+            return WORK_STATUS_FAILED
+        try:
+            status = str(row["status"] or "").strip()
+            finished_ts = row["finished_ts"]
+            error_text = str(row["error"] or "").strip()
+        except Exception:
+            status = str(row[0] or "").strip()
+            finished_ts = row[1]
+            error_text = str(row[2] or "").strip() if len(row) > 2 else ""
+        if status and status != last_status:
+            logger.info("waiting for scheduled run completion run_id=%s status=%s", run_id, status)
+            last_status = status
+        if status in job_scheduler.TERMINAL_RUN_STATUSES:
+            return _work_status_for_scheduled_run(status)
+        if finished_ts is not None and status not in {job_scheduler.RUN_STATUS_PENDING, job_scheduler.RUN_STATUS_RUNNING}:
+            return _work_status_for_scheduled_run(status)
+        if finished_ts is not None and error_text:
+            return WORK_STATUS_FAILED
+        time.sleep(poll_interval)
+
+
 def _heartbeat_until(
     stop_event: threading.Event,
     db_factory,
@@ -426,16 +503,18 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
             final_status = _run_agent_maintenance_item(settings, db_factory, item)
         elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+            run_id = int(payload.get("run_id") or item.get("run_id") or 0)
             scheduler._dispatch_workflow_run(
                 job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                run_row_id=run_id,
                 scheduled_ts=int(payload.get("scheduled_ts") or 0),
                 workflow_component=dict(payload.get("workflow_component") or {}),
                 workflow_site_scope=dict(payload.get("workflow_site_scope") or {}),
             )
-            final_status = WORK_STATUS_SUCCEEDED
+            final_status = _wait_for_scheduled_run_completion(db_factory, run_id=run_id, logger=logger)
         elif item_kind == WORK_KIND_SCHEDULED_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
+            run_id = int(payload.get("run_id") or item.get("run_id") or 0)
             if bool(payload.get("shared_execution")):
                 ansible_components = list(payload.get("ansible_components") or [])
                 try:
@@ -446,7 +525,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                 if isinstance(component, Mapping):
                     link = scheduler._dispatch_shared_ansible(
                         job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        run_row_id=run_id,
                         scheduled_ts=int(payload.get("scheduled_ts") or 0),
                         run_mode=str(payload.get("run_mode") or "system"),
                         component=dict(component),
@@ -455,7 +534,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                         target_row_ids=list(payload.get("target_row_ids") or []),
                     )
                     normalized_link = scheduler._normalize_run_activity_link(
-                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        run_row_id=run_id,
                         link=link,
                         default_component_kind="ansible",
                         default_script_type="ansible",
@@ -466,7 +545,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                 conn_lookup = scheduler._conn()
                 try:
                     cur_lookup = conn_lookup.cursor()
-                    cur_lookup.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (int(payload.get("run_id") or item.get("run_id") or 0),))
+                    cur_lookup.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (run_id,))
                     row = cur_lookup.fetchone()
                 finally:
                     conn_lookup.close()
@@ -474,7 +553,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                 if host:
                     scheduler._dispatch_run_activities(
                         job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
+                        run_row_id=run_id,
                         scheduled_ts=int(payload.get("scheduled_ts") or 0),
                         hostname=host,
                         run_mode=str(payload.get("run_mode") or "system"),
@@ -484,7 +563,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                         use_service_account=bool(payload.get("use_service_account")),
                         component_index=payload.get("component_index"),
                     )
-            final_status = WORK_STATUS_SUCCEEDED
+            final_status = _wait_for_scheduled_run_completion(db_factory, run_id=run_id, logger=logger)
         else:
             error = f"unsupported work kind {item.get('kind')}"
     except Exception as exc:
