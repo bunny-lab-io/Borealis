@@ -51,6 +51,9 @@ from .queue import (
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
+DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY = 3
+MAX_SITE_WORKER_SCHEDULED_CONCURRENCY = 32
+
 
 class _TaskSchedulerApp:
     def __init__(self, *, logger, secret_key: str) -> None:
@@ -365,6 +368,15 @@ def _worker_image() -> str:
     return str(os.environ.get("BOREALIS_SITE_WORKER_IMAGE") or "borealis-engine/site-worker:local").strip()
 
 
+def _site_worker_scheduled_concurrency() -> int:
+    raw = str(os.environ.get("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY") or DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY).strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = DEFAULT_SITE_WORKER_SCHEDULED_CONCURRENCY
+    return min(MAX_SITE_WORKER_SCHEDULED_CONCURRENCY, max(1, value))
+
+
 def _env_value(env_items: Sequence[Any], key: str) -> str:
     prefix = f"{key}="
     for item in env_items or []:
@@ -607,7 +619,7 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             "-e",
             "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
             "-e",
-            "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=7",
+            f"BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY={_site_worker_scheduled_concurrency()}",
             "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",

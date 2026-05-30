@@ -22,6 +22,7 @@ from Data.Engine.services.job_scheduler.queue import (
     stop_worker,
 )
 from Data.Engine.services.job_scheduler.worker import (
+    _fail_scheduled_run_after_transient_retries,
     _reset_scheduled_run_for_retry,
     _transient_scheduled_run_retry_reason,
 )
@@ -274,5 +275,38 @@ def test_reset_scheduled_run_for_retry_returns_transient_targets_to_pending(tmp_
         assert run_row[2] == ""
         assert "Retrying after transient worker preparation failure" in run_row[3]
         assert target_row == (job_scheduler.RESOLUTION_STATUS_PENDING, "")
+    finally:
+        conn.close()
+
+
+def test_fail_scheduled_run_after_transient_retries_marks_run_failed(tmp_path: Path, monkeypatch) -> None:
+    conn = _connect_queue_db(tmp_path)
+    try:
+        _seed_transient_skipped_run(conn, run_id=44)
+        conn.commit()
+
+        monkeypatch.setenv("BOREALIS_SITE_WORKER_TRANSIENT_RUN_RETRY_ATTEMPTS", "3")
+        message = _fail_scheduled_run_after_transient_retries(
+            conn,
+            run_id=44,
+            reason="wireguard_unavailable",
+            attempt_count=3,
+        )
+        conn.commit()
+
+        run_row = conn.execute(
+            "SELECT status, skip_reason, error FROM scheduled_job_runs WHERE id=?",
+            (44,),
+        ).fetchone()
+        target_row = conn.execute(
+            "SELECT resolution_status, resolution_reason FROM scheduled_job_run_targets WHERE run_id=?",
+            (44,),
+        ).fetchone()
+
+        assert "Transient worker preparation failed after 3 attempts" in message
+        assert run_row[0] == job_scheduler.RUN_STATUS_FAILED
+        assert run_row[1] == ""
+        assert "Transient worker preparation failed after 3 attempts" in run_row[2]
+        assert target_row == (job_scheduler.RESOLUTION_STATUS_UNRESOLVED, "wireguard_unavailable")
     finally:
         conn.close()

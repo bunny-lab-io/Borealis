@@ -39,13 +39,14 @@ from .queue import (
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 
-DEFAULT_SCHEDULED_WORK_CONCURRENCY = 7
+DEFAULT_SCHEDULED_WORK_CONCURRENCY = 3
 MAX_SCHEDULED_WORK_CONCURRENCY = 32
 DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
-DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 4
-DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 20
+DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
+DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 30
 TRANSIENT_RUN_RETRY_REASONS = {
     "wireguard_unavailable",
+    "wireguard_session_not_ready",
     job_scheduler.RESOLUTION_REASON_WIREGUARD_NOT_READY,
     job_scheduler.RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED,
 }
@@ -419,13 +420,14 @@ def _work_status_for_scheduled_run(status: str) -> str:
     return WORK_STATUS_SUCCEEDED
 
 
-def _transient_scheduled_run_retry_reason(db_factory, *, run_id: int, attempt_count: int) -> str:
-    max_attempts = _positive_int_env(
+def _transient_run_retry_max_attempts() -> int:
+    return _positive_int_env(
         "BOREALIS_SITE_WORKER_TRANSIENT_RUN_RETRY_ATTEMPTS",
         DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS,
     )
-    if int(attempt_count or 0) >= max_attempts:
-        return ""
+
+
+def _transient_scheduled_run_skip_reason(db_factory, *, run_id: int) -> str:
     conn = db_factory()
     try:
         cur = conn.cursor()
@@ -476,6 +478,12 @@ def _transient_scheduled_run_retry_reason(db_factory, *, run_id: int, attempt_co
     return ""
 
 
+def _transient_scheduled_run_retry_reason(db_factory, *, run_id: int, attempt_count: int) -> str:
+    if int(attempt_count or 0) >= _transient_run_retry_max_attempts():
+        return ""
+    return _transient_scheduled_run_skip_reason(db_factory, run_id=run_id)
+
+
 def _reset_scheduled_run_for_retry(conn, *, run_id: int, reason: str) -> None:
     now = _now_ts()
     retry_message = f"Retrying after transient worker preparation failure: {reason}"
@@ -507,6 +515,43 @@ def _reset_scheduled_run_for_retry(conn, *, run_id: int, reason: str) -> None:
             *sorted(TRANSIENT_RUN_RETRY_REASONS),
         ),
     )
+
+
+def _fail_scheduled_run_after_transient_retries(conn, *, run_id: int, reason: str, attempt_count: int) -> str:
+    now = _now_ts()
+    max_attempts = _transient_run_retry_max_attempts()
+    message = (
+        f"Transient worker preparation failed after {int(attempt_count or 0)} attempts "
+        f"(max {max_attempts}): {reason}"
+    )
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE scheduled_job_runs
+           SET status=?,
+               finished_ts=?,
+               skip_reason='',
+               error=?,
+               updated_at=?
+         WHERE id=?
+        """,
+        (job_scheduler.RUN_STATUS_FAILED, now, message[:512], now, int(run_id)),
+    )
+    placeholders = ",".join("?" for _ in TRANSIENT_RUN_RETRY_REASONS)
+    cur.execute(
+        f"""
+        UPDATE scheduled_job_run_targets
+           SET resolution_status=?
+         WHERE run_id=?
+           AND resolution_reason IN ({placeholders})
+        """,
+        (
+            job_scheduler.RESOLUTION_STATUS_UNRESOLVED,
+            int(run_id),
+            *sorted(TRANSIENT_RUN_RETRY_REASONS),
+        ),
+    )
+    return message
 
 
 def _wait_for_scheduled_run_completion(
@@ -595,6 +640,8 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
     error = ""
     final_status = WORK_STATUS_FAILED
     retry_reason = ""
+    retry_exhausted_reason = ""
+    retry_attempt_count = int(item.get("attempt_count") or 0)
     stop_event = threading.Event()
     task_links = _work_item_links(item)
     heartbeat = threading.Thread(
@@ -677,8 +724,10 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                 retry_reason = _transient_scheduled_run_retry_reason(
                     db_factory,
                     run_id=run_id,
-                    attempt_count=int(item.get("attempt_count") or 0),
+                    attempt_count=retry_attempt_count,
                 )
+                if not retry_reason and retry_attempt_count >= _transient_run_retry_max_attempts():
+                    retry_exhausted_reason = _transient_scheduled_run_skip_reason(db_factory, run_id=run_id)
         else:
             error = f"unsupported work kind {item.get('kind')}"
     except Exception as exc:
@@ -708,6 +757,22 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
                 run_id_for_retry,
                 retry_reason,
                 retry_delay,
+            )
+        elif retry_exhausted_reason:
+            run_id_for_retry = int((item.get("payload") or {}).get("run_id") or item.get("run_id") or 0)
+            error = _fail_scheduled_run_after_transient_retries(
+                conn,
+                run_id=run_id_for_retry,
+                reason=retry_exhausted_reason,
+                attempt_count=retry_attempt_count,
+            )
+            complete_work_item(conn, work_id=int(item["id"]), status=WORK_STATUS_FAILED, error=error)
+            logger.error(
+                "failed transient scheduled run after retries work_id=%s run_id=%s reason=%s attempts=%s",
+                item.get("id"),
+                run_id_for_retry,
+                retry_exhausted_reason,
+                retry_attempt_count,
             )
         else:
             complete_work_item(conn, work_id=int(item["id"]), status=final_status, error=error)
