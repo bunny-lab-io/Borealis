@@ -291,7 +291,7 @@ describe("active site workers canvas mapping", () => {
     expect(statusTone("failed")).toBe("failed");
   });
 
-  it("moves active work away from terminal site workers", () => {
+  it("marks active work from terminal workers as reassigning", () => {
     const now = 1000;
     const graph = buildGraphAt(
       {
@@ -302,6 +302,12 @@ describe("active site workers canvas mapping", () => {
             status: "stopped",
             started_at: now - 80,
             stopped_at: now - 5,
+          },
+          {
+            worker_guid: "new-worker",
+            site_id: 7,
+            status: "running",
+            started_at: now - 2,
           },
         ],
         recent_work: [
@@ -323,14 +329,17 @@ describe("active site workers canvas mapping", () => {
     );
 
     const stoppedWorker = graph.nodes.find((node) => node.id === "worker:old-worker");
-    const placeholder = graph.nodes.find((node) => node.id === "worker:queued-site-7");
+    const activeWorker = graph.nodes.find((node) => node.id === "worker:new-worker");
     const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.status === "running");
     const taskEdge = graph.edges.find((edge) => edge.target === taskNode?.id);
 
     expect(stoppedWorker).toBeTruthy();
-    expect(placeholder).toBeTruthy();
+    expect(activeWorker).toBeTruthy();
     expect(taskNode).toBeTruthy();
-    expect(taskEdge?.source).toBe(placeholder?.id);
+    expect(taskNode?.data.visualStatus).toBe("reassigning");
+    expect(taskNode?.data.visualStatusLabel).toBe("Reassigning to New Worker");
+    expect(statusTone(taskNode?.data.visualStatus)).toBe("queued");
+    expect(taskEdge?.source).toBe(activeWorker?.id);
     expect(taskEdge?.source).not.toBe(stoppedWorker?.id);
   });
 

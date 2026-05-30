@@ -110,7 +110,7 @@ export function statusTone(status) {
   const normalized = String(status || "").toLowerCase();
   if (["healthy"].includes(normalized)) return "success";
   if (["critical", "unhealthy"].includes(normalized)) return "failed";
-  if (["warning", "starting", "restarting"].includes(normalized)) return "queued";
+  if (["warning", "starting", "restarting", "reassigning"].includes(normalized)) return "queued";
   if (["succeeded", "success", "completed"].includes(normalized)) return "success";
   if (["failed", "lost", "error"].includes(normalized)) return "failed";
   if (["running", "starting"].includes(normalized)) return "running";
@@ -143,7 +143,9 @@ function statusLabel(status) {
 }
 
 function displayStatusLabel(data) {
-  const tone = statusTone(data?.status);
+  const status = data?.visualStatus || data?.status;
+  const tone = statusTone(status);
+  if (data?.visualStatusLabel) return data.visualStatusLabel;
   if (tone === "idle" && !data?.isManager && data?.idleRemainingSeconds != null) {
     const remaining = Number(data?.idleRemainingSeconds ?? 0);
     return `Idle - Teardown in ${Math.max(0, Math.ceil(remaining))}s`;
@@ -156,7 +158,7 @@ function displayStatusLabel(data) {
     const remaining = Number(data.closeRemainingSeconds || 0);
     return `${statusLabel(data?.status)} - Closing in ${Math.max(0, Math.ceil(remaining))}s`;
   }
-  return statusLabel(data?.status);
+  return statusLabel(status);
 }
 
 function taskLabel() {
@@ -198,7 +200,7 @@ function portHandleStyle(direction, tone) {
 }
 
 function WorkflowLikeCard({ data, children, hasOutput = false, hasInput = false, onClick }) {
-  const tone = statusTone(data.status);
+  const tone = statusTone(data.visualStatus || data.status);
   const colors = toneColor(tone);
   const terminal = tone === "stopped" || tone === "failed";
   return (
@@ -412,7 +414,7 @@ function centerOf(values, fallback = PYRAMID_CENTER_Y) {
 }
 
 function taskEntryTone(entry) {
-  return statusTone(entry?.work?.status);
+  return statusTone(entry?.reassigning ? "reassigning" : entry?.work?.status);
 }
 
 function isTerminalWorkTone(tone) {
@@ -579,12 +581,16 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const terminalWork = isTerminalWorkTone(tone);
     const siteId = Number(work?.site_id || 0);
     const workerGuid = String(work?.worker_guid || work?.lease_owner || "").trim();
+    let reassigning = false;
     if (workerGuid && nodeIdByGuid.has(workerGuid)) {
       const nodeId = nodeIdByGuid.get(workerGuid);
       const workerTone = workerToneByNodeId.get(nodeId);
       if (terminalWork || !isTerminalWorkerTone(workerTone)) return nodeId;
+      reassigning = true;
     }
-    if (siteId > 0 && activeNodeIdBySite.has(siteId)) return activeNodeIdBySite.get(siteId);
+    if (siteId > 0 && activeNodeIdBySite.has(siteId)) {
+      return { anchorId: activeNodeIdBySite.get(siteId), reassigning };
+    }
     if (siteId > 0 && terminalWork && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
     if (siteId <= 0) return managerNodeId;
     if (dismissInactive && terminalWork) return null;
@@ -606,7 +612,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       workerToneByNodeId.set(nodeId, statusTone(placeholder.status));
       workerRows.push(placeholder);
     }
-    return placeholderBySite.get(siteId);
+    return { anchorId: placeholderBySite.get(siteId), reassigning };
   };
 
   const groupedWork = new Map();
@@ -619,8 +625,10 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     ) {
       return;
     }
-    const anchorId = anchorForWork(work);
+    const anchorResult = anchorForWork(work);
+    const anchorId = typeof anchorResult === "string" ? anchorResult : anchorResult?.anchorId;
     if (!anchorId) return;
+    const reassigning = Boolean(typeof anchorResult === "object" && anchorResult?.reassigning);
     const taskLink = work?.task_link || {};
     const jobPart = work?.job_id || taskLink?.job_id || work?.run_id || work?.id;
     const stableKey = [
@@ -628,13 +636,14 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       work?.kind || "work",
       jobPart || work?.id,
       taskLink?.path || taskLink?.label || "",
-      work?.status || "",
+      reassigning ? "reassigning" : work?.status || "",
     ].join(":");
     const existing = groupedWork.get(stableKey);
     if (!existing) {
       groupedWork.set(stableKey, {
         anchorId,
         work: { ...work },
+        reassigning,
         count: 1,
         targetCount: Number(work?.target_count || 0),
         started_at: work?.started_at,
@@ -643,6 +652,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       return;
     }
     existing.count += 1;
+    existing.reassigning = existing.reassigning || reassigning;
     existing.targetCount = Math.max(Number(existing.targetCount || 0), Number(work?.target_count || 0));
     const existingFinished = Number(existing.work?.finished_at || existing.work?.updated_at || 0);
     const nextFinished = Number(work?.finished_at || work?.updated_at || 0);
@@ -786,7 +796,9 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       const taskNameBase = taskLink?.label || titleCase(work?.kind || "task");
       const taskName = taskNameBase;
       const duration = elapsedLabel(entry.started_at || work?.started_at, entry.finished_at || work?.finished_at);
-      const tone = statusTone(work?.status);
+      const visualStatus = entry.reassigning ? "reassigning" : "";
+      const visualStatusLabel = entry.reassigning ? "Reassigning to New Worker" : "";
+      const tone = statusTone(visualStatus || work?.status);
       const terminalFinishedAt = Number(entry.finished_at || work?.finished_at || work?.updated_at || 0);
       const closeRemainingSeconds =
         dismissInactive && isTerminalWorkTone(tone) && terminalFinishedAt > 0
@@ -804,6 +816,8 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
           targetCountLabel: targets,
           duration,
           status: work?.status || "unknown",
+          visualStatus,
+          visualStatusLabel,
           isTask: true,
           closeRemainingSeconds,
           error: work?.error || "",
