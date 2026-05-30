@@ -23,8 +23,9 @@ The React Flow canvas uses left-to-right topology:
 
 - Active workers are currently heartbeating.
 - Recent workers may show stopped, lost, completed, or failed state briefly for handoff visibility.
-- Task groups show work kind, site, claimed counts, and recent status.
-- Running or queued task groups attach only to active site workers or queued site placeholders. If their previous worker stopped or was lost, the task group shows `Reassigning to New Worker` while the scheduler hands it to another same-site worker.
+- Task groups render as `Task (n Devices)` with scheduler-style pills: `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
+- Terminal task groups stay visible for the 60-second worker history window, so recent success and failure buckets remain readable while pending work drains.
+- Running or queued task groups attach only to active site workers or queued site placeholders. If their previous worker stopped or was lost, the task group stays `Pending` and shows `Reassigning to New Worker` while the scheduler hands it to another same-site worker.
 
 ## Use Actions
 

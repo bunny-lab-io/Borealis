@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph, buildGraphAt, mergeWorkerPayload, statusTone } from "@/Admin/Engine_Status.jsx";
+import { buildGraph, buildGraphAt, mergeWorkerPayload, statusTone, taskStatusPillLabel } from "@/Admin/Engine_Status.jsx";
 
 describe("active site workers canvas mapping", () => {
   it("renders engine service topology nodes and edges", () => {
@@ -96,17 +96,19 @@ describe("active site workers canvas mapping", () => {
 
     const graph = buildGraph(payload, () => {});
     const workerNode = graph.nodes.find((node) => node.id === "worker:worker-1");
-    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task (1 Device)");
     const edge = graph.edges.find((item) => item.target === taskNode?.id);
 
     expect(workerNode?.type).toBe("worker");
     expect(workerNode?.data.idleRemainingSeconds).toBeGreaterThanOrEqual(45);
     expect(workerNode?.data.idleRemainingSeconds).toBeLessThanOrEqual(60);
     expect(taskNode?.type).toBe("task");
+    expect(taskNode?.data.label).toBe("Task (1 Device)");
     expect(taskNode?.data.status).toBe("succeeded");
+    expect(taskNode?.data.statusDisplayLabel).toBe("Success");
     expect(taskNode?.data.taskType).toBe("Assembly");
-    expect(taskNode?.data.closeRemainingSeconds).toBeGreaterThanOrEqual(15);
-    expect(taskNode?.data.closeRemainingSeconds).toBeLessThanOrEqual(30);
+    expect(taskNode?.data.closeRemainingSeconds).toBeGreaterThanOrEqual(45);
+    expect(taskNode?.data.closeRemainingSeconds).toBeLessThanOrEqual(60);
     expect(taskNode?.data.taskName).toBe("Scheduled Job 42");
     expect(statusTone(taskNode?.data.status)).toBe("success");
     expect(edge?.label).toBeUndefined();
@@ -227,7 +229,7 @@ describe("active site workers canvas mapping", () => {
     const taskNode = graph.nodes.find((node) => node.type === "task");
 
     expect(workerNode?.data.closeRemainingSeconds).toBe(55);
-    expect(taskNode?.data.closeRemainingSeconds).toBe(25);
+    expect(taskNode?.data.closeRemainingSeconds).toBe(55);
   });
 
 
@@ -253,7 +255,7 @@ describe("active site workers canvas mapping", () => {
             job_id: 42,
             status: "succeeded",
             started_at: now - 80,
-            finished_at: now - 31,
+            finished_at: now - 61,
             task_link: { label: "Scheduled Job 42", path: "/jobs/42?tab=job_history" },
           },
         ],
@@ -284,11 +286,21 @@ describe("active site workers canvas mapping", () => {
     );
 
     const placeholder = graph.nodes.find((node) => node.id === "worker:queued-site-9");
-    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task (1 Device)");
     expect(placeholder).toBeTruthy();
     expect(taskNode).toBeTruthy();
+    expect(taskNode?.data.statusDisplayLabel).toBe("Pending");
     expect(graph.edges.some((edge) => edge.source === placeholder?.id && edge.target === taskNode?.id && edge.animated)).toBe(true);
     expect(statusTone("failed")).toBe("failed");
+  });
+
+  it("normalizes task status pill labels", () => {
+    expect(taskStatusPillLabel("succeeded")).toBe("Success");
+    expect(taskStatusPillLabel("running")).toBe("Running");
+    expect(taskStatusPillLabel("queued")).toBe("Pending");
+    expect(taskStatusPillLabel("failed")).toBe("Failed");
+    expect(taskStatusPillLabel("skipped")).toBe("Skipped");
+    expect(statusTone("skipped")).toBe("stopped");
   });
 
   it("marks active work from terminal workers as reassigning", () => {
@@ -336,8 +348,9 @@ describe("active site workers canvas mapping", () => {
     expect(stoppedWorker).toBeTruthy();
     expect(activeWorker).toBeTruthy();
     expect(taskNode).toBeTruthy();
-    expect(taskNode?.data.visualStatus).toBe("reassigning");
-    expect(taskNode?.data.visualStatusLabel).toBe("Reassigning to New Worker");
+    expect(taskNode?.data.visualStatus).toBe("pending");
+    expect(taskNode?.data.statusDisplayLabel).toBe("Pending");
+    expect(taskNode?.data.statusDetail).toBe("Reassigning to New Worker");
     expect(statusTone(taskNode?.data.visualStatus)).toBe("queued");
     expect(taskEdge?.source).toBe(activeWorker?.id);
     expect(taskEdge?.source).not.toBe(stoppedWorker?.id);
@@ -434,8 +447,9 @@ describe("active site workers canvas mapping", () => {
     expect(workerNode?.data.label).toBe("Site Worker");
     expect(workerNode?.data.siteLabel).toBe("Bunny Lab");
     expect(taskNodes).toHaveLength(1);
-    expect(taskNodes[0].data.label).toBe("Task");
-    expect(taskNodes[0].data.targetCountLabel).toBe("2 Devices Targeted");
+    expect(taskNodes[0].data.label).toBe("Task (2 Devices)");
+    expect(taskNodes[0].data.targetCountLabel).toBe("");
+    expect(taskNodes[0].data.statusDisplayLabel).toBe("Success");
     expect(taskNodes[0].data.taskName).toBe("Scheduled Job 42");
   });
 

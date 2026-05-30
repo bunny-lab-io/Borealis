@@ -18,7 +18,7 @@ import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 
 const WORKER_HISTORY_SECONDS = 60;
 const WORKER_CLOSE_SECONDS = 60;
-const TASK_CLOSE_SECONDS = 30;
+const TASK_CLOSE_SECONDS = 60;
 const POLL_INTERVAL_MS = 3000;
 
 const COLORS = {
@@ -115,7 +115,7 @@ export function statusTone(status) {
   if (["failed", "lost", "error"].includes(normalized)) return "failed";
   if (["running", "starting"].includes(normalized)) return "running";
   if (["queued", "pending"].includes(normalized)) return "queued";
-  if (["cancelled", "stopped"].includes(normalized)) return "stopped";
+  if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "stopped";
   if (normalized === "idle") return "idle";
   return "unknown";
 }
@@ -142,9 +142,20 @@ function statusLabel(status) {
   return titleCase(status || "unknown");
 }
 
+export function taskStatusPillLabel(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (["succeeded", "success", "completed"].includes(normalized)) return "Success";
+  if (["running"].includes(normalized)) return "Running";
+  if (["queued", "pending", "reassigning"].includes(normalized)) return "Pending";
+  if (["failed", "lost", "error"].includes(normalized)) return "Failed";
+  if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "Skipped";
+  return statusLabel(status);
+}
+
 function displayStatusLabel(data) {
   const status = data?.visualStatus || data?.status;
   const tone = statusTone(status);
+  if (data?.isTask) return data?.statusDisplayLabel || taskStatusPillLabel(status);
   if (data?.visualStatusLabel) return data.visualStatusLabel;
   if (tone === "idle" && !data?.isManager && data?.idleRemainingSeconds != null) {
     const remaining = Number(data?.idleRemainingSeconds ?? 0);
@@ -161,14 +172,16 @@ function displayStatusLabel(data) {
   return statusLabel(status);
 }
 
-function taskLabel() {
-  return "Task";
+function taskDeviceCount(entry, work) {
+  const numbers = [entry?.count, entry?.targetCount, work?.target_count]
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return Math.max(1, ...numbers);
 }
 
-function targetCountLabel(targetCount) {
-  const count = Number(targetCount || 0);
-  if (count <= 0) return "";
-  return `${count} ${count === 1 ? "Device" : "Devices"} Targeted`;
+function taskLabel(deviceCount) {
+  const count = Math.max(1, Number(deviceCount || 1));
+  return `Task (${count} ${count === 1 ? "Device" : "Devices"})`;
 }
 
 function taskTypeLabel(work) {
@@ -345,6 +358,11 @@ const TaskNode = memo(({ data }) => {
             {data.targetCountLabel ? (
               <Typography sx={{ mt: 0.35, color: COLORS.muted, fontSize: "0.68rem", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {data.targetCountLabel}
+              </Typography>
+            ) : null}
+            {data.statusDetail ? (
+              <Typography sx={{ mt: 0.35, color: COLORS.muted, fontSize: "0.68rem", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {data.statusDetail}
               </Typography>
             ) : null}
             {canOpen ? (
@@ -791,13 +809,14 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     tasks.forEach((entry, taskIndex) => {
       const work = entry.work || {};
       const taskLink = work?.task_link || {};
-      const label = taskLabel();
-      const targets = targetCountLabel(entry.targetCount || work?.target_count);
+      const deviceCount = taskDeviceCount(entry, work);
+      const label = taskLabel(deviceCount);
       const taskNameBase = taskLink?.label || titleCase(work?.kind || "task");
       const taskName = taskNameBase;
       const duration = elapsedLabel(entry.started_at || work?.started_at, entry.finished_at || work?.finished_at);
-      const visualStatus = entry.reassigning ? "reassigning" : "";
-      const visualStatusLabel = entry.reassigning ? "Reassigning to New Worker" : "";
+      const visualStatus = entry.reassigning ? "pending" : "";
+      const statusDetail = entry.reassigning ? "Reassigning to New Worker" : "";
+      const statusDisplayLabel = taskStatusPillLabel(visualStatus || work?.status);
       const tone = statusTone(visualStatus || work?.status);
       const terminalFinishedAt = Number(entry.finished_at || work?.finished_at || work?.updated_at || 0);
       const closeRemainingSeconds =
@@ -813,11 +832,12 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
           label,
           taskName,
           taskType: taskTypeLabel(work),
-          targetCountLabel: targets,
+          targetCountLabel: "",
           duration,
           status: work?.status || "unknown",
           visualStatus,
-          visualStatusLabel,
+          statusDetail,
+          statusDisplayLabel,
           isTask: true,
           closeRemainingSeconds,
           error: work?.error || "",
