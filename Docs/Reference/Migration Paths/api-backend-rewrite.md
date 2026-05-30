@@ -1,0 +1,304 @@
+# API Backend Rewrite
+
+Track the worker-first migration that moves remote-operation ownership out of `api-backend` before the Go rewrite. Use this page as the handoff record between Codex sessions: update the active milestone, work log, validation result, and next safe resume point before stopping.
+
+## Current Status
+
+| Field | Value |
+| --- | --- |
+| Branch | `feature/rewrite-api-backend-in-golang` |
+| PR | Pending |
+| Active milestone | `M0: Tracker + PR Setup` |
+| Last updated | 2026-05-30 |
+| Next safe step | Commit tracker, open draft PR, then mark `M0` complete with PR link. |
+
+## Tracker Rules
+
+- Keep exactly one milestone marked `In Progress`.
+- Update this page when a milestone starts, completes, blocks, or changes scope.
+- Add a work-log row before every handoff so the next session has a safe resume point.
+- Keep validation results tied to the milestone that produced them.
+- Do not start the next milestone until the current milestone has a clear `Handoff Note`.
+
+## Status Legend
+
+| Status | Meaning |
+| --- | --- |
+| `Not Started` | No implementation work has begun. |
+| `In Progress` | Work is active or ready for next Codex session. |
+| `Done` | Exit criteria and validation are complete. |
+| `Blocked` | Work cannot continue without operator decision or external change. |
+
+## Milestone Summary
+
+| Milestone | Status | Core migration |
+| --- | --- | --- |
+| `M0: Tracker + PR Setup` | `In Progress` | Create branch, tracker, index link, and draft PR. |
+| `M1: Runtime Dependency Split` | `Not Started` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
+| `M2: Traefik Dynamic Worker Routing` | `Not Started` | Hotload per-site-worker routes without Traefik recreate. |
+| `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
+| `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
+| `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
+| `M6: Site-Worker Agent Socket.IO` | `Not Started` | Move Agent remote-op event ownership to site-worker. |
+| `M7: Remote Shell` | `Not Started` | Move interactive shell broker path to site-worker. |
+| `M8: Remote Desktop + Guacamole` | `Not Started` | Move VNC and Guacamole path to site-worker. |
+| `M9: Remote File Management` | `Not Started` | Move remote file operations and transfer state to site-worker. |
+| `M10: Process, Service, Software Ops` | `Not Started` | Move remaining live Agent task handlers to site-worker. |
+| `M11: Agent Maintenance + Quick Jobs` | `Not Started` | Move live quick-job and maintenance dispatch to site-worker. |
+| `M12: Ansible Execution Finalization` | `Not Started` | Ensure Ansible execution belongs to worker lane only. |
+| `M13: api-backend Cleanup` | `Not Started` | Remove obsolete remote-op proxy code and stale dependencies. |
+| `M14: Go Rewrite Prep` | `Not Started` | Freeze reduced Python API surface for Go rewrite design. |
+
+## Milestone Definitions
+
+### M0: Tracker + PR Setup
+
+| Field | Definition |
+| --- | --- |
+| Status | `In Progress` |
+| Goal | Create the long-lived branch, draft PR, tracker document, and migration-path index link. |
+| Migrates | Nothing. This milestone creates the coordination surface for later migration work. |
+| Out Of Scope | Runtime behavior changes, dependency changes, route changes, Agent changes, Go code. |
+| Done When | Branch exists, draft PR exists, tracker is linked from the migration-path index, and initial roadmap is committed. |
+| Validation | Inspect Markdown, verify index link, run `git diff --check`. |
+| Handoff Note | Start `M1` only after PR link replaces the pending PR value above. |
+
+### M1: Runtime Dependency Split
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Stop `api-backend` from carrying Ansible and execution-heavy runtime dependencies. |
+| Migrates | Ansible-only packages, execution helpers, and related container install burden from `api-backend` to worker runtime ownership. |
+| Out Of Scope | WebUI behavior, Agent socket routing, remote shell, remote desktop, file management, Go rewrite. |
+| Done When | `api-backend` no longer installs Ansible-only dependencies, `site-worker` still has required execution dependencies, and scheduled Ansible work still runs from worker lane. |
+| Validation | Focused dependency/container config review, `docker compose -f Data/Engine/Containers/compose.yaml config`, affected Engine tests when practical. |
+| Handoff Note | Record exact dependency files changed and any skipped packages before starting `M2`. |
+
+### M2: Traefik Dynamic Worker Routing
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Let Traefik hotload per-site-worker route files without recreating Traefik. |
+| Migrates | Direct routing setup for worker-owned remote-operation endpoints. |
+| Out Of Scope | Worker registry schema, operation-token authorization, Agent route cutover, remote-op feature migration. |
+| Done When | Traefik uses a watched dynamic configuration directory, core routes stay intact, and per-worker route files can be added/removed atomically. |
+| Validation | `docker compose -f Data/Engine/Containers/compose.yaml config`, generated Traefik YAML parse check if available, manual hotload smoke when runtime is available. |
+| Handoff Note | Record route filename pattern and rollback command before starting `M3`. |
+
+### M3: Site-Worker Route Registry
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Track active site-worker route, port, generation, and status in a reliable runtime registry. |
+| Migrates | Worker discovery from implicit Docker/container state to explicit scheduler-managed metadata. |
+| Out Of Scope | Browser session tokens, Agent config changes, remote-op feature behavior. |
+| Done When | Scheduler can create, update, query, and retire route records for active site-workers. |
+| Validation | Focused scheduler tests, DB lifecycle review for short-lived connections, route-registry failure/restart scenario. |
+| Handoff Note | Record registry table/structure and lifecycle owner before starting `M4`. |
+
+### M4: Signed Remote-Op Sessions
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Authorize direct browser-to-site-worker remote operations with short-lived scoped tokens. |
+| Migrates | Remote-op authorization away from api-backend proxying and toward api-backend session brokering only. |
+| Out Of Scope | Moving individual remote-op traffic paths, Agent socket target changes, Guacamole data path. |
+| Done When | WebUI can request worker URLs plus signed operation token scoped to user, site, device, capability, and expiry. |
+| Validation | Endpoint tests for scope/expiry/RBAC, token verification tests in worker code, unauthorized/expired-token manual checks. |
+| Handoff Note | Record token issuer, audience, TTL, claims, and signing-key source before starting `M5`. |
+
+### M5: Agent Ops Route Cutover
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Make enrolled Agents connect to the site-worker ops route instead of api-backend `/socket.io/`. |
+| Migrates | Agent remote-operation socket target selection. |
+| Out Of Scope | Individual remote-op handler moves, shell/VNC/file behavior, Go rewrite. |
+| Done When | Agent enrollment or refresh can deliver worker ops URL, Agent connects there, and legacy api-backend remote-op fallback is removed. |
+| Validation | Agent unit tests for config/enrollment route data, Engine tests for route response, manual reconnect smoke with one enrolled Agent. |
+| Handoff Note | Record Agent config key and cutover behavior before starting `M6`. |
+
+### M6: Site-Worker Agent Socket.IO
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move Agent remote-operation socket registry and event dispatch from `api-backend` to `site-worker`. |
+| Migrates | Agent connect/disconnect tracking, capability state, task event routing, remote-op response correlation. |
+| Out Of Scope | Feature-specific shell/VNC/file/process behavior unless needed for socket ownership smoke. |
+| Done When | Site-worker owns Agent session registry and can dispatch/receive generic remote-operation events without api-backend as middle-man. |
+| Validation | Worker socket tests, Agent connect/disconnect smoke, event timeout/error-path tests. |
+| Handoff Note | Record socket namespace/path and event contract before starting feature migrations in `M7` through `M11`. |
+
+### M7: Remote Shell
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move interactive shell traffic and WireGuard shell TCP handling to site-worker. |
+| Migrates | Shell open/send/resize/close, shell session state, and Engine-side TCP connection to Agent shell service. |
+| Out Of Scope | Remote desktop, file management, process/service/software actions, Ansible execution. |
+| Done When | WebUI shell uses direct site-worker path and `api-backend` no longer brokers shell traffic. |
+| Validation | Manual shell open/send/close smoke, disconnect/reconnect scenario, authorization failure check, focused worker tests where available. |
+| Handoff Note | Record worker route, WebSocket path, and cleanup behavior before starting `M8`. |
+
+### M8: Remote Desktop + Guacamole
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move VNC orchestration and Guacamole connection path to site-worker. |
+| Migrates | VNC start/stop/probe/credential request flow, VNC proxy ownership, and browser/Guacamole routing away from `api-backend`. |
+| Out Of Scope | Remote shell, remote files, process/service/software actions, Go rewrite. |
+| Done When | Browser remote desktop session connects through site-worker-managed route, and Guacamole no longer depends on api-backend VNC proxy code. |
+| Validation | Manual remote desktop open/close smoke, credential-request flow, unavailable-host failure, Traefik route hotload check. |
+| Handoff Note | Record Guacamole-to-worker connection method and fallback/error behavior before starting `M9`. |
+
+### M9: Remote File Management
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move remote file operations and transfer state to site-worker. |
+| Migrates | Browse, upload, folder upload, download, cancel, copy, cut, paste, rename, move, delete, create-folder, edit-text, transfer progress, and Agent file events. |
+| Out Of Scope | Process/service/software operations, remote shell, remote desktop, Ansible execution. |
+| Done When | File operations use direct site-worker routes and worker-local transfer state; api-backend no longer stores live transfer state. |
+| Validation | Manual browse/upload/download/cancel smoke, large transfer progress check, expired-token check, focused file-operation tests where available. |
+| Handoff Note | Record transfer state lifetime and cleanup behavior before starting `M10`. |
+
+### M10: Process, Service, Software Ops
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move remaining live Agent management handlers to site-worker. |
+| Migrates | Process list/control, service inventory/actions, software inventory/actions, and related live response events. |
+| Out Of Scope | Scheduled inventory storage, long-term reporting, Ansible execution, Go rewrite. |
+| Done When | Process, service, and software live operations run through site-worker and no longer depend on api-backend Agent socket registry. |
+| Validation | Manual process/service/software smoke, RBAC/token denial checks, focused route/worker tests. |
+| Handoff Note | Record any retained api-backend persistence endpoints before starting `M11`. |
+
+### M11: Agent Maintenance + Quick Jobs
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Move live quick-job and Agent maintenance dispatch that depends on the active Agent channel to site-worker. |
+| Migrates | Quick job run event dispatch, maintenance task dispatch, and live Agent delivery response handling. |
+| Out Of Scope | Scheduled job database ownership, job-scheduler manager lane, Ansible playbook execution finalization. |
+| Done When | Live dispatch path uses site-worker while scheduler persistence and job history remain intact. |
+| Validation | Quick-job smoke, Agent maintenance smoke, scheduler queue regression check. |
+| Handoff Note | Record split between scheduler persistence and worker live dispatch before starting `M12`. |
+
+### M12: Ansible Execution Finalization
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Make worker lane the only owner of Engine-side Ansible execution. |
+| Migrates | Manual and scheduled Ansible playbook execution paths that still run through `api-backend`. |
+| Out Of Scope | Non-Ansible quick jobs, remote shell/desktop/files already handled by earlier milestones, Go rewrite. |
+| Done When | `api-backend` has no Ansible execution path, worker lane runs scheduled/manual playbooks, and affected tests pass. |
+| Validation | Ansible scheduled-job smoke, manual playbook smoke, focused Engine tests for job scheduler and Ansible runner. |
+| Handoff Note | Record final Ansible ownership map before starting `M13`. |
+
+### M13: api-backend Cleanup
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Remove obsolete remote-operation proxy code and stale dependencies from `api-backend`. |
+| Migrates | Nothing new. This milestone deletes old middle-man code after feature paths move. |
+| Out Of Scope | New worker features, Agent protocol changes, Go implementation. |
+| Done When | `api-backend` responsibility map contains API/auth/database/business logic only; remote-operation broker paths are removed or rejected. |
+| Validation | Full affected Engine lane when practical, import/dependency scan, manual WebUI smoke for migrated paths. |
+| Handoff Note | Record remaining Python API surface before starting `M14`. |
+
+### M14: Go Rewrite Prep
+
+| Field | Definition |
+| --- | --- |
+| Status | `Not Started` |
+| Goal | Freeze the reduced Python `api-backend` surface so Go rewrite design can start cleanly. |
+| Migrates | Planning boundary only. No runtime ownership moves in this milestone. |
+| Out Of Scope | Writing Go production replacement, schema migrations unrelated to rewrite prep, UI changes. |
+| Done When | Reduced API surface is documented, remaining Python responsibilities are categorized, and next Go design milestone has clear boundaries. |
+| Validation | Source map review, endpoint inventory review, issue/PR notes updated. |
+| Handoff Note | Start Go design work from frozen surface map instead of pre-migration assumptions. |
+
+## Work Log
+
+| Date | Milestone | Work performed | Validation | Evidence |
+| --- | --- | --- | --- | --- |
+| 2026-05-30 | `M0` | Created tracker document and migration-path index link. | Markdown inspected; `git diff --check` passed. | This branch. |
+| 2026-05-30 | Planning | Re-evaluated issue #226 and selected worker-first migration before Go rewrite. | Repository inspection only. | Issue #226 and planning notes. |
+
+## Completed Work
+
+- Issue #226 reviewed. Decision: move remote-operation execution paths into `site-worker` before rewriting `api-backend` in Go.
+- Milestone tracker drafted with quota-sized work chunks.
+
+## Remaining Work
+
+- Complete `M0` by opening draft PR and recording PR link above.
+- Complete `M1` through `M3` to prepare worker runtime and routing foundation.
+- Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
+- Complete `M7` through `M11` to migrate each live remote-operation feature.
+- Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
+- Complete `M14` before any Go rewrite implementation starts.
+
+## Validation Matrix
+
+| Check | Milestone | Status | Notes |
+| --- | --- | --- | --- |
+| Markdown and index link inspection | `M0` | `Done` | Doc-only validation. |
+| `git diff --check` | `M0` | `Done` | Passed before first commit. |
+| `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Not Started` | Required after container or Traefik changes. |
+| Focused Engine tests | `M1`-`M14` | `Not Started` | Use domain flags while iterating. |
+| Full affected Engine lane | `M1`-`M14` | `Not Started` | Run before handoff when practical. |
+| Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
+| Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
+
+??? example "Detailed Codex Breakdown"
+
+    ### Related documentation
+
+    - [Architecture Overview](../../Reference/architecture-overview.md)
+    - [Docker Stack](../../Reference/docker-stack.md)
+    - [Database Reference](../../Reference/database.md)
+    - [Unit Testing](../../Reference/Unit_Testing.md)
+    - [Scheduled Jobs](../../Using%20the%20Platform/scheduled-jobs.md)
+
+    ### Source map
+
+    - `Data/Engine/Containers/api-backend/data/` owns current Python API and many remote-operation paths.
+    - `Data/Engine/services/job_scheduler/` owns scheduler manager, worker queue, and site-worker lifecycle code.
+    - `Data/Engine/Containers/site-worker/` runs worker container entrypoint.
+    - `Data/Engine/Containers/traefik-edge/` owns Traefik static and dynamic route generation.
+    - `Data/Agent/` owns Agent enrollment, config, Socket.IO transport, and remote-operation handlers.
+
+    ### Planned API endpoints
+
+    - `POST /api/remote-ops/session` should authorize a user/device/capability request and return direct worker URLs plus a short-lived scoped operation token.
+    - Agent enrollment, refresh, or a dedicated Agent route endpoint should return the site-worker ops base URL used by the Agent Socket.IO client.
+    - Existing api-backend remote-operation proxy endpoints should be removed or converted to route-negotiation/session-broker endpoints only.
+
+    ### Runtime behavior
+
+    - `api-backend` remains API/auth/database/business-logic owner during worker-first migration.
+    - `site-worker` becomes live remote-operation owner for Agent sockets, remote shell, remote desktop, remote file management, process/service/software operations, Agent maintenance, quick jobs that need live dispatch, and Ansible execution.
+    - Traefik hotloads per-site-worker routes from dynamic files so worker route changes do not require Traefik container recreation.
+    - Legacy api-backend remote-op fallback is intentionally not preserved after Agent ops route cutover.
+
+    ### Debug flow
+
+    - Start with this tracker and identify active milestone.
+    - Read work-log rows newest first for last completed action and validation state.
+    - For routing issues, inspect Traefik dynamic route files and worker registry state.
+    - For Agent connection issues, inspect Agent ops URL delivery, Socket.IO path, and site-worker Agent registry.
+    - For feature failures, debug the relevant milestone path before editing unrelated remote-operation code.
