@@ -10,9 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M3: Site-Worker Route Registry` |
 | Last updated | 2026-05-31 |
-| Latest implementation commit | `71ec3c95` (`Fix Traefik dynamic route directory permissions`) |
-| Current state | `M2` is done. Post-redeploy smoke confirmed Traefik watches `config/dynamic/`, core routes stay intact, route files can be atomically added/removed, and Traefik process stays up without recreation. |
-| Next safe step | Start `M3`: design and implement scheduler-owned site-worker route registry without changing remote-op feature routing yet. |
+| Latest implementation commit | `b2c8e488` (`Implement site-worker route registry`) |
+| Current state | `M3` route registry implementation is committed and locally validated. Scheduler creates, updates, queries, and retires `job_scheduler_worker_routes` rows; post-redeploy smoke is still required before marking `M3` done. |
+| Next safe step | Redeploy latest branch head, run M3 route-registry smoke, then mark `M3` done and set `M4` as next safe step if smoke passes. |
 
 ## Tracker Rules
 
@@ -111,7 +111,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Out Of Scope | Browser session tokens, Agent config changes, remote-op feature behavior. |
 | Done When | Scheduler can create, update, query, and retire route records for active site-workers. |
 | Validation | Focused scheduler tests, DB lifecycle review for short-lived connections, route-registry failure/restart scenario. |
-| Handoff Note | Record registry table/structure and lifecycle owner before starting `M4`. |
+| Handoff Note | Implementation commit `b2c8e488` adds `job_scheduler_worker_routes`. Lifecycle owner is `job-scheduler`: register/spawn/reconcile create active rows, route upserts increment `generation` only when metadata or lifecycle status changes, stopped workers retire routes, lost workers mark routes `lost`, and worker-history pruning removes old terminal routes. Route files are metadata-only in M3 and default to `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml`; M4 must not begin until post-redeploy smoke confirms this table is created and populated in runtime. |
 
 ### M4: Signed Remote-Op Sessions
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 | `M3` | Implemented scheduler-owned site-worker route registry. Added `job_scheduler_worker_routes` with active/retired/lost lifecycle states, route file/path/upstream metadata, `generation`, and metadata JSON. `register_worker`, Docker reconcile, `stop_worker`, lost-worker detection, and worker-history pruning now create, refresh, retire, or prune route records. Public queue helpers can upsert, query by worker, query active route by site, list routes, and retire route records. | `python3 -m py_compile` passed for scheduler queue/manager and focused queue tests. Focused `test_job_scheduler_queue.py` passed (`12 passed`). `git diff --check` passed. `./Engine_Unit_Tests.sh --domain scheduler` with system Python failed before tests because `pytest` is missing; rerun with the repo test venv entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped, so it is not counted as an M3 gate. Post-redeploy runtime smoke remains pending. | `b2c8e488`; `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`; `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`; `Docs/Reference/Data and Schema/db-reference.md`; `Unit_Test_Results/engine-20260531T063347Z`; `Unit_Test_Results/engine-20260531T063404Z`. |
 | 2026-05-31 | `M2` | Closed M2 after redeploy of the route-directory permission fix. Runtime `config/dynamic/` is operator-writable as `nicole:nicole 0775`; generated static config watches that directory; `core.yml` remains loaded; temporary `site-worker-m2-hotload-validation.yml` was added atomically, served `/__borealis_m2_hotload` through Traefik to API `/health`, then removed cleanly. Traefik process stayed on the same PID/start time through add/remove. | Runtime config parse passed. API `/health` and WebUI loopback smoke passed. Hotload add returned `{"status":"ok"}`. Hotload removal returned non-200 (`301` through the normal HTTP redirect route). Traefik process stayed `2240940 Sun May 31 00:12:24 2026`. Temporary route file cleanup verified. | Runtime `Settings.json`, `traefik.yml`, `dynamic/core.yml`; Traefik process table; hotload validation route output. |
 | 2026-05-31 | `M2` | Ran post-redeploy M2 read-only smoke. Generated Traefik static config points `providers.file.directory` at `Engine/Services/traefik-edge/config/dynamic`, `watch` is enabled, `core.yml` exists, and live API/WebUI routes answer through current core routes. Hotload add/remove smoke was blocked because `config/dynamic/` was `root:root 0755` from deploy. Staged fix: `Engine.sh` now records runtime owner UID/GID, `ensure_service_tree` and `traefik-edge` entrypoint keep the watched dynamic directory owner-writable as `0775`, and `compose.env.example` carries safe root defaults. | `bash -n Engine.sh`, `bash -n Data/Engine/Containers/traefik-edge/entrypoint.sh`, `python3 -m py_compile`, `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, focused `test_edge_runtime.py`, and `git diff --check` passed. Runtime hotload remains pending redeploy of this permission fix. | Runtime `Settings.json`, `traefik.yml`, and `dynamic/core.yml`; current Traefik process started 2026-05-31 00:02:03 America/Denver; route write attempt returned permission denied before fix. |
 | 2026-05-30 | `M2` | Implemented Traefik watched dynamic directory support. `traefik-edge` now renders static config with `providers.file.directory`, keeps core routes in `config/dynamic/core.yml`, preserves current API/WebUI/VNC routers, and publishes the site-worker route filename pattern in `Settings.json`. `Engine.sh`, `compose.env.example`, and Python edge-runtime artifact generation now use the same dynamic directory layout and migrate legacy `dynamic.yml` settings to `dynamic/core.yml`. | `bash -n Engine.sh`, `bash -n Data/Engine/Containers/traefik-edge/entrypoint.sh`, `python3 -m py_compile` for touched Python files, `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, generated Traefik YAML parse checks for Python and shell renderers, focused `test_edge_runtime.py`, and `git diff --check` passed. Full `core` lane remains blocked by runtime secret permission errors outside the touched edge tests; `test_edge_runtime.py` passes inside that lane. | `Data/Engine/Containers/traefik-edge/entrypoint.sh`; `Data/Engine/Containers/api-backend/data/edge_runtime.py`; `Data/Engine/Unit_Tests/test_edge_runtime.py`; `Unit_Test_Results/engine-20260530T233846Z`. |
@@ -298,11 +299,12 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Jobs 102/103 terminal results were confirmed from PostgreSQL: Job 102 succeeded; Job 103 succeeded on seven targets and failed on `lab-mail-02` due SSH authentication, not scheduler/runtime ownership.
 - M1 post-redeploy close check passed: current WebUI image hash is deployed and served `adminRoutes` bundle includes Engine Status countdown/handoff code.
 - M2 complete: Traefik file provider now watches `Engine/Services/traefik-edge/config/dynamic/`, core routes render to `core.yml`, per-site-worker route files use `site-worker-<worker_guid>.yml`, and post-redeploy add/remove hotload smoke passed without recreating Traefik.
+- M3 implementation committed: `job_scheduler_worker_routes` records scheduler-owned site-worker route metadata, lifecycle status, and generation; local focused queue tests cover create, query, update, retire, lost-worker, prune, and missing-registry recovery behavior.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Complete `M3` to prepare the worker route registry foundation.
+- Redeploy latest branch head and complete `M3` post-redeploy route-registry smoke before marking `M3` done.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
@@ -316,10 +318,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` and local `M2` implementation | M2 validation used `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`. |
 | Generated Traefik YAML parse | `M2` | `Done` for local implementation | PyYAML parsed both Python-rendered and shell entrypoint-rendered static/core dynamic configs. |
-| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes and `M2` edge runtime | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, and focused `Data/Engine/Unit_Tests/test_edge_runtime.py` passed. |
+| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes, `M2` edge runtime, and local `M3` route registry | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, focused `Data/Engine/Unit_Tests/test_edge_runtime.py`, and focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py` passed. |
 | WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. M1 close used prod WebUI image hash plus served bundle inspection instead. |
-| Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
+| Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. For M3, `./Engine_Unit_Tests.sh --domain scheduler` failed under system Python because `pytest` is missing; with the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped. Earlier scheduler-domain blocker was the existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
 | Manual Traefik hotload smoke | `M2` | `Done` | Temporary route file add returned API health, removal stopped the route, and Traefik process stayed unchanged. |
+| Runtime route-registry smoke | `M3` | `Pending redeploy` | After rebuild, verify `job_scheduler_worker_routes` exists, active site-workers have active route rows, missing route rows are recreated by reconcile, and stopped/lost workers mark routes terminal. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
 
@@ -330,9 +333,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `71ec3c95`, "Fix Traefik dynamic route directory permissions", and the later `M2 Complete` tracker update.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `b2c8e488`, "Implement site-worker route registry", and the later tracker update that records M3 as pending post-redeploy smoke.
 
-M1 and M2 are Done. Continue M3 only.
+M1 and M2 are Done. M3 implementation is committed, but M3 is still In Progress until post-redeploy route-registry smoke passes. Do not start M4 yet.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -358,15 +361,22 @@ Completed M2 state:
 - Post-redeploy hotload smoke passed: temporary route add returned API health, removal stopped the route, and Traefik process stayed unchanged.
 
 Next work:
-1. Implement M3: scheduler-owned site-worker route registry.
-2. Keep worker registry schema/structure short-lived for DB operations; read Data and Schema docs before touching DB code.
-3. Record registry table/structure and lifecycle owner before starting M4.
-4. Do not change browser session tokens, Agent config, or remote-op feature routing in M3.
+1. Have operator rebuild latest branch head if not already rebuilt.
+2. Run M3 route-registry smoke:
+   - Confirm `job_scheduler_worker_routes` exists in runtime DB.
+   - Confirm active site-workers have `active` route rows with `generation >= 1`, route file path `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml`, and metadata owner `job-scheduler`.
+   - Confirm a missing route row for an active Docker-discovered site-worker is recreated by job-scheduler reconcile.
+   - Confirm stopped/lost site-workers retire route rows as `retired` or `lost`.
+3. If smoke passes, mark M3 Done, add work-log validation row, and set next safe step to M4.
+4. If smoke fails, fix only the M3 regression, validate, commit, and keep M3 In Progress.
+5. Do not change browser session tokens, Agent config, or remote-op feature routing in M3.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
 - Official `core` lane with the repo test venv still fails on root-owned runtime secret paths outside touched edge-runtime tests.
 - Runtime Engine/Deploy/compose.env compose config could not run locally because the file was root-owned.
+- Current M3 local validation passed: py_compile for scheduler queue/manager and focused queue tests, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py` (`12 passed`), and `git diff --check`.
+- `./Engine_Unit_Tests.sh --domain scheduler` under system Python fails because `pytest` is missing; under the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped.
 - Do not run npm/vite from staging source under Data/Engine/Containers/*/data.
 ```
 
