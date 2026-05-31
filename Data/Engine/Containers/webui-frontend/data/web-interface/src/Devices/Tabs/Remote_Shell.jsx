@@ -63,6 +63,41 @@ const emitAsync = (socket, event, payload, timeoutMs = 4000) =>
     });
   });
 
+const waitForSocketConnect = (socket, timeoutMs = 10000) =>
+  new Promise((resolve) => {
+    if (!socket) {
+      resolve({ error: "socket_missing" });
+      return;
+    }
+    if (socket.connected) {
+      resolve({ status: "ok" });
+      return;
+    }
+
+    let settled = false;
+    const cleanup = () => {
+      socket.off("connect", handleConnect);
+      socket.off("connect_error", handleConnectError);
+      socket.off("disconnect", handleDisconnect);
+      clearTimeout(timer);
+    };
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(payload || {});
+    };
+    const handleConnect = () => finish({ status: "ok" });
+    const handleConnectError = (err) =>
+      finish({ error: "worker_socket_connect_failed", detail: normalizeText(err?.message || err) });
+    const handleDisconnect = () => finish({ error: "worker_socket_disconnected" });
+    const timer = setTimeout(() => finish({ error: "worker_socket_connect_timeout" }), timeoutMs);
+
+    socket.on("connect", handleConnect);
+    socket.on("connect_error", handleConnectError);
+    socket.on("disconnect", handleDisconnect);
+  });
+
 function normalizeText(value) {
   if (value == null) return "";
   try {
@@ -322,7 +357,8 @@ export default function ReverseTunnelRemoteShell({ device }) {
       disposeShellSocket();
       const socket = io(config.origin, {
         path: config.path,
-        transports: ["websocket"],
+        transports: ["websocket", "polling"],
+        tryAllTransports: true,
         forceNew: true,
       });
       socketRef.current = socket;
@@ -445,6 +481,12 @@ export default function ReverseTunnelRemoteShell({ device }) {
         throw new Error("Site-worker shell session token was not returned.");
       }
       const socket = replaceShellSocket(remoteOpsSession);
+      setStatusMessage("Connecting to shell worker...");
+      const connected = await waitForSocketConnect(socket, 10000);
+      if (connected?.error) {
+        const detail = connected.detail ? `: ${connected.detail}` : "";
+        throw new Error(`${connected.error}${detail}`);
+      }
       setStatusMessage("Waiting for shell session...");
       const opened = await emitAsync(
         socket,
