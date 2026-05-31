@@ -144,12 +144,21 @@ function inferShellKind(device) {
 }
 
 function shellSocketConfig(remoteOpsSession) {
+  const routePrefix = normalizeText(remoteOpsSession?.worker?.route_path_prefix);
+  if (routePrefix) {
+    const normalizedPrefix = routePrefix.startsWith("/") ? routePrefix : `/${routePrefix}`;
+    return {
+      origin: window.location.origin,
+      path: `${normalizedPrefix.replace(/\/$/, "")}/socket.io/`,
+    };
+  }
+
   const socketUrl = normalizeText(remoteOpsSession?.worker?.urls?.socket_io);
   if (!socketUrl) return null;
   try {
     const parsed = new URL(socketUrl, window.location.origin);
     return {
-      origin: parsed.origin,
+      origin: window.location.origin,
       path: parsed.pathname,
     };
   } catch {
@@ -357,7 +366,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
       disposeShellSocket();
       const socket = io(config.origin, {
         path: config.path,
-        transports: ["websocket", "polling"],
+        transports: ["polling", "websocket"],
         tryAllTransports: true,
         forceNew: true,
       });
