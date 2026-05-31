@@ -128,7 +128,7 @@ func (c *Client) BaseURL() string {
 func (c *Client) RemoteOpsBaseURL() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.cfg.RemoteOps.Available {
+	if remoteOpsRouteUsable(c.cfg.RemoteOps) {
 		return strings.TrimRight(strings.TrimSpace(c.cfg.RemoteOps.BaseURL), "/")
 	}
 	return ""
@@ -137,6 +137,9 @@ func (c *Client) RemoteOpsBaseURL() string {
 func (c *Client) RemoteOpsRouteNeedsRefresh(maxAge time.Duration) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !remoteOpsRouteUsable(c.cfg.RemoteOps) {
+		return true
+	}
 	if c.cfg.RemoteOps.Available && strings.TrimSpace(c.cfg.RemoteOps.BaseURL) != "" {
 		return false
 	}
@@ -530,6 +533,29 @@ func applyRemoteOpsRoute(cfg *agentconfig.AgentConfig, route *remoteOpsRouteResp
 		Reason:    strings.TrimSpace(route.Reason),
 		UpdatedAt: now,
 	}
+}
+
+func remoteOpsRouteUsable(route agentconfig.RemoteOpsSection) bool {
+	if !route.Available {
+		return false
+	}
+	baseURL := strings.TrimSpace(route.BaseURL)
+	if baseURL == "" {
+		return false
+	}
+	workerGUID := strings.TrimSpace(route.WorkerGUID)
+	pathPrefix := strings.TrimSpace(route.RoutePathPrefix)
+	if workerGUID == "" || pathPrefix == "" {
+		return false
+	}
+	workerPrefix := "/_borealis/site-workers/"
+	if !strings.Contains(baseURL, workerPrefix) || !strings.Contains(pathPrefix, workerPrefix) {
+		return false
+	}
+	if !strings.Contains(baseURL, workerGUID) || !strings.Contains(pathPrefix, workerGUID) {
+		return false
+	}
+	return true
 }
 
 func permanentRefreshFailure(err error) bool {

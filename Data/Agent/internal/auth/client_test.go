@@ -207,6 +207,71 @@ func TestRefreshTokenClearsUnavailableRemoteOpsRoute(t *testing.T) {
 	}
 }
 
+func TestLegacyRemoteOpsRootForcesRefresh(t *testing.T) {
+	var refreshSeen bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/token/refresh" {
+			http.NotFound(w, r)
+			return
+		}
+		refreshSeen = true
+		baseURL := "http://" + r.Host
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "new",
+			"expires_in":   900,
+			"remote_ops_route": map[string]any{
+				"available":         true,
+				"site_id":           1,
+				"worker_guid":       "worker-current-route",
+				"route_generation":  8,
+				"route_path_prefix": "/_borealis/site-workers/worker-current-route",
+				"base_url":          baseURL + "/_borealis/site-workers/worker-current-route",
+				"socket_url":        baseURL + "/_borealis/site-workers/worker-current-route/socket.io/",
+			},
+		})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = server.URL
+	cfg.Agent.GUID = "GUID"
+	cfg.Tokens.AccessToken = "old"
+	cfg.Tokens.AccessExpiresAt = time.Now().Add(time.Hour).Unix()
+	cfg.Tokens.RefreshToken = "refresh"
+	cfg.RemoteOps.Available = true
+	cfg.RemoteOps.BaseURL = server.URL
+	cfg.RemoteOps.UpdatedAt = time.Now().Unix()
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system", WithHTTPClient(server.Client()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !client.RemoteOpsRouteNeedsRefresh(time.Minute) {
+		t.Fatal("legacy api-backend root route did not require refresh")
+	}
+	if client.RemoteOpsBaseURL() != "" {
+		t.Fatalf("legacy api-backend fallback used: %q", client.RemoteOpsBaseURL())
+	}
+	if err := client.RefreshRemoteOpsRoute(context.Background()); err != nil {
+		t.Fatalf("RefreshRemoteOpsRoute failed: %v", err)
+	}
+	if !refreshSeen {
+		t.Fatal("refresh endpoint was not called")
+	}
+	loaded, _ := agentconfig.Load(path)
+	if !loaded.RemoteOps.Available || loaded.RemoteOps.WorkerGUID != "worker-current-route" {
+		t.Fatalf("remote ops route not refreshed: %#v", loaded.RemoteOps)
+	}
+	if client.RemoteOpsBaseURL() != server.URL+"/_borealis/site-workers/worker-current-route" {
+		t.Fatalf("remote ops base url mismatch: %q", client.RemoteOpsBaseURL())
+	}
+}
+
 func TestTransientRefreshFailureKeepsRefreshToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/token/refresh" {
