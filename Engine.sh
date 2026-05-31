@@ -527,6 +527,38 @@ generate_secret() {
   date +%s%N | sha256sum | awk '{print $1}'
 }
 
+resolve_runtime_owner_uid() {
+  if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_UID}"
+  elif [[ -n "${SUDO_UID:-}" ]]; then
+    printf '%s\n' "${SUDO_UID}"
+  else
+    id -u
+  fi
+}
+
+resolve_runtime_owner_gid() {
+  if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_GID}"
+  elif [[ -n "${SUDO_GID:-}" ]]; then
+    printf '%s\n' "${SUDO_GID}"
+  else
+    id -g
+  fi
+}
+
+apply_traefik_dynamic_config_permissions() {
+  local dynamic_dir="${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic"
+  local owner_uid
+  local owner_gid
+  owner_uid="$(resolve_runtime_owner_uid)"
+  owner_gid="$(resolve_runtime_owner_gid)"
+  if [[ "${EUID:-$(id -u)}" -eq 0 && "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]]; then
+    chown "${owner_uid}:${owner_gid}" "${dynamic_dir}" 2>/dev/null || true
+  fi
+  chmod 0775 "${dynamic_dir}" 2>/dev/null || true
+}
+
 ensure_service_tree() {
   mkdir -p "${DEPLOY_DIR}"
   mkdir -p \
@@ -554,6 +586,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
+  apply_traefik_dynamic_config_permissions
   chmod 0777 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
@@ -942,6 +975,8 @@ write_compose_env() {
   local traefik_trusted_proxy_ips
   local traefik_forwarded_headers_trusted_ips
   local traefik_proxy_protocol_trusted_ips
+  local runtime_owner_uid
+  local runtime_owner_gid
   if (($# >= 4)); then
     traefik_trusted_proxy_ips="${trusted_proxy_ips_arg}"
   else
@@ -949,6 +984,8 @@ write_compose_env() {
   fi
   traefik_forwarded_headers_trusted_ips="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)}"
   traefik_proxy_protocol_trusted_ips="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)}"
+  runtime_owner_uid="$(resolve_runtime_owner_uid)"
+  runtime_owner_gid="$(resolve_runtime_owner_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
   log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
 
@@ -957,6 +994,8 @@ BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 BOREALIS_RUNTIME_ENV_FILE=${RUNTIME_ENV}
 BOREALIS_WEBUI_ENV_FILE=${WEBUI_ENV}
+BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
+BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
 BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}

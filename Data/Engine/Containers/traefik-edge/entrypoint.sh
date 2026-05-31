@@ -15,6 +15,8 @@ HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
 FORWARDED_HEADERS_TRUSTED_IPS="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
 PROXY_PROTOCOL_TRUSTED_IPS="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
+RUNTIME_OWNER_UID="${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-}"
+RUNTIME_OWNER_GID="${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-}"
 
 case "${CORE_DYNAMIC_CONFIG_PATH}" in
   "${DYNAMIC_CONFIG_DIR}"/*) ;;
@@ -43,7 +45,17 @@ EOF
   IFS="${old_ifs}"
 }
 
+apply_dynamic_config_permissions() {
+  if [ "$(id -u 2>/dev/null || printf '1')" = "0" ] \
+    && printf '%s' "${RUNTIME_OWNER_UID}" | grep -Eq '^[0-9]+$' \
+    && printf '%s' "${RUNTIME_OWNER_GID}" | grep -Eq '^[0-9]+$'; then
+    chown "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" "${DYNAMIC_CONFIG_DIR}" 2>/dev/null || true
+  fi
+  chmod 0775 "${DYNAMIC_CONFIG_DIR}" 2>/dev/null || true
+}
+
 mkdir -p "${CONFIG_DIR}" "${DYNAMIC_CONFIG_DIR}" "${LOG_DIR}" "${STATE_DIR}"
+apply_dynamic_config_permissions
 touch "${STATE_DIR}/acme.json"
 chmod 600 "${STATE_DIR}/acme.json" 2>/dev/null || true
 
