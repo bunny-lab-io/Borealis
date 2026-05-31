@@ -19,6 +19,9 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from ....public_endpoints import wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
+from ...job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
+from ...remote_ops.agent_routes import site_worker_route_urls
+from ...remote_ops.sessions import issue_remote_op_session
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
@@ -74,6 +77,39 @@ def _infer_endpoint_host(adapters: "EngineServiceAdapters", req) -> str:
     return host
 
 
+def _lookup_shell_device_and_route(adapters: "EngineServiceAdapters", agent_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    conn = adapters.db_conn_factory()
+    try:
+        ensure_job_scheduler_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT d.guid, d.hostname, d.agent_id, ds.site_id, s.name
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname=d.hostname
+         LEFT JOIN sites AS s ON s.id=ds.site_id
+             WHERE LOWER(d.agent_id)=LOWER(?)
+             LIMIT 1
+            """,
+            (agent_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None, None
+        device = {
+            "guid": _normalize_text(row[0]),
+            "hostname": _normalize_text(row[1]),
+            "agent_id": _normalize_text(row[2]),
+            "site_id": row[3],
+            "site_name": _normalize_text(row[4]),
+        }
+        site_id = int(row[3]) if row[3] is not None else 0
+        route = active_worker_route_for_site(conn, site_id=site_id) if site_id > 0 else None
+        return device, dict(route) if route else None
+    finally:
+        conn.close()
+
+
 def register_shell(app, adapters: "EngineServiceAdapters") -> None:
     blueprint = Blueprint("vpn_shell", __name__)
     logger = adapters.context.logger.getChild("vpn_shell.api")
@@ -111,6 +147,11 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
         agent_id = _resolve_requested_agent_id(adapters, requested_agent_id)
         if not site_access.user_can_access_agent_id(user, agent_id):
             return jsonify({"error": "not found"}), 404
+        device, worker_route = _lookup_shell_device_and_route(adapters, agent_id)
+        if not device:
+            return jsonify({"error": "not found"}), 404
+        if not worker_route:
+            return jsonify({"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."}), 409
 
         try:
             tunnel_service = _get_tunnel_service(adapters)
@@ -140,22 +181,48 @@ def register_shell(app, adapters: "EngineServiceAdapters") -> None:
             )
             return jsonify({"error": "establish_failed", "detail": str(exc)}), 500
 
-        agent_socket = False
-        registry = getattr(adapters.context, "agent_socket_registry", None)
-        if registry and hasattr(registry, "is_registered"):
-            try:
-                agent_socket = bool(registry.is_registered(agent_id))
-            except Exception:
-                agent_socket = False
+        issued = issue_remote_op_session(
+            adapters.jwt_service,
+            user=user,
+            device=device,
+            worker_route=worker_route,
+            capabilities=["remote_shell"],
+            ttl_seconds=body.get("ttl_seconds"),
+        )
+        urls = site_worker_route_urls(adapters.context, request, worker_route)
 
         response = dict(payload)
         response["status"] = "ok"
-        response["agent_socket"] = agent_socket
+        response["agent_socket"] = True
+        response["shell_port"] = int(getattr(adapters.context, "wireguard_shell_port", 47002) or 47002)
+        response["remote_ops_session"] = {
+            "session_id": issued["session_id"],
+            "token_type": "Bearer",
+            "token": issued["token"],
+            "issued_at": issued["issued_at"],
+            "expires_at": issued["expires_at"],
+            "expires_in": issued["expires_in"],
+            "capabilities": issued["capabilities"],
+            "device": {
+                "guid": device.get("guid") or "",
+                "hostname": device.get("hostname") or "",
+                "agent_id": device.get("agent_id") or "",
+                "site_id": device.get("site_id"),
+                "site_name": device.get("site_name") or "",
+            },
+            "worker": {
+                "worker_guid": worker_route.get("worker_guid") or "",
+                "route_generation": worker_route.get("generation") or 0,
+                "route_path_prefix": worker_route.get("route_path_prefix") or "",
+                "base_url": urls["base"],
+                "urls": urls,
+            },
+        }
         _service_log_event(
-            "vpn_shell_establish_response agent_id={0} tunnel_id={1} agent_socket={2}".format(
+            "vpn_shell_establish_response agent_id={0} tunnel_id={1} worker_guid={2}".format(
                 agent_id,
                 response.get("tunnel_id", "-"),
-                str(agent_socket).lower(),
+                worker_route.get("worker_guid", "-"),
             )
         )
         return jsonify(response), 200

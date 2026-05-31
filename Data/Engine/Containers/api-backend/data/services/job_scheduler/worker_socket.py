@@ -19,6 +19,15 @@ from flask_socketio import SocketIO
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.WebSocket.vpn_shell import (
+    _CONNECT_TIMEOUT_SECONDS,
+    _CONNECT_WAIT_WINDOW_SECONDS,
+    _REEMIT_START_AFTER_SECONDS,
+    _RETRY_DELAY_SECONDS,
+    ShellSession,
+    _configure_tcp_socket,
+    _cooperative_sleep,
+)
 from Data.Engine.services.activity_history import (
     get_activity_history_row,
     normalize_activity_status,
@@ -31,6 +40,7 @@ from Data.Engine.services.remote_ops.agent_socket_registry import (
     infer_hostname_from_agent_id,
     normalize_helper_contexts,
 )
+from Data.Engine.services.remote_ops.sessions import RemoteOpSessionError, verify_remote_op_session
 
 
 def _now_ts() -> int:
@@ -190,9 +200,13 @@ class SiteWorkerSocketRuntime:
         )
         self.registry = AgentSocketRegistry(self.socketio, logger.getChild("agent_registry"))
         self.jwt_service = jwt_service_module.load_service()
+        self._shell_sessions: Dict[str, ShellSession] = {}
+        self._shell_sessions_by_agent: Dict[str, ShellSession] = {}
+        self._shell_lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
         self._register_routes()
         self._register_socket_handlers()
+        self._register_shell_handlers()
         self._register_task_event_handlers()
 
     def _log(self, message: str, *, level: str = "INFO") -> None:
@@ -284,6 +298,7 @@ class SiteWorkerSocketRuntime:
         @self.socketio.on("disconnect")
         def _disconnect() -> None:
             agent_id = self.registry.unregister(request.sid)
+            shell_closed = self._close_shell_session(request.sid, reason="operator_socket_disconnect")
             if agent_id:
                 self.logger.info(
                     "Site-worker Agent socket disconnected worker_guid=%s site_id=%s agent_id=%s sid=%s",
@@ -293,6 +308,257 @@ class SiteWorkerSocketRuntime:
                     request.sid,
                 )
                 self._log("agent_socket_disconnect agent_id={0} sid={1}".format(agent_id, request.sid))
+            elif shell_closed:
+                self._log("vpn_shell_client_disconnect sid={0} remote={1}".format(request.sid, _remote_addr() or "-"))
+
+    def _remote_op_token_from_payload(self, data: Any) -> str:
+        if isinstance(data, Mapping):
+            for key in ("operation_token", "remote_op_token", "token"):
+                token = str(data.get(key) or "").strip()
+                if token:
+                    return token
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[len("Bearer ") :].strip()
+        return ""
+
+    def _verify_shell_operation(self, data: Any) -> Dict[str, Any]:
+        token = self._remote_op_token_from_payload(data)
+        try:
+            return verify_remote_op_session(
+                self.jwt_service,
+                token,
+                required_capability="remote_shell",
+                worker_guid=self.worker_guid,
+                site_id=self.site_id,
+            )
+        except RemoteOpSessionError as exc:
+            self._log(
+                "vpn_shell_token_rejected sid={0} reason={1} remote={2}".format(
+                    request.sid,
+                    exc.code,
+                    _remote_addr() or "-",
+                ),
+                level="WARNING",
+            )
+            raise
+
+    def _lookup_shell_virtual_ip(self, agent_id: str) -> str:
+        clean_agent_id = str(agent_id or "").strip()
+        if not clean_agent_id:
+            return ""
+        try:
+            with closing(self.db_conn_factory()) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT virtual_ip FROM device_vpn_ip_leases WHERE agent_id=?",
+                    (clean_agent_id,),
+                )
+                row = cur.fetchone()
+        except Exception:
+            self.logger.debug("site-worker shell VPN lease lookup failed agent_id=%s", clean_agent_id, exc_info=True)
+            return ""
+        if not row:
+            return ""
+        return str(row[0] or "").split("/")[0].strip()
+
+    def _shell_port(self, data: Any) -> int:
+        candidates = []
+        if isinstance(data, Mapping):
+            candidates.append(data.get("shell_port"))
+            tunnel = data.get("tunnel") if isinstance(data.get("tunnel"), Mapping) else {}
+            candidates.append(tunnel.get("shell_port"))
+        candidates.append(os.environ.get("BOREALIS_WIREGUARD_SHELL_PORT"))
+        for candidate in candidates:
+            try:
+                port = int(str(candidate or "").strip())
+            except Exception:
+                port = 0
+            if port > 0:
+                return port
+        return 47002
+
+    def _tunnel_payload(self, data: Any, *, agent_id: str, virtual_ip: str) -> Dict[str, Any]:
+        if not isinstance(data, Mapping) or not isinstance(data.get("tunnel"), Mapping):
+            return {}
+        payload = dict(data.get("tunnel") or {})
+        for key in ("remote_ops_session", "operation_token", "remote_op_token", "shell_port", "status", "agent_socket"):
+            payload.pop(key, None)
+        if str(payload.get("agent_id") or "").strip() != agent_id:
+            return {}
+        payload_virtual_ip = str(payload.get("virtual_ip") or "").split("/")[0].strip()
+        if payload_virtual_ip and payload_virtual_ip != virtual_ip:
+            return {}
+        return payload
+
+    def _remove_shell_session(self, sid: str, session: ShellSession) -> None:
+        with self._shell_lock:
+            if self._shell_sessions.get(sid) is session:
+                self._shell_sessions.pop(sid, None)
+            if self._shell_sessions_by_agent.get(session.agent_id) is session:
+                self._shell_sessions_by_agent.pop(session.agent_id, None)
+
+    def _close_shell_session(self, sid: str, *, reason: str = "close_request") -> bool:
+        with self._shell_lock:
+            session = self._shell_sessions.pop(str(sid or ""), None)
+            if session is not None and self._shell_sessions_by_agent.get(session.agent_id) is session:
+                self._shell_sessions_by_agent.pop(session.agent_id, None)
+        if session is None:
+            return False
+        session.close_with_reason(reason)
+        return True
+
+    def _close_agent_shell_session(self, agent_id: str, *, reason: str = "superseded_agent_session") -> bool:
+        with self._shell_lock:
+            session = self._shell_sessions_by_agent.pop(str(agent_id or ""), None)
+            if session is not None and self._shell_sessions.get(session.sid) is session:
+                self._shell_sessions.pop(session.sid, None)
+        if session is None:
+            return False
+        session.close_with_reason(reason)
+        return True
+
+    def _register_shell_handlers(self) -> None:
+        @self.socketio.on("vpn_shell_open")
+        def _vpn_shell_open(data: Any) -> Dict[str, Any]:
+            if not isinstance(data, Mapping):
+                data = {}
+            try:
+                claims = self._verify_shell_operation(data)
+            except RemoteOpSessionError as exc:
+                return {"error": exc.code}
+            agent_id = str(data.get("agent_id") or claims.get("agent_id") or "").strip()
+            if not agent_id:
+                return {"error": "agent_id_required"}
+            if agent_id != str(claims.get("agent_id") or "").strip():
+                return {"error": "device_mismatch"}
+            virtual_ip = self._lookup_shell_virtual_ip(agent_id)
+            if not virtual_ip:
+                self._log(
+                    "vpn_shell_open_failed agent_id={0} sid={1} reason=vpn_lease_missing".format(
+                        agent_id,
+                        request.sid,
+                    ),
+                    level="WARNING",
+                )
+                return {"error": "tunnel_down"}
+            port = self._shell_port(data)
+            tunnel_payload = self._tunnel_payload(data, agent_id=agent_id, virtual_ip=virtual_ip)
+            self._close_shell_session(request.sid, reason="superseded_open")
+            self._close_agent_shell_session(agent_id, reason="superseded_agent_session")
+            session = self._open_shell_session(request.sid, agent_id, virtual_ip, port, tunnel_payload)
+            if session is None:
+                return {"error": "shell_connect_failed"}
+            return {"status": "ok", "session_id": getattr(session, "session_id", "")}
+
+        @self.socketio.on("vpn_shell_send")
+        def _vpn_shell_send(data: Any) -> Dict[str, Any]:
+            payload = data.get("data") if isinstance(data, Mapping) else data
+            if payload is None:
+                return {"error": "payload_required"}
+            with self._shell_lock:
+                session = self._shell_sessions.get(request.sid)
+            if session is None or not session.is_active():
+                self._close_shell_session(request.sid, reason="inactive_send")
+                return {"error": "shell_session_missing"}
+            session.send(str(payload))
+            return {"status": "ok"}
+
+        @self.socketio.on("vpn_shell_close")
+        def _vpn_shell_close(_data: Any = None) -> Dict[str, Any]:
+            self._close_shell_session(request.sid, reason="close_request")
+            return {"status": "ok"}
+
+    def _emit_shell_agent_start(self, agent_id: str, tunnel_payload: Mapping[str, Any], *, trigger_after: float) -> None:
+        if not tunnel_payload:
+            return
+        emitted = self.registry.emit(agent_id, "vpn_tunnel_start", dict(tunnel_payload))
+        self._log(
+            "vpn_shell_agent_start_emit agent_id={0} sid={1} trigger_elapsed={2} emitted={3}".format(
+                agent_id,
+                request.sid,
+                int(trigger_after),
+                str(bool(emitted)).lower(),
+            ),
+            level="INFO" if emitted else "WARNING",
+        )
+
+    def _open_shell_session(
+        self,
+        sid: str,
+        agent_id: str,
+        virtual_ip: str,
+        port: int,
+        tunnel_payload: Mapping[str, Any],
+    ) -> Optional[ShellSession]:
+        deadline = time.monotonic() + _CONNECT_WAIT_WINDOW_SECONDS
+        reemit_index = 0
+        attempts = 0
+        last_error: Optional[Exception] = None
+        started_at = time.monotonic()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            elapsed = max(0.0, time.monotonic() - started_at)
+            while reemit_index < len(_REEMIT_START_AFTER_SECONDS):
+                trigger_after = _REEMIT_START_AFTER_SECONDS[reemit_index]
+                if elapsed + 0.001 < trigger_after:
+                    break
+                self._emit_shell_agent_start(agent_id, tunnel_payload, trigger_after=trigger_after)
+                reemit_index += 1
+            attempts += 1
+            try:
+                tcp = socket.create_connection((virtual_ip, int(port)), timeout=min(_CONNECT_TIMEOUT_SECONDS, max(0.5, remaining)))
+                _configure_tcp_socket(tcp)
+            except Exception as exc:
+                last_error = exc
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    _cooperative_sleep(min(_RETRY_DELAY_SECONDS, remaining))
+                continue
+            session = ShellSession(
+                sid=sid,
+                agent_id=agent_id,
+                socketio=self.socketio,
+                tcp=tcp,
+                service_log=self.service_log,
+                on_closed=lambda closed_sid, closed_session: self._remove_shell_session(closed_sid, closed_session),
+            )
+            try:
+                session.tcp.settimeout(15)
+            except Exception:
+                pass
+            with self._shell_lock:
+                self._shell_sessions[sid] = session
+                self._shell_sessions_by_agent[agent_id] = session
+            self._log(
+                "vpn_shell_open_success agent_id={0} sid={1} host={2} port={3} attempts={4}".format(
+                    agent_id,
+                    sid,
+                    virtual_ip,
+                    port,
+                    attempts,
+                )
+            )
+            session.start_reader()
+            if session.wait_for_ready(timeout=min(2.0, max(0.5, deadline - time.monotonic()))):
+                return session
+            self._remove_shell_session(sid, session)
+            session.close_with_reason("ready_probe_failed")
+            last_error = RuntimeError("shell_ready_probe_failed")
+        self._log(
+            "vpn_shell_open_failed agent_id={0} sid={1} host={2} port={3} attempts={4} error={5}".format(
+                agent_id,
+                sid,
+                virtual_ip,
+                port,
+                attempts,
+                str(last_error) if last_error else "-",
+            ),
+            level="WARNING",
+        )
+        return None
 
     def _resolve_scheduled_run_context(
         self,

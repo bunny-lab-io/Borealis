@@ -108,6 +108,28 @@ function inferShellKind(device) {
   return "powershell";
 }
 
+function shellSocketConfig(remoteOpsSession) {
+  const socketUrl = normalizeText(remoteOpsSession?.worker?.urls?.socket_io);
+  if (!socketUrl) return null;
+  try {
+    const parsed = new URL(socketUrl, window.location.origin);
+    return {
+      origin: parsed.origin,
+      path: parsed.pathname,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shellTunnelPayload(data) {
+  const payload = { ...(data || {}) };
+  delete payload.remote_ops_session;
+  delete payload.agent_socket;
+  delete payload.status;
+  return payload;
+}
+
 function cleanShellOutput(value) {
   if (value == null) return "";
   try {
@@ -136,6 +158,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const [loading, setLoading] = useState(false);
   const socketRef = useRef(null);
   const localSocketRef = useRef(false);
+  const socketCleanupRef = useRef(null);
   const terminalRef = useRef(null);
   const agentIdRef = useRef("");
   const activeSessionIdRef = useRef("");
@@ -167,20 +190,6 @@ export default function ReverseTunnelRemoteShell({ device }) {
     agentIdRef.current = agentId;
   }, [agentId]);
 
-
-  const ensureSocket = useCallback(() => {
-    if (socketRef.current) return socketRef.current;
-    const existing = typeof window !== "undefined" ? window.BorealisSocket : null;
-    if (existing) {
-      socketRef.current = existing;
-      localSocketRef.current = false;
-      return existing;
-    }
-    const socket = io(window.location.origin, { transports: ["websocket"] });
-    socketRef.current = socket;
-    localSocketRef.current = true;
-    return socket;
-  }, []);
 
   const notifyAgentOnboarding = useCallback(async () => {
     try {
@@ -239,6 +248,91 @@ export default function ReverseTunnelRemoteShell({ device }) {
     scrollToBottom();
   }, [output, scrollToBottom]);
 
+  const bindShellSocketHandlers = useCallback(
+    (socket) => {
+      if (!socket) return () => {};
+      const handleDisconnectEvent = () => {
+        cancelPendingConnect();
+        activeSessionIdRef.current = "";
+        activeAgentIdRef.current = "";
+        setLoading(false);
+        setShellState("closed");
+        setSessionState("idle");
+        setStatusMessage("Socket disconnected.");
+      };
+      const handleOutput = (payload) => {
+        const currentSessionId = activeSessionIdRef.current;
+        if (currentSessionId && payload?.session_id !== currentSessionId) {
+          return;
+        }
+        const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
+        if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
+          return;
+        }
+        appendOutput(payload?.data || "");
+      };
+      const handleClosed = (payload) => {
+        const currentSessionId = activeSessionIdRef.current;
+        if (currentSessionId && payload?.session_id !== currentSessionId) {
+          return;
+        }
+        const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
+        if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
+          return;
+        }
+        cancelPendingConnect();
+        activeSessionIdRef.current = "";
+        activeAgentIdRef.current = "";
+        setLoading(false);
+        setShellState("closed");
+        setSessionState("idle");
+      };
+
+      socket.on("disconnect", handleDisconnectEvent);
+      socket.on("vpn_shell_output", handleOutput);
+      socket.on("vpn_shell_closed", handleClosed);
+
+      return () => {
+        socket.off("disconnect", handleDisconnectEvent);
+        socket.off("vpn_shell_output", handleOutput);
+        socket.off("vpn_shell_closed", handleClosed);
+      };
+    },
+    [appendOutput, cancelPendingConnect]
+  );
+
+  const disposeShellSocket = useCallback(() => {
+    if (socketCleanupRef.current) {
+      socketCleanupRef.current();
+      socketCleanupRef.current = null;
+    }
+    if (localSocketRef.current && socketRef.current) {
+      socketRef.current.disconnect();
+    }
+    socketRef.current = null;
+    localSocketRef.current = false;
+  }, []);
+
+  const replaceShellSocket = useCallback(
+    (remoteOpsSession) => {
+      const config = shellSocketConfig(remoteOpsSession);
+      if (!config) {
+        throw new Error("site_worker_shell_route_unavailable");
+      }
+      disposeShellSocket();
+      const socket = io(config.origin, {
+        path: config.path,
+        transports: ["websocket"],
+        forceNew: true,
+      });
+      socketRef.current = socket;
+      localSocketRef.current = true;
+      socketCleanupRef.current = bindShellSocketHandlers(socket);
+      return socket;
+    },
+    [bindShellSocketHandlers, disposeShellSocket]
+  );
+
   const disconnectShell = useCallback(async (reason = "operator_disconnect", targetAgentId = "") => {
     const currentAgentId = String(targetAgentId || activeAgentIdRef.current || agentIdRef.current || "").trim();
     if (!currentAgentId) return;
@@ -254,9 +348,10 @@ export default function ReverseTunnelRemoteShell({ device }) {
   }, []);
 
   const closeShell = useCallback(async () => {
-    const socket = ensureSocket();
+    const socket = socketRef.current;
+    if (!socket) return;
     await emitAsync(socket, "vpn_shell_close", {});
-  }, [ensureSocket]);
+  }, []);
 
   const handleDisconnect = useCallback(async () => {
     cancelPendingConnect();
@@ -272,8 +367,9 @@ export default function ReverseTunnelRemoteShell({ device }) {
       setShellState("closed");
       setSessionState("idle");
       setLoading(false);
+      disposeShellSocket();
     }
-  }, [cancelPendingConnect, closeShell, disconnectShell]);
+  }, [cancelPendingConnect, closeShell, disconnectShell, disposeShellSocket]);
 
   useEffect(() => {
     const previousAgentId = previousAgentIdRef.current;
@@ -292,60 +388,8 @@ export default function ReverseTunnelRemoteShell({ device }) {
     setStatusMessage("");
     closeShell();
     disconnectShell("component_unmount", connectedAgentId);
-  }, [agentId, cancelPendingConnect, closeShell, disconnectShell]);
-
-  useEffect(() => {
-    const socket = ensureSocket();
-    const handleDisconnectEvent = () => {
-      cancelPendingConnect();
-      activeSessionIdRef.current = "";
-      activeAgentIdRef.current = "";
-      setLoading(false);
-      setShellState("closed");
-      setSessionState("idle");
-      setStatusMessage("Socket disconnected.");
-    };
-    const handleOutput = (payload) => {
-      const currentSessionId = activeSessionIdRef.current;
-      if (currentSessionId && payload?.session_id !== currentSessionId) {
-        return;
-      }
-      const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
-      if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
-        return;
-      }
-      appendOutput(payload?.data || "");
-    };
-    const handleClosed = (payload) => {
-      const currentSessionId = activeSessionIdRef.current;
-      if (currentSessionId && payload?.session_id !== currentSessionId) {
-        return;
-      }
-      const currentAgentId = activeAgentIdRef.current || agentIdRef.current;
-      if (currentAgentId && payload?.agent_id && payload.agent_id !== currentAgentId) {
-        return;
-      }
-      cancelPendingConnect();
-      activeSessionIdRef.current = "";
-      activeAgentIdRef.current = "";
-      setLoading(false);
-      setShellState("closed");
-      setSessionState("idle");
-    };
-
-    socket.on("disconnect", handleDisconnectEvent);
-    socket.on("vpn_shell_output", handleOutput);
-    socket.on("vpn_shell_closed", handleClosed);
-
-    return () => {
-      socket.off("disconnect", handleDisconnectEvent);
-      socket.off("vpn_shell_output", handleOutput);
-      socket.off("vpn_shell_closed", handleClosed);
-      if (localSocketRef.current) {
-        socket.disconnect();
-      }
-    };
-  }, [appendOutput, cancelPendingConnect, ensureSocket]);
+    disposeShellSocket();
+  }, [agentId, cancelPendingConnect, closeShell, disconnectShell, disposeShellSocket]);
 
   useEffect(() => {
     return () => {
@@ -353,8 +397,9 @@ export default function ReverseTunnelRemoteShell({ device }) {
       const connectedAgentId = activeAgentIdRef.current;
       closeShell();
       disconnectShell("component_unmount", connectedAgentId);
+      disposeShellSocket();
     };
-  }, [cancelPendingConnect, closeShell, disconnectShell]);
+  }, [cancelPendingConnect, closeShell, disconnectShell, disposeShellSocket]);
 
   const requestTunnel = useCallback(async () => {
     if (!agentId) {
@@ -395,9 +440,23 @@ export default function ReverseTunnelRemoteShell({ device }) {
       activeAgentIdRef.current = resolvedAgentId;
       setTunnel(data);
 
-      const socket = ensureSocket();
+      const remoteOpsSession = data?.remote_ops_session;
+      if (!remoteOpsSession?.token) {
+        throw new Error("Site-worker shell session token was not returned.");
+      }
+      const socket = replaceShellSocket(remoteOpsSession);
       setStatusMessage("Waiting for shell session...");
-      const opened = await emitAsync(socket, "vpn_shell_open", { agent_id: resolvedAgentId }, 35000);
+      const opened = await emitAsync(
+        socket,
+        "vpn_shell_open",
+        {
+          agent_id: resolvedAgentId,
+          operation_token: remoteOpsSession.token,
+          shell_port: data?.shell_port,
+          tunnel: shellTunnelPayload(data),
+        },
+        35000
+      );
       if (!opened || opened.cancelled) {
         return;
       }
@@ -435,11 +494,11 @@ export default function ReverseTunnelRemoteShell({ device }) {
         setLoading(false);
       }
     }
-  }, [agentId, ensureSocket, handleAgentOnboarding]);
+  }, [agentId, handleAgentOnboarding, replaceShellSocket]);
 
   const handleSend = useCallback(
     async (text) => {
-      const socket = ensureSocket();
+      const socket = socketRef.current;
       if (!socket || sessionState !== "connected") return;
       const lineEnding = shellKind === "bash" ? "\n" : "\r\n";
       const payload = text.endsWith("\n") ? text : `${text}${lineEnding}`;
@@ -450,7 +509,7 @@ export default function ReverseTunnelRemoteShell({ device }) {
         setStatusMessage(String(resp.error));
       }
     },
-    [appendCommandEcho, ensureSocket, sessionState, shellKind]
+    [appendCommandEcho, sessionState, shellKind]
   );
 
   const handleCopy = async () => {

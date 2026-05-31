@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import queue
+import socket
+import threading
 import time
 from pathlib import Path
 
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
+from Data.Engine.services.remote_ops.sessions import issue_remote_op_session
+
+
+AGENT_GUID = "11111111-2222-3333-4444-555555555555"
+AGENT_HOSTNAME = "LAB-ONE"
+AGENT_ID = f"{AGENT_HOSTNAME}_{AGENT_GUID}_SYSTEM"
 
 
 def _service_log(_service: str, _message: str, scope=None, *, level: str = "INFO") -> None:
@@ -61,16 +72,14 @@ def _seed_device(conn, *, guid: str, hostname: str, site_id: int, fingerprint: s
 
 def _runtime(tmp_path: Path, *, site_id: int = 7) -> tuple[SiteWorkerSocketRuntime, str]:
     db_path = tmp_path / "worker-socket.sqlite3"
-    guid = "11111111-2222-3333-4444-555555555555"
-    hostname = "LAB-ONE"
     fingerprint = "fingerprint-1"
     conn = sqlite3.connect(str(db_path))
     try:
-        _seed_device(conn, guid=guid, hostname=hostname, site_id=site_id, fingerprint=fingerprint)
+        _seed_device(conn, guid=AGENT_GUID, hostname=AGENT_HOSTNAME, site_id=site_id, fingerprint=fingerprint)
     finally:
         conn.close()
     service = jwt_service.load_service()
-    token = service.issue_access_token(guid.upper(), fingerprint, 1)
+    token = service.issue_access_token(AGENT_GUID.upper(), fingerprint, 1)
     runtime = SiteWorkerSocketRuntime(
         worker_guid="worker-socket-test",
         site_id=site_id,
@@ -81,6 +90,129 @@ def _runtime(tmp_path: Path, *, site_id: int = 7) -> tuple[SiteWorkerSocketRunti
         service_log=_service_log,
     )
     return runtime, token
+
+
+def _issue_shell_token(
+    runtime: SiteWorkerSocketRuntime,
+    *,
+    agent_id: str = AGENT_ID,
+    site_id: int = 7,
+    worker_guid: str = "worker-socket-test",
+) -> str:
+    issued = issue_remote_op_session(
+        runtime.jwt_service,
+        user={"username": "unit", "role": "Admin"},
+        device={
+            "guid": AGENT_GUID,
+            "hostname": AGENT_HOSTNAME,
+            "agent_id": agent_id,
+            "site_id": site_id,
+        },
+        worker_route={"worker_guid": worker_guid, "generation": 1},
+        capabilities=["remote_shell"],
+        now=int(time.time()),
+    )
+    return issued["token"]
+
+
+def _seed_vpn_lease(runtime: SiteWorkerSocketRuntime, *, agent_id: str = AGENT_ID, virtual_ip: str = "127.0.0.1") -> None:
+    conn = runtime.db_conn_factory()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_vpn_ip_leases (
+                agent_id TEXT PRIMARY KEY,
+                virtual_ip TEXT NOT NULL,
+                updated_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO device_vpn_ip_leases(agent_id, virtual_ip, updated_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(agent_id) DO UPDATE SET
+                virtual_ip=excluded.virtual_ip,
+                updated_at=excluded.updated_at
+            """,
+            (agent_id, virtual_ip, int(time.time())),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class _FakeShellServer:
+    def __init__(self) -> None:
+        self.messages: "queue.Queue[dict]" = queue.Queue()
+        self._stop = threading.Event()
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self._listener.listen(1)
+        self.port = int(self._listener.getsockname()[1])
+        self._conn: socket.socket | None = None
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        for sock in (self._conn, self._listener):
+            try:
+                if sock is not None:
+                    sock.close()
+            except Exception:
+                pass
+        self._thread.join(timeout=2.0)
+
+    def __enter__(self) -> "_FakeShellServer":
+        return self
+
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
+        self.close()
+
+    def _serve(self) -> None:
+        try:
+            self._listener.settimeout(2.0)
+            conn, _addr = self._listener.accept()
+        except Exception:
+            return
+        self._conn = conn
+        with conn:
+            stream = conn.makefile("rwb", buffering=0)
+            while not self._stop.is_set():
+                try:
+                    line = stream.readline()
+                except Exception:
+                    break
+                if not line:
+                    break
+                try:
+                    msg = json.loads(line.decode("utf-8"))
+                except Exception:
+                    continue
+                self.messages.put(msg)
+                if msg.get("type") == "ping":
+                    response = {
+                        "type": "pong",
+                        "ping_id": msg.get("ping_id"),
+                        "sent_at_ms": msg.get("sent_at_ms"),
+                    }
+                    try:
+                        stream.write(json.dumps(response).encode("utf-8") + b"\n")
+                    except Exception:
+                        break
+
+    def wait_for_message(self, message_type: str, *, timeout: float = 2.0) -> dict:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                msg = self.messages.get(timeout=max(0.01, deadline - time.time()))
+            except queue.Empty:
+                break
+            if msg.get("type") == message_type:
+                return msg
+        raise AssertionError(f"missing shell message type {message_type}")
 
 
 def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path, monkeypatch) -> None:
@@ -97,8 +229,8 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
     ack = client.emit(
         "connect_agent",
         {
-            "agent_id": "LAB-ONE_11111111-2222-3333-4444-555555555555_SYSTEM",
-            "hostname": "LAB-ONE",
+            "agent_id": AGENT_ID,
+            "hostname": AGENT_HOSTNAME,
             "service_mode": "system",
             "capabilities": {"helper_contexts": ["currentuser"]},
         },
@@ -131,8 +263,8 @@ def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch
     ack = client.emit(
         "connect_agent",
         {
-            "agent_id": "LAB-ONE_11111111-2222-3333-4444-555555555555_SYSTEM",
-            "hostname": "LAB-ONE",
+            "agent_id": AGENT_ID,
+            "hostname": AGENT_HOSTNAME,
             "service_mode": "system",
         },
         callback=True,
@@ -141,3 +273,56 @@ def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch
     assert ack["error"] == "device_site_mismatch"
     assert not runtime.has_host_service_socket("lab-one", "system")
     client.disconnect()
+
+
+def test_site_worker_shell_rejects_missing_remote_op_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+
+    client = runtime.socketio.test_client(runtime.app)
+    assert client.is_connected()
+
+    ack = client.emit("vpn_shell_open", {"agent_id": AGENT_ID}, callback=True)
+
+    assert ack["error"] == "missing_token"
+    client.disconnect()
+
+
+def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+    _seed_vpn_lease(runtime)
+    operation_token = _issue_shell_token(runtime)
+
+    client = runtime.socketio.test_client(runtime.app)
+    assert client.is_connected()
+
+    with _FakeShellServer() as server:
+        ack = client.emit(
+            "vpn_shell_open",
+            {
+                "agent_id": AGENT_ID,
+                "operation_token": operation_token,
+                "shell_port": server.port,
+                "tunnel": {"agent_id": AGENT_ID, "virtual_ip": "127.0.0.1/32"},
+            },
+            callback=True,
+        )
+
+        assert ack["status"] == "ok"
+        assert ack["session_id"]
+        assert server.wait_for_message("ping")["ping_id"]
+
+        send_ack = client.emit("vpn_shell_send", {"data": "whoami\n"}, callback=True)
+        assert send_ack["status"] == "ok"
+        stdin = server.wait_for_message("stdin")
+        assert base64.b64decode(stdin["data"]).decode("utf-8") == "whoami\n"
+
+        close_ack = client.emit("vpn_shell_close", {}, callback=True)
+        assert close_ack["status"] == "ok"
+
+    client.disconnect()
+    assert runtime._shell_sessions == {}
+    assert runtime._shell_sessions_by_agent == {}
