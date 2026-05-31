@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
@@ -288,6 +289,39 @@ def test_site_worker_remote_ops_port_is_deterministic(monkeypatch) -> None:
     assert first == second
     assert 57000 <= first < 57100
     assert 57000 <= other < 57100
+
+
+def test_spawn_site_worker_mounts_traefik_config_for_route_files(tmp_path: Path, monkeypatch) -> None:
+    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
+
+    project_root = tmp_path / "Borealis"
+    dynamic_dir = project_root / "Engine" / "Services" / "traefik-edge" / "config" / "dynamic"
+    db_path = tmp_path / "queue.sqlite3"
+    monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(project_root))
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
+    monkeypatch.setattr(job_scheduler_manager.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
+    calls = []
+
+    def _run(args, **_kwargs):
+        calls.append(list(args))
+        return SimpleNamespace(returncode=0, stdout="site-worker-container\n", stderr="")
+
+    monkeypatch.setattr(job_scheduler_manager.subprocess, "run", _run)
+    monkeypatch.setattr(job_scheduler_manager, "_worker_image", lambda: "borealis-engine/site-worker:test")
+
+    def _factory():
+        conn = sqlite3.connect(str(db_path))
+        ensure_job_scheduler_tables(conn)
+        return conn
+
+    logger = SimpleNamespace(info=lambda *_args, **_kwargs: None, error=lambda *_args, **_kwargs: None)
+    job_scheduler_manager._spawn_site_worker(_factory, site_id=12, logger=logger)
+
+    assert calls
+    docker_args = calls[0]
+    mount = f"{project_root}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config"
+    assert mount in docker_args
+    assert list(dynamic_dir.glob("site-worker-*.yml"))
 
 
 def test_worker_route_upsert_recovers_missing_registry_row_for_live_worker(tmp_path: Path, monkeypatch) -> None:

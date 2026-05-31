@@ -616,8 +616,10 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
     project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
     api_cache_root = project_root / "Engine" / "Services" / "api-backend" / "cache"
     site_worker_log_root = project_root / "Engine" / "Services" / "api-backend" / "logs" / "site-workers"
+    traefik_config_root = project_root / "Engine" / "Services" / "traefik-edge" / "config"
     api_cache_root.mkdir(parents=True, exist_ok=True)
     site_worker_log_root.mkdir(parents=True, exist_ok=True)
+    traefik_config_root.mkdir(parents=True, exist_ok=True)
     env_file = _compose_env_file()
     image = _worker_image()
     args = [
@@ -675,6 +677,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
         [
             "-v",
             f"{site_worker_log_root}:/opt/Borealis/Engine/Services/api-backend/logs/site-workers",
+            "-v",
+            f"{traefik_config_root}:/opt/Borealis/Engine/Services/traefik-edge/config",
             "-v",
             f"{project_root}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro",
             "-v",
