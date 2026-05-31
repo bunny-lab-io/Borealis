@@ -10,7 +10,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M2: Traefik Dynamic Worker Routing` |
 | Last updated | 2026-05-31 |
-| Latest implementation commit | `c52b5317` (`Implement Traefik dynamic route directory`) |
+| Latest implementation commit | `71ec3c95` (`Fix Traefik dynamic route directory permissions`) |
 | Current state | `M2` implementation is committed locally and post-redeploy read-only config smoke passed. Live hotload smoke exposed that the watched route directory was redeployed as `root:root 0755`, blocking operator-side atomic route drops. A permission fix is staged so deploy writes runtime owner UID/GID and Traefik keeps `config/dynamic/` owner-writable with mode `0775`. |
 | Next safe step | Redeploy branch head with the `M2` route-directory permission fix, rerun file-provider hotload add/remove smoke, then mark `M2` done before starting `M3`. |
 
@@ -330,7 +330,7 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include the M2 route-directory permission fix after `c52b5317`, "Implement Traefik dynamic route directory".
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after `71ec3c95`, "Fix Traefik dynamic route directory permissions".
 
 M1 is Done. Continue M2 only. Do not start M3 until M2 post-redeploy hotload smoke passes and this tracker marks M2 Done.
 
