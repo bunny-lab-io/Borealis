@@ -22,6 +22,7 @@ The React Flow canvas uses left-to-right topology:
 ## Understand Worker States
 
 - Active workers are currently heartbeating.
+- Site workers with connected agents show `Running` with connected device count because they are maintaining remote-operation communication paths.
 - Recent workers may show stopped, lost, completed, or failed state briefly for handoff visibility.
 - Task groups render as `Task (n Devices)` with scheduler-style pills: `Success`, `Running`, `Pending`, `Failed`, or `Skipped`.
 - Terminal task groups show a countdown in the status pill and disappear after 30 seconds. If another task lands in the same terminal bucket before the countdown expires, the bucket count updates and the countdown resets.

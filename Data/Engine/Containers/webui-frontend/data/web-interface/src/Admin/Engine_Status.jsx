@@ -196,6 +196,29 @@ function taskLabel(deviceCount) {
   return `Task (${count} ${count === 1 ? "Device" : "Devices"})`;
 }
 
+function connectedDeviceLabel(deviceCount, { compact = false } = {}) {
+  const count = Math.max(0, Number(deviceCount || 0));
+  if (count <= 0) return "";
+  const noun = count === 1 ? "Device" : "Devices";
+  return compact ? `${count} ${noun}` : `${count} ${noun} Connected`;
+}
+
+function siteWorkerConnectedDeviceCount(worker) {
+  const direct = [
+    worker?.connected_device_count,
+    worker?.connectedDeviceCount,
+    worker?.registered_device_count,
+    worker?.registeredDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const links = Array.isArray(worker?.task_links) ? worker.task_links : [];
+  const link = links.find((item) => String(item?.kind || "").toLowerCase() === "agent_sockets");
+  const count = Number(link?.count || link?.device_count || link?.target_count || 0);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
 function taskTypeLabel(work) {
   const fromPayload = String(work?.task_type || "").trim();
   if (fromPayload) return fromPayload;
@@ -321,6 +344,11 @@ const WorkerNode = memo(({ data }) => {
             <Box sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.24)", background: "rgba(15,23,42,0.42)", px: 0.85, py: 0.32, color: COLORS.muted, fontSize: "0.67rem", lineHeight: 1 }}>
               {data.siteLabel}
             </Box>
+            {data.connectedDeviceLabel ? (
+              <Box sx={{ borderRadius: 999, border: "1px solid rgba(96,165,250,0.32)", background: "rgba(14,165,233,0.12)", px: 0.85, py: 0.32, color: COLORS.blue, fontSize: "0.67rem", fontWeight: 700, lineHeight: 1 }}>
+                {data.connectedDeviceLabel}
+              </Box>
+            ) : null}
           </Box>
         ) : null}
         {Array.isArray(data.actions) && data.actions.length ? (
@@ -467,6 +495,7 @@ function workerLaneRank(worker, taskEntries = []) {
   if (taskTones.has("queued")) return 1;
   const workerTone = statusTone(worker?.status);
   if (workerTone === "running") return 2;
+  if (siteWorkerConnectedDeviceCount(worker) > 0 && !isTerminalWorkerTone(workerTone)) return 2;
   if (workerTone === "idle") return 3;
   if (taskTones.has("failed")) return 4;
   if (workerTone === "failed" || workerTone === "stopped") return 5;
@@ -796,6 +825,10 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const workerStatus = worker?.status || "unknown";
     const workerTone = statusTone(workerStatus);
     const isRedeployingWorker = siteId > 0 && redeployingSiteIds.has(siteId) && isTerminalWorkerTone(workerTone);
+    const connectedDeviceCount = siteWorkerConnectedDeviceCount(worker);
+    const connectedLabel = connectedDeviceLabel(connectedDeviceCount);
+    const connectedPillLabel = connectedDeviceLabel(connectedDeviceCount, { compact: true });
+    const showConnectedStatus = connectedDeviceCount > 0 && !isRedeployingWorker && !isTerminalWorkerTone(workerTone);
     workerNodes.push({
       id,
       type: "worker",
@@ -804,13 +837,15 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
         label: "Site Worker",
         startedLabel: epochLabel(worker?.started_at),
         status: workerStatus,
-        visualStatus: isRedeployingWorker ? "re-deploying" : "",
-        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : "",
+        visualStatus: isRedeployingWorker ? "re-deploying" : showConnectedStatus ? "running" : "",
+        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : showConnectedStatus ? `Running - ${connectedPillLabel}` : "",
         statusCountdown: isRedeployingWorker,
         isManager: false,
         siteLabel: siteName || `Site ${siteId}`,
+        connectedDeviceCount,
+        connectedDeviceLabel: showConnectedStatus ? connectedLabel : "",
         idleRemainingSeconds:
-          dismissInactive && workerTone === "idle"
+          dismissInactive && workerTone === "idle" && connectedDeviceCount <= 0
             ? idleTtlSeconds - Math.max(0, nowSeconds - Number(worker?.idle_since || nowSeconds))
             : null,
         closeRemainingSeconds:

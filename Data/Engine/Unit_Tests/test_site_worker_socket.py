@@ -277,6 +277,39 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
     assert not runtime.has_registered_agents()
 
 
+def test_site_worker_socket_counts_unique_registered_devices(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+
+    runtime.registry.register(
+        AGENT_ID,
+        "sid-system",
+        service_mode="system",
+        hostname=AGENT_HOSTNAME,
+        guid=AGENT_GUID,
+    )
+    runtime.registry.register(
+        f"{AGENT_HOSTNAME}_{AGENT_GUID}_CURRENTUSER",
+        "sid-currentuser",
+        service_mode="currentuser",
+        hostname=AGENT_HOSTNAME,
+        guid=AGENT_GUID,
+    )
+
+    assert runtime.has_registered_agents()
+    assert runtime.registered_device_count() == 1
+
+    runtime.registry.register(
+        "LAB-TWO_22222222-3333-4444-5555-666666666666_SYSTEM",
+        "sid-lab-two",
+        service_mode="system",
+        hostname="LAB-TWO",
+        guid="22222222-3333-4444-5555-666666666666",
+    )
+
+    assert runtime.registered_device_count() == 2
+
+
 def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")

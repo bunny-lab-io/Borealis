@@ -1088,5 +1088,19 @@ class SiteWorkerSocketRuntime:
     def has_registered_agents(self) -> bool:
         return bool(self.registry.snapshot())
 
+    def registered_device_count(self) -> int:
+        snapshot = self.registry.snapshot()
+        devices: set[str] = set()
+        for agent_id, meta in snapshot.items():
+            guid = str((meta or {}).get("guid") or "").strip().upper()
+            hostname = str((meta or {}).get("hostname") or "").strip().lower()
+            if guid:
+                devices.add(f"guid:{guid}")
+            elif hostname:
+                devices.add(f"host:{hostname}")
+            elif agent_id:
+                devices.add(f"agent:{agent_id}")
+        return len(devices)
+
 
 __all__ = ["SiteWorkerSocketRuntime", "SocketAgentAuthError"]

@@ -67,7 +67,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 | `enrollment` | Agent enrollment and token API behavior. |
 | `files` | Engine file management API behavior. |
 | `rbac` | Role-based access control API behavior. |
-| `remote-access` | Guacamole, VNC, VPN shell/tunnel, WireGuard, and websocket registry behavior. |
+| `remote-access` | Guacamole, VNC, VPN shell/tunnel, WireGuard, site-worker sockets, and websocket registry behavior. |
 | `runtime-overrides` | Runtime override merge behavior. |
 | `scheduler` | Scheduled jobs API, scheduler timing behavior, target parsing, and automatic onboarding job creation. |
 | `server` | Server information API behavior. |

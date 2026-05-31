@@ -52,6 +52,7 @@ TRANSIENT_RUN_RETRY_REASONS = {
     job_scheduler.RESOLUTION_REASON_WIREGUARD_NOT_READY,
     job_scheduler.RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED,
 }
+LANE_AGENT_SOCKETS = "agent_sockets"
 
 
 class _WorkerApp:
@@ -339,6 +340,27 @@ def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: thr
                 if isinstance(link, Mapping):
                     links.append(dict(link))
         return links
+
+
+def _agent_socket_task_links(connected_device_count: int) -> list[Dict[str, Any]]:
+    count = max(0, int(connected_device_count or 0))
+    if count <= 0:
+        return []
+    noun = "Device" if count == 1 else "Devices"
+    return [
+        {
+            "kind": LANE_AGENT_SOCKETS,
+            "label": f"{count} {noun} Connected",
+            "count": count,
+        }
+    ]
+
+
+def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int) -> list[str]:
+    current = [str(lane) for lane in lanes or [] if str(lane or "").strip()]
+    if connected_device_count > 0 and LANE_AGENT_SOCKETS not in current:
+        current.append(LANE_AGENT_SOCKETS)
+    return current
 
 
 def _update_agent_maintenance_run(
@@ -900,6 +922,19 @@ def main() -> None:
     def active_links() -> list[Dict[str, Any]]:
         return _active_task_links(active_items, active_lock)
 
+    def connected_device_count() -> int:
+        try:
+            return socket_runtime.registered_device_count()
+        except Exception:
+            return 0
+
+    def visible_links() -> list[Dict[str, Any]]:
+        count = connected_device_count()
+        return active_links() + _agent_socket_task_links(count)
+
+    def visible_lanes(lanes: list[str]) -> list[str]:
+        return _lanes_with_agent_sockets(lanes, connected_device_count())
+
     def prune_active_items() -> None:
         with active_lock:
             finished_ids = [work_id for work_id, entry in active_items.items() if not entry["thread"].is_alive()]
@@ -961,8 +996,8 @@ def main() -> None:
                             conn,
                             worker_guid=worker_guid,
                             status=WORKER_STATUS_RUNNING,
-                            lanes=current_lanes,
-                            task_links=active_links() + task_links,
+                            lanes=visible_lanes(current_lanes),
+                            task_links=visible_links() + task_links,
                             claimed_count=claimed_count,
                         )
                     conn.commit()
@@ -977,7 +1012,7 @@ def main() -> None:
                             "db_factory": db_factory,
                             "worker_guid": worker_guid,
                             "item": item,
-                            "task_links_getter": active_links,
+                            "task_links_getter": visible_links,
                             "socket_runtime": socket_runtime,
                         },
                         daemon=True,
@@ -995,8 +1030,8 @@ def main() -> None:
                         conn,
                         worker_guid=worker_guid,
                         status=WORKER_STATUS_RUNNING,
-                        lanes=active_lanes,
-                        task_links=active_links(),
+                        lanes=visible_lanes(active_lanes),
+                        task_links=visible_links(),
                         claimed_count=claimed_count,
                     )
                     conn.commit()
@@ -1005,8 +1040,8 @@ def main() -> None:
                 time.sleep(1.0 if active_scheduled < scheduled_concurrency else 3.0)
                 continue
 
-            agent_sockets_registered = socket_runtime.has_registered_agents()
-            if agent_sockets_registered:
+            agent_device_count = connected_device_count()
+            if agent_device_count > 0:
                 idle_since = None
             elif idle_since is None:
                 idle_since = _now_ts()
@@ -1015,8 +1050,9 @@ def main() -> None:
                 heartbeat_worker(
                     conn,
                     worker_guid=worker_guid,
-                    status=WORKER_STATUS_IDLE,
-                    lanes=[],
+                    status=WORKER_STATUS_RUNNING if agent_device_count > 0 else WORKER_STATUS_IDLE,
+                    lanes=_lanes_with_agent_sockets([], agent_device_count),
+                    task_links=_agent_socket_task_links(agent_device_count),
                     idle_since=idle_since,
                     claimed_count=claimed_count,
                 )

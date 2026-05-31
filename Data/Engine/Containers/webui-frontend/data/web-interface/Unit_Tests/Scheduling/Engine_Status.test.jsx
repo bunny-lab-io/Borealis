@@ -117,6 +117,37 @@ describe("active site workers canvas mapping", () => {
     expect(edge?.animated).toBe(false);
   });
 
+  it("shows connected site workers as running instead of idle teardown", () => {
+    const graph = buildGraphAt(
+      {
+        worker_idle_ttl_seconds: 60,
+        site_names: { 7: "Bunny Lab" },
+        workers: [
+          {
+            worker_guid: "worker-1",
+            container_name: "site-worker-1",
+            site_id: 7,
+            status: "idle",
+            started_at: 100,
+            idle_since: 950,
+            current_lanes: ["agent_sockets"],
+            task_links: [{ kind: "agent_sockets", label: "2 Devices Connected", count: 2 }],
+          },
+        ],
+      },
+      () => {},
+      1000
+    );
+
+    const workerNode = graph.nodes.find((node) => node.id === "worker:worker-1");
+
+    expect(workerNode?.data.visualStatus).toBe("running");
+    expect(workerNode?.data.visualStatusLabel).toBe("Running - 2 Devices");
+    expect(workerNode?.data.connectedDeviceCount).toBe(2);
+    expect(workerNode?.data.connectedDeviceLabel).toBe("2 Devices Connected");
+    expect(workerNode?.data.idleRemainingSeconds).toBeNull();
+  });
+
   it("hides terminal workers and their terminal work once worker is gone", () => {
     const now = 1000;
     const graph = buildGraphAt(
