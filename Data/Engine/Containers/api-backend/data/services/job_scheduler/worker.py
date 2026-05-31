@@ -35,10 +35,12 @@ from .queue import (
     heartbeat_worker,
     register_worker,
     requeue_work_item,
+    site_worker_remote_ops_port,
     stop_worker,
 )
 from .runtime_settings import load_site_worker_settings
 from .security import INTERNAL_TOKEN_HEADER, internal_token
+from .worker_socket import SiteWorkerSocketRuntime
 
 DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
 DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
@@ -174,7 +176,18 @@ def _service_log(logger):
     return _log
 
 
-def _build_worker_scheduler(settings, logger, db_factory):
+def _remote_ops_route_metadata(*, worker_guid: str, host: str, port: int) -> Dict[str, Any]:
+    return {
+        "remote_ops_socket": {
+            "host": str(host or "127.0.0.1"),
+            "path": "/socket.io/",
+            "port": int(port or 0),
+            "worker_guid": str(worker_guid or ""),
+        }
+    }
+
+
+def _build_worker_scheduler(settings, logger, db_factory, *, socket_runtime: Optional[SiteWorkerSocketRuntime] = None):
     assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
     assembly_cache.reload()
     assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=logger)
@@ -194,22 +207,25 @@ def _build_worker_scheduler(settings, logger, db_factory):
     secret = str(settings.secret_key or "")
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
     job_scheduler.set_public_base_url_lookup(scheduler, lambda: _public_base_url(settings, secret))
-    job_scheduler.set_host_service_emitter(
-        scheduler,
-        lambda hostname, service_mode, event_name, payload: bool(
-            _post_internal(
-                secret,
-                "/api/internal/job-scheduler/host-service-event",
-                {
-                    "hostname": hostname,
-                    "service_mode": service_mode,
-                    "event_name": event_name,
-                    "payload": payload,
-                },
-                timeout=20.0,
-            ).get("emitted")
-        ),
-    )
+    if socket_runtime is not None:
+        job_scheduler.set_host_service_emitter(scheduler, socket_runtime.emit_host_service_event)
+    else:
+        job_scheduler.set_host_service_emitter(
+            scheduler,
+            lambda hostname, service_mode, event_name, payload: bool(
+                _post_internal(
+                    secret,
+                    "/api/internal/job-scheduler/host-service-event",
+                    {
+                        "hostname": hostname,
+                        "service_mode": service_mode,
+                        "event_name": event_name,
+                        "payload": payload,
+                    },
+                    timeout=20.0,
+                ).get("emitted")
+            ),
+        )
     job_scheduler.set_workflow_run_launcher(
         scheduler,
         lambda **kwargs: _post_internal(secret, "/api/internal/job-scheduler/workflow/start", kwargs, timeout=30.0),
@@ -377,7 +393,13 @@ def _update_agent_maintenance_run(
         conn.close()
 
 
-def _run_agent_maintenance_item(settings, db_factory, item: Mapping[str, Any]) -> str:
+def _run_agent_maintenance_item(
+    settings,
+    db_factory,
+    item: Mapping[str, Any],
+    *,
+    socket_runtime: Optional[SiteWorkerSocketRuntime] = None,
+) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
     run_id = int(payload.get("run_id") or item.get("run_id") or 0)
     hostname = str(payload.get("hostname") or "").strip()
@@ -385,18 +407,24 @@ def _run_agent_maintenance_item(settings, db_factory, item: Mapping[str, Any]) -
     event_payload = payload.get("event_payload") if isinstance(payload.get("event_payload"), Mapping) else {}
     if not run_id or not hostname or not operation_id or not event_payload:
         raise RuntimeError("agent maintenance work item payload incomplete")
-    response = _post_internal(
-        str(settings.secret_key or ""),
-        "/api/internal/job-scheduler/host-service-event",
-        {
-            "hostname": hostname,
-            "service_mode": str(payload.get("service_mode") or "system"),
-            "event_name": str(payload.get("event_name") or "agent_maintenance_request"),
-            "payload": dict(event_payload),
-        },
-        timeout=30.0,
-    )
-    if not bool(response.get("emitted")):
+    service_mode = str(payload.get("service_mode") or "system")
+    event_name = str(payload.get("event_name") or "agent_maintenance_request")
+    if socket_runtime is not None:
+        emitted = socket_runtime.emit_host_service_event(hostname, service_mode, event_name, dict(event_payload))
+    else:
+        response = _post_internal(
+            str(settings.secret_key or ""),
+            "/api/internal/job-scheduler/host-service-event",
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": dict(event_payload),
+            },
+            timeout=30.0,
+        )
+        emitted = bool(response.get("emitted"))
+    if not emitted:
         error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
         _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
         raise RuntimeError(error)
@@ -635,8 +663,17 @@ def _heartbeat_until(
             conn.close()
 
 
-def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: Mapping[str, Any], task_links_getter=None) -> None:
-    scheduler = _build_worker_scheduler(settings, logger, db_factory)
+def _execute_work_item(
+    settings,
+    logger,
+    db_factory,
+    *,
+    worker_guid: str,
+    item: Mapping[str, Any],
+    task_links_getter=None,
+    socket_runtime: Optional[SiteWorkerSocketRuntime] = None,
+) -> None:
+    scheduler = _build_worker_scheduler(settings, logger, db_factory, socket_runtime=socket_runtime)
     error = ""
     final_status = WORK_STATUS_FAILED
     retry_reason = ""
@@ -656,7 +693,7 @@ def _execute_work_item(settings, logger, db_factory, *, worker_guid: str, item: 
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
         elif item_kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
-            final_status = _run_agent_maintenance_item(settings, db_factory, item)
+            final_status = _run_agent_maintenance_item(settings, db_factory, item, socket_runtime=socket_runtime)
         elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
             run_id = int(payload.get("run_id") or item.get("run_id") or 0)
@@ -796,12 +833,38 @@ def main() -> None:
     worker_guid = str(os.environ.get("BOREALIS_SITE_WORKER_GUID") or "").strip()
     site_id = int(str(os.environ.get("BOREALIS_SITE_WORKER_SITE_ID") or "0").strip() or "0")
     container_name = str(os.environ.get("BOREALIS_SITE_WORKER_CONTAINER_NAME") or f"site-worker-{worker_guid}").strip()
+    remote_ops_host = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    try:
+        remote_ops_port = int(str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT") or "0").strip() or "0")
+    except Exception:
+        remote_ops_port = 0
+    if remote_ops_port <= 0:
+        remote_ops_port = site_worker_remote_ops_port(worker_guid, site_id)
     idle_ttl = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
     if not worker_guid or site_id <= 0:
         raise RuntimeError("site worker requires BOREALIS_SITE_WORKER_GUID and BOREALIS_SITE_WORKER_SITE_ID")
+    socket_runtime = SiteWorkerSocketRuntime(
+        worker_guid=worker_guid,
+        site_id=site_id,
+        host=remote_ops_host,
+        port=remote_ops_port,
+        db_conn_factory=db_factory,
+        logger=logger.getChild("remote_ops"),
+        service_log=_service_log(logger),
+    )
+    socket_runtime.start()
     conn = db_factory()
     try:
-        register_worker(conn, worker_guid=worker_guid, container_name=container_name, site_id=site_id, status=WORKER_STATUS_RUNNING)
+        register_worker(
+            conn,
+            worker_guid=worker_guid,
+            container_name=container_name,
+            site_id=site_id,
+            status=WORKER_STATUS_RUNNING,
+            upstream_host=remote_ops_host,
+            upstream_port=remote_ops_port,
+            route_metadata=_remote_ops_route_metadata(worker_guid=worker_guid, host=remote_ops_host, port=remote_ops_port),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -891,6 +954,7 @@ def main() -> None:
                             "worker_guid": worker_guid,
                             "item": item,
                             "task_links_getter": active_links,
+                            "socket_runtime": socket_runtime,
                         },
                         daemon=True,
                     )

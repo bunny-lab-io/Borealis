@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,8 @@ WORKER_ROUTE_TERMINAL_STATUSES = (
 DEFAULT_SITE_WORKER_ROUTE_ROOT = "/_borealis/site-workers"
 DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME = "http"
 DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST = "127.0.0.1"
+DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE = 56000
+DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE = 5000
 WORKER_ROUTE_SELECT_COLUMNS = """
     worker_guid, site_id, container_name, route_name, route_path_prefix,
     route_file_path, upstream_scheme, upstream_host, upstream_port,
@@ -121,6 +124,24 @@ def _safe_route_segment(value: Any) -> str:
     return segment or "worker"
 
 
+def site_worker_remote_ops_port(worker_guid: Any, site_id: Any = 0) -> int:
+    raw_base = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE") or "").strip()
+    raw_range = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE") or "").strip()
+    try:
+        base = int(raw_base) if raw_base else DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE
+    except Exception:
+        base = DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE
+    try:
+        port_range = int(raw_range) if raw_range else DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE
+    except Exception:
+        port_range = DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE
+    base = min(65000, max(1024, base))
+    port_range = min(max(1, port_range), max(1, 65535 - base))
+    seed = f"{worker_guid or ''}:{site_id or ''}".encode("utf-8", errors="ignore")
+    digest = hashlib.sha256(seed).hexdigest()
+    return base + (int(digest[:8], 16) % port_range)
+
+
 def _site_worker_route_dir() -> Path:
     configured = str(os.environ.get("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR") or "").strip()
     if configured:
@@ -172,6 +193,91 @@ def _route_row_to_dict(row: Sequence[Any]) -> Dict[str, Any]:
         "updated_at": row[13],
         "retired_at": row[14],
     }
+
+
+def _quote_yaml(value: Any) -> str:
+    text = str(value or "")
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _route_tls_block() -> str:
+    hostname = str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost").strip()
+    acme_email = str(os.environ.get("BOREALIS_ACME_EMAIL") or "").strip()
+    if acme_email and hostname and hostname != "localhost":
+        return "      tls:\n        certResolver: letsencrypt"
+    return "      tls: {}"
+
+
+def _worker_route_config(route: Mapping[str, Any]) -> str:
+    hostname = str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost").strip() or "localhost"
+    route_name = str(route.get("route_name") or "").strip()
+    route_path_prefix = str(route.get("route_path_prefix") or "").rstrip("/")
+    upstream_scheme = str(route.get("upstream_scheme") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME
+    upstream_host = str(route.get("upstream_host") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST
+    upstream_port = int(route.get("upstream_port") or 0)
+    service_name = route_name
+    strip_name = f"{route_name}-strip"
+    upstream_url = f"{upstream_scheme}://{upstream_host}:{upstream_port}"
+    tls_block = _route_tls_block()
+    return "\n".join(
+        [
+            "http:",
+            "  middlewares:",
+            f"    {strip_name}:",
+            "      stripPrefix:",
+            "        prefixes:",
+            f"          - {_quote_yaml(route_path_prefix)}",
+            "  routers:",
+            f"    {route_name}:",
+            "      entryPoints:",
+            "        - websecure",
+            f"      rule: \"Host(`{hostname}`) && PathPrefix(`{route_path_prefix}`)\"",
+            "      middlewares:",
+            f"        - {strip_name}",
+            f"      service: {service_name}",
+            "      priority: 120",
+            tls_block,
+            "  services:",
+            f"    {service_name}:",
+            "      loadBalancer:",
+            "        servers:",
+            f"          - url: {_quote_yaml(upstream_url)}",
+            "",
+        ]
+    )
+
+
+def _write_worker_route_file(route: Mapping[str, Any]) -> None:
+    if str(route.get("status") or "") != WORKER_ROUTE_STATUS_ACTIVE:
+        return
+    try:
+        upstream_port = int(route.get("upstream_port") or 0)
+    except Exception:
+        upstream_port = 0
+    if upstream_port <= 0:
+        return
+    route_file_path = str(route.get("route_file_path") or "").strip()
+    if not route_file_path:
+        return
+    route_path = Path(route_file_path)
+    route_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = route_path.with_name(f".{route_path.name}.tmp")
+    tmp_path.write_text(_worker_route_config(route), encoding="utf-8")
+    os.replace(tmp_path, route_path)
+
+
+def _remove_worker_route_files(routes: Sequence[Mapping[str, Any]]) -> None:
+    for route in routes or []:
+        route_path = Path(str(route.get("route_file_path") or ""))
+        if not str(route_path):
+            continue
+        for path in (route_path, route_path.with_name(f".{route_path.name}.tmp")):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
 
 
 def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
@@ -921,7 +1027,10 @@ def upsert_worker_route(
                 retired_at,
             ),
         )
-        return _fetch_worker_route(conn, worker_guid=normalized_guid)
+        created_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+        if created_route:
+            _write_worker_route_file(created_route)
+        return created_route
 
     existing = _route_row_to_dict(existing_row)
     desired = {
@@ -984,7 +1093,13 @@ def upsert_worker_route(
                 normalized_guid,
             ),
         )
-    return _fetch_worker_route(conn, worker_guid=normalized_guid)
+    updated_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+    if updated_route:
+        if route_status == WORKER_ROUTE_STATUS_ACTIVE:
+            _write_worker_route_file(updated_route)
+        else:
+            _remove_worker_route_files([updated_route])
+    return updated_route
 
 
 def retire_worker_routes(
@@ -1003,6 +1118,14 @@ def retire_worker_routes(
     placeholders = ",".join("?" for _ in guids)
     now = _now_ts()
     cur = conn.cursor()
+    existing_routes = [
+        route
+        for route in (
+            _fetch_worker_route(conn, worker_guid=guid)
+            for guid in guids
+        )
+        if route
+    ]
     cur.execute(
         f"""
         UPDATE job_scheduler_worker_routes
@@ -1015,6 +1138,7 @@ def retire_worker_routes(
         """,
         (route_status, now, now, *guids, route_status),
     )
+    _remove_worker_route_files(existing_routes)
     return max(0, int(getattr(cur, "rowcount", 0) or 0))
 
 
@@ -1084,6 +1208,9 @@ def register_worker(
     container_name: str,
     site_id: int,
     status: str = WORKER_STATUS_STARTING,
+    upstream_host: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
+    upstream_port: Optional[int] = None,
+    route_metadata: Optional[Mapping[str, Any]] = None,
 ) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
@@ -1140,6 +1267,9 @@ def register_worker(
             container_name=normalized_container,
             site_id=normalized_site_id,
             status=route_status,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+            metadata=route_metadata,
         )
 
 
@@ -1364,6 +1494,16 @@ def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 6
     )
     deleted_workers = max(0, int(getattr(cur, "rowcount", 0) or 0))
     cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE status IN (?, ?)
+           AND COALESCE(retired_at, updated_at, created_at, 0) < ?
+        """,
+        (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
+    )
+    stale_routes = [_route_row_to_dict(row) for row in cur.fetchall() or []]
+    cur.execute(
         """
         UPDATE job_scheduler_worker_routes
            SET retired_at=COALESCE(retired_at, updated_at, created_at, ?),
@@ -1381,6 +1521,7 @@ def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 6
         """,
         (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
     )
+    _remove_worker_route_files(stale_routes)
     return deleted_workers
 
 

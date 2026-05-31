@@ -46,6 +46,7 @@ from .queue import (
     queued_site_ids,
     register_worker,
     replace_service_snapshots,
+    site_worker_remote_ops_port,
     update_worker_docker_state,
     upsert_worker_route,
     heartbeat_worker,
@@ -375,6 +376,17 @@ def _env_value(env_items: Sequence[Any], key: str) -> str:
     return ""
 
 
+def _remote_ops_route_metadata(*, worker_guid: str, port: int) -> Dict[str, Any]:
+    return {
+        "remote_ops_socket": {
+            "host": "127.0.0.1",
+            "path": "/socket.io/",
+            "port": int(port or 0),
+            "worker_guid": str(worker_guid or ""),
+        }
+    }
+
+
 def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
     docker_bin = shutil.which("docker") or ""
     if not docker_bin:
@@ -426,6 +438,15 @@ def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
             site_id = int(site_raw)
         except Exception:
             site_id = 0
+        remote_ops_port_raw = str(
+            labels.get("borealis.remote_ops_port")
+            or _env_value(env_items, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT")
+            or ""
+        ).strip()
+        try:
+            remote_ops_port = int(remote_ops_port_raw) if remote_ops_port_raw else 0
+        except Exception:
+            remote_ops_port = 0
         name = str(item.get("Name") or "").strip().lstrip("/")
         if not name:
             names = item.get("Names") if isinstance(item.get("Names"), list) else []
@@ -447,6 +468,7 @@ def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
                 "container_name": name or f"site-worker-{worker_guid}",
                 "docker_state": docker_state or "running",
                 "exit_code": exit_code,
+                "remote_ops_port": remote_ops_port or site_worker_remote_ops_port(worker_guid, site_id),
             }
         )
     return snapshots
@@ -474,6 +496,8 @@ def _reconcile_site_workers(db_factory, logger) -> None:
                 seen_sites[site_id] = container_name
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM job_scheduler_workers WHERE worker_guid=? LIMIT 1", (worker_guid,))
+            remote_ops_port = int(snapshot.get("remote_ops_port") or site_worker_remote_ops_port(worker_guid, site_id))
+            route_metadata = _remote_ops_route_metadata(worker_guid=worker_guid, port=remote_ops_port)
             if not cur.fetchone():
                 register_worker(
                     conn,
@@ -481,12 +505,16 @@ def _reconcile_site_workers(db_factory, logger) -> None:
                     container_name=container_name,
                     site_id=site_id,
                     status=WORKER_STATUS_RUNNING,
+                    upstream_port=remote_ops_port,
+                    route_metadata=route_metadata,
                 )
             upsert_worker_route(
                 conn,
                 worker_guid=worker_guid,
                 container_name=container_name,
                 site_id=site_id,
+                upstream_port=remote_ops_port,
+                metadata=route_metadata,
             )
             update_worker_docker_state(
                 conn,
@@ -567,7 +595,15 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             return
         worker_guid = str(uuid.uuid4())
         container_name = f"site-worker-{worker_guid}"
-        register_worker(conn, worker_guid=worker_guid, container_name=container_name, site_id=int(site_id))
+        remote_ops_port = site_worker_remote_ops_port(worker_guid, site_id)
+        register_worker(
+            conn,
+            worker_guid=worker_guid,
+            container_name=container_name,
+            site_id=int(site_id),
+            upstream_port=remote_ops_port,
+            route_metadata=_remote_ops_route_metadata(worker_guid=worker_guid, port=remote_ops_port),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -600,6 +636,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
         "--label",
         f"borealis.worker_guid={worker_guid}",
         "--label",
+        f"borealis.remote_ops_port={remote_ops_port}",
+        "--label",
         "borealis.created_by=job-scheduler",
     ]
     if env_file.is_file():
@@ -613,6 +651,10 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             f"BOREALIS_SITE_WORKER_SITE_ID={int(site_id)}",
             "-e",
             f"BOREALIS_SITE_WORKER_CONTAINER_NAME={container_name}",
+            "-e",
+            "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST=127.0.0.1",
+            "-e",
+            f"BOREALIS_SITE_WORKER_REMOTE_OPS_PORT={remote_ops_port}",
             "-e",
             "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
             "-e",

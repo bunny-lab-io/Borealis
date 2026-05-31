@@ -1,0 +1,584 @@
+"""Site-worker Socket.IO runtime for Agent remote-operation channels."""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import logging
+import os
+import socket
+import threading
+import time
+from contextlib import closing
+from typing import Any, Callable, Dict, Mapping, Optional
+
+import jwt
+from flask import Flask, jsonify, request
+from flask_socketio import SocketIO
+
+from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
+from Data.Engine.auth.guid_utils import normalize_guid
+from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.activity_history import (
+    get_activity_history_row,
+    normalize_activity_status,
+    status_is_terminal,
+    update_activity_history_row,
+)
+from Data.Engine.services.remote_ops.agent_socket_registry import (
+    AgentSocketRegistry,
+    infer_guid_from_agent_id,
+    infer_hostname_from_agent_id,
+    normalize_helper_contexts,
+)
+
+
+def _now_ts() -> int:
+    return int(time.time())
+
+
+def _resolve_socketio_async_mode() -> str:
+    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "eventlet").strip().lower() or "eventlet"
+    if requested != "eventlet":
+        return requested
+    try:
+        importlib.util.find_spec("engineio.async_drivers.eventlet")
+        importlib.import_module("engineio.async_drivers.eventlet")
+        import eventlet  # type: ignore
+
+        eventlet.monkey_patch(thread=False)
+        return "eventlet"
+    except Exception:
+        return "threading"
+
+
+def _remote_addr() -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return (request.remote_addr or "").strip()
+
+
+def _assert_port_available(host: str, port: int) -> None:
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, int(port)))
+
+
+class SocketAgentAuthError(Exception):
+    def __init__(self, code: str, *, status_code: int = 401) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status_code = status_code
+
+
+def _bearer_token() -> str:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return ""
+    return auth_header[len("Bearer ") :].strip()
+
+
+def _authenticate_socket_agent(
+    *,
+    db_conn_factory: Callable[[], sqlite3.Connection],
+    jwt_service: Any,
+    worker_site_id: int,
+    agent_id: str,
+) -> Dict[str, Any]:
+    token = _bearer_token()
+    if not token:
+        raise SocketAgentAuthError("missing_authorization")
+    try:
+        claims = jwt_service.decode(token)
+    except jwt.ExpiredSignatureError:
+        raise SocketAgentAuthError("token_expired")
+    except Exception:
+        raise SocketAgentAuthError("invalid_token")
+
+    guid = normalize_guid(str(claims.get("guid") or "").strip())
+    fingerprint = str(claims.get("ssl_key_fingerprint") or "").lower().strip()
+    try:
+        token_version = int(claims.get("token_version") or 0)
+    except Exception:
+        token_version = 0
+    if not guid or not fingerprint or token_version <= 0:
+        raise SocketAgentAuthError("invalid_claims")
+
+    agent_guid = normalize_guid(infer_guid_from_agent_id(agent_id))
+    if agent_guid and agent_guid != guid:
+        raise SocketAgentAuthError("agent_id_guid_mismatch", status_code=403)
+
+    with closing(db_conn_factory()) as conn:
+        cur = conn.cursor()
+        required_token_version = device_purge_state.get_required_token_version(cur, guid)
+        if required_token_version is not None and token_version < required_token_version:
+            raise SocketAgentAuthError("device_purged")
+        cur.execute(
+            """
+            SELECT d.guid, d.ssl_key_fingerprint, d.token_version, d.status, d.hostname, ds.site_id
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             WHERE UPPER(d.guid) = ?
+            """,
+            (guid,),
+        )
+        rows = cur.fetchall()
+    row = None
+    for candidate in rows or []:
+        if normalize_guid(candidate[0]) == guid:
+            row = candidate
+            break
+    if row is None and rows:
+        row = rows[0]
+    if row is None:
+        raise SocketAgentAuthError("device_not_found", status_code=404)
+    stored_guid, stored_fingerprint, stored_version, status, hostname, site_id = row
+    if normalize_guid(stored_guid) != guid:
+        raise SocketAgentAuthError("device_mismatch")
+    if str(stored_fingerprint or "").lower().strip() != fingerprint:
+        raise SocketAgentAuthError("fingerprint_mismatch", status_code=403)
+    if int(stored_version or 0) != token_version:
+        raise SocketAgentAuthError("token_version_mismatch", status_code=403)
+    if str(status or "active").strip().lower() in {"revoked", "decommissioned"}:
+        raise SocketAgentAuthError("device_revoked", status_code=403)
+    try:
+        device_site_id = int(site_id) if site_id is not None else 0
+    except Exception:
+        device_site_id = 0
+    if device_site_id <= 0:
+        raise SocketAgentAuthError("device_site_unassigned", status_code=403)
+    if int(worker_site_id or 0) != device_site_id:
+        raise SocketAgentAuthError("device_site_mismatch", status_code=403)
+    return {
+        "guid": guid,
+        "hostname": str(hostname or ""),
+        "site_id": device_site_id,
+        "claims": claims,
+    }
+
+
+class SiteWorkerSocketRuntime:
+    def __init__(
+        self,
+        *,
+        worker_guid: str,
+        site_id: int,
+        host: str,
+        port: int,
+        db_conn_factory: Callable[[], sqlite3.Connection],
+        logger: logging.Logger,
+        service_log: Callable[[str, str, Optional[str]], None],
+    ) -> None:
+        self.worker_guid = str(worker_guid or "")
+        self.site_id = int(site_id or 0)
+        self.host = str(host or "127.0.0.1")
+        self.port = int(port or 0)
+        self.db_conn_factory = db_conn_factory
+        self.logger = logger
+        self.service_log = service_log
+        self.app = Flask(f"borealis_site_worker_{self.worker_guid}")
+        self.app.secret_key = str(os.environ.get("BOREALIS_ENGINE_SECRET") or "site-worker")
+        self.socketio = SocketIO(
+            self.app,
+            cors_allowed_origins="*",
+            async_mode=_resolve_socketio_async_mode(),
+            engineio_options={
+                "max_http_buffer_size": 100_000_000,
+                "max_websocket_message_size": 100_000_000,
+            },
+        )
+        self.registry = AgentSocketRegistry(self.socketio, logger.getChild("agent_registry"))
+        self.jwt_service = jwt_service_module.load_service()
+        self._thread: Optional[threading.Thread] = None
+        self._register_routes()
+        self._register_socket_handlers()
+        self._register_task_event_handlers()
+
+    def _log(self, message: str, *, level: str = "INFO") -> None:
+        try:
+            self.service_log("site_worker_remote_ops", message, scope=self.worker_guid, level=level)
+        except Exception:
+            self.logger.debug("site-worker remote ops service log failed", exc_info=True)
+
+    def _register_routes(self) -> None:
+        @self.app.route("/health", methods=["GET"])
+        def _health():
+            return jsonify({"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id})
+
+        @self.app.route("/agents", methods=["GET"])
+        def _agents():
+            return jsonify({"agents": self.registry.snapshot(), "worker_guid": self.worker_guid, "site_id": self.site_id})
+
+    def _register_socket_handlers(self) -> None:
+        @self.socketio.on("connect_agent")
+        def _connect_agent(data: Any) -> Dict[str, Any]:
+            agent_id = ""
+            service_mode = ""
+            hostname = ""
+            helper_contexts = ()
+            if isinstance(data, dict):
+                agent_id = str(data.get("agent_id") or "").strip()
+                service_mode = str(data.get("service_mode") or "").strip().lower()
+                hostname = str(data.get("hostname") or "").strip()
+                capabilities = data.get("capabilities") if isinstance(data.get("capabilities"), Mapping) else {}
+                helper_contexts = normalize_helper_contexts(data.get("helper_contexts") or capabilities.get("helper_contexts"))
+            elif isinstance(data, str):
+                agent_id = data.strip()
+            if not agent_id:
+                self._log(
+                    "agent_socket_missing sid={0} remote={1}".format(request.sid, _remote_addr() or "-"),
+                    level="WARNING",
+                )
+                return {"error": "agent_id_required"}
+            try:
+                auth_context = _authenticate_socket_agent(
+                    db_conn_factory=self.db_conn_factory,
+                    jwt_service=self.jwt_service,
+                    worker_site_id=self.site_id,
+                    agent_id=agent_id,
+                )
+            except SocketAgentAuthError as exc:
+                self._log(
+                    "agent_socket_rejected agent_id={0} sid={1} reason={2} remote={3}".format(
+                        agent_id,
+                        request.sid,
+                        exc.code,
+                        _remote_addr() or "-",
+                    ),
+                    level="WARNING",
+                )
+                return {"error": exc.code, "status_code": exc.status_code}
+
+            inferred_hostname = hostname or str(auth_context.get("hostname") or "") or infer_hostname_from_agent_id(agent_id)
+            self.registry.register(
+                agent_id,
+                request.sid,
+                service_mode=service_mode,
+                hostname=inferred_hostname,
+                helper_contexts=helper_contexts,
+                guid=str(auth_context.get("guid") or ""),
+            )
+            self.logger.info(
+                "Site-worker Agent socket registered worker_guid=%s site_id=%s agent_id=%s hostname=%s service_mode=%s helper_contexts=%s sid=%s",
+                self.worker_guid,
+                self.site_id,
+                agent_id,
+                inferred_hostname,
+                service_mode,
+                ",".join(helper_contexts) if helper_contexts else "-",
+                request.sid,
+            )
+            self._log(
+                "agent_socket_register agent_id={0} hostname={1} service_mode={2} helper_contexts={3} sid={4} remote={5}".format(
+                    agent_id,
+                    inferred_hostname or "-",
+                    service_mode or "-",
+                    ",".join(helper_contexts) if helper_contexts else "-",
+                    request.sid,
+                    _remote_addr() or "-",
+                )
+            )
+            return {"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id}
+
+        @self.socketio.on("disconnect")
+        def _disconnect() -> None:
+            agent_id = self.registry.unregister(request.sid)
+            if agent_id:
+                self.logger.info(
+                    "Site-worker Agent socket disconnected worker_guid=%s site_id=%s agent_id=%s sid=%s",
+                    self.worker_guid,
+                    self.site_id,
+                    agent_id,
+                    request.sid,
+                )
+                self._log("agent_socket_disconnect agent_id={0} sid={1}".format(agent_id, request.sid))
+
+    def _resolve_scheduled_run_context(
+        self,
+        cursor: Any,
+        *,
+        activity_id: int,
+        context_info: Optional[Dict[str, Any]],
+    ) -> tuple[Optional[int], Optional[int]]:
+        try:
+            cursor.execute(
+                "SELECT run_id FROM scheduled_job_run_activity WHERE activity_id=?",
+                (int(activity_id),),
+            )
+            link = cursor.fetchone()
+        except sqlite3.Error:
+            link = None
+        run_id: Optional[int] = None
+        scheduled_ts_ctx: Optional[int] = None
+        if link:
+            try:
+                run_id = int(link[0])
+            except Exception:
+                run_id = None
+        if run_id is None and context_info:
+            ctx_run = context_info.get("scheduled_job_run_id") or context_info.get("run_id")
+            try:
+                if ctx_run is not None:
+                    run_id = int(ctx_run)
+            except (TypeError, ValueError):
+                run_id = None
+            try:
+                if context_info.get("scheduled_ts") is not None:
+                    scheduled_ts_ctx = int(context_info.get("scheduled_ts"))
+            except (TypeError, ValueError):
+                scheduled_ts_ctx = None
+        return run_id, scheduled_ts_ctx
+
+    def _update_scheduled_run_state(
+        self,
+        cursor: Any,
+        *,
+        run_id: Optional[int],
+        scheduled_ts_ctx: Optional[int],
+        status: str,
+        activity_id: int,
+        context_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if run_id is None:
+            if context_info:
+                self._log(
+                    f"scheduled_run_update_skipped activity_id={activity_id} status={status} context={context_info}",
+                    level="WARNING",
+                )
+            return
+        ts_now = _now_ts()
+        normalized_status = normalize_activity_status(status, default="Failed")
+        lowered = normalized_status.lower()
+        try:
+            if lowered == "running":
+                cursor.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status='Running',
+                           started_ts=COALESCE(started_ts, ?),
+                           updated_at=?
+                     WHERE id=?
+                    """,
+                    (ts_now, ts_now, int(run_id)),
+                )
+            elif lowered == "queued":
+                cursor.execute(
+                    "UPDATE scheduled_job_runs SET updated_at=? WHERE id=?",
+                    (ts_now, int(run_id)),
+                )
+            else:
+                cursor.execute(
+                    """
+                    UPDATE scheduled_job_runs
+                       SET status=?,
+                           finished_ts=COALESCE(finished_ts, ?),
+                           updated_at=?
+                     WHERE id=?
+                    """,
+                    (normalized_status, ts_now, ts_now, int(run_id)),
+                )
+            if scheduled_ts_ctx is not None:
+                cursor.execute(
+                    "UPDATE scheduled_job_runs SET scheduled_ts=COALESCE(scheduled_ts, ?) WHERE id=?",
+                    (int(scheduled_ts_ctx), int(run_id)),
+                )
+        except Exception:
+            self.logger.debug(
+                "site-worker task event run update failed activity_id=%s run_id=%s",
+                activity_id,
+                run_id,
+                exc_info=True,
+            )
+
+    def _register_task_event_handlers(self) -> None:
+        @self.socketio.on("quick_job_progress")
+        def _handle_quick_job_progress(data: Any) -> None:
+            if not isinstance(data, dict):
+                return
+            try:
+                activity_id = int(data.get("job_id"))
+            except (TypeError, ValueError):
+                return
+            normalized_status = normalize_activity_status(data.get("status"), default="Running")
+            ctx_payload = data.get("context")
+            context_info: Optional[Dict[str, Any]] = ctx_payload if isinstance(ctx_payload, dict) else None
+            metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else None
+            conn: Optional[sqlite3.Connection] = None
+            cursor = None
+            try:
+                conn = self.db_conn_factory()
+                cursor = conn.cursor()
+                existing_row = get_activity_history_row(conn, activity_id)
+                existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+                if metadata:
+                    merged_metadata.update(metadata)
+                if isinstance(context_info, dict):
+                    for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
+                        if key in context_info and context_info.get(key) not in (None, ""):
+                            merged_metadata.setdefault(key, context_info.get(key))
+                ts_now = _now_ts()
+                update_kwargs: Dict[str, Any] = {
+                    "status": normalized_status,
+                    "updated_at": ts_now,
+                }
+                if data.get("stdout") is not None:
+                    update_kwargs["stdout"] = data.get("stdout")
+                if data.get("stderr") is not None:
+                    update_kwargs["stderr"] = data.get("stderr")
+                if bool(data.get("append_output")):
+                    update_kwargs["append_output"] = True
+                queue_lane = str(data.get("queue_lane") or "")
+                activity_kind = str(data.get("activity_kind") or "")
+                if queue_lane:
+                    update_kwargs["queue_lane"] = queue_lane
+                if activity_kind:
+                    update_kwargs["activity_kind"] = activity_kind
+                if merged_metadata:
+                    update_kwargs["metadata"] = merged_metadata
+                if normalized_status.lower() == "running":
+                    update_kwargs["started_at"] = ts_now
+                if status_is_terminal(normalized_status):
+                    update_kwargs["finished_at"] = ts_now
+                update_activity_history_row(conn, activity_id, **update_kwargs)
+                run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
+                    cursor,
+                    activity_id=activity_id,
+                    context_info=context_info,
+                )
+                self._update_scheduled_run_state(
+                    cursor,
+                    run_id=run_id,
+                    scheduled_ts_ctx=scheduled_ts_ctx,
+                    status=normalized_status,
+                    activity_id=activity_id,
+                    context_info=context_info,
+                )
+                conn.commit()
+            except Exception:
+                self.logger.warning("site-worker quick_job_progress handler failed activity_id=%s", activity_id, exc_info=True)
+            finally:
+                if cursor is not None:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        @self.socketio.on("quick_job_result")
+        def _handle_quick_job_result(data: Any) -> None:
+            if not isinstance(data, dict):
+                return
+            try:
+                activity_id = int(data.get("job_id"))
+            except (TypeError, ValueError):
+                return
+            status = str(data.get("status") or "").strip() or "Failed"
+            stdout = str(data.get("stdout") or "")
+            stderr = str(data.get("stderr") or "")
+            ctx_payload = data.get("context")
+            context_info: Optional[Dict[str, Any]] = ctx_payload if isinstance(ctx_payload, dict) else None
+            conn: Optional[sqlite3.Connection] = None
+            cursor = None
+            try:
+                conn = self.db_conn_factory()
+                cursor = conn.cursor()
+                existing_row = get_activity_history_row(conn, activity_id)
+                existing_metadata = existing_row.get("metadata") if isinstance(existing_row, dict) else {}
+                merged_metadata = dict(existing_metadata) if isinstance(existing_metadata, dict) else {}
+                if isinstance(context_info, dict):
+                    for key in ("assembly_source", "assembly_guid", "scheduled_job_id", "scheduled_job_run_id", "scheduled_ts"):
+                        if key in context_info and context_info.get(key) not in (None, ""):
+                            merged_metadata.setdefault(key, context_info.get(key))
+                result_ts = _now_ts()
+                update_kwargs: Dict[str, Any] = {
+                    "status": status,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "updated_at": result_ts,
+                    "finished_at": result_ts,
+                }
+                if merged_metadata:
+                    update_kwargs["metadata"] = merged_metadata
+                update_activity_history_row(conn, activity_id, **update_kwargs)
+                run_id, scheduled_ts_ctx = self._resolve_scheduled_run_context(
+                    cursor,
+                    activity_id=activity_id,
+                    context_info=context_info,
+                )
+                self._update_scheduled_run_state(
+                    cursor,
+                    run_id=run_id,
+                    scheduled_ts_ctx=scheduled_ts_ctx,
+                    status=status,
+                    activity_id=activity_id,
+                    context_info=context_info,
+                )
+                conn.commit()
+                self._log(f"quick_job_result_processed activity_id={activity_id} status={status}")
+            except Exception:
+                self.logger.warning("site-worker quick_job_result handler failed activity_id=%s", activity_id, exc_info=True)
+            finally:
+                if cursor is not None:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        if self.port <= 0:
+            raise RuntimeError("site-worker remote ops port is required")
+        _assert_port_available(self.host, self.port)
+        self._thread = threading.Thread(target=self._run, name=f"site-worker-socket-{self.worker_guid}", daemon=True)
+        self._thread.start()
+        self._log(
+            "socket_runtime_start worker_guid={0} site_id={1} host={2} port={3} async_mode={4}".format(
+                self.worker_guid,
+                self.site_id,
+                self.host,
+                self.port,
+                getattr(self.socketio, "async_mode", "-"),
+            )
+        )
+
+    def _run(self) -> None:
+        run_kwargs: Dict[str, Any] = {"host": self.host, "port": self.port}
+        if getattr(self.socketio, "async_mode", "") == "threading":
+            run_kwargs["allow_unsafe_werkzeug"] = True
+        try:
+            self.socketio.run(self.app, **run_kwargs)
+        except BaseException:
+            self.logger.exception("site-worker Socket.IO runtime crashed")
+            raise
+
+    def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
+        return self.registry.emit_to_host(hostname, service_mode, event_name, payload)
+
+    def call_host_service_event(
+        self,
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        timeout: float = 30.0,
+    ) -> Any:
+        return self.registry.call_to_host(hostname, service_mode, event_name, payload, timeout=timeout)
+
+    def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
+        return self.registry.is_host_mode_registered(hostname, service_mode)
+
+
+__all__ = ["SiteWorkerSocketRuntime", "SocketAgentAuthError"]

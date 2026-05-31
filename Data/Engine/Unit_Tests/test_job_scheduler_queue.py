@@ -26,6 +26,7 @@ from Data.Engine.services.job_scheduler.queue import (
     prune_worker_history,
     register_worker,
     requeue_work_item,
+    site_worker_remote_ops_port,
     stop_worker,
     upsert_worker_route,
     worker_route_for_worker,
@@ -241,6 +242,52 @@ def test_worker_route_upsert_updates_generation_only_when_metadata_changes(tmp_p
         assert [route["worker_guid"] for route in routes] == ["worker-upsert"]
     finally:
         conn.close()
+
+
+def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Path, monkeypatch) -> None:
+    dynamic_dir = tmp_path / "dynamic"
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
+    monkeypatch.setenv("BOREALIS_PUBLIC_HOSTNAME", "engine.example.test")
+    conn = _connect_queue_db(tmp_path)
+    try:
+        route = upsert_worker_route(
+            conn,
+            worker_guid="worker-route-file",
+            container_name="site-worker-worker-route-file",
+            site_id=12,
+            upstream_port=58123,
+            metadata={"listener": "remote-op"},
+        )
+        conn.commit()
+
+        assert route is not None
+        route_file = Path(str(route["route_file_path"]))
+        assert route_file.exists()
+        route_text = route_file.read_text(encoding="utf-8")
+        assert "borealis-site-worker-worker-route-file" in route_text
+        assert "PathPrefix(`/_borealis/site-workers/worker-route-file`)" in route_text
+        assert 'url: "http://127.0.0.1:58123"' in route_text
+        assert "stripPrefix:" in route_text
+
+        stop_worker(conn, worker_guid="worker-route-file")
+        conn.commit()
+
+        assert not route_file.exists()
+    finally:
+        conn.close()
+
+
+def test_site_worker_remote_ops_port_is_deterministic(monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "57000")
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", "100")
+
+    first = site_worker_remote_ops_port("worker-port", 4)
+    second = site_worker_remote_ops_port("worker-port", 4)
+    other = site_worker_remote_ops_port("worker-port-other", 4)
+
+    assert first == second
+    assert 57000 <= first < 57100
+    assert 57000 <= other < 57100
 
 
 def test_worker_route_upsert_recovers_missing_registry_row_for_live_worker(tmp_path: Path, monkeypatch) -> None:
