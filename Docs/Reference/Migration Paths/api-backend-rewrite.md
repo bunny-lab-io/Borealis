@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M4: Signed Remote-Op Sessions` |
+| Active milestone | `M5: Agent Ops Route Cutover` |
 | Last updated | 2026-05-31 |
 | Latest implementation commit | `53388af0` (`Implement signed remote-op sessions`) |
-| Current state | `M4` implementation is committed and locally validated. `POST /api/remote-ops/session` mints signed worker-scoped operation tokens and returns direct site-worker route URLs when an active route exists. Post-redeploy smoke is still required before marking `M4` done. |
-| Next safe step | Rebuild/redeploy Engine, then smoke `POST /api/remote-ops/session` for success, unauthorized user, invalid/expired token verification, and missing worker-route behavior. Do not start `M5` until this passes and `M4` is marked `Done`. |
+| Current state | `M4` is done. Post-redeploy smoke confirmed signed remote-op session behavior against runtime PostgreSQL with a synthetic active worker route, including success, missing-route, invalid-capability, out-of-scope, unauthorized, invalid-token, and expired-token paths. |
+| Next safe step | Start `M5`: deliver site-worker ops URL metadata to enrolled Agents without moving individual remote-op feature handlers yet. |
 
 ## Tracker Rules
 
@@ -39,8 +39,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M1: Runtime Dependency Split` | `Done` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
 | `M2: Traefik Dynamic Worker Routing` | `Done` | Hotload per-site-worker routes without Traefik recreate. |
 | `M3: Site-Worker Route Registry` | `Done` | Track active worker route metadata in runtime registry. |
-| `M4: Signed Remote-Op Sessions` | `In Progress` | Mint scoped tokens for direct browser-to-worker access. |
-| `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
+| `M4: Signed Remote-Op Sessions` | `Done` | Mint scoped tokens for direct browser-to-worker access. |
+| `M5: Agent Ops Route Cutover` | `In Progress` | Move Agent remote-op socket target to site-worker. |
 | `M6: Site-Worker Agent Socket.IO` | `Not Started` | Move Agent remote-op event ownership to site-worker. |
 | `M7: Remote Shell` | `Not Started` | Move interactive shell broker path to site-worker. |
 | `M8: Remote Desktop + Guacamole` | `Not Started` | Move VNC and Guacamole path to site-worker. |
@@ -117,19 +117,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Authorize direct browser-to-site-worker remote operations with short-lived scoped tokens. |
 | Migrates | Remote-op authorization away from api-backend proxying and toward api-backend session brokering only. |
 | Out Of Scope | Moving individual remote-op traffic paths, Agent socket target changes, Guacamole data path. |
 | Done When | WebUI can request worker URLs plus signed operation token scoped to user, site, device, capability, and expiry. |
 | Validation | Endpoint tests for scope/expiry/RBAC, token verification tests in worker code, unauthorized/expired-token manual checks. |
-| Handoff Note | Implementation commit `53388af0` adds `POST /api/remote-ops/session` and shared `Data.Engine.services.remote_ops` token helpers. Token issuer is `borealis-api-backend`; audience is `borealis-site-worker`; token type is `remote-op-session`; default TTL is `300` seconds and max TTL is `900` seconds, overrideable with `BOREALIS_REMOTE_OP_SESSION_TTL_SECONDS` and `BOREALIS_REMOTE_OP_SESSION_MAX_TTL_SECONDS`. Claims are `iss`, `aud`, `typ`, `sub`, `jti`, `iat`, `nbf`, `exp`, `user`, `role`, `site_id`, `device_guid`, `hostname`, `agent_id`, `worker_guid`, `route_generation`, and `capabilities`. Signing uses the existing Engine Ed25519 JWT key from `Engine/Services/api-backend/secrets/Auth_Tokens/borealis-jwt-ed25519.key`, with `BOREALIS_ENGINE_AUTH_TOKEN_ROOT` honored at key-load time. M4 still needs post-redeploy smoke before `M5`. |
+| Handoff Note | Implementation commit `53388af0` adds `POST /api/remote-ops/session` and shared `Data.Engine.services.remote_ops` token helpers. Token issuer is `borealis-api-backend`; audience is `borealis-site-worker`; token type is `remote-op-session`; default TTL is `300` seconds and max TTL is `900` seconds, overrideable with `BOREALIS_REMOTE_OP_SESSION_TTL_SECONDS` and `BOREALIS_REMOTE_OP_SESSION_MAX_TTL_SECONDS`. Claims are `iss`, `aud`, `typ`, `sub`, `jti`, `iat`, `nbf`, `exp`, `user`, `role`, `site_id`, `device_guid`, `hostname`, `agent_id`, `worker_guid`, `route_generation`, and `capabilities`. Signing uses the existing Engine Ed25519 JWT key from `Engine/Services/api-backend/secrets/Auth_Tokens/borealis-jwt-ed25519.key`, with `BOREALIS_ENGINE_AUTH_TOKEN_ROOT` honored at key-load time. Post-redeploy smoke passed on 2026-05-31 using runtime PostgreSQL and synthetic worker route `m4-runtime-smoke-worker`; synthetic rows were cleaned up. `M5` is now active. |
 
 ### M5: Agent Ops Route Cutover
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Make enrolled Agents connect to the site-worker ops route instead of api-backend `/socket.io/`. |
 | Migrates | Agent remote-operation socket target selection. |
 | Out Of Scope | Individual remote-op handler moves, shell/VNC/file behavior, Go rewrite. |
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 | `M4` | Closed M4 after operator rebuild. Runtime image manifest updated at `2026-05-31T07:50:20Z`; live backend `POST /api/remote-ops/session` returned `401` without auth; runtime DB initially had no active site-worker route rows. Created synthetic worker route `m4-runtime-smoke-worker` for site `1`, requested session for `LAB-CA-01`, verified returned worker URL and scoped token claims, checked missing-route `409`, invalid capability `400`, out-of-scope user `404`, invalid-token rejection, and expired-token rejection, then deleted synthetic worker and route rows. | Runtime API `/health` returned `{"status":"ok"}`. Synthetic M4 smoke returned `m4_runtime_smoke=pass`, `session_status=200`, `unauthorized_status=401`, `missing_route_status=409`, `invalid_capability_status=400`, and `out_of_scope_status=404`. Cleanup verified zero synthetic worker/route rows and zero active route rows. `git diff --check` passed before tracker update. | Runtime PostgreSQL tables; `Engine/Deploy/image-manifest.json`; synthetic worker GUID `m4-runtime-smoke-worker`; `92acf473`. |
 | 2026-05-31 | `M4` | Implemented signed remote-op session broker. Added `POST /api/remote-ops/session`, shared token issue/verify helpers for api-backend/site-worker use, scoped capability aliases, active site-worker route lookup, site RBAC checks, and direct worker URL response. JWT service now supports signing arbitrary claim sets and resolves the Engine auth token root at key-load time so runtime/test env overrides are honored. | `python3 -m py_compile` passed for touched API/auth/token files. Focused `test_remote_ops_sessions.py` passed (`8 passed`). Adjacent token/enrollment tests passed. `./Engine_Unit_Tests.sh --domain remote-access` passed with isolated test token root. `git diff --check` passed. Post-redeploy runtime smoke remains pending. | `53388af0`; `Unit_Test_Results/engine-20260531T073124Z`; focused pytest output. |
 | 2026-05-31 | `M3` | Closed M3 after operator rebuild. Runtime DB table `engine.job_scheduler_worker_routes` exists. Runtime DB initially had only the job-scheduler manager worker, so no active site-worker route rows were expected. Ran isolated synthetic registry smoke against runtime PostgreSQL: created active route row through `register_worker`, queried by worker and site, confirmed no-op upsert keeps `generation=1`, metadata/upstream update increments to `generation=2`, deleted route row and recovered it with `upsert_worker_route`, retired it with `stop_worker`, marked it `lost` with `mark_missing_workers_lost`, listed terminal route rows, then deleted synthetic worker/route rows. | Runtime API `/health` returned `{"status":"ok"}`; Traefik ping returned `OK`; runtime image manifest updated at `2026-05-31T07:11:04Z`; branch head is `faf6de8d`. Runtime registry smoke returned `route-registry-smoke=pass`, `created_generation=1 changed_generation=2 final_status=lost`. Cleanup verified zero synthetic rows remained. `git diff --check` passed before tracker update. | Runtime PostgreSQL table inventory; `Engine/Deploy/image-manifest.json`; synthetic worker GUID `m3-runtime-smoke-worker`; `faf6de8d`. |
 | 2026-05-31 | `M3` | Implemented scheduler-owned site-worker route registry. Added `job_scheduler_worker_routes` with active/retired/lost lifecycle states, route file/path/upstream metadata, `generation`, and metadata JSON. `register_worker`, Docker reconcile, `stop_worker`, lost-worker detection, and worker-history pruning now create, refresh, retire, or prune route records. Public queue helpers can upsert, query by worker, query active route by site, list routes, and retire route records. | `python3 -m py_compile` passed for scheduler queue/manager and focused queue tests. Focused `test_job_scheduler_queue.py` passed (`12 passed`). `git diff --check` passed. `./Engine_Unit_Tests.sh --domain scheduler` with system Python failed before tests because `pytest` is missing; rerun with the repo test venv entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped, so it is not counted as an M3 gate. Post-redeploy runtime smoke remains pending. | `b2c8e488`; `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`; `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`; `Docs/Reference/Data and Schema/db-reference.md`; `Unit_Test_Results/engine-20260531T063347Z`; `Unit_Test_Results/engine-20260531T063404Z`. |
@@ -303,12 +304,12 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - M2 complete: Traefik file provider now watches `Engine/Services/traefik-edge/config/dynamic/`, core routes render to `core.yml`, per-site-worker route files use `site-worker-<worker_guid>.yml`, and post-redeploy add/remove hotload smoke passed without recreating Traefik.
 - M3 implementation committed: `job_scheduler_worker_routes` records scheduler-owned site-worker route metadata, lifecycle status, and generation; local focused queue tests cover create, query, update, retire, lost-worker, prune, and missing-registry recovery behavior.
 - M3 post-redeploy smoke complete: runtime PostgreSQL has `engine.job_scheduler_worker_routes`, synthetic route registry lifecycle smoke passed, and synthetic rows were cleaned up.
-- M4 implementation committed: api-backend now brokers signed remote-op sessions for active site-worker routes, and shared token verification covers scope, expiry, worker, site, device, hostname, and capability checks. Post-redeploy smoke remains pending before M4 can close.
+- M4 complete: api-backend now brokers signed remote-op sessions for active site-worker routes, shared token verification covers scope, expiry, worker, site, device, hostname, and capability checks, and post-redeploy runtime smoke passed with synthetic route cleanup.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
+- Complete `M5` and `M6` to establish Agent socket ownership on site-worker.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
 - Complete `M14` before any Go rewrite implementation starts.
@@ -326,7 +327,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. For M3, `./Engine_Unit_Tests.sh --domain scheduler` failed under system Python because `pytest` is missing; with the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped. Earlier scheduler-domain blocker was the existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
 | Manual Traefik hotload smoke | `M2` | `Done` | Temporary route file add returned API health, removal stopped the route, and Traefik process stayed unchanged. |
 | Runtime route-registry smoke | `M3` | `Done` | Runtime DB table exists; synthetic smoke verified create/query/update/recover/retire/lost lifecycle and cleanup. No active site-worker existed at smoke time, so no live route row was expected. |
-| Remote-op session smoke | `M4` | `Pending` | Local endpoint/token tests pass. Runtime smoke must confirm success, unauthorized access, expired/invalid token rejection, and missing worker-route behavior after redeploy. |
+| Remote-op session smoke | `M4` | `Done` | Runtime smoke confirmed success, unauthorized access, invalid capability, out-of-scope access, expired/invalid token rejection, missing worker-route behavior, and synthetic route cleanup. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
 
@@ -337,9 +338,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `53388af0`, "Implement signed remote-op sessions", and the later tracker update that records M4 implementation state.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `92acf473`, "Update M4 tracker implementation state", and the later tracker update that marks M4 done after post-redeploy smoke.
 
-M1, M2, and M3 are Done. M4 is active.
+M1, M2, M3, and M4 are Done. M5 is active.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -369,25 +370,26 @@ Completed M3 state:
 - Runtime PostgreSQL has `engine.job_scheduler_worker_routes`.
 - Synthetic post-redeploy route-registry smoke passed create/query/update/recover/retire/lost lifecycle and cleanup.
 
-Current M4 implementation state:
+Completed M4 state:
 - `POST /api/remote-ops/session` authorizes an operator/device/capability request and returns direct active site-worker URLs plus a signed operation token.
 - Shared `Data.Engine.services.remote_ops` helpers issue and verify tokens for api-backend/site-worker code.
 - Token issuer is `borealis-api-backend`; audience is `borealis-site-worker`; token type is `remote-op-session`; default TTL is 300 seconds; max TTL is 900 seconds.
 - Claims include user, role, site_id, device_guid, hostname, agent_id, worker_guid, route_generation, capabilities, and standard JWT timing/id fields.
 - Signing uses the existing Engine Ed25519 JWT key under `Engine/Services/api-backend/secrets/Auth_Tokens/borealis-jwt-ed25519.key`.
-- Local validation passed, but post-redeploy smoke has not run yet.
+- Post-redeploy smoke passed after operator rebuild: runtime DB synthetic route `m4-runtime-smoke-worker` produced session success, missing-route, invalid-capability, out-of-scope, unauthorized, invalid-token, and expired-token checks; synthetic rows were cleaned up.
 
 Next work:
-1. Rebuild/redeploy Engine with branch head including `53388af0`.
-2. Smoke `POST /api/remote-ops/session` for success, unauthorized user, invalid/expired token verification, and missing worker-route behavior.
-3. If smoke passes, mark M4 Done, add a work-log row, and only then start M5.
-4. If smoke fails, fix only the M4 regression and repeat validation.
+1. Implement M5: deliver site-worker ops URL metadata to enrolled Agents without moving individual remote-op feature handlers yet.
+2. Keep M5 scoped to Agent route target selection and config/enrollment payloads. Do not move shell/VNC/file/process/service/software handlers yet.
+3. Add Engine tests for route response and Agent tests for config/enrollment route data.
+4. Validate with one enrolled Agent reconnect smoke before marking M5 done.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
 - Official `core` lane with the repo test venv still fails on root-owned runtime secret paths outside touched edge-runtime tests.
 - Runtime Engine/Deploy/compose.env compose config could not run locally because the file was root-owned.
 - Current M4 local validation passed: py_compile for touched auth/API files, focused `Data/Engine/Unit_Tests/test_remote_ops_sessions.py` (`8 passed`), adjacent token/enrollment tests, `./Engine_Unit_Tests.sh --domain remote-access`, and `git diff --check`.
+- Current M4 runtime validation passed after rebuild: live backend rejected unauthenticated session requests with `401`; synthetic runtime route smoke passed success and denial paths; cleanup verified zero synthetic rows.
 - `./Engine_Unit_Tests.sh --domain scheduler` under system Python fails because `pytest` is missing; under the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped.
 - Do not run npm/vite from staging source under Data/Engine/Containers/*/data.
 ```
