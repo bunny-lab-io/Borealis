@@ -35,6 +35,7 @@ from .queue import (
     heartbeat_worker,
     register_worker,
     requeue_work_item,
+    site_worker_remote_desktop_port,
     site_worker_remote_ops_port,
     stop_worker,
 )
@@ -176,14 +177,22 @@ def _service_log(logger):
     return _log
 
 
-def _remote_ops_route_metadata(*, worker_guid: str, host: str, port: int) -> Dict[str, Any]:
+def _remote_ops_route_metadata(*, worker_guid: str, host: str, port: int, remote_desktop_port: int = 0) -> Dict[str, Any]:
     return {
         "remote_ops_socket": {
             "host": str(host or "127.0.0.1"),
             "path": "/socket.io/",
             "port": int(port or 0),
             "worker_guid": str(worker_guid or ""),
-        }
+        },
+        "remote_desktop_guacamole": {
+            "host": str(host or "127.0.0.1"),
+            "scheme": "http",
+            "path": "/remote-desktop/vnc/guacamole",
+            "path_prefix": "/remote-desktop/vnc",
+            "port": int(remote_desktop_port or 0),
+            "worker_guid": str(worker_guid or ""),
+        },
     }
 
 
@@ -840,6 +849,12 @@ def main() -> None:
         remote_ops_port = 0
     if remote_ops_port <= 0:
         remote_ops_port = site_worker_remote_ops_port(worker_guid, site_id)
+    try:
+        remote_desktop_port = int(str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT") or "0").strip() or "0")
+    except Exception:
+        remote_desktop_port = 0
+    if remote_desktop_port <= 0:
+        remote_desktop_port = site_worker_remote_desktop_port(worker_guid, site_id)
     idle_ttl = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
     if not worker_guid or site_id <= 0:
         raise RuntimeError("site worker requires BOREALIS_SITE_WORKER_GUID and BOREALIS_SITE_WORKER_SITE_ID")
@@ -848,6 +863,10 @@ def main() -> None:
         site_id=site_id,
         host=remote_ops_host,
         port=remote_ops_port,
+        guacamole_host=remote_ops_host,
+        guacamole_port=remote_desktop_port,
+        internal_secret=settings.secret_key,
+        internal_api_base_url=_api_base_url(),
         db_conn_factory=db_factory,
         logger=logger.getChild("remote_ops"),
         service_log=_service_log(logger),
@@ -863,7 +882,12 @@ def main() -> None:
             status=WORKER_STATUS_RUNNING,
             upstream_host=remote_ops_host,
             upstream_port=remote_ops_port,
-            route_metadata=_remote_ops_route_metadata(worker_guid=worker_guid, host=remote_ops_host, port=remote_ops_port),
+            route_metadata=_remote_ops_route_metadata(
+                worker_guid=worker_guid,
+                host=remote_ops_host,
+                port=remote_ops_port,
+                remote_desktop_port=remote_desktop_port,
+            ),
         )
         conn.commit()
     finally:

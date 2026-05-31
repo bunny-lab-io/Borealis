@@ -27,6 +27,7 @@ from Data.Engine.services.job_scheduler.queue import (
     prune_worker_history,
     register_worker,
     requeue_work_item,
+    site_worker_remote_desktop_port,
     site_worker_remote_ops_port,
     stop_worker,
     upsert_worker_route,
@@ -257,7 +258,15 @@ def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Pat
             container_name="site-worker-worker-route-file",
             site_id=12,
             upstream_port=58123,
-            metadata={"listener": "remote-op"},
+            metadata={
+                "listener": "remote-op",
+                "remote_desktop_guacamole": {
+                    "host": "127.0.0.1",
+                    "scheme": "http",
+                    "path_prefix": "/remote-desktop/vnc",
+                    "port": 61234,
+                },
+            },
         )
         conn.commit()
 
@@ -267,7 +276,9 @@ def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Pat
         route_text = route_file.read_text(encoding="utf-8")
         assert "borealis-site-worker-worker-route-file" in route_text
         assert "PathPrefix(`/_borealis/site-workers/worker-route-file`)" in route_text
+        assert "PathPrefix(`/_borealis/site-workers/worker-route-file/remote-desktop/vnc`)" in route_text
         assert 'url: "http://127.0.0.1:58123"' in route_text
+        assert 'url: "http://127.0.0.1:61234"' in route_text
         assert "stripPrefix:" in route_text
 
         stop_worker(conn, worker_guid="worker-route-file")
@@ -289,6 +300,19 @@ def test_site_worker_remote_ops_port_is_deterministic(monkeypatch) -> None:
     assert first == second
     assert 57000 <= first < 57100
     assert 57000 <= other < 57100
+
+
+def test_site_worker_remote_desktop_port_is_deterministic(monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "62000")
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", "100")
+
+    first = site_worker_remote_desktop_port("worker-port", 4)
+    second = site_worker_remote_desktop_port("worker-port", 4)
+    other = site_worker_remote_desktop_port("worker-port-other", 4)
+
+    assert first == second
+    assert 62000 <= first < 62100
+    assert 62000 <= other < 62100
 
 
 def test_spawn_site_worker_mounts_traefik_config_for_route_files(tmp_path: Path, monkeypatch) -> None:

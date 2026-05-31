@@ -15,12 +15,15 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 import threading
 import time
 import uuid
 from types import SimpleNamespace
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
+from urllib.error import HTTPError, URLError
+from urllib.request import Request as UrlRequest, urlopen
 
 from flask import Blueprint, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -28,12 +31,15 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from ....public_endpoints import build_websocket_url, public_guacamole_vnc_path, wireguard_endpoint
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
+from ...job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
+from ...remote_ops.agent_routes import join_url, site_worker_route_urls
+from ...remote_ops.sessions import issue_remote_op_session
 from ...RemoteDesktop.guacamole_proxy import guacd_health, normalize_guacamole_performance_preference
 from ...RemoteDesktop.rfb_probe import (
     VncAuthProbeResult as _VncAuthProbeResult,
     wait_for_vnc_auth_ready as _wait_for_backend_auth_ready,
 )
-from ...RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from .tunnel import _get_tunnel_service, _resolve_requested_agent_id
 
@@ -549,6 +555,120 @@ def _agent_socket_registered(context: Any, agent_id: str) -> Optional[bool]:
         return None
 
 
+def _lookup_vnc_device_and_route(adapters: "EngineServiceAdapters", agent_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    conn = adapters.db_conn_factory()
+    try:
+        ensure_job_scheduler_tables(conn)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT d.guid, d.hostname, d.agent_id, ds.site_id, s.name
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname=d.hostname
+         LEFT JOIN sites AS s ON s.id=ds.site_id
+             WHERE LOWER(d.agent_id)=LOWER(?)
+             LIMIT 1
+            """,
+            (agent_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None, None
+        device = {
+            "guid": _normalize_text(row[0]),
+            "hostname": _normalize_text(row[1]),
+            "agent_id": _normalize_text(row[2]),
+            "site_id": row[3],
+            "site_name": _normalize_text(row[4]),
+        }
+        try:
+            site_id = int(row[3]) if row[3] is not None else 0
+        except Exception:
+            site_id = 0
+        route = active_worker_route_for_site(conn, site_id=site_id) if site_id > 0 else None
+        return device, dict(route) if route else None
+    finally:
+        conn.close()
+
+
+def _worker_remote_desktop_url(worker_route: Mapping[str, Any], path: str) -> str:
+    scheme = _normalize_text(worker_route.get("upstream_scheme")) or "http"
+    host = _normalize_text(worker_route.get("upstream_host")) or "127.0.0.1"
+    try:
+        port = int(worker_route.get("upstream_port") or 0)
+    except Exception:
+        port = 0
+    if port <= 0:
+        raise RuntimeError("site_worker_route_missing_port")
+    normalized_path = _normalize_text(path)
+    if not normalized_path.startswith("/"):
+        normalized_path = f"/{normalized_path}"
+    return f"{scheme}://{host}:{port}{normalized_path}"
+
+
+def _post_worker_remote_desktop(
+    app: Any,
+    worker_route: Mapping[str, Any],
+    path: str,
+    payload: Mapping[str, Any],
+    *,
+    timeout_seconds: float = 10.0,
+) -> Dict[str, Any]:
+    secret = require_app_secret(app)
+    body = json.dumps(dict(payload or {}), separators=(",", ":")).encode("utf-8")
+    req = UrlRequest(
+        _worker_remote_desktop_url(worker_route, path),
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            INTERNAL_TOKEN_HEADER: internal_token(secret),
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=max(0.5, float(timeout_seconds))) as response:
+            raw = response.read()
+            status = int(getattr(response, "status", 200) or 200)
+    except HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"site_worker_remote_desktop_http_{exc.code}:{detail[:180]}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"site_worker_remote_desktop_unreachable:{exc.reason}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"site_worker_remote_desktop_unreachable:{exc}") from exc
+    if status >= 400:
+        raise RuntimeError(f"site_worker_remote_desktop_http_{status}")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("site_worker_remote_desktop_invalid_response") from exc
+    return dict(parsed or {}) if isinstance(parsed, Mapping) else {}
+
+
+def _register_worker_guacamole_session(
+    app: Any,
+    adapters: "EngineServiceAdapters",
+    worker_route: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    _ = adapters
+    return _post_worker_remote_desktop(app, worker_route, "/remote-desktop/vnc/session", payload, timeout_seconds=10.0)
+
+
+def _disconnect_worker_guacamole_session(
+    app: Any,
+    worker_route: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> Dict[str, Any]:
+    return _post_worker_remote_desktop(app, worker_route, "/remote-desktop/vnc/disconnect", payload, timeout_seconds=5.0)
+
+
 def _should_prewarm_vnc_backend(
     *,
     had_tunnel_payload: bool,
@@ -597,6 +717,13 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             return forwarded.split(",")[0].strip()
         return (request.remote_addr or "").strip()
 
+    def _require_internal() -> bool:
+        try:
+            secret = require_app_secret(app)
+        except Exception:
+            return False
+        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
+
     def _resolve_allowed_ips(
         *,
         session_payload: Optional[Dict[str, Any]] = None,
@@ -620,6 +747,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         agent_id: str,
         operator_id: Optional[str],
         *,
+        user: Optional[Dict[str, Any]] = None,
         remove_wallpaper: bool,
         viewer: str = "guacamole",
         performance_preference: int = 0,
@@ -628,6 +756,14 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         if normalized_viewer != "guacamole":
             return {"error": "invalid_viewer"}, 400
         normalized_performance_preference = normalize_guacamole_performance_preference(performance_preference)
+        device, worker_route = _lookup_vnc_device_and_route(adapters, agent_id)
+        if not device:
+            return {"error": "not found"}, 404
+        if not worker_route:
+            return {
+                "error": "site_worker_unavailable",
+                "message": "No active site-worker route is available for this device site.",
+            }, 409
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
         _trace(
             "E01",
@@ -1418,61 +1554,92 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             "performance_preference": normalized_performance_preference,
         }
 
-        def _on_open() -> None:
-            manager.record_proxy_open(
-                collaboration_session.session_id,
-                participant.participant_id,
-            )
-
-        def _on_close(reason: str) -> None:
-            manager.record_proxy_close(
-                collaboration_session.session_id,
-                participant.participant_id,
-                reason=reason,
-            )
-
         health = guacd_health(adapters.context)
         if not bool(health.get("enabled")) or not bool(health.get("available")):
             return {
                 "error": "guacamole_unavailable",
                 "detail": health.get("reason") or "unavailable",
             }, 503
-        registry = ensure_guacamole_vnc_proxy(adapters.context, logger=logger)
-        if registry is None:
-            return {"error": "guacamole_proxy_unavailable"}, 503
         width, height = _initial_display_size(display_virtual_bounds, display_topology)
-        guacamole_session = registry.create(
-            agent_id=agent_id,
-            host=host,
-            port=vnc_port,
-            password=collaboration_session.controller_password,
-            operator_id=operator_id,
-            session_id=collaboration_session.session_id,
-            participant_id=participant.participant_id,
-            role=participant.role,
-            width=width,
-            height=height,
-            performance_preference=normalized_performance_preference,
-            restart_tunnel=_restart_tunnel,
-            confirm_transport=_confirm_transport,
-            on_open=_on_open,
-            on_close=_on_close,
+        issued = issue_remote_op_session(
+            adapters.jwt_service,
+            user=user or {},
+            device=device,
+            worker_route=worker_route,
+            capabilities=["remote_desktop"],
         )
-        ws_path = public_guacamole_vnc_path(adapters.context)
+        worker_payload = {
+            "operation_token": issued["token"],
+            "agent_id": agent_id,
+            "host": host,
+            "port": vnc_port,
+            "password": collaboration_session.controller_password,
+            "operator_id": operator_id or "",
+            "session_id": collaboration_session.session_id,
+            "participant_id": participant.participant_id,
+            "role": participant.role,
+            "width": width,
+            "height": height,
+            "dpi": 96,
+            "performance_preference": normalized_performance_preference,
+        }
+        try:
+            worker_response = _register_worker_guacamole_session(app, adapters, worker_route, worker_payload)
+        except Exception as exc:
+            manager.record_error(collaboration_session.session_id, "worker_guacamole_unavailable")
+            _service_log_event(
+                "vnc_worker_guacamole_register_failed agent_id={0} session_id={1} worker_guid={2} error={3}".format(
+                    agent_id,
+                    collaboration_session.session_id,
+                    worker_route.get("worker_guid") or "-",
+                    str(exc)[:180],
+                ),
+                level="WARNING",
+            )
+            return {"error": "guacamole_proxy_unavailable", "detail": str(exc)}, 503
+        guacamole_token = _normalize_text(worker_response.get("token"))
+        if not guacamole_token:
+            manager.record_error(collaboration_session.session_id, "worker_guacamole_token_missing")
+            return {"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, 503
+        urls = site_worker_route_urls(adapters.context, request, worker_route)
+        ws_path = join_url(_normalize_text(worker_route.get("route_path_prefix")), "/remote-desktop/vnc/guacamole")
         ws_url = build_websocket_url(adapters.context, request, ws_path)
         _service_log_event(
-            "vnc_session_ready agent_id={0} session_id={1} role={2} credential_revision={3} viewer=guacamole".format(
+            "vnc_session_ready agent_id={0} session_id={1} role={2} credential_revision={3} viewer=guacamole worker_guid={4}".format(
                 agent_id,
                 collaboration_session.session_id,
                 participant.role,
                 collaboration_session.credential_revision,
+                worker_route.get("worker_guid") or "-",
             )
         )
         base_payload.update(
             {
                 "guacamole_ws_url": ws_url,
                 "guacamole_ws_path": ws_path,
-                "token": guacamole_session.token,
+                "token": guacamole_token,
+                "remote_ops_session": {
+                    "session_id": issued["session_id"],
+                    "token_type": "Bearer",
+                    "issued_at": issued["issued_at"],
+                    "expires_at": issued["expires_at"],
+                    "expires_in": issued["expires_in"],
+                    "capabilities": issued["capabilities"],
+                    "device": {
+                        "guid": device.get("guid") or "",
+                        "hostname": device.get("hostname") or "",
+                        "agent_id": device.get("agent_id") or "",
+                        "site_id": device.get("site_id"),
+                        "site_name": device.get("site_name") or "",
+                    },
+                    "worker": {
+                        "worker_guid": worker_route.get("worker_guid") or "",
+                        "route_generation": worker_route.get("generation") or 0,
+                        "route_path_prefix": worker_route.get("route_path_prefix") or "",
+                        "base_url": urls["base"],
+                        "urls": urls,
+                    },
+                },
             }
         )
         return base_payload, 200
@@ -1507,6 +1674,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         payload, status = _issue_session(
             agent_id,
             operator_id,
+            user=user,
             remove_wallpaper=remove_wallpaper,
             viewer=viewer,
             performance_preference=performance_preference,
@@ -1544,6 +1712,45 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             }
         ), 200
 
+    @blueprint.route("/api/internal/vnc/session-event", methods=["POST"])
+    def internal_vnc_session_event():
+        if not _require_internal():
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        if not isinstance(body, dict):
+            body = {}
+        event = _normalize_text(body.get("event")).lower()
+        session_id = _normalize_text(body.get("session_id"))
+        participant_id = _normalize_text(body.get("participant_id"))
+        reason = _normalize_text(body.get("reason"))
+        if not event or not session_id:
+            return jsonify({"error": "event_and_session_id_required"}), 400
+        manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
+        collaboration_session = manager.get_session_by_id(session_id)
+        if collaboration_session is None:
+            return jsonify({"error": "session_not_found"}), 404
+        if event == "open":
+            manager.record_proxy_open(session_id, participant_id)
+        elif event == "close":
+            manager.record_proxy_close(session_id, participant_id, reason=reason)
+        elif event == "transport_confirm":
+            tunnel_service = _get_tunnel_service(adapters)
+            try:
+                tunnel_service.confirm_transport_success(
+                    collaboration_session.agent_id,
+                    reason=reason or "vnc_backend_connect",
+                )
+            except Exception:
+                logger.debug(
+                    "Failed to confirm worker VNC transport agent_id=%s session_id=%s",
+                    collaboration_session.agent_id,
+                    session_id,
+                    exc_info=True,
+                )
+        else:
+            return jsonify({"error": "invalid_event"}), 400
+        return jsonify({"status": "ok"}), 200
+
     @blueprint.route("/api/vnc/session", methods=["POST"])
     def vnc_session():
         return vnc_establish()
@@ -1576,6 +1783,7 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "not found"}), 404
         if collaboration_session is None:
             return jsonify({"error": "session_not_found"}), 404
+        _device, worker_route = _lookup_vnc_device_and_route(adapters, resolved_agent_id)
 
         current_snapshot = manager.session_snapshot(
             collaboration_session,
@@ -1608,16 +1816,20 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
         except KeyError:
             return jsonify({"error": "session_not_found"}), 404
 
-        proxy = getattr(adapters.context, "vnc_proxy", None)
         if bool(result.get("closed")):
-            if proxy is not None and hasattr(proxy, "disconnect_session"):
+            if worker_route:
                 try:
-                    proxy.disconnect_session(
-                        collaboration_session.session_id,
-                        reason=reason or "session_closed",
+                    _disconnect_worker_guacamole_session(
+                        app,
+                        worker_route,
+                        {
+                            "session_id": collaboration_session.session_id,
+                            "reason": reason or "session_closed",
+                            "close_session": True,
+                        },
                     )
                 except Exception:
-                    logger.debug("Failed to disconnect VNC session %s", collaboration_session.session_id, exc_info=True)
+                    logger.debug("Failed to disconnect worker VNC session %s", collaboration_session.session_id, exc_info=True)
             _context_emit_agent_event(
                 adapters.context,
                 resolved_agent_id,
@@ -1626,16 +1838,21 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
         else:
             left_participant_id = _normalize_text(result.get("participant_id"))
-            if proxy is not None and hasattr(proxy, "disconnect_participant") and left_participant_id:
+            if worker_route and left_participant_id:
                 try:
-                    proxy.disconnect_participant(
-                        collaboration_session.session_id,
-                        left_participant_id,
-                        reason=reason or "participant_left",
+                    _disconnect_worker_guacamole_session(
+                        app,
+                        worker_route,
+                        {
+                            "session_id": collaboration_session.session_id,
+                            "participant_id": left_participant_id,
+                            "reason": reason or "participant_left",
+                            "close_session": False,
+                        },
                     )
                 except Exception:
                     logger.debug(
-                        "Failed to disconnect VNC participant %s/%s",
+                        "Failed to disconnect worker VNC participant %s/%s",
                         collaboration_session.session_id,
                         left_participant_id,
                         exc_info=True,
@@ -1676,15 +1893,20 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                             "reason": "controller_vacated",
                         },
                     )
-                    if proxy is not None and hasattr(proxy, "disconnect_session"):
+                    if worker_route:
                         try:
-                            proxy.disconnect_session(
-                                refreshed_session.session_id,
-                                reason="controller_reconnect_required",
+                            _disconnect_worker_guacamole_session(
+                                app,
+                                worker_route,
+                                {
+                                    "session_id": refreshed_session.session_id,
+                                    "reason": "controller_reconnect_required",
+                                    "close_session": True,
+                                },
                             )
                         except Exception:
                             logger.debug(
-                                "Failed to force VNC reconnect after controller leave %s",
+                                "Failed to force worker VNC reconnect after controller leave %s",
                                 refreshed_session.session_id,
                                 exc_info=True,
                             )

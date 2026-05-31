@@ -44,6 +44,8 @@ DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME = "http"
 DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE = 56000
 DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE = 5000
+DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE = 61000
+DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE = 3000
 WORKER_ROUTE_SELECT_COLUMNS = """
     worker_guid, site_id, container_name, route_name, route_path_prefix,
     route_file_path, upstream_scheme, upstream_host, upstream_port,
@@ -125,16 +127,46 @@ def _safe_route_segment(value: Any) -> str:
 
 
 def site_worker_remote_ops_port(worker_guid: Any, site_id: Any = 0) -> int:
-    raw_base = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE") or "").strip()
-    raw_range = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE") or "").strip()
+    return _site_worker_deterministic_port(
+        worker_guid,
+        site_id,
+        base_env="BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE",
+        range_env="BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE",
+        default_base=DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE,
+        default_range=DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE,
+    )
+
+
+def site_worker_remote_desktop_port(worker_guid: Any, site_id: Any = 0) -> int:
+    return _site_worker_deterministic_port(
+        worker_guid,
+        site_id,
+        base_env="BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE",
+        range_env="BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE",
+        default_base=DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE,
+        default_range=DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE,
+    )
+
+
+def _site_worker_deterministic_port(
+    worker_guid: Any,
+    site_id: Any = 0,
+    *,
+    base_env: str,
+    range_env: str,
+    default_base: int,
+    default_range: int,
+) -> int:
+    raw_base = str(os.environ.get(base_env) or "").strip()
+    raw_range = str(os.environ.get(range_env) or "").strip()
     try:
-        base = int(raw_base) if raw_base else DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE
+        base = int(raw_base) if raw_base else int(default_base)
     except Exception:
-        base = DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE
+        base = int(default_base)
     try:
-        port_range = int(raw_range) if raw_range else DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE
+        port_range = int(raw_range) if raw_range else int(default_range)
     except Exception:
-        port_range = DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE
+        port_range = int(default_range)
     base = min(65000, max(1024, base))
     port_range = min(max(1, port_range), max(1, 65535 - base))
     seed = f"{worker_guid or ''}:{site_id or ''}".encode("utf-8", errors="ignore")
@@ -219,32 +251,73 @@ def _worker_route_config(route: Mapping[str, Any]) -> str:
     strip_name = f"{route_name}-strip"
     upstream_url = f"{upstream_scheme}://{upstream_host}:{upstream_port}"
     tls_block = _route_tls_block()
-    return "\n".join(
+    metadata = route.get("metadata") if isinstance(route.get("metadata"), Mapping) else {}
+    remote_desktop = metadata.get("remote_desktop_guacamole") if isinstance(metadata.get("remote_desktop_guacamole"), Mapping) else {}
+    try:
+        guacamole_port = int(remote_desktop.get("port") or 0)
+    except Exception:
+        guacamole_port = 0
+    guacamole_host = str(remote_desktop.get("host") or upstream_host).strip() or upstream_host
+    guacamole_scheme = str(remote_desktop.get("scheme") or upstream_scheme).strip() or upstream_scheme
+    guacamole_path = str(remote_desktop.get("path_prefix") or "/remote-desktop/vnc").strip() or "/remote-desktop/vnc"
+    if not guacamole_path.startswith("/"):
+        guacamole_path = f"/{guacamole_path}"
+    guacamole_route_path = f"{route_path_prefix}{guacamole_path.rstrip('/')}"
+    guacamole_service_name = f"{route_name}-remote-desktop"
+    guacamole_route_name = f"{route_name}-remote-desktop"
+    guacamole_url = f"{guacamole_scheme}://{guacamole_host}:{guacamole_port}"
+    lines = [
+        "http:",
+        "  middlewares:",
+        f"    {strip_name}:",
+        "      stripPrefix:",
+        "        prefixes:",
+        f"          - {_quote_yaml(route_path_prefix)}",
+        "  routers:",
+        f"    {route_name}:",
+        "      entryPoints:",
+        "        - websecure",
+        f"      rule: \"Host(`{hostname}`) && PathPrefix(`{route_path_prefix}`)\"",
+        "      middlewares:",
+        f"        - {strip_name}",
+        f"      service: {service_name}",
+        "      priority: 120",
+        tls_block,
+    ]
+    if guacamole_port > 0:
+        lines.extend(
+            [
+                f"    {guacamole_route_name}:",
+                "      entryPoints:",
+                "        - websecure",
+                f"      rule: \"Host(`{hostname}`) && PathPrefix(`{guacamole_route_path}`)\"",
+                "      middlewares:",
+                f"        - {strip_name}",
+                f"      service: {guacamole_service_name}",
+                "      priority: 130",
+                tls_block,
+            ]
+        )
+    lines.extend(
         [
-            "http:",
-            "  middlewares:",
-            f"    {strip_name}:",
-            "      stripPrefix:",
-            "        prefixes:",
-            f"          - {_quote_yaml(route_path_prefix)}",
-            "  routers:",
-            f"    {route_name}:",
-            "      entryPoints:",
-            "        - websecure",
-            f"      rule: \"Host(`{hostname}`) && PathPrefix(`{route_path_prefix}`)\"",
-            "      middlewares:",
-            f"        - {strip_name}",
-            f"      service: {service_name}",
-            "      priority: 120",
-            tls_block,
             "  services:",
             f"    {service_name}:",
             "      loadBalancer:",
             "        servers:",
             f"          - url: {_quote_yaml(upstream_url)}",
-            "",
         ]
     )
+    if guacamole_port > 0:
+        lines.extend(
+            [
+                f"    {guacamole_service_name}:",
+                "      loadBalancer:",
+                "        servers:",
+                f"          - url: {_quote_yaml(guacamole_url)}",
+            ]
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _write_worker_route_file(route: Mapping[str, Any]) -> None:

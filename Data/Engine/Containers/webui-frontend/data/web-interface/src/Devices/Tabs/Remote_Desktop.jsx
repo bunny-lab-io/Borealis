@@ -1294,7 +1294,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const connectToken = Number(options.connectToken || 0);
       const attempt = Number(options.attempt || 1);
       const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
-      const wsUrl = data?.guacamole_ws_url || buildWsUrl(data?.guacamole_ws_path, "");
+      const wsUrl = buildWsUrl(data?.guacamole_ws_path, "") || data?.guacamole_ws_url || "";
       const token = data?.token || "";
       const displayHost = displayRef.current;
       if (!wsUrl || !token) {

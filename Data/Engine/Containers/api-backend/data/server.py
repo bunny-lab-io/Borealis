@@ -350,7 +350,6 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
         return response
 
     from .services import API, WebSocket, WebUI  # Local import to avoid circular deps during bootstrap
-    from .services.RemoteDesktop.vnc_proxy import ensure_guacamole_vnc_proxy
 
     API.register_api(app, context)
     WebUI.register_web_ui(app, context)
@@ -361,15 +360,6 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
             release_manager.start()
         except Exception:
             logger.error("Failed to start agent release channel manager.", exc_info=True)
-    try:
-        registry = ensure_guacamole_vnc_proxy(context, logger=logger.getChild("guacamole_proxy"))
-        if registry is None:
-            logger.error("Guacamole Remote Desktop proxy failed to pre-start; sessions will attempt lazy start.")
-        else:
-            logger.info("Guacamole Remote Desktop proxy pre-started on %s:%s.", context.vnc_ws_host, context.vnc_ws_port)
-    except Exception:
-        logger.error("Failed to pre-start Guacamole Remote Desktop proxy.", exc_info=True)
-
     logger.debug("Engine application factory completed initialisation.")
 
     return app, socketio, context

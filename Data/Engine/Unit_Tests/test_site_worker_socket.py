@@ -11,6 +11,7 @@ from pathlib import Path
 
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
 from Data.Engine.services.remote_ops.sessions import issue_remote_op_session
 
@@ -85,6 +86,10 @@ def _runtime(tmp_path: Path, *, site_id: int = 7) -> tuple[SiteWorkerSocketRunti
         site_id=site_id,
         host="127.0.0.1",
         port=59001,
+        guacamole_host="127.0.0.1",
+        guacamole_port=61001,
+        internal_secret="unit-internal-secret",
+        internal_api_base_url="http://127.0.0.1:5000",
         db_conn_factory=_db_factory(db_path),
         logger=logging.getLogger("test.site_worker_socket"),
         service_log=_service_log,
@@ -110,6 +115,29 @@ def _issue_shell_token(
         },
         worker_route={"worker_guid": worker_guid, "generation": 1},
         capabilities=["remote_shell"],
+        now=int(time.time()),
+    )
+    return issued["token"]
+
+
+def _issue_remote_desktop_token(
+    runtime: SiteWorkerSocketRuntime,
+    *,
+    agent_id: str = AGENT_ID,
+    site_id: int = 7,
+    worker_guid: str = "worker-socket-test",
+) -> str:
+    issued = issue_remote_op_session(
+        runtime.jwt_service,
+        user={"username": "unit", "role": "Admin"},
+        device={
+            "guid": AGENT_GUID,
+            "hostname": AGENT_HOSTNAME,
+            "agent_id": agent_id,
+            "site_id": site_id,
+        },
+        worker_route={"worker_guid": worker_guid, "generation": 1},
+        capabilities=["remote_desktop"],
         now=int(time.time()),
     )
     return issued["token"]
@@ -287,6 +315,74 @@ def test_site_worker_shell_rejects_missing_remote_op_token(tmp_path: Path, monke
 
     assert ack["error"] == "missing_token"
     client.disconnect()
+
+
+def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+    operation_token = _issue_remote_desktop_token(runtime)
+    monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+
+    client = runtime.app.test_client()
+    response = client.post(
+        "/remote-desktop/vnc/session",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "operation_token": operation_token,
+            "agent_id": AGENT_ID,
+            "host": "10.255.0.20",
+            "port": 5900,
+            "password": "secretpw",
+            "operator_id": "unit",
+            "session_id": "vnc-session-1",
+            "participant_id": "participant-1",
+            "role": "controller",
+            "width": 1920,
+            "height": 1080,
+            "performance_preference": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "ok"
+    token = payload["token"]
+    session = runtime._guacamole_registry.consume(token)
+    assert session is not None
+    assert session.agent_id == AGENT_ID
+    assert session.host == "10.255.0.20"
+    assert session.port == 5900
+    assert session.password == "secretpw"
+    assert session.session_id == "vnc-session-1"
+    assert session.participant_id == "participant-1"
+    assert session.performance_preference == 2
+
+
+def test_site_worker_remote_desktop_rejects_wrong_worker_token(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+    operation_token = _issue_remote_desktop_token(runtime, worker_guid="other-worker")
+    monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+
+    client = runtime.app.test_client()
+    response = client.post(
+        "/remote-desktop/vnc/session",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "operation_token": operation_token,
+            "agent_id": AGENT_ID,
+            "host": "10.255.0.20",
+            "port": 5900,
+            "password": "secretpw",
+            "session_id": "vnc-session-1",
+            "participant_id": "participant-1",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "worker_mismatch"
 
 
 def test_site_worker_shell_bridges_valid_session_to_agent_tcp(tmp_path: Path, monkeypatch) -> None:

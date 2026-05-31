@@ -13,6 +13,7 @@ from contextlib import closing
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import jwt
+import requests
 from flask import Flask, jsonify, request
 from flask_socketio import SocketIO
 
@@ -41,6 +42,15 @@ from Data.Engine.services.remote_ops.agent_socket_registry import (
     normalize_helper_contexts,
 )
 from Data.Engine.services.remote_ops.sessions import RemoteOpSessionError, verify_remote_op_session
+from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
+    DEFAULT_GUACD_HOST,
+    DEFAULT_GUACD_PORT,
+    GUACAMOLE_WS_PATH,
+    GuacamoleSessionRegistry,
+    normalize_guacamole_performance_preference,
+)
+from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
+from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
 
 def _now_ts() -> int:
@@ -176,6 +186,10 @@ class SiteWorkerSocketRuntime:
         site_id: int,
         host: str,
         port: int,
+        guacamole_host: str = "127.0.0.1",
+        guacamole_port: int = 0,
+        internal_secret: str = "",
+        internal_api_base_url: str = "",
         db_conn_factory: Callable[[], sqlite3.Connection],
         logger: logging.Logger,
         service_log: Callable[[str, str, Optional[str]], None],
@@ -184,6 +198,12 @@ class SiteWorkerSocketRuntime:
         self.site_id = int(site_id or 0)
         self.host = str(host or "127.0.0.1")
         self.port = int(port or 0)
+        self.guacamole_host = str(guacamole_host or self.host or "127.0.0.1")
+        self.guacamole_port = int(guacamole_port or 0)
+        self.internal_secret = str(internal_secret or os.environ.get("BOREALIS_ENGINE_SECRET") or "")
+        self.internal_api_base_url = str(
+            internal_api_base_url or os.environ.get("BOREALIS_INTERNAL_API_BASE_URL") or "http://127.0.0.1:5000"
+        ).rstrip("/")
         self.db_conn_factory = db_conn_factory
         self.logger = logger
         self.service_log = service_log
@@ -200,6 +220,16 @@ class SiteWorkerSocketRuntime:
         )
         self.registry = AgentSocketRegistry(self.socketio, logger.getChild("agent_registry"))
         self.jwt_service = jwt_service_module.load_service()
+        try:
+            guacamole_ttl_seconds = int(os.environ.get("BOREALIS_VNC_SESSION_TTL_SECONDS") or "120")
+        except Exception:
+            guacamole_ttl_seconds = 120
+        self._guacamole_registry = GuacamoleSessionRegistry(
+            ttl_seconds=guacamole_ttl_seconds,
+            logger=logger.getChild("guacamole_registry"),
+        )
+        self._guacamole_proxy: Optional[VncProxyServer] = None
+        self._guacamole_lock = threading.RLock()
         self._shell_sessions: Dict[str, ShellSession] = {}
         self._shell_sessions_by_agent: Dict[str, ShellSession] = {}
         self._shell_lock = threading.RLock()
@@ -207,6 +237,7 @@ class SiteWorkerSocketRuntime:
         self._register_routes()
         self._register_socket_handlers()
         self._register_shell_handlers()
+        self._register_remote_desktop_routes()
         self._register_task_event_handlers()
 
     def _log(self, message: str, *, level: str = "INFO") -> None:
@@ -223,6 +254,214 @@ class SiteWorkerSocketRuntime:
         @self.app.route("/agents", methods=["GET"])
         def _agents():
             return jsonify({"agents": self.registry.snapshot(), "worker_guid": self.worker_guid, "site_id": self.site_id})
+
+    def _require_internal_request(self) -> Optional[tuple[Dict[str, Any], int]]:
+        if validate_internal_token(self.internal_secret, request.headers.get(INTERNAL_TOKEN_HEADER)):
+            return None
+        self._log(
+            "remote_desktop_internal_rejected remote={0}".format(_remote_addr() or "-"),
+            level="WARNING",
+        )
+        return {"error": "unauthorized"}, 401
+
+    def _ensure_guacamole_proxy(self) -> bool:
+        if self.guacamole_port <= 0:
+            return False
+        with self._guacamole_lock:
+            if self._guacamole_proxy is None:
+                try:
+                    guacd_port = int(os.environ.get("BOREALIS_GUACD_PORT") or DEFAULT_GUACD_PORT)
+                except Exception:
+                    guacd_port = DEFAULT_GUACD_PORT
+                self._guacamole_proxy = VncProxyServer(
+                    host=self.guacamole_host,
+                    port=self.guacamole_port,
+                    guacamole_registry=self._guacamole_registry,
+                    logger=self.logger.getChild("guacamole_proxy"),
+                    guacamole_path=GUACAMOLE_WS_PATH,
+                    guacd_host=str(os.environ.get("BOREALIS_GUACD_HOST") or DEFAULT_GUACD_HOST),
+                    guacd_port=guacd_port,
+                    ssl_context=None,
+                )
+            return bool(self._guacamole_proxy.ensure_started())
+
+    def _notify_vnc_session_event(
+        self,
+        *,
+        event: str,
+        agent_id: str,
+        session_id: str,
+        participant_id: str,
+        reason: str = "",
+    ) -> None:
+        if not self.internal_secret or not self.internal_api_base_url:
+            return
+        try:
+            response = requests.post(
+                f"{self.internal_api_base_url}/api/internal/vnc/session-event",
+                headers={INTERNAL_TOKEN_HEADER: internal_token(self.internal_secret)},
+                json={
+                    "event": str(event or "").strip(),
+                    "agent_id": str(agent_id or "").strip(),
+                    "session_id": str(session_id or "").strip(),
+                    "participant_id": str(participant_id or "").strip(),
+                    "reason": str(reason or "").strip(),
+                    "worker_guid": self.worker_guid,
+                    "site_id": self.site_id,
+                },
+                timeout=5.0,
+            )
+            if response.status_code >= 400:
+                self._log(
+                    "remote_desktop_session_event_failed event={0} session_id={1} status={2}".format(
+                        event or "-",
+                        session_id or "-",
+                        response.status_code,
+                    ),
+                    level="WARNING",
+                )
+        except Exception as exc:
+            self._log(
+                "remote_desktop_session_event_failed event={0} session_id={1} error={2}".format(
+                    event or "-",
+                    session_id or "-",
+                    str(exc)[:160],
+                ),
+                level="WARNING",
+            )
+
+    def _register_remote_desktop_routes(self) -> None:
+        @self.app.route("/remote-desktop/vnc/session", methods=["POST"])
+        def _remote_desktop_session():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            if not self._ensure_guacamole_proxy():
+                return jsonify({"error": "guacamole_proxy_unavailable"}), 503
+
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            token = str(data.get("operation_token") or data.get("remote_op_token") or "").strip()
+            try:
+                claims = verify_remote_op_session(
+                    self.jwt_service,
+                    token,
+                    required_capability="remote_desktop",
+                    worker_guid=self.worker_guid,
+                    site_id=self.site_id,
+                )
+            except RemoteOpSessionError as exc:
+                self._log(
+                    "remote_desktop_token_rejected reason={0} remote={1}".format(
+                        exc.code,
+                        _remote_addr() or "-",
+                    ),
+                    level="WARNING",
+                )
+                return jsonify({"error": exc.code}), 403
+
+            agent_id = str(data.get("agent_id") or claims.get("agent_id") or "").strip()
+            if not agent_id:
+                return jsonify({"error": "agent_id_required"}), 400
+            if agent_id != str(claims.get("agent_id") or "").strip():
+                return jsonify({"error": "device_mismatch"}), 403
+
+            host = str(data.get("host") or data.get("virtual_ip") or "").split("/")[0].strip()
+            try:
+                port = int(data.get("port") or 5900)
+            except Exception:
+                port = 5900
+            password = str(data.get("password") or "").strip()[:8]
+            session_id = str(data.get("session_id") or "").strip()
+            participant_id = str(data.get("participant_id") or "").strip()
+            operator_id = str(data.get("operator_id") or "").strip()
+            role = str(data.get("role") or "").strip()
+            if not host or port <= 0 or not password or not session_id or not participant_id:
+                return jsonify({"error": "invalid_session_payload"}), 400
+            try:
+                width = int(data.get("width") or 1024)
+            except Exception:
+                width = 1024
+            try:
+                height = int(data.get("height") or 768)
+            except Exception:
+                height = 768
+            try:
+                dpi = int(data.get("dpi") or 96)
+            except Exception:
+                dpi = 96
+            performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
+
+            guacamole_session = self._guacamole_registry.create(
+                agent_id=agent_id,
+                host=host,
+                port=port,
+                password=password,
+                operator_id=operator_id,
+                session_id=session_id,
+                participant_id=participant_id,
+                role=role,
+                width=width,
+                height=height,
+                dpi=dpi,
+                performance_preference=performance_preference,
+                confirm_transport=lambda reason: self._notify_vnc_session_event(
+                    event="transport_confirm",
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    reason=reason,
+                ),
+                on_open=lambda: self._notify_vnc_session_event(
+                    event="open",
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                ),
+                on_close=lambda reason: self._notify_vnc_session_event(
+                    event="close",
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    reason=reason,
+                ),
+            )
+            self._log(
+                "remote_desktop_session_registered agent_id={0} session_id={1} participant_id={2} host={3} port={4}".format(
+                    agent_id,
+                    session_id,
+                    participant_id,
+                    host,
+                    port,
+                )
+            )
+            return jsonify({"status": "ok", "token": guacamole_session.token}), 200
+
+        @self.app.route("/remote-desktop/vnc/disconnect", methods=["POST"])
+        def _remote_desktop_disconnect():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            session_id = str(data.get("session_id") or "").strip()
+            participant_id = str(data.get("participant_id") or "").strip()
+            reason = str(data.get("reason") or "session_closed").strip()
+            close_session = bool(data.get("close_session"))
+            if not session_id:
+                return jsonify({"error": "session_id_required"}), 400
+            proxy = self._guacamole_proxy
+            disconnected = 0
+            if proxy is not None:
+                if close_session:
+                    disconnected = proxy.disconnect_session(session_id, reason=reason)
+                elif participant_id:
+                    disconnected = proxy.disconnect_participant(session_id, participant_id, reason=reason)
+            return jsonify({"status": "ok", "disconnected": disconnected}), 200
 
     def _register_socket_handlers(self) -> None:
         @self.socketio.on("connect_agent")
