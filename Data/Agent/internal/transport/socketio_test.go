@@ -24,6 +24,17 @@ func TestSocketURL(t *testing.T) {
 	}
 }
 
+func TestSocketURLPreservesRoutePrefix(t *testing.T) {
+	got, err := socketURL("https://borealis.example.com/_borealis/site-workers/worker-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "wss://borealis.example.com/_borealis/site-workers/worker-1/socket.io/?EIO=4&transport=websocket"
+	if got != want {
+		t.Fatalf("url = %q, want %q", got, want)
+	}
+}
+
 func TestParseEventPacket(t *testing.T) {
 	event, payload, ackID, err := parseEventPacket(`12["quick_job_run",{"job_id":7}]`)
 	if err != nil {

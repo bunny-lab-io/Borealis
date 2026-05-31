@@ -29,13 +29,14 @@ const (
 var fileMu sync.Mutex
 
 type AgentConfig struct {
-	SchemaVersion  int             `json:"schema_version"`
-	ServerURL      string          `json:"server_url"`
-	EnrollmentCode string          `json:"enrollment_code,omitempty"`
-	Agent          AgentSection    `json:"agent"`
-	Identity       IdentitySection `json:"identity"`
-	Tokens         TokenSection    `json:"tokens"`
-	Trust          TrustSection    `json:"trust"`
+	SchemaVersion  int              `json:"schema_version"`
+	ServerURL      string           `json:"server_url"`
+	EnrollmentCode string           `json:"enrollment_code,omitempty"`
+	Agent          AgentSection     `json:"agent"`
+	RemoteOps      RemoteOpsSection `json:"remote_ops"`
+	Identity       IdentitySection  `json:"identity"`
+	Tokens         TokenSection     `json:"tokens"`
+	Trust          TrustSection     `json:"trust"`
 }
 
 type AgentSection struct {
@@ -103,6 +104,18 @@ type TrustSection struct {
 	ServerSigningKeySPKIB64 string `json:"server_signing_key_spki_b64"`
 }
 
+type RemoteOpsSection struct {
+	Available       bool   `json:"available"`
+	SiteID          int    `json:"site_id,omitempty"`
+	WorkerGUID      string `json:"worker_guid,omitempty"`
+	RouteGeneration int64  `json:"route_generation,omitempty"`
+	RoutePathPrefix string `json:"route_path_prefix,omitempty"`
+	BaseURL         string `json:"base_url,omitempty"`
+	SocketURL       string `json:"socket_url,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	UpdatedAt       int64  `json:"updated_at,omitempty"`
+}
+
 type DependencyStateSection struct {
 	Phase            string `json:"phase"`
 	Status           string `json:"status"`
@@ -144,6 +157,10 @@ func NormalizeServerURL(value string) string {
 	text := strings.TrimSpace(value)
 	text = strings.TrimRight(text, "/")
 	return text
+}
+
+func NormalizeRemoteOpsURL(value string) string {
+	return NormalizeServerURL(value)
 }
 
 func NormalizeBranch(value string) string {
@@ -455,6 +472,7 @@ func (c *AgentConfig) ApplyDefaults() {
 		c.Agent.Branch = DefaultBranch
 	}
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
+	c.RemoteOps = normalizeRemoteOpsSection(c.RemoteOps)
 	c.Agent.Update = normalizeUpdateSection(c.Agent.Update)
 	if c.Agent.LogRetentionDays <= 0 {
 		c.Agent.LogRetentionDays = DefaultLogRetentionDays
@@ -797,6 +815,31 @@ func normalizeDependencyState(state *DependencyStateSection) {
 	state.InstalledVersion = NormalizeDependencyVersion(state.InstalledVersion)
 	state.Detail = strings.TrimSpace(state.Detail)
 	state.LastError = strings.TrimSpace(state.LastError)
+}
+
+func normalizeRemoteOpsSection(section RemoteOpsSection) RemoteOpsSection {
+	section.WorkerGUID = strings.TrimSpace(section.WorkerGUID)
+	section.RoutePathPrefix = strings.TrimSpace(section.RoutePathPrefix)
+	section.BaseURL = NormalizeRemoteOpsURL(section.BaseURL)
+	section.SocketURL = NormalizeRemoteOpsURL(section.SocketURL)
+	section.Reason = strings.TrimSpace(section.Reason)
+	if section.SiteID < 0 {
+		section.SiteID = 0
+	}
+	if section.RouteGeneration < 0 {
+		section.RouteGeneration = 0
+	}
+	if section.UpdatedAt < 0 {
+		section.UpdatedAt = 0
+	}
+	if !section.Available {
+		section.WorkerGUID = ""
+		section.RouteGeneration = 0
+		section.RoutePathPrefix = ""
+		section.BaseURL = ""
+		section.SocketURL = ""
+	}
+	return section
 }
 
 func (c AgentConfig) Clone() AgentConfig {

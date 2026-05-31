@@ -13,13 +13,14 @@ from __future__ import annotations
 import hashlib
 from Data.Engine.db import dbapi as sqlite3
 from datetime import datetime, timezone, timedelta
-from typing import Callable
+from typing import Any, Callable, Dict, Optional
 
 from flask import Blueprint, current_app, jsonify, request
 
 from ....auth import device_purge_state
 from ....auth.dpop import DPoPReplayError, DPoPValidator, DPoPVerificationError
 from ....auth.guid_utils import normalize_guid
+from ...remote_ops.agent_routes import build_agent_remote_ops_route_payload, fetch_active_site_worker_route
 
 
 def register(
@@ -53,6 +54,9 @@ def register(
         if not guid or not refresh_token:
             return jsonify({"error": "invalid_request"}), 400
 
+        remote_ops_site_id: Optional[int] = None
+        remote_ops_route: Optional[Dict[str, Any]] = None
+        remote_ops_reason = "site_worker_unavailable"
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
@@ -90,9 +94,10 @@ def register(
 
             cur.execute(
                 """
-                SELECT guid, ssl_key_fingerprint, token_version, status
-                  FROM devices
-                 WHERE guid = ?
+                SELECT d.guid, d.ssl_key_fingerprint, d.token_version, d.status, d.hostname, ds.site_id
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 WHERE d.guid = ?
                 """,
                 (guid,),
             )
@@ -100,10 +105,18 @@ def register(
             if not device_row:
                 return jsonify({"error": "device_not_found"}), 404
 
-            device_guid, fingerprint, token_version, status = device_row
+            device_guid, fingerprint, token_version, status, _hostname, site_id = device_row
             status_norm = (status or "active").strip().lower()
             if status_norm in {"revoked", "decommissioned"}:
                 return jsonify({"error": "device_revoked"}), 403
+            try:
+                remote_ops_site_id = int(site_id) if site_id is not None else None
+            except Exception:
+                remote_ops_site_id = None
+            if remote_ops_site_id is None:
+                remote_ops_reason = "device_site_unassigned"
+            else:
+                remote_ops_route = fetch_active_site_worker_route(conn, site_id=remote_ops_site_id)
 
             dpop_proof = request.headers.get("DPoP")
             jkt = stored_jkt or ""
@@ -152,11 +165,19 @@ def register(
         finally:
             conn.close()
 
+        remote_ops_payload = build_agent_remote_ops_route_payload(
+            app,
+            request,
+            site_id=remote_ops_site_id,
+            route=remote_ops_route,
+            reason=remote_ops_reason,
+        )
         return jsonify(
             {
                 "access_token": new_access_token,
                 "expires_in": 900,
                 "token_type": "Bearer",
+                "remote_ops_route": remote_ops_payload,
             }
         )
 

@@ -125,6 +125,34 @@ func (c *Client) BaseURL() string {
 	return strings.TrimRight(c.cfg.ServerURL, "/")
 }
 
+func (c *Client) RemoteOpsBaseURL() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cfg.RemoteOps.Available {
+		return strings.TrimRight(strings.TrimSpace(c.cfg.RemoteOps.BaseURL), "/")
+	}
+	return ""
+}
+
+func (c *Client) RemoteOpsRouteNeedsRefresh(maxAge time.Duration) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cfg.RemoteOps.Available && strings.TrimSpace(c.cfg.RemoteOps.BaseURL) != "" {
+		return false
+	}
+	if c.cfg.RemoteOps.UpdatedAt <= 0 {
+		return true
+	}
+	if maxAge <= 0 {
+		return true
+	}
+	return time.Since(time.Unix(c.cfg.RemoteOps.UpdatedAt, 0)) >= maxAge
+}
+
+func (c *Client) RefreshRemoteOpsRoute(ctx context.Context) error {
+	return c.refreshLocked(ctx)
+}
+
 func (c *Client) AgentID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -390,13 +418,25 @@ func (c *Client) performEnrollmentLocked(ctx context.Context) error {
 }
 
 type enrollFinalResponse struct {
-	Status       string `json:"status"`
-	GUID         string `json:"guid"`
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int64  `json:"expires_in"`
-	PollAfterMS  int    `json:"poll_after_ms"`
-	SigningKey   string `json:"signing_key"`
+	Status         string                  `json:"status"`
+	GUID           string                  `json:"guid"`
+	AccessToken    string                  `json:"access_token"`
+	RefreshToken   string                  `json:"refresh_token"`
+	ExpiresIn      int64                   `json:"expires_in"`
+	PollAfterMS    int                     `json:"poll_after_ms"`
+	SigningKey     string                  `json:"signing_key"`
+	RemoteOpsRoute *remoteOpsRouteResponse `json:"remote_ops_route"`
+}
+
+type remoteOpsRouteResponse struct {
+	Available       bool   `json:"available"`
+	SiteID          int    `json:"site_id"`
+	WorkerGUID      string `json:"worker_guid"`
+	RouteGeneration int64  `json:"route_generation"`
+	RoutePathPrefix string `json:"route_path_prefix"`
+	BaseURL         string `json:"base_url"`
+	SocketURL       string `json:"socket_url"`
+	Reason          string `json:"reason"`
 }
 
 func (c *Client) applyTokensLocked(response enrollFinalResponse) error {
@@ -417,6 +457,7 @@ func (c *Client) applyTokensLocked(response enrollFinalResponse) error {
 	if strings.TrimSpace(response.SigningKey) != "" {
 		c.cfg.Trust.ServerSigningKeySPKIB64 = strings.TrimSpace(response.SigningKey)
 	}
+	applyRemoteOpsRoute(c.cfg, response.RemoteOpsRoute)
 	c.cfg.EnrollmentCode = ""
 	return agentconfig.Save(c.configPath, c.cfg)
 }
@@ -432,8 +473,9 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 		"refresh_token": refreshToken,
 	}
 	var response struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int64  `json:"expires_in"`
+		AccessToken    string                  `json:"access_token"`
+		ExpiresIn      int64                   `json:"expires_in"`
+		RemoteOpsRoute *remoteOpsRouteResponse `json:"remote_ops_route"`
 	}
 	if _, err := c.doJSON(ctx, http.MethodPost, "/api/agent/token/refresh", payload, &response, true); err != nil {
 		if permanentRefreshFailure(err) {
@@ -460,7 +502,34 @@ func (c *Client) refreshLocked(ctx context.Context) error {
 	}
 	c.cfg.Tokens.AccessToken = strings.TrimSpace(response.AccessToken)
 	c.cfg.Tokens.AccessExpiresAt = time.Now().Unix() + expiresIn - 5
+	applyRemoteOpsRoute(c.cfg, response.RemoteOpsRoute)
 	return agentconfig.Save(c.configPath, c.cfg)
+}
+
+func applyRemoteOpsRoute(cfg *agentconfig.AgentConfig, route *remoteOpsRouteResponse) {
+	if cfg == nil || route == nil {
+		return
+	}
+	now := time.Now().Unix()
+	if route.Available && strings.TrimSpace(route.BaseURL) != "" {
+		cfg.RemoteOps = agentconfig.RemoteOpsSection{
+			Available:       true,
+			SiteID:          route.SiteID,
+			WorkerGUID:      strings.TrimSpace(route.WorkerGUID),
+			RouteGeneration: route.RouteGeneration,
+			RoutePathPrefix: strings.TrimSpace(route.RoutePathPrefix),
+			BaseURL:         agentconfig.NormalizeRemoteOpsURL(route.BaseURL),
+			SocketURL:       agentconfig.NormalizeRemoteOpsURL(route.SocketURL),
+			UpdatedAt:       now,
+		}
+		return
+	}
+	cfg.RemoteOps = agentconfig.RemoteOpsSection{
+		Available: false,
+		SiteID:    route.SiteID,
+		Reason:    strings.TrimSpace(route.Reason),
+		UpdatedAt: now,
+	}
 }
 
 func permanentRefreshFailure(err error) bool {

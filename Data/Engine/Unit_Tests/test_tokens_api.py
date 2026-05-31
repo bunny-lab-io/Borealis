@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 from flask.testing import FlaskClient
 
+from Data.Engine.services.job_scheduler.queue import WORKER_STATUS_RUNNING, register_worker
+
 from .conftest import EngineTestHarness
 
 
@@ -62,17 +64,33 @@ def test_refresh_token_success(engine_harness: EngineTestHarness) -> None:
                 _iso(expires_at),
             ),
         )
+        cur.execute(
+            "INSERT INTO device_sites (device_hostname, site_id, assigned_at) VALUES (?, ?, ?)",
+            ("device-one", 1, int(now.timestamp())),
+        )
+        register_worker(
+            conn,
+            worker_guid="worker-refresh-route",
+            container_name="site-worker-worker-refresh-route",
+            site_id=1,
+            status=WORKER_STATUS_RUNNING,
+        )
         conn.commit()
 
     response = client.post(
         "/api/agent/token/refresh",
         json={"guid": guid, "refresh_token": refresh_token},
+        headers={"X-Forwarded-Host": "engine.example.test", "X-Forwarded-Proto": "https"},
     )
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["token_type"] == "Bearer"
     assert payload["expires_in"] == 900
     assert isinstance(payload["access_token"], str) and payload["access_token"]
+    assert payload["remote_ops_route"]["available"] is True
+    assert payload["remote_ops_route"]["worker_guid"] == "worker-refresh-route"
+    assert payload["remote_ops_route"]["base_url"].endswith("/_borealis/site-workers/worker-refresh-route")
+    assert payload["remote_ops_route"]["socket_url"].endswith("/_borealis/site-workers/worker-refresh-route/socket.io/")
 
     with sqlite3.connect(str(harness.db_path)) as conn:
         cur = conn.cursor()

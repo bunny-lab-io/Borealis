@@ -36,6 +36,7 @@ from ....auth.rate_limit import SlidingWindowRateLimiter
 from ....crypto import keys as crypto_keys
 from ....enrollment.nonce_store import NonceCache
 from ....auth.guid_utils import normalize_guid
+from ...remote_ops.agent_routes import build_agent_remote_ops_route_payload, fetch_active_site_worker_route
 from cryptography.hazmat.primitives import serialization
 
 
@@ -712,6 +713,9 @@ def register(
             _poll_log(f"enrollment poll invalid_sig ref={approval_reference}", context_hint)
             return jsonify({"error": "invalid_proof_sig"}), 400
 
+        remote_ops_site_id: Optional[int] = None
+        remote_ops_route: Optional[Dict[str, Any]] = None
+        remote_ops_reason = "site_worker_unavailable"
         conn = db_conn_factory()
         try:
             cur = conn.cursor()
@@ -822,6 +826,7 @@ def register(
             device_record = _ensure_device_record(cur, effective_guid, hostname_claimed, fingerprint)
             _store_device_key(cur, effective_guid, fingerprint)
             if site_id:
+                remote_ops_site_id = int(site_id)
                 assigned_at = int(time.time())
                 cur.execute(
                     """
@@ -832,6 +837,9 @@ def register(
                     """,
                     (device_record.get("hostname"), site_id, assigned_at),
                 )
+                remote_ops_route = fetch_active_site_worker_route(conn, site_id=int(site_id))
+            else:
+                remote_ops_reason = "device_site_unassigned"
 
             # Update approval record with final state
             cur.execute(
@@ -857,6 +865,13 @@ def register(
         finally:
             conn.close()
 
+        remote_ops_payload = build_agent_remote_ops_route_payload(
+            app,
+            request,
+            site_id=remote_ops_site_id,
+            route=remote_ops_route,
+            reason=remote_ops_reason,
+        )
         _poll_log(
             f"enrollment finalized guid={effective_guid} fingerprint={fingerprint[:12]} host={hostname_claimed}",
             context_hint,
@@ -870,6 +885,7 @@ def register(
                 "refresh_token": refresh_info["token"],
                 "token_type": "Bearer",
                 "signing_key": _signing_key_b64(),
+                "remote_ops_route": remote_ops_payload,
             }
         )
 

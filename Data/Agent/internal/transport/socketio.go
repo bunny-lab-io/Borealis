@@ -239,7 +239,14 @@ func socketURL(baseURL string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported socket scheme %q", parsed.Scheme)
 	}
-	parsed.Path = "/socket.io/"
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(basePath, "/socket.io") {
+		parsed.Path = basePath + "/"
+	} else if basePath == "" {
+		parsed.Path = "/socket.io/"
+	} else {
+		parsed.Path = basePath + "/socket.io/"
+	}
 	parsed.RawQuery = "EIO=4&transport=websocket"
 	return parsed.String(), nil
 }

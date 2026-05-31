@@ -6,9 +6,9 @@ from typing import Any, Dict, Mapping, Optional
 
 from flask import Blueprint, jsonify, request
 
-from ....public_endpoints import public_base_url
 from ...auth import RequestAuthContext, UserSiteAccessManager
 from ...job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
+from ...remote_ops.agent_routes import site_worker_route_urls
 from ...remote_ops.sessions import (
     REMOTE_OP_SESSION_AUDIENCE,
     REMOTE_OP_SESSION_ISSUER,
@@ -38,16 +38,6 @@ def _normalize_int(value: Any) -> Optional[int]:
         return int(value)
     except Exception:
         return None
-
-
-def _join_url(base: str, path: str) -> str:
-    base_value = _normalize_text(base).rstrip("/")
-    path_value = _normalize_text(path)
-    if not path_value:
-        return base_value
-    if not path_value.startswith("/"):
-        path_value = f"/{path_value}"
-    return f"{base_value}{path_value}"
 
 
 def _lookup_device(conn, body: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
@@ -90,16 +80,6 @@ def _lookup_device(conn, body: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "agent_id": _normalize_text(row[2]),
         "site_id": _normalize_int(row[3]),
         "site_name": _normalize_text(row[4]),
-    }
-
-
-def _worker_urls(context: Any, req: Any, route: Mapping[str, Any]) -> Dict[str, str]:
-    base = public_base_url(context, req=req)
-    route_prefix = _normalize_text(route.get("route_path_prefix"))
-    worker_base = _join_url(base, route_prefix)
-    return {
-        "base": worker_base,
-        "socket_io": _join_url(worker_base, "/socket.io"),
     }
 
 
@@ -159,7 +139,7 @@ def register_remote_ops_sessions(app, adapters: "EngineServiceAdapters") -> None
         except RemoteOpSessionError as exc:
             return jsonify({"error": exc.code, "message": exc.message}), 400
 
-        urls = _worker_urls(adapters.context, request, route)
+        urls = site_worker_route_urls(adapters.context, request, route)
         session_payload = {
             "session_id": issued["session_id"],
             "token_type": "Bearer",
