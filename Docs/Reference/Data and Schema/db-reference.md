@@ -822,6 +822,19 @@ finally:
     - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
     - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 60 seconds), and `/api/server/workers?history_seconds=60` hides old terminal rows even if legacy rows lack `stopped_at`.
 
+    #### `job_scheduler_worker_routes`
+    - Status: Active.
+    - Purpose: Scheduler-owned route registry for active and recently terminal site-worker routes.
+    - Columns: `worker_guid`, `site_id`, `container_name`, `route_name`, `route_path_prefix`, `route_file_path`, `upstream_scheme`, `upstream_host`, `upstream_port`, `status`, `generation`, `metadata_json`, `created_at`, `updated_at`, `retired_at`.
+    - Used by:
+    - `job-scheduler` site-worker spawn, Docker reconcile, lost-worker detection, and worker-history pruning.
+    - Future remote-operation session brokering that needs a stable worker route lookup without Docker inspection.
+    - Notes:
+    - `worker_guid` is the primary key and matches `job_scheduler_workers.worker_guid`.
+    - Active route rows use status `active`; terminal route rows use `retired` or `lost`.
+    - `generation` starts at `1` and increments only when route metadata or lifecycle status changes, not on every scheduler reconcile tick.
+    - Route files are recorded as `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` by default. M3 records route metadata only; later milestones write and authorize feature-specific route traffic.
+
     #### `job_scheduler_service_snapshots`
     - Status: Active.
     - Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.

@@ -10,17 +10,25 @@ from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
     WORK_STATUS_QUEUED,
     WORK_STATUS_RUNNING,
+    WORKER_ROUTE_STATUS_ACTIVE,
+    WORKER_ROUTE_STATUS_LOST,
+    WORKER_ROUTE_STATUS_RETIRED,
     WORKER_STATUS_LOST,
     WORKER_STATUS_RUNNING,
     WORKER_STATUS_STOPPED,
+    active_worker_route_for_site,
     claim_next_work_item,
     enqueue_scheduled_run,
     ensure_job_scheduler_tables,
     expire_stale_leases,
+    list_worker_routes,
     mark_missing_workers_lost,
+    prune_worker_history,
     register_worker,
     requeue_work_item,
     stop_worker,
+    upsert_worker_route,
+    worker_route_for_worker,
 )
 from Data.Engine.services.job_scheduler.worker import (
     _fail_scheduled_run_after_transient_retries,
@@ -156,6 +164,117 @@ def test_site_worker_scheduled_concurrency_uses_config_env_and_default(tmp_path:
     assert _site_worker_scheduled_concurrency() == 1
 
 
+def test_register_worker_creates_active_route_record(tmp_path: Path, monkeypatch) -> None:
+    dynamic_dir = tmp_path / "dynamic"
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
+    conn = _connect_queue_db(tmp_path)
+    try:
+        register_worker(
+            conn,
+            worker_guid="worker-registry",
+            container_name="site-worker-worker-registry",
+            site_id=7,
+            status=WORKER_STATUS_RUNNING,
+        )
+        conn.commit()
+
+        route = worker_route_for_worker(conn, worker_guid="worker-registry")
+        assert route is not None
+        assert route["worker_guid"] == "worker-registry"
+        assert route["site_id"] == 7
+        assert route["container_name"] == "site-worker-worker-registry"
+        assert route["status"] == WORKER_ROUTE_STATUS_ACTIVE
+        assert route["generation"] == 1
+        assert route["route_name"] == "borealis-site-worker-worker-registry"
+        assert route["route_path_prefix"] == "/_borealis/site-workers/worker-registry"
+        assert route["route_file_path"] == str(dynamic_dir / "site-worker-worker-registry.yml")
+        assert route["upstream_scheme"] == "http"
+        assert route["upstream_host"] == "127.0.0.1"
+        assert route["upstream_port"] == 0
+        assert route["metadata"]["lifecycle_owner"] == "job-scheduler"
+        assert route["metadata"]["route_kind"] == "site_worker"
+
+        active = active_worker_route_for_site(conn, site_id=7)
+        assert active is not None
+        assert active["worker_guid"] == "worker-registry"
+    finally:
+        conn.close()
+
+
+def test_worker_route_upsert_updates_generation_only_when_metadata_changes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(tmp_path / "dynamic"))
+    conn = _connect_queue_db(tmp_path)
+    try:
+        first = upsert_worker_route(
+            conn,
+            worker_guid="worker-upsert",
+            container_name="site-worker-worker-upsert",
+            site_id=12,
+        )
+        same = upsert_worker_route(
+            conn,
+            worker_guid="worker-upsert",
+            container_name="site-worker-worker-upsert",
+            site_id=12,
+        )
+        changed = upsert_worker_route(
+            conn,
+            worker_guid="worker-upsert",
+            container_name="site-worker-worker-upsert-v2",
+            site_id=12,
+            upstream_port=8123,
+            metadata={"listener": "remote-op"},
+        )
+        conn.commit()
+
+        assert first is not None
+        assert same is not None
+        assert changed is not None
+        assert first["generation"] == 1
+        assert same["generation"] == 1
+        assert changed["generation"] == 2
+        assert changed["container_name"] == "site-worker-worker-upsert-v2"
+        assert changed["upstream_port"] == 8123
+        assert changed["metadata"]["listener"] == "remote-op"
+
+        routes = list_worker_routes(conn, site_id=12, statuses=[WORKER_ROUTE_STATUS_ACTIVE])
+        assert [route["worker_guid"] for route in routes] == ["worker-upsert"]
+    finally:
+        conn.close()
+
+
+def test_worker_route_upsert_recovers_missing_registry_row_for_live_worker(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(tmp_path / "dynamic"))
+    conn = _connect_queue_db(tmp_path)
+    try:
+        register_worker(
+            conn,
+            worker_guid="worker-recover",
+            container_name="site-worker-worker-recover",
+            site_id=15,
+            status=WORKER_STATUS_RUNNING,
+        )
+        conn.execute("DELETE FROM job_scheduler_worker_routes WHERE worker_guid=?", ("worker-recover",))
+        conn.commit()
+
+        assert worker_route_for_worker(conn, worker_guid="worker-recover") is None
+
+        recovered = upsert_worker_route(
+            conn,
+            worker_guid="worker-recover",
+            container_name="site-worker-worker-recover",
+            site_id=15,
+        )
+        conn.commit()
+
+        assert recovered is not None
+        assert recovered["status"] == WORKER_ROUTE_STATUS_ACTIVE
+        assert recovered["generation"] == 1
+        assert recovered["route_file_path"].endswith("site-worker-worker-recover.yml")
+    finally:
+        conn.close()
+
+
 def test_stop_worker_requeues_running_work_item(tmp_path: Path) -> None:
     conn = _connect_queue_db(tmp_path)
     try:
@@ -172,6 +291,10 @@ def test_stop_worker_requeues_running_work_item(tmp_path: Path) -> None:
         assert row[4] is None
         assert row[5] is None
         assert "site worker stopped" in row[6]
+        route = worker_route_for_worker(conn, worker_guid="worker-stop")
+        assert route is not None
+        assert route["status"] == WORKER_ROUTE_STATUS_RETIRED
+        assert route["retired_at"] is not None
     finally:
         conn.close()
 
@@ -195,6 +318,49 @@ def test_mark_missing_worker_requeues_running_work_item(tmp_path: Path) -> None:
         assert row[1] is None
         assert row[4] is None
         assert "container disappeared" in row[6]
+        route = worker_route_for_worker(conn, worker_guid="worker-missing")
+        assert route is not None
+        assert route["status"] == WORKER_ROUTE_STATUS_LOST
+        assert route["retired_at"] is not None
+    finally:
+        conn.close()
+
+
+def test_prune_worker_history_removes_old_terminal_route_records(tmp_path: Path) -> None:
+    conn = _connect_queue_db(tmp_path)
+    try:
+        register_worker(
+            conn,
+            worker_guid="worker-prune",
+            container_name="site-worker-worker-prune",
+            site_id=17,
+            status=WORKER_STATUS_RUNNING,
+        )
+        stop_worker(conn, worker_guid="worker-prune")
+        old_ts = int(time.time()) - 300
+        conn.execute(
+            """
+            UPDATE job_scheduler_workers
+               SET stopped_at=?, last_seen_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (old_ts, old_ts, old_ts, "worker-prune"),
+        )
+        conn.execute(
+            """
+            UPDATE job_scheduler_worker_routes
+               SET retired_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (old_ts, old_ts, "worker-prune"),
+        )
+        conn.commit()
+
+        deleted = prune_worker_history(conn, retention_seconds=60)
+        conn.commit()
+
+        assert deleted == 1
+        assert worker_route_for_worker(conn, worker_guid="worker-prune") is None
     finally:
         conn.close()
 

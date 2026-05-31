@@ -47,6 +47,7 @@ from .queue import (
     register_worker,
     replace_service_snapshots,
     update_worker_docker_state,
+    upsert_worker_route,
     heartbeat_worker,
 )
 from .security import INTERNAL_TOKEN_HEADER, internal_token
@@ -460,6 +461,7 @@ def _reconcile_site_workers(db_factory, logger) -> None:
     duplicate_sites: Dict[int, List[str]] = {}
     conn = db_factory()
     try:
+        ensure_job_scheduler_tables(conn)
         for snapshot in snapshots:
             worker_guid = str(snapshot.get("worker_guid") or "").strip()
             container_name = str(snapshot.get("container_name") or f"site-worker-{worker_guid}").strip()
@@ -480,6 +482,12 @@ def _reconcile_site_workers(db_factory, logger) -> None:
                     site_id=site_id,
                     status=WORKER_STATUS_RUNNING,
                 )
+            upsert_worker_route(
+                conn,
+                worker_guid=worker_guid,
+                container_name=container_name,
+                site_id=site_id,
+            )
             update_worker_docker_state(
                 conn,
                 worker_guid=worker_guid,
