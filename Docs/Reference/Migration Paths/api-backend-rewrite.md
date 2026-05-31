@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M7: Remote Shell` |
+| Active milestone | `M8: Remote Desktop + Guacamole` |
 | Last updated | 2026-05-31 |
-| Latest implementation commit | `83136e22` (`Implement M7 remote shell worker path`) plus M7 WebUI socket route hardening fixes. |
-| Current state | `M7` implementation is committed and local validation passed. `/api/shell/establish` remains the authenticated broker for tunnel/session setup, now returns a scoped `remote_shell` remote-op token plus active site-worker Socket.IO route. WebUI Remote Shell opens a direct site-worker Socket.IO connection for shell open/send/close, derives the browser Socket.IO path from the worker route prefix on the current page origin, waits for that worker socket to connect before sending `vpn_shell_open`, and starts with polling before WebSocket upgrade. Site-worker verifies remote-op tokens, owns shell session state, emits tunnel starts through its local Agent registry, and bridges TCP to the Agent shell listener over WireGuard. |
-| Next safe step | Rebuild/redeploy Engine from latest branch head, then rerun M7 smoke against LAB-OPERATOR-01: verify shell establish returns `remote_ops_session`, browser shell socket reaches `/_borealis/site-workers/<worker_guid>/socket.io/`, command input/output works, disconnect cleans up worker shell session, and invalid/missing remote-op token is rejected. Do not start `M8` until M7 post-redeploy smoke passes and this tracker marks `M7` Done. |
+| Latest implementation commit | `8edd5d2c` (`Harden M7 shell worker browser route`). |
+| Current state | `M7` is complete after post-redeploy WebUI smoke. `/api/shell/establish` remains the authenticated broker for tunnel/session setup, returns a scoped `remote_shell` token plus active site-worker Socket.IO route, and WebUI Remote Shell connects to that route through the current page origin. Site-worker verifies remote-op tokens, owns shell session state, emits tunnel starts through its local Agent registry, bridges TCP to the Agent shell listener over WireGuard, and closes worker-local sessions on operator disconnect. |
+| Next safe step | Begin `M8` by inventorying Remote Desktop and Guacamole ownership: `/api/vnc/*`, Guacamole WebSocket routing, Agent VNC ensure/credential flow, existing api-backend VNC proxy/session code, and WebUI Remote Desktop entrypoints. Keep M8 scope limited to moving VNC/Guacamole orchestration and browser data path to site-worker. |
 
 ## Tracker Rules
 
@@ -42,8 +42,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M4: Signed Remote-Op Sessions` | `Done` | Mint scoped tokens for direct browser-to-worker access. |
 | `M5: Agent Ops Route Cutover` | `Done` | Move Agent remote-op socket target to site-worker. |
 | `M6: Site-Worker Agent Socket.IO` | `Done` | Move Agent remote-op event ownership to site-worker. |
-| `M7: Remote Shell` | `In Progress` | Move interactive shell broker path to site-worker. |
-| `M8: Remote Desktop + Guacamole` | `Not Started` | Move VNC and Guacamole path to site-worker. |
+| `M7: Remote Shell` | `Done` | Move interactive shell broker path to site-worker. |
+| `M8: Remote Desktop + Guacamole` | `In Progress` | Move VNC and Guacamole path to site-worker. |
 | `M9: Remote File Management` | `Not Started` | Move remote file operations and transfer state to site-worker. |
 | `M10: Process, Service, Software Ops` | `Not Started` | Move remaining live Agent task handlers to site-worker. |
 | `M11: Agent Maintenance + Quick Jobs` | `Not Started` | Move live quick-job and maintenance dispatch to site-worker. |
@@ -153,25 +153,25 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Move interactive shell traffic and WireGuard shell TCP handling to site-worker. |
 | Migrates | Shell open/send/resize/close, shell session state, and Engine-side TCP connection to Agent shell service. |
 | Out Of Scope | Remote desktop, file management, process/service/software actions, Ansible execution. |
 | Done When | WebUI shell uses direct site-worker path and `api-backend` no longer brokers shell traffic. |
 | Validation | Manual shell open/send/close smoke, disconnect/reconnect scenario, authorization failure check, focused worker tests where available. |
-| Handoff Note | Implementation commit `83136e22` plus current WebUI socket route hardening are ready for post-rebuild smoke. Validate LAB-OPERATOR-01 Remote Shell through WebUI, confirm worker route and Socket.IO path from `/api/shell/establish`, confirm worker-local shell open/send/close logs, and leave `M8` untouched until M7 is marked `Done`. |
+| Handoff Note | `M7` completed after post-redeploy WebUI smoke on LAB-OPERATOR-01. Browser shell traffic reached `/_borealis/site-workers/38da1dbc-a6ee-43e9-b16d-cdb6be6da4c5/socket.io/`, site-worker opened the shell over WireGuard, command output returned, and close/disconnect cleaned up the worker-local shell session. `M8` is now active. |
 
 ### M8: Remote Desktop + Guacamole
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Move VNC orchestration and Guacamole connection path to site-worker. |
 | Migrates | VNC start/stop/probe/credential request flow, VNC proxy ownership, and browser/Guacamole routing away from `api-backend`. |
 | Out Of Scope | Remote shell, remote files, process/service/software actions, Go rewrite. |
 | Done When | Browser remote desktop session connects through site-worker-managed route, and Guacamole no longer depends on api-backend VNC proxy code. |
 | Validation | Manual remote desktop open/close smoke, credential-request flow, unavailable-host failure, Traefik route hotload check. |
-| Handoff Note | Record Guacamole-to-worker connection method and fallback/error behavior before starting `M9`. |
+| Handoff Note | Start M8 with a source map for `Data/Engine/Containers/api-backend/data/services/API/devices/vnc.py`, Guacamole WebSocket routing, Agent VNC ensure/credential events, and WebUI Remote Desktop routes. Record Guacamole-to-worker connection method and fallback/error behavior before starting `M9`. |
 
 ### M9: Remote File Management
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 | `M7` | Closed Remote Shell worker migration after Engine rebuild from `8edd5d2c`. Served WebUI bundle included route-prefix shell Socket.IO logic and polling-first transport. Synthetic future Bunny Lab work item spawned a site-worker route so LAB-OPERATOR-01 could register on the worker. Operator opened WebUI Remote Shell, ran `whoami`, ran `echo M7_SHELL_SMOKE`, received output, and closed the session. Synthetic `m7-runtime-smoke-route-*` work row was deleted after smoke. | Post-redeploy M7 smoke passed. Worker-local logs show `vpn_shell_open_success`, `vpn_shell_ready_pong`, two `vpn_shell_output_timing` entries, `vpn_shell_closed reason=close_request`, and `vpn_shell_output_summary lines=4 inputs=2`. Traefik access log shows browser polling through the site-worker route. `git diff --check` passed before the code-fix handoff commit. | Branch head `8edd5d2c`; served asset `inventoryRoutes-CEOXYMjk.js`; worker route `38da1dbc-a6ee-43e9-b16d-cdb6be6da4c5` on port `60600`; Traefik route `/_borealis/site-workers/38da1dbc-a6ee-43e9-b16d-cdb6be6da4c5/socket.io/`; Agent `LAB-OPERATOR-01_2540DA38-E2B1-45B9-9113-BF7CF0E1778A_SYSTEM`; smoke row `705` deleted. |
 | 2026-05-31 | `M7` | Investigated repeated post-redeploy `worker_socket_connect_timeout` during LAB-OPERATOR-01 WebUI Remote Shell attempts. `/api/shell/establish` returned active worker `0deeff72-fda8-4b0a-9c94-ea12f5f39f19` three times, the worker was healthy, LAB-OPERATOR-01 was registered on the worker, Traefik-prefixed worker health and Socket.IO polling passed, and direct missing-token `vpn_shell_open` was rejected. Browser attempts did not reach the worker route in Traefik or site-worker logs, so WebUI now derives the shell Socket.IO path from `route_path_prefix` on `window.location.origin`, keeps absolute worker URLs only as path fallback, and starts with polling before WebSocket upgrade. | `git diff --check` passed. WebUI unit lane was not run because runtime cache is missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests` and `node_modules`. Post-rebuild WebUI shell smoke remains pending. | Runtime worker `0deeff72-fda8-4b0a-9c94-ea12f5f39f19`, port `56706`; Agent registry contained `LAB-OPERATOR-01_2540DA38-E2B1-45B9-9113-BF7CF0E1778A_SYSTEM`; Traefik-prefixed `/health` and `/socket.io/?transport=polling&EIO=4` returned `200`; direct `vpn_shell_open` without token returned `missing_token`; no browser `/_borealis/site-workers/...` access log appeared for the failed UI attempts. |
 | 2026-05-31 | `M7` | Investigated failed LAB-OPERATOR-01 WebUI Remote Shell attempts after Engine redeploy. `/api/shell/establish` returned the active site-worker route and scoped token, served WebUI bundle contained M7 code, Traefik prefix polling reached the worker, and HTTP/1.1 WebSocket upgrade worked. Hardened the WebUI shell path so it waits for the dedicated worker Socket.IO connection before emitting `vpn_shell_open`, allows polling fallback, and reports worker socket connect failures directly instead of surfacing only a shell-open timeout. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain remote-access` passed with `BOREALIS_ENGINE_TEST_PYTHON=/opt/Borealis/.cache/codex-engine-tests/bin/python`; the first system-Python attempt failed before tests because `/usr/bin/python3` has no `pytest`. WebUI unit lane remains blocked because runtime cache is missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests` and `node_modules`. Post-rebuild WebUI smoke remains pending. | Runtime logs: shell establishes at `13:22:21`, `13:23:08`, and `13:23:44`; worker route `dbcee686-3e5a-4ba3-970b-b843507ab316`; Traefik-prefixed worker polling `HTTP/2 200`; HTTP/1.1 worker WebSocket `101 Switching Protocols`; `Unit_Test_Results/engine-20260531T133040Z`; source `Remote_Shell.jsx`. |
 | 2026-05-31 | `M7` | Implemented Remote Shell worker path. Shell establish now requires an active same-site worker route and returns a scoped `remote_shell` token plus worker Socket.IO URL. WebUI creates a dedicated site-worker Socket.IO client for shell events and no longer binds shell handlers to the main api-backend socket. Site-worker validates the token, looks up the Agent WireGuard lease, owns shell sessions, enforces one active shell per Agent, retries TCP connect to the Agent shell listener, and cleans sessions on close/disconnect. | Local validation passed: `python3 -m py_compile` for touched Python files, focused `test_site_worker_socket.py` passed (`4 passed`), `Engine_Unit_Tests.sh --domain remote-access` passed with isolated JWT token root, and `git diff --check` passed. WebUI unit lane was not run because runtime cache is missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests` and `node_modules`. Post-rebuild WebUI/Agent smoke remains pending. | `83136e22`; `Unit_Test_Results/engine-20260531T125049Z`; focused pytest output. |
