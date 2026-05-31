@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M2: Traefik Dynamic Worker Routing` |
+| Active milestone | `M3: Site-Worker Route Registry` |
 | Last updated | 2026-05-31 |
 | Latest implementation commit | `71ec3c95` (`Fix Traefik dynamic route directory permissions`) |
-| Current state | `M2` implementation is committed locally and post-redeploy read-only config smoke passed. Live hotload smoke exposed that the watched route directory was redeployed as `root:root 0755`, blocking operator-side atomic route drops. A permission fix is staged so deploy writes runtime owner UID/GID and Traefik keeps `config/dynamic/` owner-writable with mode `0775`. |
-| Next safe step | Redeploy branch head with the `M2` route-directory permission fix, rerun file-provider hotload add/remove smoke, then mark `M2` done before starting `M3`. |
+| Current state | `M2` is done. Post-redeploy smoke confirmed Traefik watches `config/dynamic/`, core routes stay intact, route files can be atomically added/removed, and Traefik process stays up without recreation. |
+| Next safe step | Start `M3`: design and implement scheduler-owned site-worker route registry without changing remote-op feature routing yet. |
 
 ## Tracker Rules
 
@@ -37,8 +37,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- | --- |
 | `M0: Tracker + PR Setup` | `Done` | Create branch, tracker, index link, and draft PR. |
 | `M1: Runtime Dependency Split` | `Done` | Move Ansible/runtime-heavy dependencies out of `api-backend`. |
-| `M2: Traefik Dynamic Worker Routing` | `In Progress` | Hotload per-site-worker routes without Traefik recreate. |
-| `M3: Site-Worker Route Registry` | `Not Started` | Track active worker route metadata in runtime registry. |
+| `M2: Traefik Dynamic Worker Routing` | `Done` | Hotload per-site-worker routes without Traefik recreate. |
+| `M3: Site-Worker Route Registry` | `In Progress` | Track active worker route metadata in runtime registry. |
 | `M4: Signed Remote-Op Sessions` | `Not Started` | Mint scoped tokens for direct browser-to-worker access. |
 | `M5: Agent Ops Route Cutover` | `Not Started` | Move Agent remote-op socket target to site-worker. |
 | `M6: Site-Worker Agent Socket.IO` | `Not Started` | Move Agent remote-op event ownership to site-worker. |
@@ -93,19 +93,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Let Traefik hotload per-site-worker route files without recreating Traefik. |
 | Migrates | Direct routing setup for worker-owned remote-operation endpoints. |
 | Out Of Scope | Worker registry schema, operation-token authorization, Agent route cutover, remote-op feature migration. |
 | Done When | Traefik uses a watched dynamic configuration directory, core routes stay intact, and per-worker route files can be added/removed atomically. |
 | Validation | `docker compose -f Data/Engine/Containers/compose.yaml config`, generated Traefik YAML parse check if available, manual hotload smoke when runtime is available. |
-| Handoff Note | Route directory is `Engine/Services/traefik-edge/config/dynamic/`. Core routes render to `core.yml`. Future site-worker routes must use `site-worker-<worker_guid>.yml` in that directory; write `.site-worker-<worker_guid>.yml.tmp` in the same directory, then rename to the final filename so Traefik sees an atomic add/update. Roll back worker routes with `rm -f Engine/Services/traefik-edge/config/dynamic/site-worker-*.yml`; reload Traefik with `bash Engine.sh --service traefik-edge reload prod` only if runtime file watching is unhealthy. |
+| Handoff Note | Route directory is `Engine/Services/traefik-edge/config/dynamic/`. Core routes render to `core.yml`. Future site-worker routes must use `site-worker-<worker_guid>.yml` in that directory; write `.site-worker-<worker_guid>.yml.tmp` in the same directory, then rename to the final filename so Traefik sees an atomic add/update. Roll back worker routes with `rm -f Engine/Services/traefik-edge/config/dynamic/site-worker-*.yml`; reload Traefik with `bash Engine.sh --service traefik-edge reload prod` only if runtime file watching is unhealthy. Post-redeploy smoke passed on 2026-05-31: temporary route returned API health, removal stopped that route, and Traefik PID/start time stayed unchanged. |
 
 ### M3: Site-Worker Route Registry
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Track active site-worker route, port, generation, and status in a reliable runtime registry. |
 | Migrates | Worker discovery from implicit Docker/container state to explicit scheduler-managed metadata. |
 | Out Of Scope | Browser session tokens, Agent config changes, remote-op feature behavior. |
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-05-31 | `M2` | Closed M2 after redeploy of the route-directory permission fix. Runtime `config/dynamic/` is operator-writable as `nicole:nicole 0775`; generated static config watches that directory; `core.yml` remains loaded; temporary `site-worker-m2-hotload-validation.yml` was added atomically, served `/__borealis_m2_hotload` through Traefik to API `/health`, then removed cleanly. Traefik process stayed on the same PID/start time through add/remove. | Runtime config parse passed. API `/health` and WebUI loopback smoke passed. Hotload add returned `{"status":"ok"}`. Hotload removal returned non-200 (`301` through the normal HTTP redirect route). Traefik process stayed `2240940 Sun May 31 00:12:24 2026`. Temporary route file cleanup verified. | Runtime `Settings.json`, `traefik.yml`, `dynamic/core.yml`; Traefik process table; hotload validation route output. |
 | 2026-05-31 | `M2` | Ran post-redeploy M2 read-only smoke. Generated Traefik static config points `providers.file.directory` at `Engine/Services/traefik-edge/config/dynamic`, `watch` is enabled, `core.yml` exists, and live API/WebUI routes answer through current core routes. Hotload add/remove smoke was blocked because `config/dynamic/` was `root:root 0755` from deploy. Staged fix: `Engine.sh` now records runtime owner UID/GID, `ensure_service_tree` and `traefik-edge` entrypoint keep the watched dynamic directory owner-writable as `0775`, and `compose.env.example` carries safe root defaults. | `bash -n Engine.sh`, `bash -n Data/Engine/Containers/traefik-edge/entrypoint.sh`, `python3 -m py_compile`, `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, focused `test_edge_runtime.py`, and `git diff --check` passed. Runtime hotload remains pending redeploy of this permission fix. | Runtime `Settings.json`, `traefik.yml`, and `dynamic/core.yml`; current Traefik process started 2026-05-31 00:02:03 America/Denver; route write attempt returned permission denied before fix. |
 | 2026-05-30 | `M2` | Implemented Traefik watched dynamic directory support. `traefik-edge` now renders static config with `providers.file.directory`, keeps core routes in `config/dynamic/core.yml`, preserves current API/WebUI/VNC routers, and publishes the site-worker route filename pattern in `Settings.json`. `Engine.sh`, `compose.env.example`, and Python edge-runtime artifact generation now use the same dynamic directory layout and migrate legacy `dynamic.yml` settings to `dynamic/core.yml`. | `bash -n Engine.sh`, `bash -n Data/Engine/Containers/traefik-edge/entrypoint.sh`, `python3 -m py_compile` for touched Python files, `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, generated Traefik YAML parse checks for Python and shell renderers, focused `test_edge_runtime.py`, and `git diff --check` passed. Full `core` lane remains blocked by runtime secret permission errors outside the touched edge tests; `test_edge_runtime.py` passes inside that lane. | `Data/Engine/Containers/traefik-edge/entrypoint.sh`; `Data/Engine/Containers/api-backend/data/edge_runtime.py`; `Data/Engine/Unit_Tests/test_edge_runtime.py`; `Unit_Test_Results/engine-20260530T233846Z`. |
 | 2026-05-30 | `M1` | Closed M1 after redeploy. Runtime image manifest now matches current source for `api-backend`, `job-scheduler`, `site-worker`, and `webui-frontend`. Served WebUI `adminRoutes` bundle contains Engine Status terminal countdown and orphaned worker handoff strings. Jobs 102/103 remain terminal in PostgreSQL: Job 102 `Success`; Job 103 seven `Success` runs plus one endpoint-specific SSH auth `Failed` run on `lab-mail-02`. | `git diff --check` passed. Live API `/health` returned `ok`. `./Engine_Unit_Tests.sh --domain webui` remains blocked because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`, but prod WebUI image hash and served bundle were validated. | `Engine/Deploy/image-manifest.json`; served `/assets/adminRoutes-C4ohTIET.js`; `Unit_Test_Results/engine-20260530T232746Z`; runtime DB rows for Jobs 102/103. |
@@ -296,13 +297,12 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - Engine Status terminal task groups now show a 30-second countdown, aggregate matching terminal work, and reset the timer when newer matching terminal work arrives. Worker lanes now show `Re-Deploying` while orphaned same-site work waits for replacement worker claim.
 - Jobs 102/103 terminal results were confirmed from PostgreSQL: Job 102 succeeded; Job 103 succeeded on seven targets and failed on `lab-mail-02` due SSH authentication, not scheduler/runtime ownership.
 - M1 post-redeploy close check passed: current WebUI image hash is deployed and served `adminRoutes` bundle includes Engine Status countdown/handoff code.
-- M2 implementation committed: Traefik file provider now watches `Engine/Services/traefik-edge/config/dynamic/`, core routes render to `core.yml`, and per-site-worker route files use `site-worker-<worker_guid>.yml`. Post-redeploy read-only smoke passed; hotload smoke needs one more redeploy for route-directory owner/mode fix.
+- M2 complete: Traefik file provider now watches `Engine/Services/traefik-edge/config/dynamic/`, core routes render to `core.yml`, per-site-worker route files use `site-worker-<worker_guid>.yml`, and post-redeploy add/remove hotload smoke passed without recreating Traefik.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Redeploy the `M2` Traefik changes and smoke dynamic file-provider hotload before marking `M2` done.
-- After `M2` is done, complete `M3` to prepare the worker route registry foundation.
+- Complete `M3` to prepare the worker route registry foundation.
 - Complete `M4` through `M6` to establish direct worker authorization and Agent socket ownership.
 - Complete `M7` through `M11` to migrate each live remote-operation feature.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
@@ -319,7 +319,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes and `M2` edge runtime | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, and focused `Data/Engine/Unit_Tests/test_edge_runtime.py` passed. |
 | WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. M1 close used prod WebUI image hash plus served bundle inspection instead. |
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. `scheduler` domain currently fails before touched cases on existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
-| Manual Traefik hotload smoke | `M2` | `Pending permission-fix redeploy` | Read-only config smoke passed. Add/remove route smoke was blocked by `root:root 0755` dynamic directory; rerun after redeploying the owner/mode fix. |
+| Manual Traefik hotload smoke | `M2` | `Done` | Temporary route file add returned API health, removal stopped the route, and Traefik process stayed unchanged. |
 | Agent unit tests | `M5`, `M6` | `Not Started` | Required when Agent config or socket behavior changes. |
 | Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
 
@@ -330,9 +330,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after `71ec3c95`, "Fix Traefik dynamic route directory permissions".
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `71ec3c95`, "Fix Traefik dynamic route directory permissions", and the later `M2 Complete` tracker update.
 
-M1 is Done. Continue M2 only. Do not start M3 until M2 post-redeploy hotload smoke passes and this tracker marks M2 Done.
+M1 and M2 are Done. Continue M3 only.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -349,13 +349,19 @@ Completed M1 state:
 - Server Info should show Site Worker Scheduled Tasks as read-only profile-managed value. PUT /api/server/site-worker-settings was removed; GET remains.
 - Engine Status `Task (n Devices)` cards show represented target count. A shared Ansible batch can be one scheduled work item with multiple devices; individual Ansible can group several one-target work items into one card when job/status/worker match.
 
+Completed M2 state:
+- Traefik watches `Engine/Services/traefik-edge/config/dynamic`.
+- Core routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`.
+- Future site-worker route files use `site-worker-<worker_guid>.yml`.
+- Route files must be written as `.site-worker-<worker_guid>.yml.tmp` in the same directory, then renamed to final filename for atomic hotload.
+- Route rollback command is `rm -f Engine/Services/traefik-edge/config/dynamic/site-worker-*.yml`.
+- Post-redeploy hotload smoke passed: temporary route add returned API health, removal stopped the route, and Traefik process stayed unchanged.
+
 Next work:
-1. Redeploy branch head with M2 Traefik route-directory permission fix.
-2. Confirm `Engine/Services/traefik-edge/config/traefik.yml` uses `providers.file.directory: Engine/Services/traefik-edge/config/dynamic`.
-3. Confirm core routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`.
-4. Smoke file-provider hotload by atomically adding/removing a valid `site-worker-<worker_guid>.yml` route file in the watched directory without recreating the Traefik container.
-5. If smoke passes, mark M2 Done and set next safe step to M3.
-6. If smoke fails, fix only M2 routing regression and keep M2 In Progress.
+1. Implement M3: scheduler-owned site-worker route registry.
+2. Keep worker registry schema/structure short-lived for DB operations; read Data and Schema docs before touching DB code.
+3. Record registry table/structure and lifecycle owner before starting M4.
+4. Do not change browser session tokens, Agent config, or remote-op feature routing in M3.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
