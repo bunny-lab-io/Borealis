@@ -107,12 +107,14 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
 
     assert ack["status"] == "ok"
     assert runtime.has_host_service_socket("lab-one", "system")
+    assert runtime.has_registered_agents()
     assert runtime.emit_host_service_event("LAB-ONE", "system", "agent_maintenance_request", {"operation_id": "op1"})
     received = client.get_received()
     assert any(item["name"] == "agent_maintenance_request" for item in received)
 
     client.disconnect()
     assert not runtime.has_host_service_socket("lab-one", "system")
+    assert not runtime.has_registered_agents()
 
 
 def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch) -> None:

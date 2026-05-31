@@ -140,9 +140,6 @@ func (c *Client) RemoteOpsRouteNeedsRefresh(maxAge time.Duration) bool {
 	if !remoteOpsRouteUsable(c.cfg.RemoteOps) {
 		return true
 	}
-	if c.cfg.RemoteOps.Available && strings.TrimSpace(c.cfg.RemoteOps.BaseURL) != "" {
-		return false
-	}
 	if c.cfg.RemoteOps.UpdatedAt <= 0 {
 		return true
 	}

@@ -379,7 +379,17 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		_ = a.postStatus(ctx, "steady_state_online", "healthy", "Agent steady state online.")
 		return nil
 	})
-	return socket.Connect(ctx)
+	if err := socket.Connect(ctx); err != nil {
+		if ctx.Err() == nil {
+			refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if refreshErr := a.authClient.RefreshRemoteOpsRoute(refreshCtx); refreshErr != nil {
+				a.logger.Printf("remote ops route refresh after socket disconnect failed: %v", refreshErr)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) postStatus(ctx context.Context, phase string, status string, message string) error {

@@ -981,7 +981,10 @@ def main() -> None:
                 time.sleep(1.0 if active_scheduled < scheduled_concurrency else 3.0)
                 continue
 
-            if idle_since is None:
+            agent_sockets_registered = socket_runtime.has_registered_agents()
+            if agent_sockets_registered:
+                idle_since = None
+            elif idle_since is None:
                 idle_since = _now_ts()
             conn = db_factory()
             try:
@@ -996,7 +999,7 @@ def main() -> None:
                 conn.commit()
             finally:
                 conn.close()
-            if (_now_ts() - idle_since) >= idle_ttl:
+            if idle_since is not None and (_now_ts() - idle_since) >= idle_ttl:
                 logger.info("site worker idle ttl reached; exiting")
                 return
             time.sleep(3.0)

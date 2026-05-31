@@ -272,6 +272,35 @@ func TestLegacyRemoteOpsRootForcesRefresh(t *testing.T) {
 	}
 }
 
+func TestRemoteOpsRouteNeedsRefreshHonorsAge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.test"
+	cfg.RemoteOps.Available = true
+	cfg.RemoteOps.WorkerGUID = "worker-current-route"
+	cfg.RemoteOps.RoutePathPrefix = "/_borealis/site-workers/worker-current-route"
+	cfg.RemoteOps.BaseURL = "https://borealis.example.test/_borealis/site-workers/worker-current-route"
+	cfg.RemoteOps.SocketURL = cfg.RemoteOps.BaseURL + "/socket.io"
+	cfg.RemoteOps.UpdatedAt = time.Now().Unix()
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.RemoteOpsRouteNeedsRefresh(time.Minute) {
+		t.Fatal("fresh site-worker route required refresh")
+	}
+	client.mu.Lock()
+	client.cfg.RemoteOps.UpdatedAt = time.Now().Add(-2 * time.Minute).Unix()
+	client.mu.Unlock()
+	if !client.RemoteOpsRouteNeedsRefresh(time.Minute) {
+		t.Fatal("stale site-worker route did not require refresh")
+	}
+}
+
 func TestTransientRefreshFailureKeepsRefreshToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/token/refresh" {

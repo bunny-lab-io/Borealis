@@ -580,5 +580,8 @@ class SiteWorkerSocketRuntime:
     def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
         return self.registry.is_host_mode_registered(hostname, service_mode)
 
+    def has_registered_agents(self) -> bool:
+        return bool(self.registry.snapshot())
+
 
 __all__ = ["SiteWorkerSocketRuntime", "SocketAgentAuthError"]
