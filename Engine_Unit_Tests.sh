@@ -238,6 +238,7 @@ engine_python_files_for_domain() {
     remote-access)
       emit_existing_paths \
         "${test_root}/test_guacamole_proxy.py" \
+        "${test_root}/test_remote_ops_sessions.py" \
         "${test_root}/test_vnc_api.py" \
         "${test_root}/test_vnc_proxy.py" \
         "${test_root}/test_vnc_sessions.py" \

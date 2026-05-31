@@ -341,6 +341,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .devices.file_management import register_file_management
     from .devices.management import register_management
     from .devices.processes import register_processes
+    from .devices.remote_ops_sessions import register_remote_ops_sessions
     from .devices.services import register_services
     from .devices.shell import register_shell
     from .devices.tunnel import register_tunnel
@@ -349,6 +350,7 @@ def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     register_management(app, adapters)
     register_admin_endpoints(app, adapters)
     device_routes.register_agents(app, adapters)
+    register_remote_ops_sessions(app, adapters)
     register_tunnel(app, adapters)
     register_vnc(app, adapters)
     register_shell(app, adapters)
