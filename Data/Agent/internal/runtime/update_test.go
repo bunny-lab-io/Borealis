@@ -151,8 +151,8 @@ func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Agent.Update.OperationID != "op-ack-first" || loaded.Agent.Update.Status != "config_written" {
-		t.Fatalf("update operation should be written before updater completion: %#v", loaded.Agent.Update)
+	if loaded.Agent.Update.OperationID != "" {
+		t.Fatalf("update operation should not be written before ack callback: %#v", loaded.Agent.Update)
 	}
 	go afterAck()
 	select {
@@ -172,6 +172,66 @@ func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("update operation did not reach updater_started: %#v", loaded.Agent.Update)
+}
+
+func TestHandleUpdateRequestStoresCurrentTargetAfterAckCallback(t *testing.T) {
+	originalStarter := startLocalUpdaterForRequest
+	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+	startLocalUpdaterForRequest = func(configPath string) error {
+		return nil
+	}
+
+	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.com"
+	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelUnstable
+	cfg.Agent.Branch = "feature/rewrite-api-backend-in-golang"
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := agent.handleUpdateRequest(context.Background(), map[string]any{
+		"operation_id": "op-current-target",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, afterAck := responseBody(t, response)
+	if body["status"] != "ok" || body["operation_id"] != "op-current-target" {
+		t.Fatalf("unexpected response: %#v", body)
+	}
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Update.OperationID != "" {
+		t.Fatalf("update operation should not be written before ack callback: %#v", loaded.Agent.Update)
+	}
+
+	go afterAck()
+	for i := 0; i < 20; i++ {
+		loaded, err = agentconfig.Load(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Agent.Update.Status == "updater_started" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if loaded.Agent.Update.OperationID != "op-current-target" {
+		t.Fatalf("operation id = %q", loaded.Agent.Update.OperationID)
+	}
+	if loaded.Agent.Update.TargetChannel != agentconfig.ReleaseChannelUnstable {
+		t.Fatalf("target channel = %q", loaded.Agent.Update.TargetChannel)
+	}
+	if loaded.Agent.Update.TargetBranch != "feature/rewrite-api-backend-in-golang" {
+		t.Fatalf("target branch = %q", loaded.Agent.Update.TargetBranch)
+	}
 }
 
 type testAfterAckResponse interface {
