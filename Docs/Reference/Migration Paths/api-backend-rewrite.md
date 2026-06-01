@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M8: Remote Desktop + Guacamole` |
+| Active milestone | `M9: Remote File Management` |
 | Last updated | 2026-06-01 |
-| Latest implementation commit | `699dbcd8` (`Route VNC credential requests through site workers`). |
-| Current state | `M8` local implementation is complete and awaits Engine rebuild plus browser Remote Desktop smoke. `/api/vnc/establish` remains the authenticated broker for login/RBAC, VNC credential request, WireGuard tunnel readiness, VNC start/probe, and collaboration metadata. It now requires an active same-site worker route, asks that site-worker for live Agent VNC credentials over the worker-owned Agent socket, issues a scoped `remote_desktop` token, registers the one-time Guacamole session inside that site-worker over the internal token channel, and returns a worker-prefixed Guacamole WebSocket path. Site-worker owns the Guacamole session registry, worker-local VNC proxy process, browser/guacd bridge, worker disconnect endpoint, Agent socket call/emit bridge, and proxy open/close callbacks back into api-backend collaboration state. Engine Status now shows connected site-workers with a `Running` header pill and a `n Devices Connected` body chip, and job-scheduler now replaces stale site-worker containers after redeploy image changes. |
-| Next safe step | Operator rebuild/redeploy Engine from branch head at or after `699dbcd8`, then run M8 smoke: confirm Engine Status keeps the site-worker `Running` with `1 Device Connected` for LAB-OPERATOR-01, open Remote Desktop for LAB-OPERATOR-01, verify browser WebSocket uses `/_borealis/site-workers/<worker_guid>/remote-desktop/vnc/guacamole`, verify the desktop renders and disconnect cleans up worker-local session state. Do not start `M9` until post-redeploy M8 smoke passes and this tracker marks `M8` Done. |
+| Latest implementation commit | `a62dae99` (`Route File Management through site workers`). |
+| Current state | `M8` is Done after post-redeploy browser smoke: LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row through the worker-managed Guacamole path. `M9` local implementation is committed. api-backend remains the authenticated File Management REST broker for operator login/RBAC and device scope, but every live file RPC now routes to the active same-site site-worker over internal authenticated worker routes. Site-worker owns worker-local transfer state, upload staging, download artifacts, Agent transfer helper endpoints, cancel/progress snapshots, and Agent file-management event dispatch over the worker-owned Agent socket. Agent file transfers honor `transfer_base_url` so upload/download helper calls land on the site-worker route instead of api-backend. |
+| Next safe step | Operator rebuild/redeploy Engine and redeploy LAB-OPERATOR-01 Agent from branch head at or after `a62dae99`, then run M9 smoke: open File Management for LAB-OPERATOR-01, browse roots/children, upload one file, upload one folder, download one file, download one folder/archive, cancel an in-progress transfer, and confirm progress/status updates without page refresh. Do not start `M10` until post-redeploy M9 smoke passes and this tracker marks `M9` Done. |
 
 ## Tracker Rules
 
@@ -43,8 +43,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M5: Agent Ops Route Cutover` | `Done` | Move Agent remote-op socket target to site-worker. |
 | `M6: Site-Worker Agent Socket.IO` | `Done` | Move Agent remote-op event ownership to site-worker. |
 | `M7: Remote Shell` | `Done` | Move interactive shell broker path to site-worker. |
-| `M8: Remote Desktop + Guacamole` | `In Progress` | Move VNC and Guacamole path to site-worker. |
-| `M9: Remote File Management` | `Not Started` | Move remote file operations and transfer state to site-worker. |
+| `M8: Remote Desktop + Guacamole` | `Done` | Move VNC and Guacamole path to site-worker. |
+| `M9: Remote File Management` | `In Progress` | Move remote file operations and transfer state to site-worker. |
 | `M10: Process, Service, Software Ops` | `Not Started` | Move remaining live Agent task handlers to site-worker. |
 | `M11: Agent Maintenance + Quick Jobs` | `Not Started` | Move live quick-job and maintenance dispatch to site-worker. |
 | `M12: Ansible Execution Finalization` | `Not Started` | Ensure Ansible execution belongs to worker lane only. |
@@ -165,25 +165,25 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Move VNC orchestration and Guacamole connection path to site-worker. |
 | Migrates | VNC start/stop/probe/credential request flow, VNC proxy ownership, and browser/Guacamole routing away from `api-backend`. |
 | Out Of Scope | Remote shell, remote files, process/service/software actions, Go rewrite. |
 | Done When | Browser remote desktop session connects through site-worker-managed route, and Guacamole no longer depends on api-backend VNC proxy code. |
 | Validation | Manual remote desktop open/close smoke, credential-request flow, unavailable-host failure, Traefik route hotload check. |
-| Handoff Note | M8 implementation is in `46cc9833` with follow-up stability/UI/VNC credential fixes through `699dbcd8`. Expected browser WebSocket path is `/_borealis/site-workers/<worker_guid>/remote-desktop/vnc/guacamole`. Engine Status should show connected site-workers with a `Running` header pill and `n Devices Connected` body chip instead of idle teardown. Check site-worker logs for `remote_desktop_session_registered` and Guacamole bridge start/end lines. If smoke fails, fix only M8 regression before marking M8 Done or starting `M9`. |
+| Handoff Note | `M8` completed after post-redeploy browser smoke on LAB-OPERATOR-01. Remote Desktop connected successfully three times in a row through the worker-managed Guacamole path. `M9` is now active. |
 
 ### M9: Remote File Management
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Move remote file operations and transfer state to site-worker. |
 | Migrates | Browse, upload, folder upload, download, cancel, copy, cut, paste, rename, move, delete, create-folder, edit-text, transfer progress, and Agent file events. |
 | Out Of Scope | Process/service/software operations, remote shell, remote desktop, Ansible execution. |
 | Done When | File operations use direct site-worker routes and worker-local transfer state; api-backend no longer stores live transfer state. |
 | Validation | Manual browse/upload/download/cancel smoke, large transfer progress check, expired-token check, focused file-operation tests where available. |
-| Handoff Note | Record transfer state lifetime and cleanup behavior before starting `M10`. |
+| Handoff Note | M9 implementation commit `a62dae99` routes live File Management RPCs and transfer helpers through active same-site site-workers. Worker-local transfer state lives under temp path `Borealis/site_worker_file_management/<worker_guid>` with `FILE_TRANSFER_SESSION_TTL_SECONDS` cleanup; completed download artifacts are removed after the operator downloads content. Post-redeploy browser smoke remains required before marking `M9` Done or starting `M10`. |
 
 ### M10: Process, Service, Software Ops
 
@@ -249,6 +249,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-01 | `M9` | Implemented worker-owned File Management transfer state. Operator `/api/device/files/<hostname>/*` endpoints still perform api-backend login/RBAC/device-scope checks, then call the active same-site site-worker over internal routes for live file RPCs, upload/download transfer creation, status, cancel, and content streaming. Site-worker now owns FileTransferStore, staged upload bytes, completed download artifacts, Agent transfer helper endpoints, and worker-local Agent file events. Agent upload/download code now honors `transfer_base_url` for status, progress, upload-item fetches, cancellation checks, and artifact upload. | Local validation passed: Python compile for touched Engine files, direct focused pytest for File Management and site-worker socket tests passed (`17 passed`), `./Engine_Unit_Tests.sh --domain files` passed, `./Engine_Unit_Tests.sh --domain remote-access` passed, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed, and `git diff --check` passed. Post-redeploy browser File Management smoke remains pending. | Implementation commit `a62dae99`; `Unit_Test_Results/engine-20260601T061939Z`; `Unit_Test_Results/agent-20260601T062212Z`. |
+| 2026-06-01 | `M8` | Closed Remote Desktop worker migration after operator browser smoke. LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row after Engine rebuild/redeploy, confirming the worker-managed Guacamole route and VNC credential bridge were usable in the WebUI. | Post-redeploy browser Remote Desktop smoke passed. | Operator report on 2026-06-01; M8 implementation commits through `699dbcd8` plus follow-up site-worker status/UI commits. |
 | 2026-06-01 | `M8` | Fixed Remote Desktop establish after Agent sockets moved to site-workers. Runtime VNC logs showed repeated LAB-OPERATOR-01 establish attempts failing at `vnc_agent_live_credentials_unavailable` while Agent role health reported VNC ready. api-backend now falls back from legacy `call_agent_event` to the active same-site worker route for live `vnc_credential_request`, socket-registration checks, and VNC start/stop emits. Site-worker exposes internal authenticated host-service `status`, `event`, and `call` endpoints backed by its worker-local Agent socket registry. | Local validation passed: Python compile for touched VNC/site-worker/test files, focused worker credential bridge regressions passed (`2 passed`), full `test_vnc_api.py` plus `test_site_worker_socket.py` passed (`42 passed`), `./Engine_Unit_Tests.sh --domain remote-access` passed, and `git diff --check` passed. Post-redeploy browser Remote Desktop smoke remains pending. | Implementation commit `699dbcd8`; VNC log evidence `E04F result=vnc_agent_live_credentials_unavailable` for LAB-OPERATOR-01 at `2026-06-01 00:30:48-00:30:59`; `Unit_Test_Results/engine-20260601T004042Z`. |
 | 2026-06-01 | `M8` | Simplified connected site-worker status presentation after operator UI review. Connected site-worker node header now shows only `Running`; connected device count stays in the node body as `n Devices Connected`. | `git diff --check` passed. `./Engine_Unit_Tests.sh --domain webui` is blocked because runtime WebUI unit tests are missing at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. | Implementation commit `5ca5e94a`; blocked WebUI run `Unit_Test_Results/engine-20260601T001545Z`. |
 | 2026-06-01 | `M8` | Stabilized persistent site-workers after Remote Desktop route work. Site-workers with registered Agent sockets now heartbeat as running with an `agent_sockets` link so Engine Status shows connected workers as running and suppresses idle teardown. Job-scheduler detects live site-worker containers whose image tag differs from `BOREALIS_SITE_WORKER_IMAGE`, stops stale containers during reconcile, and spawns replacements from the current image. Online same-site devices also keep a replacement site-worker route alive while Agent sockets reconnect. | Runtime smoke after manually stopping stale worker confirmed replacement site-worker image `borealis-engine/site-worker:sha-2c480331ff3a`; LAB-OPERATOR-01 reconnected and Engine Status showed a running site-worker with `1 Device Connected`. Focused pytest passed for `test_job_scheduler_queue.py` and `test_site_worker_socket.py` (`25 passed`); `test_job_scheduler_queue.py` passed inside scheduler lane. Full scheduler lane remains blocked by existing runtime secret permission errors in `test_scheduled_jobs_api.py` against root-owned `Engine/Services/api-backend/secrets/Auth_Tokens/borealis-jwt-ed25519.key`. `git diff --check` passed. | Follow-up commits `5c805338` and `d43786e3`; active runtime worker during smoke `5c9bc193-78a5-42a6-8d42-976af5666246`; Remote Desktop browser smoke remains pending before M8 Done. |
@@ -324,12 +326,16 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - M6 implementation committed: site-worker starts a local Socket.IO listener, scheduler publishes matching Traefik route files, same-site Agent bearer-token authentication is enforced, and worker-local Agent registry/dispatch helpers are available for feature migrations. Follow-up mount fix is committed after first runtime smoke found host route file missing.
 - M6 post-rebuild route-file smoke passed: direct worker health, Traefik-prefixed health, and Traefik-prefixed Socket.IO polling handshake all work.
 - M6 stale-Agent-route fix committed: Agents no longer treat an api-backend root remote-op base URL as usable and will refresh route metadata before socket connect. LAB-OPERATOR-01 needs redeploy from branch head before final M6 Agent smoke.
+- M6 post-redeploy Agent socket smoke passed with LAB-OPERATOR-01 registered on a site-worker route.
+- M7 complete: Remote Shell opens through the site-worker route and worker-owned WireGuard shell bridge.
+- M8 complete: Remote Desktop/Guacamole opens through the site-worker route; LAB-OPERATOR-01 connected successfully three times after redeploy.
+- M9 implementation committed: live File Management RPCs and transfer state now route through the active same-site site-worker. Post-redeploy File Management smoke is pending.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Complete `M6` post-redeploy Agent socket smoke to establish Agent socket ownership on site-worker.
-- Complete `M7` through `M11` to migrate each live remote-operation feature.
+- Complete `M9` post-redeploy File Management smoke before starting `M10`.
+- Complete `M10` and `M11` to migrate remaining live remote-operation features.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
 - Complete `M14` before any Go rewrite implementation starts.
 
@@ -341,15 +347,15 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` and local `M2` implementation | M2 validation used `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`. |
 | Generated Traefik YAML parse | `M2` | `Done` for local implementation | PyYAML parsed both Python-rendered and shell entrypoint-rendered static/core dynamic configs. |
-| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes, `M2` edge runtime, local `M3` route registry, local `M4` session broker, and local `M6` worker socket | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, focused `Data/Engine/Unit_Tests/test_edge_runtime.py`, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`, focused `Data/Engine/Unit_Tests/test_remote_ops_sessions.py`, and focused `Data/Engine/Unit_Tests/test_site_worker_socket.py` passed. |
+| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes, `M2` edge runtime, local `M3` route registry, local `M4` session broker, local `M6` worker socket, and local `M9` File Management worker routes | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, focused `Data/Engine/Unit_Tests/test_edge_runtime.py`, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`, focused `Data/Engine/Unit_Tests/test_remote_ops_sessions.py`, focused `Data/Engine/Unit_Tests/test_file_management_api.py`, and focused `Data/Engine/Unit_Tests/test_site_worker_socket.py` passed. |
 | WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. M1 close used prod WebUI image hash plus served bundle inspection instead. |
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. For M3, `./Engine_Unit_Tests.sh --domain scheduler` failed under system Python because `pytest` is missing; with the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped. Earlier scheduler-domain blocker was the existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
 | Manual Traefik hotload smoke | `M2` | `Done` | Temporary route file add returned API health, removal stopped the route, and Traefik process stayed unchanged. |
 | Runtime route-registry smoke | `M3` | `Done` | Runtime DB table exists; synthetic smoke verified create/query/update/recover/retire/lost lifecycle and cleanup. No active site-worker existed at smoke time, so no live route row was expected. |
 | Remote-op session smoke | `M4` | `Done` | Runtime smoke confirmed success, unauthorized access, invalid capability, out-of-scope access, expired/invalid token rejection, missing worker-route behavior, and synthetic route cleanup. |
-| Agent socket smoke | `M6` | `Pending` | Route-file and Engine.IO handshake smoke passed after rebuild. LAB-OPERATOR-01 pre-fix smoke reached api-backend socket due stale remote-op root config. Remaining gate after redeploy from `d831f92a`: same-site Agent should connect through the site-worker route, appear in worker registry, receive a generic event, then unregister on disconnect. |
-| Agent unit tests | `M5`, `M6` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover and again after the M6 stale-route refresh fix (`Unit_Test_Results/agent-20260531T114654Z`). |
-| Manual remote-op smoke | `M7`-`M11` | `Not Started` | Shell, desktop, files, process/service/software. |
+| Agent socket smoke | `M6` | `Done` | LAB-OPERATOR-01 registered through site-worker route after redeploy/reapproval, and later remote shell/desktop smokes confirmed worker-owned Agent socket dispatch. |
+| Agent unit tests | `M5`, `M6`, `M9` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover, M6 stale-route refresh, and M9 transfer URL routing (`Unit_Test_Results/agent-20260601T062212Z`). |
+| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7` and `M8`, `Pending` for `M9` | Shell and desktop passed against LAB-OPERATOR-01. File Management smoke is next. Process/service/software remain future `M10`. |
 
 ## Fresh Codex Prompt
 
@@ -358,9 +364,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `f32f6c4d`, "Fix site-worker route file mounts", and the later tracker update that keeps M6 active.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `a62dae99`, "Route File Management through site workers", and the later tracker update that keeps M9 active.
 
-M1, M2, M3, M4, and M5 are Done. M6 is active.
+M1 through M8 are Done. M9 is active and awaiting post-redeploy File Management smoke.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -403,25 +409,38 @@ Completed M5 state:
 - Agent config stores the route and reconnects Socket.IO to the site-worker route when available.
 - Runtime synthetic token-refresh smoke passed after redeploy; synthetic rows were cleaned up.
 
-Current M6 state:
-- Implementation commit `494f1f3d` starts a site-worker Socket.IO listener on `/socket.io/`.
-- Follow-up commit `f32f6c4d` mounts Traefik config into `job-scheduler` and spawned site-workers so route files reach `Engine/Services/traefik-edge/config/dynamic/`.
-- Scheduler/worker route registration now assigns site-worker remote-op ports and writes Traefik route files under the `/_borealis/site-workers/<worker_guid>` prefix.
+Completed M6 state:
+- Site-worker owns Agent Socket.IO listener on `/socket.io/` behind `/_borealis/site-workers/<worker_guid>`.
 - Site-worker authenticates Agent bearer tokens against device GUID, fingerprint, token version, status, and site assignment.
-- Worker-local Agent registry supports hostname/service-mode lookup, `emit`, and `call` for later feature migrations.
-- First post-rebuild smoke found direct worker Socket.IO healthy but Traefik route file missing; mount fix committed.
-- Post-rebuild route-file smoke passed after the mount fix: synthetic queued work spawned site-workers, route files appeared in `Engine/Services/traefik-edge/config/dynamic/`, direct worker health passed, Traefik-prefixed health passed, and Traefik-prefixed Socket.IO polling handshakes returned Engine.IO open packets.
-- LAB-OPERATOR-01 live smoke found stale Agent config could still treat the api-backend root as usable remote-op route and register on the api-backend socket while a site-worker route was active.
-- Follow-up commit `d831f92a` fixes stale Agent route validation: non-site-worker remote-op base URLs are unusable, force token refresh, and cannot fall back to api-backend `/socket.io/`.
-- Synthetic route-smoke work items `696` and `697` were deleted after validation.
-- LAB-OPERATOR-01 synthetic work item `698` and temporary refresh token `m6-smoke-refresh-lab-operator` were deleted after validation.
+- Worker-local Agent registry supports hostname/service-mode lookup, `emit`, and `call`.
+- LAB-OPERATOR-01 registered through site-worker route after redeploy/reapproval, and later Remote Shell/Remote Desktop smokes confirmed worker-owned Agent socket dispatch.
+
+Completed M7 state:
+- Remote Shell uses direct site-worker Socket.IO path and worker-owned WireGuard shell bridge.
+- LAB-OPERATOR-01 shell smoke passed with command output returned and close cleanup confirmed.
+
+Completed M8 state:
+- `/api/vnc/establish` brokers auth/RBAC and registers Remote Desktop sessions inside the active same-site worker.
+- Browser Guacamole WebSocket path uses `/_borealis/site-workers/<worker_guid>/remote-desktop/vnc/guacamole`.
+- LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row after redeploy.
+
+Current M9 state:
+- Implementation commit `a62dae99` routes live File Management RPCs and transfer state through active same-site site-workers.
+- api-backend remains operator REST broker for login/RBAC/device scope, then calls worker internal routes.
+- Site-worker owns FileTransferStore, upload staging, download artifacts, Agent transfer helper endpoints, transfer progress/cancel snapshots, and Agent file-management event dispatch.
+- Agent File Management honors `transfer_base_url` for upload item fetches, transfer status checks, progress updates, cancellation checks, and download artifact upload.
+- Worker-local transfer state lives under temp path `Borealis/site_worker_file_management/<worker_guid>` with `FILE_TRANSFER_SESSION_TTL_SECONDS` cleanup.
+- Local validation passed: Python compile, focused pytest (`17 passed`), Engine `files`, Engine `remote-access`, Agent `go-agent`, and `git diff --check`.
 
 Next work:
-1. Have operator redeploy LAB-OPERATOR-01 from branch head including `d831f92a`.
-2. Create a short-lived same-site worker route if no active site-worker route exists for that Agent site.
-3. Confirm the Agent connects through `/_borealis/site-workers/<worker_guid>/socket.io/`, not api-backend `/socket.io/`.
-4. Confirm Agent bearer token authentication succeeds, same-site Agent registration appears in site-worker `/agents`, generic event dispatch reaches the Agent, and disconnect unregisters the Agent.
-5. Do not start `M7` until M6 Agent connect/disconnect and generic dispatch smoke passes and this tracker marks M6 `Done`.
+1. Have operator rebuild/redeploy Engine and redeploy LAB-OPERATOR-01 Agent from branch head at or after `a62dae99`.
+2. Open File Management for LAB-OPERATOR-01.
+3. Confirm roots and children browsing works.
+4. Upload one file and one folder.
+5. Download one file and one folder/archive.
+6. Cancel an in-progress transfer.
+7. Confirm transfer progress/status updates without browser page refresh.
+8. Do not start `M10` until M9 smoke passes and this tracker marks M9 `Done`.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
@@ -430,10 +449,11 @@ Validation constraints from prior session:
 - Current M6 local validation passed: py_compile for touched scheduler/socket/registry files, compose config with `Data/Engine/Containers/compose.env.example`, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py` plus `Data/Engine/Unit_Tests/test_site_worker_socket.py` (`17 passed`), and `git diff --check`.
 - Current M6 runtime route validation passed after rebuild: synthetic site `1` and site `5` workers wrote host route files, direct `/health` passed, Traefik-prefixed `/health` passed, and Traefik-prefixed `/socket.io/?transport=polling&EIO=4` returned Engine.IO open packets.
 - Current M6 stale-route fix validation passed: `go test ./internal/auth` from `Data/Agent`, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent`, and `git diff --check`.
-- Current M6 live Agent validation is still pending until LAB-OPERATOR-01 is redeployed from branch head with `d831f92a`.
+- Current M6 live Agent validation passed after LAB-OPERATOR-01 redeploy/reapproval.
+- Current M9 local validation passed: py_compile for touched Engine files, focused File Management/site-worker pytest (`17 passed`), Engine `files`, Engine `remote-access`, Agent `go-agent`, and `git diff --check`.
 - Current M4 runtime validation passed after rebuild: live backend rejected unauthenticated session requests with `401`; synthetic runtime route smoke passed success and denial paths; cleanup verified zero synthetic rows.
 - `./Engine_Unit_Tests.sh --domain scheduler` under system Python fails because `pytest` is missing; under the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped.
-- `./Engine_Unit_Tests.sh --domain scheduler` and `./Engine_Unit_Tests.sh --domain remote-access` were not counted for current M6 because they entered unrelated long-running `test_scheduled_jobs_api.py` and `test_vnc_api.py` paths.
+- `./Engine_Unit_Tests.sh --domain scheduler` was not counted for current M6 because it entered unrelated long-running `test_scheduled_jobs_api.py` paths.
 - Do not run npm/vite from staging source under Data/Engine/Containers/*/data.
 ```
 
