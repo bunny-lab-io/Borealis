@@ -144,6 +144,17 @@ const GRID_SHELL_SX = {
     paddingLeft: "12px",
     paddingRight: "9px",
   },
+  "& .ag-center-cols-container .ag-cell.center-col, & .ag-pinned-left-cols-container .ag-cell.center-col, & .ag-pinned-right-cols-container .ag-cell.center-col": {
+    justifyContent: "center",
+    textAlign: "center",
+  },
+  "& .ag-center-cols-container .ag-cell.center-col .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.center-col .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.center-col .ag-cell-wrapper": {
+    justifyContent: "center",
+  },
+  "& .ag-center-cols-container .ag-cell.center-col .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.center-col .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.center-col .ag-cell-value": {
+    display: "flex",
+    justifyContent: "center",
+  },
   "& .ag-row": {
     borderColor: "rgba(255,255,255,0.04)",
     transition: "background 160ms ease, box-shadow 160ms ease, transform 160ms ease",
@@ -522,17 +533,19 @@ function StatusPill({ label, tone }) {
         minWidth: 86,
         maxWidth: "100%",
         px: 1.15,
-        py: 0.35,
+        py: 0,
+        height: 24,
         borderRadius: 999,
         border: `1px solid ${style.border}`,
         background: style.bg,
         color: style.text,
         fontSize: "0.78rem",
         fontWeight: 700,
-        lineHeight: 1.2,
+        lineHeight: 1,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
+        verticalAlign: "middle",
       }}
     >
       {label}
@@ -625,7 +638,7 @@ function ContainerCell(params) {
   const busy = params?.context?.recreateBusyId === row.worker_guid;
   const canRecreate = Boolean(row.worker_guid);
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.1, width: "100%", minWidth: 0 }}>
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
       <Typography
         component="span"
         title={row.container_id_full || row.container_name || row.container_id}
@@ -638,6 +651,7 @@ function ContainerCell(params) {
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
           minWidth: 0,
+          flexShrink: 1,
         }}
       >
         {row.container_id}
@@ -653,10 +667,10 @@ function ContainerCell(params) {
           onRecreate?.(row);
         }}
         sx={{
-          ml: "auto",
           display: "inline-flex",
           alignItems: "center",
           p: 0,
+          m: 0,
           border: 0,
           background: "transparent",
           color: BOREALIS_LINK_COLOR,
@@ -679,7 +693,7 @@ function ContainerCell(params) {
           },
         }}
       >
-        {busy ? "Queued..." : "Re-Create"}
+        {busy ? "[Queued...]" : "[Re-Create]"}
       </Box>
     </Box>
   );
@@ -696,7 +710,8 @@ function ConnectedDevicesCell(params) {
     <Typography sx={{ color: "#f4f7ff", fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.3 }}>
       {connected}
       <Box component="span" sx={{ color: "rgba(148,163,184,0.52)", fontWeight: 700 }}>
-        /{total}
+        {" / "}
+        {total} Devices
       </Box>
     </Typography>
   );
@@ -713,7 +728,17 @@ function AssignedTasksCell(params) {
     );
   }
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", width: "100%", minHeight: "100%", py: 0.35 }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "100%",
+        minHeight: "100%",
+        py: 0.35,
+      }}
+    >
       {groups.map((group) => (
         <Box
           key={group.key}
@@ -723,7 +748,7 @@ function AssignedTasksCell(params) {
             alignItems: "center",
             columnGap: 1.2,
             minHeight: BASE_ROW_HEIGHT - 2,
-            width: "100%",
+            width: "min(100%, 470px)",
             minWidth: 0,
           }}
         >
@@ -981,21 +1006,22 @@ export default function SiteWorkers() {
         field: "created_label",
         minWidth: 185,
         flex: 0.75,
+        cellClass: "center-col",
       },
       {
         headerName: "Status",
         field: "status_label",
         minWidth: 118,
         flex: 0.35,
-        cellClass: "auto-col-tight",
+        cellClass: "auto-col-tight center-col",
         cellRenderer: StatusCell,
       },
       {
         headerName: "Connected Devices",
         field: "connected_devices",
-        minWidth: 128,
-        flex: 0.45,
-        cellClass: "auto-col-tight",
+        minWidth: 168,
+        flex: 0.55,
+        cellClass: "auto-col-tight center-col",
         cellRenderer: ConnectedDevicesCell,
       },
       {
@@ -1010,6 +1036,7 @@ export default function SiteWorkers() {
         cellRendererParams: {
           suppressMouseEventHandling: () => true,
         },
+        cellClass: "center-col",
         cellRenderer: AssignedTasksCell,
       },
     ],
