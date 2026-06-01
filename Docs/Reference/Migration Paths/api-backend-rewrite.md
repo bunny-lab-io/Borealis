@@ -10,9 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M10: Process, Service, Software Ops` |
 | Last updated | 2026-06-01 |
-| Latest implementation commit | `ecd2c41f` (`Fix Site Workers grid indicators`). |
-| Current state | `M9` is Done after post-redeploy File Management smoke. Operator confirmed File Management behavior is working as expected after Engine/Agent redeploy. api-backend remains the authenticated File Management REST broker for operator login/RBAC and device scope, while live file RPCs and transfer state route through the active same-site site-worker. Site-worker owns worker-local transfer state, upload staging, download artifacts, Agent transfer helper endpoints, cancel/progress snapshots, and Agent file-management event dispatch over the worker-owned Agent socket. |
-| Next safe step | Start `M10`: migrate live process, service, and software management operations to the active same-site site-worker while keeping api-backend as the authenticated REST/RBAC/database broker. Inspect existing process/service/software API routes, Agent role event names, and cached inventory write paths before editing. Do not start `M11` until post-redeploy M10 smoke passes and this tracker marks `M10` Done. |
+| Latest implementation commit | `c76073f7` (`Route process service software ops through site workers`). |
+| Current state | `M10` implementation is committed and awaiting post-redeploy smoke. api-backend remains the authenticated REST/RBAC/database broker for process, service, and software pages, while live process RPCs, service control events, and software inventory refresh events route through the active same-site site-worker host-service bridge. Site Workers UI follow-up commit `5e198907` fixes status pill vertical alignment and hides AG Grid multi-sort numbering. |
+| Next safe step | Have the operator rebuild/redeploy the Engine from branch head, then smoke M10 in the WebUI: process list and End Task, service list and start/stop/restart, software refresh plus one override-triggered refresh. Do not start `M11` until post-redeploy M10 smoke passes and this tracker marks `M10` Done. |
 
 ## Tracker Rules
 
@@ -195,7 +195,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Out Of Scope | Scheduled inventory storage, long-term reporting, Ansible execution, Go rewrite. |
 | Done When | Process, service, and software live operations run through site-worker and no longer depend on api-backend Agent socket registry. |
 | Validation | Manual process/service/software smoke, RBAC/token denial checks, focused route/worker tests. |
-| Handoff Note | Start by inventorying process, service, and software API routes and Agent role event names. Preserve api-backend ownership of auth/RBAC/database persistence, and move live Agent dispatch through site-worker host-service internal routes. |
+| Handoff Note | Implementation commit `c76073f7` adds shared api-backend worker-bridge helpers and routes live process RPCs, service control events, and software inventory refresh events through the active same-site site-worker host-service internal routes. api-backend still owns login/RBAC, cached service/software inventory reads, service pending-state persistence, software override persistence, and quick-job queueing. Post-redeploy WebUI smoke remains pending; do not start `M11` until that smoke passes and this milestone is marked Done. |
 
 ### M11: Agent Maintenance + Quick Jobs
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-01 | `M10` | Implemented worker-routed process, service, and software live operations. Added shared api-backend worker bridge for internal site-worker host-service `status`, `event`, and `call`; process list/terminate now call worker-owned SYSTEM Agent sockets; service start/stop/restart and software inventory refresh requests now emit through the active same-site worker. Site Workers UI status pills were vertically centered and AG Grid sort-order numbers hidden. | Local validation passed: Python compile for touched backend/test files; focused device API pytest for process/service/software paths passed (`7 passed`); `test_site_worker_socket.py` passed (`10 passed`); `./Engine_Unit_Tests.sh --domain devices` passed when run with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT`; `git diff --check` passed. WebUI unit lane remains blocked until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. Post-redeploy M10 smoke remains pending. | Implementation commit `c76073f7`; UI commit `5e198907`; `Unit_Test_Results/engine-20260601T074913Z`; blocked WebUI run `Unit_Test_Results/engine-20260601T075442Z`. |
 | 2026-06-01 | `M9` | Closed Remote File Management worker migration after operator smoke. After Engine/Agent redeploy, operator confirmed File Management behavior worked as expected through the WebUI. `M10` is now active. | Post-redeploy File Management smoke passed by operator report. | Operator report on 2026-06-01; implementation commit `a62dae99`; UI follow-up commit `ecd2c41f`. |
 | 2026-06-01 | `M9` | Implemented worker-owned File Management transfer state. Operator `/api/device/files/<hostname>/*` endpoints still perform api-backend login/RBAC/device-scope checks, then call the active same-site site-worker over internal routes for live file RPCs, upload/download transfer creation, status, cancel, and content streaming. Site-worker now owns FileTransferStore, staged upload bytes, completed download artifacts, Agent transfer helper endpoints, and worker-local Agent file events. Agent upload/download code now honors `transfer_base_url` for status, progress, upload-item fetches, cancellation checks, and artifact upload. | Local validation passed: Python compile for touched Engine files, direct focused pytest for File Management and site-worker socket tests passed (`17 passed`), `./Engine_Unit_Tests.sh --domain files` passed, `./Engine_Unit_Tests.sh --domain remote-access` passed, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed, and `git diff --check` passed. Post-redeploy browser File Management smoke remains pending. | Implementation commit `a62dae99`; `Unit_Test_Results/engine-20260601T061939Z`; `Unit_Test_Results/agent-20260601T062212Z`. |
 | 2026-06-01 | `M8` | Closed Remote Desktop worker migration after operator browser smoke. LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row after Engine rebuild/redeploy, confirming the worker-managed Guacamole route and VNC credential bridge were usable in the WebUI. | Post-redeploy browser Remote Desktop smoke passed. | Operator report on 2026-06-01; M8 implementation commits through `699dbcd8` plus follow-up site-worker status/UI commits. |
@@ -331,11 +332,13 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - M7 complete: Remote Shell opens through the site-worker route and worker-owned WireGuard shell bridge.
 - M8 complete: Remote Desktop/Guacamole opens through the site-worker route; LAB-OPERATOR-01 connected successfully three times after redeploy.
 - M9 complete: live File Management RPCs and transfer state route through the active same-site site-worker, and post-redeploy File Management smoke passed.
+- M10 implementation committed: live process RPCs, service control events, and software inventory refresh events now route through the active same-site site-worker host-service bridge. Post-redeploy M10 smoke remains pending before marking M10 Done.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Complete `M10` and `M11` to migrate remaining live remote-operation features.
+- Complete `M10` post-redeploy smoke, then mark `M10` Done before starting `M11`.
+- Complete `M11` to migrate remaining live quick-job and maintenance dispatch.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
 - Complete `M14` before any Go rewrite implementation starts.
 
@@ -347,15 +350,16 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `git diff --check` | `M0` | `Done` | Passed before first commit. |
 | `docker compose -f Data/Engine/Containers/compose.yaml config` | `M1`, `M2` | `Done` for `M1` and local `M2` implementation | M2 validation used `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`. |
 | Generated Traefik YAML parse | `M2` | `Done` for local implementation | PyYAML parsed both Python-rendered and shell entrypoint-rendered static/core dynamic configs. |
-| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes, `M2` edge runtime, local `M3` route registry, local `M4` session broker, local `M6` worker socket, and local `M9` File Management worker routes | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, focused `Data/Engine/Unit_Tests/test_edge_runtime.py`, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`, focused `Data/Engine/Unit_Tests/test_remote_ops_sessions.py`, focused `Data/Engine/Unit_Tests/test_file_management_api.py`, and focused `Data/Engine/Unit_Tests/test_site_worker_socket.py` passed. |
-| WebUI unit tests | `M1` support fixes | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. M1 close used prod WebUI image hash plus served bundle inspection instead. |
+| Focused Engine tests | `M1`-`M14` | `Done` for current `M1` fixes, `M2` edge runtime, local `M3` route registry, local `M4` session broker, local `M6` worker socket, local `M9` File Management worker routes, and local `M10` process/service/software worker routing | Queue retry tests, server-info settings tests, scheduled job credential validation tests, affected scheduler validation cases, focused `Data/Engine/Unit_Tests/test_edge_runtime.py`, focused `Data/Engine/Unit_Tests/test_job_scheduler_queue.py`, focused `Data/Engine/Unit_Tests/test_remote_ops_sessions.py`, focused `Data/Engine/Unit_Tests/test_file_management_api.py`, focused M10 `test_devices_api.py` cases (`7 passed`), and focused `Data/Engine/Unit_Tests/test_site_worker_socket.py` passed. |
+| WebUI unit tests | `M1` support fixes and `M10` Site Workers UI follow-up | `Blocked` locally | `./Engine_Unit_Tests.sh --domain webui` cannot run until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface`. Latest blocked run: `Unit_Test_Results/engine-20260601T075442Z`. |
 | Full affected Engine lane | `M1`-`M14` | `Blocked` for scheduler/core domains | `ansible` domain passed. For M3, `./Engine_Unit_Tests.sh --domain scheduler` failed under system Python because `pytest` is missing; with the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped. Earlier scheduler-domain blocker was the existing onboarding helper mismatch: `scheduled_job_module._onboarding_raw_input_map` missing. `core` domain currently fails on root-owned runtime secret paths outside touched edge tests. |
 | Manual Traefik hotload smoke | `M2` | `Done` | Temporary route file add returned API health, removal stopped the route, and Traefik process stayed unchanged. |
 | Runtime route-registry smoke | `M3` | `Done` | Runtime DB table exists; synthetic smoke verified create/query/update/recover/retire/lost lifecycle and cleanup. No active site-worker existed at smoke time, so no live route row was expected. |
 | Remote-op session smoke | `M4` | `Done` | Runtime smoke confirmed success, unauthorized access, invalid capability, out-of-scope access, expired/invalid token rejection, missing worker-route behavior, and synthetic route cleanup. |
 | Agent socket smoke | `M6` | `Done` | LAB-OPERATOR-01 registered through site-worker route after redeploy/reapproval, and later remote shell/desktop smokes confirmed worker-owned Agent socket dispatch. |
 | Agent unit tests | `M5`, `M6`, `M9` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover, M6 stale-route refresh, and M9 transfer URL routing (`Unit_Test_Results/agent-20260601T062212Z`). |
-| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7`, `M8`, and `M9` | Shell, desktop, and File Management passed against LAB-OPERATOR-01. Process/service/software are active `M10` scope. |
+| Engine devices lane | `M10` | `Done` for local implementation | `./Engine_Unit_Tests.sh --domain devices` passed with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT=/tmp/borealis-codex-test-auth-tokens-m10` to avoid root-owned runtime JWT secret path. Results: `Unit_Test_Results/engine-20260601T074913Z`. |
+| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7`, `M8`, and `M9`; `Pending` for `M10` | Shell, desktop, and File Management passed against LAB-OPERATOR-01. Process/service/software M10 smoke is next. |
 
 ## Fresh Codex Prompt
 
@@ -364,7 +368,7 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include the tracker update that marks M10 active after File Management smoke passed.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include M10 implementation commit `c76073f7` and tracker updates showing M10 smoke is pending.
 
 M1 through M9 are Done. M10 is active.
 
@@ -434,18 +438,28 @@ Completed M9 state:
 - Post-redeploy File Management smoke passed by operator report.
 
 Current M10 state:
-- Goal is process, service, and software live-operation migration.
-- api-backend should remain REST/RBAC/database broker.
-- Live Agent dispatch should move through site-worker host-service internal routes.
-- Need inventory current process/service/software API routes, Agent role event names, cached inventory persistence, and live refresh/control actions before editing.
+- Implementation commit `c76073f7` routes live process, service, and software operations through active same-site site-workers.
+- Shared helper `Data/Engine/Containers/api-backend/data/services/remote_ops/worker_bridge.py` wraps internal site-worker host-service `status`, `event`, and `call`.
+- Process list and End Task now call `process_management_request` through the worker-owned SYSTEM Agent socket.
+- Service start/stop/restart now emits `service_control_action` through the worker-owned SYSTEM Agent socket, while api-backend still persists pending service state.
+- Software inventory refresh requests now emit `software_inventory_refresh_request` through the worker-owned SYSTEM Agent socket, while api-backend still owns icon/uninstall override persistence and quick-job queueing.
+- Site Workers UI follow-up commit `5e198907` vertically centers status pill text and hides AG Grid multi-sort numbering.
+- Local validation passed: py_compile for touched backend/test files, focused M10 pytest (`7 passed`), `test_site_worker_socket.py` (`10 passed`), `./Engine_Unit_Tests.sh --domain devices` with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT`, and `git diff --check`.
+- WebUI unit lane remains blocked until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`.
+- Post-redeploy M10 smoke remains pending. Do not mark M10 Done yet.
 
 Next work:
-1. Map process/service/software routes and Agent event names.
-2. Route live process/service/software requests through active same-site site-worker.
-3. Preserve api-backend persistence endpoints and cached inventory writes.
-4. Validate focused process/service/software tests and Agent tests where touched.
-5. Have operator rebuild/redeploy Engine and Agent, then smoke process list/control, service list/action, and software refresh/action paths.
-6. Do not start `M11` until M10 smoke passes and this tracker marks M10 `Done`.
+1. Have operator rebuild/redeploy Engine from branch head.
+2. Smoke M10 in WebUI against LAB-OPERATOR-01 or another online device:
+   - Processes tab loads live process list.
+   - End Task returns expected success/failure for a safe test process.
+   - Services tab loads cached service inventory and shows `agent_socket` as available when worker socket is connected.
+   - Service action start/stop/restart dispatches and records pending state.
+   - Installed Software `Query Software Changes` queues a refresh.
+   - Software icon override or clear-icon action persists rule and requests refresh.
+3. If smoke passes, update this tracker: mark M10 Done, add validation row, set next safe step to M11.
+4. If smoke fails, fix only M10 regression, validate, commit, push, and retry smoke.
+5. Do not start `M11` until M10 smoke passes and this tracker marks M10 `Done`.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
@@ -456,6 +470,7 @@ Validation constraints from prior session:
 - Current M6 stale-route fix validation passed: `go test ./internal/auth` from `Data/Agent`, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent`, and `git diff --check`.
 - Current M6 live Agent validation passed after LAB-OPERATOR-01 redeploy/reapproval.
 - Current M9 local validation passed: py_compile for touched Engine files, focused File Management/site-worker pytest (`17 passed`), Engine `files`, Engine `remote-access`, Agent `go-agent`, and `git diff --check`.
+- Current M10 local validation passed: py_compile for touched backend/test files, focused M10 device API pytest (`7 passed`), `test_site_worker_socket.py` (`10 passed`), Engine `devices` with isolated auth-token root (`Unit_Test_Results/engine-20260601T074913Z`), and `git diff --check`.
 - Current M4 runtime validation passed after rebuild: live backend rejected unauthenticated session requests with `401`; synthetic runtime route smoke passed success and denial paths; cleanup verified zero synthetic rows.
 - `./Engine_Unit_Tests.sh --domain scheduler` under system Python fails because `pytest` is missing; under the repo test venv it entered unrelated long-running `test_scheduled_jobs_api.py` failures and was stopped.
 - `./Engine_Unit_Tests.sh --domain scheduler` was not counted for current M6 because it entered unrelated long-running `test_scheduled_jobs_api.py` paths.
