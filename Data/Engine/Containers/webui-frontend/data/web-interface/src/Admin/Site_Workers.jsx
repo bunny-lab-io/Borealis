@@ -682,14 +682,16 @@ function StatusPill({ label, tone }) {
         color: style.text,
         fontSize: "0.78rem",
         fontWeight: 700,
-        lineHeight: "24px",
+        lineHeight: 1,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         verticalAlign: "middle",
       }}
     >
-      {label}
+      <Box component="span" sx={{ display: "inline-block", transform: "translateY(-2px)" }}>
+        {label}
+      </Box>
     </Box>
   );
 }
@@ -780,7 +782,7 @@ function ContainerCell(params) {
   const canRecreate = Boolean(row.worker_guid);
   const muted = row.container_id === "Unknown" || row.container_id === "N/A";
   return (
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 0.8, width: "100%", minWidth: 0 }}>
       <Typography
         component="span"
         title={row.container_id_full || row.container_name || row.container_id}
@@ -853,7 +855,7 @@ function CreatedCell(params) {
         fontSize: "0.84rem",
         fontWeight: 700,
         lineHeight: 1.35,
-        textAlign: "center",
+        textAlign: "left",
       }}
     >
       {value}
@@ -1224,7 +1226,6 @@ export default function SiteWorkers() {
         field: "container_id",
         minWidth: 260,
         flex: 1.05,
-        cellClass: "center-col",
         cellRendererParams: {
           suppressMouseEventHandling: () => true,
         },
@@ -1235,7 +1236,6 @@ export default function SiteWorkers() {
         field: "created_label",
         minWidth: 185,
         flex: 0.75,
-        cellClass: "center-col",
         cellRenderer: CreatedCell,
       },
       {
