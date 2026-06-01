@@ -1535,6 +1535,9 @@ def _collect_worker_payload(
     except Exception:
         worker_idle_ttl_seconds = 60
     conn = adapters.db_conn_factory()
+    site_names: Dict[int, str] = {}
+    site_device_counts: Dict[int, int] = {}
+    job_names: Dict[int, str] = {}
     try:
         rows = list_worker_snapshots(conn, include_stopped_since=history_seconds)
         active_work = list_active_work_items(conn)
@@ -1544,20 +1547,52 @@ def _collect_worker_payload(
             for row in [*rows, *active_work, *recent_work]
             if int(row.get("site_id") or 0) > 0
         }
-        site_names: Dict[int, str] = {}
+        job_ids = {
+            int(row.get("job_id") or 0)
+            for row in [*active_work, *recent_work]
+            if int(row.get("job_id") or 0) > 0
+        }
+        cur = conn.cursor()
         if site_ids:
             placeholders = ",".join("?" for _ in site_ids)
-            cur = conn.cursor()
             cur.execute(f"SELECT id, name FROM sites WHERE id IN ({placeholders})", tuple(sorted(site_ids)))
             site_names = {int(row[0]): str(row[1] or "").strip() for row in cur.fetchall() or [] if row and row[0] is not None}
-            for collection in (rows, active_work, recent_work):
-                for item in collection:
-                    site_id = int(item.get("site_id") or 0)
-                    if site_id > 0:
-                        item["site_name"] = site_names.get(site_id) or f"Site {site_id}"
+            cur.execute(
+                f"""
+                SELECT site_id, COUNT(DISTINCT device_hostname)
+                  FROM device_sites
+                 WHERE site_id IN ({placeholders})
+              GROUP BY site_id
+                """,
+                tuple(sorted(site_ids)),
+            )
+            site_device_counts = {
+                int(row[0]): int(row[1] or 0)
+                for row in cur.fetchall() or []
+                if row and row[0] is not None
+            }
+        if job_ids:
+            placeholders = ",".join("?" for _ in job_ids)
+            cur.execute(f"SELECT id, name FROM scheduled_jobs WHERE id IN ({placeholders})", tuple(sorted(job_ids)))
+            job_names = {int(row[0]): str(row[1] or "").strip() for row in cur.fetchall() or [] if row and row[0] is not None}
         conn.commit()
     finally:
         conn.close()
+    for collection in (rows, active_work, recent_work):
+        for item in collection:
+            site_id = int(item.get("site_id") or 0)
+            if site_id > 0:
+                item["site_name"] = site_names.get(site_id) or f"Site {site_id}"
+                item["site_device_count"] = int(site_device_counts.get(site_id, 0))
+            job_id = int(item.get("job_id") or 0)
+            job_name = job_names.get(job_id, "") if job_id > 0 else ""
+            if job_name:
+                item["job_name"] = job_name
+                task_link = item.get("task_link")
+                if isinstance(task_link, Mapping):
+                    enriched_link = dict(task_link)
+                    enriched_link["job_name"] = job_name
+                    item["task_link"] = enriched_link
     if include_container_metadata:
         rows = _attach_worker_container_metadata(rows)
     active = [row for row in rows if str(row.get("status") or "").lower() in {"starting", "running", "idle"}]
@@ -1570,6 +1605,7 @@ def _collect_worker_payload(
         "active_work": active_work,
         "recent_work": recent_work,
         "site_names": {str(key): value for key, value in site_names.items()},
+        "site_device_counts": {str(key): value for key, value in site_device_counts.items()},
         "worker_idle_ttl_seconds": worker_idle_ttl_seconds,
     }
 

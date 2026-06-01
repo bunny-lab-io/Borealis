@@ -10,6 +10,7 @@ import {
   DialogContent,
   DialogTitle,
   Paper,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
@@ -37,7 +38,7 @@ const WORKER_HISTORY_SECONDS = 300;
 const POLL_INTERVAL_MS = 3000;
 const BASE_ROW_HEIGHT = 44;
 const WORKER_REMOVE_SECONDS = 30;
-const AUTO_SIZE_COLUMNS = ["site_name", "container_id", "created_label", "status_label", "connected_devices", "assigned_tasks"];
+const AUTO_SIZE_COLUMNS = ["site_name", "container_id", "created_label", "connected_devices", "assigned_task_groups"];
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
@@ -238,6 +239,21 @@ function connectedDeviceCount(worker) {
   return Number.isFinite(count) && count > 0 ? count : 0;
 }
 
+function siteDeviceCount(payload, worker, siteId) {
+  const direct = [
+    worker?.site_device_count,
+    worker?.siteDeviceCount,
+    worker?.site_total_device_count,
+    worker?.siteTotalDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const counts = payload?.site_device_counts || payload?.siteDeviceCounts || {};
+  const mapped = Number(counts[String(siteId)] || counts[siteId] || 0);
+  return Number.isFinite(mapped) && mapped > 0 ? mapped : 0;
+}
+
 function workStatusBucket(status) {
   const normalized = String(status || "").trim().toLowerCase();
   if (["succeeded", "success", "completed"].includes(normalized)) return "success";
@@ -325,6 +341,11 @@ function jobPathForWork(work, jobId) {
   return "";
 }
 
+function jobNameForWork(work) {
+  const taskLink = work?.task_link || {};
+  return String(work?.job_name || taskLink?.job_name || taskLink?.name || taskLink?.label || "").trim();
+}
+
 function buildTaskGroupsByWorker(payload) {
   const byWorker = new Map();
   const seen = new Set();
@@ -342,12 +363,14 @@ function buildTaskGroupsByWorker(payload) {
     if (!keys.size) return;
     const bucket = workStatusBucket(work?.status);
     const jobId = jobIdForWork(work);
+    const jobName = jobNameForWork(work);
     const jobKey = jobId ? `job:${jobId}` : `work:${work?.kind || "task"}:${work?.id || identity}`;
     keys.forEach((key) => {
       const workerGroups = byWorker.get(key) || new Map();
       const group = workerGroups.get(jobKey) || {
         key: jobKey,
         job_id: jobId,
+        job_name: jobName,
         label: jobId ? `Job ID: ${jobId}` : "Task",
         path: jobPathForWork(work, jobId),
         counts: emptyTaskCounts(),
@@ -367,6 +390,7 @@ function buildTaskGroupsByWorker(payload) {
         Number(group.last_activity_at || 0),
         Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || 0)
       );
+      if (!group.job_name && jobName) group.job_name = jobName;
       if (!group.path) group.path = jobPathForWork(work, jobId);
       workerGroups.set(jobKey, group);
       byWorker.set(key, workerGroups);
@@ -463,6 +487,8 @@ function normalizeRows(payload, nowSeconds) {
         (containerName && taskGroupsByWorker.get(containerName)) ||
         [];
       const containerId = String(worker?.container_id || "").trim();
+      const connectedDevices = connectedDeviceCount(worker);
+      const siteDevices = siteDeviceCount(payload, worker, siteId);
       return {
         id: `site-worker-site-${siteId}`,
         worker_instance_id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
@@ -475,7 +501,8 @@ function normalizeRows(payload, nowSeconds) {
         created_label: epochLabel(worker?.started_at),
         status_label: status.label,
         status_tone: status.tone,
-        connected_devices: connectedDeviceCount(worker),
+        connected_devices: connectedDevices,
+        site_device_count: siteDevices,
         assigned_task_groups: taskGroups,
         raw: worker,
       };
@@ -663,9 +690,14 @@ function StatusCell(params) {
 }
 
 function ConnectedDevicesCell(params) {
+  const connected = Number(params?.data?.connected_devices || 0);
+  const total = Math.max(0, Number(params?.data?.site_device_count || 0));
   return (
     <Typography sx={{ color: "#f4f7ff", fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.3 }}>
-      {Number(params?.data?.connected_devices || 0)}
+      {connected}
+      <Box component="span" sx={{ color: "rgba(148,163,184,0.52)", fontWeight: 700 }}>
+        /{total}
+      </Box>
     </Typography>
   );
 }
@@ -695,46 +727,48 @@ function AssignedTasksCell(params) {
             minWidth: 0,
           }}
         >
-          <Box
-            component="button"
-            type="button"
-            disabled={!group.path}
-            onMouseDown={stopGridEvent}
-            onClick={(event) => {
-              stopGridEvent(event);
-              if (group.path && navigate) navigate(String(group.path));
-            }}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              p: 0,
-              border: 0,
-              background: "transparent",
-              color: BOREALIS_LINK_COLOR,
-              cursor: group.path ? "pointer" : "default",
-              font: "inherit",
-              fontSize: "0.8rem",
-              fontWeight: 700,
-              lineHeight: 1.4,
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              transition: "color 160ms ease",
-              "&:hover": group.path
-                ? {
-                    color: BOREALIS_LINK_HOVER_COLOR,
-                    textDecoration: "underline",
-                  }
-                : undefined,
-              "&:disabled": {
-                opacity: 0.72,
-              },
-            }}
-          >
-            {group.label}
-          </Box>
+          <Tooltip title={group.job_name || group.label || ""} placement="top-start" arrow>
+            <Box
+              component="button"
+              type="button"
+              disabled={!group.path}
+              onMouseDown={stopGridEvent}
+              onClick={(event) => {
+                stopGridEvent(event);
+                if (group.path && navigate) navigate(String(group.path));
+              }}
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                p: 0,
+                border: 0,
+                background: "transparent",
+                color: BOREALIS_LINK_COLOR,
+                cursor: group.path ? "pointer" : "default",
+                font: "inherit",
+                fontSize: "0.8rem",
+                fontWeight: 700,
+                lineHeight: 1.4,
+                textDecoration: "none",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                transition: "color 160ms ease",
+                "&:hover": group.path
+                  ? {
+                      color: BOREALIS_LINK_HOVER_COLOR,
+                      textDecoration: "underline",
+                    }
+                  : undefined,
+                "&:disabled": {
+                  opacity: 0.72,
+                },
+              }}
+            >
+              {group.label}
+            </Box>
+          </Tooltip>
           <TaskResultsBar counts={group.counts || emptyTaskCounts()} />
         </Box>
       ))}
@@ -746,6 +780,7 @@ export default function SiteWorkers() {
   const navigate = useNavigate();
   const notify = useAppNotifications({ title: "Site Workers", icon: "accounttree", variant: "info" });
   const gridApiRef = useRef(null);
+  const requestSeqRef = useRef(0);
   const [payload, setPayload] = useState({ workers: [], active_work: [], recent_work: [] });
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -776,22 +811,29 @@ export default function SiteWorkers() {
 
   const loadWorkers = useCallback(async ({ showLoading = false } = {}) => {
     if (showLoading) setLoading(true);
+    const requestSeq = requestSeqRef.current + 1;
+    requestSeqRef.current = requestSeq;
     try {
-      const response = await fetch(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`, {
+      const response = await fetch(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}&_=${Date.now()}`, {
         credentials: "include",
         cache: "no-store",
+        headers: {
+          "Cache-Control": "no-store",
+        },
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
       }
+      if (requestSeq !== requestSeqRef.current) return;
       setPayload(data && typeof data === "object" ? data : {});
       setLoadError("");
       setLastLoadedAt(Date.now());
     } catch (error) {
+      if (requestSeq !== requestSeqRef.current) return;
       setLoadError(error?.message || "Unable to load site workers.");
     } finally {
-      setLoading(false);
+      if (requestSeq === requestSeqRef.current) setLoading(false);
     }
   }, []);
 
@@ -811,6 +853,24 @@ export default function SiteWorkers() {
   useEffect(() => {
     autoSizeColumns();
   }, [autoSizeColumns]);
+
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    const refresh = () => {
+      try {
+        api.refreshCells({ force: true });
+        api.resetRowHeights();
+      } catch {
+        /* grid may still be settling */
+      }
+    };
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(refresh);
+    } else {
+      setTimeout(refresh, 0);
+    }
+  }, [rows]);
 
   const openRecreateDialog = useCallback((row) => {
     setActionError("");
@@ -925,22 +985,22 @@ export default function SiteWorkers() {
       {
         headerName: "Status",
         field: "status_label",
-        minWidth: 180,
-        flex: 0.75,
+        minWidth: 118,
+        flex: 0.35,
         cellClass: "auto-col-tight",
         cellRenderer: StatusCell,
       },
       {
         headerName: "Connected Devices",
         field: "connected_devices",
-        minWidth: 155,
-        flex: 0.55,
+        minWidth: 128,
+        flex: 0.45,
         cellClass: "auto-col-tight",
         cellRenderer: ConnectedDevicesCell,
       },
       {
         headerName: "Assigned Tasks",
-        field: "assigned_tasks",
+        field: "assigned_task_groups",
         minWidth: 340,
         flex: 1.2,
         sortable: false,

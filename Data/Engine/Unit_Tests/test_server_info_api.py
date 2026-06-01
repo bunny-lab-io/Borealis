@@ -238,6 +238,19 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
             "INSERT OR IGNORE INTO sites(id, name, description, created_at) VALUES (?,?,?,?)",
             (7, "Bunny Lab", "", now),
         )
+        cur.executemany(
+            "INSERT OR REPLACE INTO device_sites(device_hostname, site_id, assigned_at) VALUES (?,?,?)",
+            [("lab-01", 7, now), ("lab-02", 7, now)],
+        )
+        cur.execute(
+            """
+            INSERT INTO scheduled_jobs(
+                id, name, components_json, targets_json, schedule_type,
+                execution_context, job_kind, enabled, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (55, "Patch Bunny Lab", "[]", "[]", "manual", "system", "automation", 1, now, now),
+        )
         cur.execute(
             """
             INSERT INTO job_scheduler_workers(
@@ -328,15 +341,20 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["worker_idle_ttl_seconds"] == 60
+    assert payload["site_device_counts"]["7"] == 2
+    assert payload["workers"][0]["site_device_count"] == 2
     recent_ids = {row["id"] for row in payload["recent_work"]}
     assert len(recent_ids) == 1
     recent = payload["recent_work"][0]
     assert recent["kind"] == "scheduled_run"
     assert recent["status"] == "succeeded"
     assert recent["site_name"] == "Bunny Lab"
+    assert recent["site_device_count"] == 2
+    assert recent["job_name"] == "Patch Bunny Lab"
     assert recent["target_count"] == 2
     assert recent["task_type"] == "Assembly"
     assert recent["task_link"]["path"] == "/jobs/55?tab=job_history"
+    assert recent["task_link"]["job_name"] == "Patch Bunny Lab"
 
 
 def test_server_workers_includes_short_container_id(engine_harness: EngineTestHarness, monkeypatch) -> None:
