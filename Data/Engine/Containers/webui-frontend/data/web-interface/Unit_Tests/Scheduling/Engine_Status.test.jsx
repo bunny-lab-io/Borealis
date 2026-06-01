@@ -142,7 +142,7 @@ describe("active site workers canvas mapping", () => {
     const workerNode = graph.nodes.find((node) => node.id === "worker:worker-1");
 
     expect(workerNode?.data.visualStatus).toBe("running");
-    expect(workerNode?.data.visualStatusLabel).toBe("Running - 2 Devices");
+    expect(workerNode?.data.visualStatusLabel).toBe("Running");
     expect(workerNode?.data.connectedDeviceCount).toBe(2);
     expect(workerNode?.data.connectedDeviceLabel).toBe("2 Devices Connected");
     expect(workerNode?.data.idleRemainingSeconds).toBeNull();

@@ -827,7 +827,6 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const isRedeployingWorker = siteId > 0 && redeployingSiteIds.has(siteId) && isTerminalWorkerTone(workerTone);
     const connectedDeviceCount = siteWorkerConnectedDeviceCount(worker);
     const connectedLabel = connectedDeviceLabel(connectedDeviceCount);
-    const connectedPillLabel = connectedDeviceLabel(connectedDeviceCount, { compact: true });
     const showConnectedStatus = connectedDeviceCount > 0 && !isRedeployingWorker && !isTerminalWorkerTone(workerTone);
     workerNodes.push({
       id,
@@ -838,7 +837,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
         startedLabel: epochLabel(worker?.started_at),
         status: workerStatus,
         visualStatus: isRedeployingWorker ? "re-deploying" : showConnectedStatus ? "running" : "",
-        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : showConnectedStatus ? `Running - ${connectedPillLabel}` : "",
+        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : showConnectedStatus ? "Running" : "",
         statusCountdown: isRedeployingWorker,
         isManager: false,
         siteLabel: siteName || `Site ${siteId}`,
