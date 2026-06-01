@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M9: Remote File Management` |
+| Active milestone | `M10: Process, Service, Software Ops` |
 | Last updated | 2026-06-01 |
-| Latest implementation commit | `a62dae99` (`Route File Management through site workers`). |
-| Current state | `M8` is Done after post-redeploy browser smoke: LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row through the worker-managed Guacamole path. `M9` local implementation is committed. api-backend remains the authenticated File Management REST broker for operator login/RBAC and device scope, but every live file RPC now routes to the active same-site site-worker over internal authenticated worker routes. Site-worker owns worker-local transfer state, upload staging, download artifacts, Agent transfer helper endpoints, cancel/progress snapshots, and Agent file-management event dispatch over the worker-owned Agent socket. Agent file transfers honor `transfer_base_url` so upload/download helper calls land on the site-worker route instead of api-backend. |
-| Next safe step | Operator rebuild/redeploy Engine and redeploy LAB-OPERATOR-01 Agent from branch head at or after `a62dae99`, then run M9 smoke: open File Management for LAB-OPERATOR-01, browse roots/children, upload one file, upload one folder, download one file, download one folder/archive, cancel an in-progress transfer, and confirm progress/status updates without page refresh. Do not start `M10` until post-redeploy M9 smoke passes and this tracker marks `M9` Done. |
+| Latest implementation commit | `ecd2c41f` (`Fix Site Workers grid indicators`). |
+| Current state | `M9` is Done after post-redeploy File Management smoke. Operator confirmed File Management behavior is working as expected after Engine/Agent redeploy. api-backend remains the authenticated File Management REST broker for operator login/RBAC and device scope, while live file RPCs and transfer state route through the active same-site site-worker. Site-worker owns worker-local transfer state, upload staging, download artifacts, Agent transfer helper endpoints, cancel/progress snapshots, and Agent file-management event dispatch over the worker-owned Agent socket. |
+| Next safe step | Start `M10`: migrate live process, service, and software management operations to the active same-site site-worker while keeping api-backend as the authenticated REST/RBAC/database broker. Inspect existing process/service/software API routes, Agent role event names, and cached inventory write paths before editing. Do not start `M11` until post-redeploy M10 smoke passes and this tracker marks `M10` Done. |
 
 ## Tracker Rules
 
@@ -44,8 +44,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M6: Site-Worker Agent Socket.IO` | `Done` | Move Agent remote-op event ownership to site-worker. |
 | `M7: Remote Shell` | `Done` | Move interactive shell broker path to site-worker. |
 | `M8: Remote Desktop + Guacamole` | `Done` | Move VNC and Guacamole path to site-worker. |
-| `M9: Remote File Management` | `In Progress` | Move remote file operations and transfer state to site-worker. |
-| `M10: Process, Service, Software Ops` | `Not Started` | Move remaining live Agent task handlers to site-worker. |
+| `M9: Remote File Management` | `Done` | Move remote file operations and transfer state to site-worker. |
+| `M10: Process, Service, Software Ops` | `In Progress` | Move remaining live Agent task handlers to site-worker. |
 | `M11: Agent Maintenance + Quick Jobs` | `Not Started` | Move live quick-job and maintenance dispatch to site-worker. |
 | `M12: Ansible Execution Finalization` | `Not Started` | Ensure Ansible execution belongs to worker lane only. |
 | `M13: api-backend Cleanup` | `Not Started` | Remove obsolete remote-op proxy code and stale dependencies. |
@@ -177,25 +177,25 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Move remote file operations and transfer state to site-worker. |
 | Migrates | Browse, upload, folder upload, download, cancel, copy, cut, paste, rename, move, delete, create-folder, edit-text, transfer progress, and Agent file events. |
 | Out Of Scope | Process/service/software operations, remote shell, remote desktop, Ansible execution. |
 | Done When | File operations use direct site-worker routes and worker-local transfer state; api-backend no longer stores live transfer state. |
 | Validation | Manual browse/upload/download/cancel smoke, large transfer progress check, expired-token check, focused file-operation tests where available. |
-| Handoff Note | M9 implementation commit `a62dae99` routes live File Management RPCs and transfer helpers through active same-site site-workers. Worker-local transfer state lives under temp path `Borealis/site_worker_file_management/<worker_guid>` with `FILE_TRANSFER_SESSION_TTL_SECONDS` cleanup; completed download artifacts are removed after the operator downloads content. Post-redeploy browser smoke remains required before marking `M9` Done or starting `M10`. |
+| Handoff Note | `M9` completed after post-redeploy File Management smoke. Operator confirmed File Management behavior is working as expected. Worker-local transfer state lives under temp path `Borealis/site_worker_file_management/<worker_guid>` with `FILE_TRANSFER_SESSION_TTL_SECONDS` cleanup; completed download artifacts are removed after the operator downloads content. `M10` is now active. |
 
 ### M10: Process, Service, Software Ops
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Move remaining live Agent management handlers to site-worker. |
 | Migrates | Process list/control, service inventory/actions, software inventory/actions, and related live response events. |
 | Out Of Scope | Scheduled inventory storage, long-term reporting, Ansible execution, Go rewrite. |
 | Done When | Process, service, and software live operations run through site-worker and no longer depend on api-backend Agent socket registry. |
 | Validation | Manual process/service/software smoke, RBAC/token denial checks, focused route/worker tests. |
-| Handoff Note | Record any retained api-backend persistence endpoints before starting `M11`. |
+| Handoff Note | Start by inventorying process, service, and software API routes and Agent role event names. Preserve api-backend ownership of auth/RBAC/database persistence, and move live Agent dispatch through site-worker host-service internal routes. |
 
 ### M11: Agent Maintenance + Quick Jobs
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-01 | `M9` | Closed Remote File Management worker migration after operator smoke. After Engine/Agent redeploy, operator confirmed File Management behavior worked as expected through the WebUI. `M10` is now active. | Post-redeploy File Management smoke passed by operator report. | Operator report on 2026-06-01; implementation commit `a62dae99`; UI follow-up commit `ecd2c41f`. |
 | 2026-06-01 | `M9` | Implemented worker-owned File Management transfer state. Operator `/api/device/files/<hostname>/*` endpoints still perform api-backend login/RBAC/device-scope checks, then call the active same-site site-worker over internal routes for live file RPCs, upload/download transfer creation, status, cancel, and content streaming. Site-worker now owns FileTransferStore, staged upload bytes, completed download artifacts, Agent transfer helper endpoints, and worker-local Agent file events. Agent upload/download code now honors `transfer_base_url` for status, progress, upload-item fetches, cancellation checks, and artifact upload. | Local validation passed: Python compile for touched Engine files, direct focused pytest for File Management and site-worker socket tests passed (`17 passed`), `./Engine_Unit_Tests.sh --domain files` passed, `./Engine_Unit_Tests.sh --domain remote-access` passed, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed, and `git diff --check` passed. Post-redeploy browser File Management smoke remains pending. | Implementation commit `a62dae99`; `Unit_Test_Results/engine-20260601T061939Z`; `Unit_Test_Results/agent-20260601T062212Z`. |
 | 2026-06-01 | `M8` | Closed Remote Desktop worker migration after operator browser smoke. LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row after Engine rebuild/redeploy, confirming the worker-managed Guacamole route and VNC credential bridge were usable in the WebUI. | Post-redeploy browser Remote Desktop smoke passed. | Operator report on 2026-06-01; M8 implementation commits through `699dbcd8` plus follow-up site-worker status/UI commits. |
 | 2026-06-01 | `M8` | Fixed Remote Desktop establish after Agent sockets moved to site-workers. Runtime VNC logs showed repeated LAB-OPERATOR-01 establish attempts failing at `vnc_agent_live_credentials_unavailable` while Agent role health reported VNC ready. api-backend now falls back from legacy `call_agent_event` to the active same-site worker route for live `vnc_credential_request`, socket-registration checks, and VNC start/stop emits. Site-worker exposes internal authenticated host-service `status`, `event`, and `call` endpoints backed by its worker-local Agent socket registry. | Local validation passed: Python compile for touched VNC/site-worker/test files, focused worker credential bridge regressions passed (`2 passed`), full `test_vnc_api.py` plus `test_site_worker_socket.py` passed (`42 passed`), `./Engine_Unit_Tests.sh --domain remote-access` passed, and `git diff --check` passed. Post-redeploy browser Remote Desktop smoke remains pending. | Implementation commit `699dbcd8`; VNC log evidence `E04F result=vnc_agent_live_credentials_unavailable` for LAB-OPERATOR-01 at `2026-06-01 00:30:48-00:30:59`; `Unit_Test_Results/engine-20260601T004042Z`. |
@@ -329,12 +330,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - M6 post-redeploy Agent socket smoke passed with LAB-OPERATOR-01 registered on a site-worker route.
 - M7 complete: Remote Shell opens through the site-worker route and worker-owned WireGuard shell bridge.
 - M8 complete: Remote Desktop/Guacamole opens through the site-worker route; LAB-OPERATOR-01 connected successfully three times after redeploy.
-- M9 implementation committed: live File Management RPCs and transfer state now route through the active same-site site-worker. Post-redeploy File Management smoke is pending.
+- M9 complete: live File Management RPCs and transfer state route through the active same-site site-worker, and post-redeploy File Management smoke passed.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Complete `M9` post-redeploy File Management smoke before starting `M10`.
 - Complete `M10` and `M11` to migrate remaining live remote-operation features.
 - Complete `M12` and `M13` to finalize Ansible ownership and clean `api-backend`.
 - Complete `M14` before any Go rewrite implementation starts.
@@ -355,7 +355,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Remote-op session smoke | `M4` | `Done` | Runtime smoke confirmed success, unauthorized access, invalid capability, out-of-scope access, expired/invalid token rejection, missing worker-route behavior, and synthetic route cleanup. |
 | Agent socket smoke | `M6` | `Done` | LAB-OPERATOR-01 registered through site-worker route after redeploy/reapproval, and later remote shell/desktop smokes confirmed worker-owned Agent socket dispatch. |
 | Agent unit tests | `M5`, `M6`, `M9` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover, M6 stale-route refresh, and M9 transfer URL routing (`Unit_Test_Results/agent-20260601T062212Z`). |
-| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7` and `M8`, `Pending` for `M9` | Shell and desktop passed against LAB-OPERATOR-01. File Management smoke is next. Process/service/software remain future `M10`. |
+| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7`, `M8`, and `M9` | Shell, desktop, and File Management passed against LAB-OPERATOR-01. Process/service/software are active `M10` scope. |
 
 ## Fresh Codex Prompt
 
@@ -364,9 +364,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include `a62dae99`, "Route File Management through site workers", and the later tracker update that keeps M9 active.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include the tracker update that marks M10 active after File Management smoke passed.
 
-M1 through M8 are Done. M9 is active and awaiting post-redeploy File Management smoke.
+M1 through M9 are Done. M10 is active.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -424,23 +424,28 @@ Completed M8 state:
 - Browser Guacamole WebSocket path uses `/_borealis/site-workers/<worker_guid>/remote-desktop/vnc/guacamole`.
 - LAB-OPERATOR-01 Remote Desktop connected successfully three times in a row after redeploy.
 
-Current M9 state:
+Completed M9 state:
 - Implementation commit `a62dae99` routes live File Management RPCs and transfer state through active same-site site-workers.
 - api-backend remains operator REST broker for login/RBAC/device scope, then calls worker internal routes.
 - Site-worker owns FileTransferStore, upload staging, download artifacts, Agent transfer helper endpoints, transfer progress/cancel snapshots, and Agent file-management event dispatch.
 - Agent File Management honors `transfer_base_url` for upload item fetches, transfer status checks, progress updates, cancellation checks, and download artifact upload.
 - Worker-local transfer state lives under temp path `Borealis/site_worker_file_management/<worker_guid>` with `FILE_TRANSFER_SESSION_TTL_SECONDS` cleanup.
 - Local validation passed: Python compile, focused pytest (`17 passed`), Engine `files`, Engine `remote-access`, Agent `go-agent`, and `git diff --check`.
+- Post-redeploy File Management smoke passed by operator report.
+
+Current M10 state:
+- Goal is process, service, and software live-operation migration.
+- api-backend should remain REST/RBAC/database broker.
+- Live Agent dispatch should move through site-worker host-service internal routes.
+- Need inventory current process/service/software API routes, Agent role event names, cached inventory persistence, and live refresh/control actions before editing.
 
 Next work:
-1. Have operator rebuild/redeploy Engine and redeploy LAB-OPERATOR-01 Agent from branch head at or after `a62dae99`.
-2. Open File Management for LAB-OPERATOR-01.
-3. Confirm roots and children browsing works.
-4. Upload one file and one folder.
-5. Download one file and one folder/archive.
-6. Cancel an in-progress transfer.
-7. Confirm transfer progress/status updates without browser page refresh.
-8. Do not start `M10` until M9 smoke passes and this tracker marks M9 `Done`.
+1. Map process/service/software routes and Agent event names.
+2. Route live process/service/software requests through active same-site site-worker.
+3. Preserve api-backend persistence endpoints and cached inventory writes.
+4. Validate focused process/service/software tests and Agent tests where touched.
+5. Have operator rebuild/redeploy Engine and Agent, then smoke process list/control, service list/action, and software refresh/action paths.
+6. Do not start `M11` until M10 smoke passes and this tracker marks M10 `Done`.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
