@@ -880,13 +880,6 @@ function ConnectedDevicesCell(params) {
         lineHeight: 1.25,
       }}
     >
-      <Typography sx={{ color: "#f4f7ff", fontSize: "0.78rem", fontWeight: 800, lineHeight: 1.1, textAlign: "center" }}>
-        {connected}
-        <Box component="span" sx={{ color: PLACEHOLDER_TEXT_COLOR, fontWeight: 800 }}>
-          {" / "}
-          {total} Devices
-        </Box>
-      </Typography>
       <Box
         sx={{
           display: "flex",
@@ -927,7 +920,7 @@ function ConnectedDevicesCell(params) {
           fontFamily: gridFontFamily,
         }}
       >
-        {CONNECTION_SECTIONS.filter((section) => Number(counts[section.key] || 0) > 0).map((section) => (
+        {CONNECTION_SECTIONS.map((section) => (
           <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.35 }}>
             <Box component="span" sx={{ width: 5, height: 5, borderRadius: 1, backgroundColor: section.color }} />
             {counts[section.key]} {section.label}
