@@ -368,6 +368,13 @@ def _worker_image() -> str:
     return str(os.environ.get("BOREALIS_SITE_WORKER_IMAGE") or "borealis-engine/site-worker:local").strip()
 
 
+def _agent_online_window_seconds() -> int:
+    try:
+        return max(60, int(str(os.environ.get("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS") or "300").strip() or "300"))
+    except Exception:
+        return 300
+
+
 def _env_value(env_items: Sequence[Any], key: str) -> str:
     prefix = f"{key}="
     for item in env_items or []:
@@ -484,6 +491,7 @@ def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
                 "worker_guid": worker_guid,
                 "site_id": site_id,
                 "container_name": name or f"site-worker-{worker_guid}",
+                "image": str(config.get("Image") or "").strip(),
                 "docker_state": docker_state or "running",
                 "exit_code": exit_code,
                 "remote_ops_port": remote_ops_port or site_worker_remote_ops_port(worker_guid, site_id),
@@ -493,10 +501,69 @@ def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
     return snapshots
 
 
+def _stop_site_worker_container(container_name: str, logger) -> bool:
+    docker_bin = shutil.which("docker") or ""
+    if not docker_bin:
+        logger.warning("docker CLI unavailable; cannot stop stale site-worker %s", container_name)
+        return False
+    name = str(container_name or "").strip()
+    if not name:
+        return False
+    try:
+        completed = subprocess.run([docker_bin, "stop", name], capture_output=True, text=True, check=False, timeout=20)
+    except Exception as exc:
+        logger.warning("site-worker stale image stop failed container=%s err=%s", name, exc)
+        return False
+    if completed.returncode != 0:
+        logger.warning("site-worker stale image stop failed container=%s output=%s", name, (completed.stderr or completed.stdout or "").strip())
+        return False
+    logger.info("stopped stale site-worker container=%s", name)
+    return True
+
+
+def _filter_current_site_worker_snapshots(snapshots: Sequence[Mapping[str, Any]], logger) -> List[Dict[str, Any]]:
+    desired_image = _worker_image()
+    current: List[Dict[str, Any]] = []
+    for snapshot in snapshots or []:
+        row = dict(snapshot)
+        image = str(row.get("image") or "").strip()
+        container_name = str(row.get("container_name") or "").strip()
+        if desired_image and image and image != desired_image:
+            logger.info("site-worker image drift detected container=%s current=%s desired=%s", container_name, image, desired_image)
+            if _stop_site_worker_container(container_name, logger):
+                continue
+        current.append(row)
+    return current
+
+
+def _online_site_ids(conn: sqlite3.Connection, *, now_ts: Optional[int] = None, window_seconds: Optional[int] = None) -> List[int]:
+    cutoff = int(now_ts if now_ts is not None else _now_ts()) - int(window_seconds or _agent_online_window_seconds())
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT DISTINCT ds.site_id
+              FROM device_sites ds
+              JOIN devices d ON lower(d.hostname)=lower(ds.device_hostname)
+             WHERE ds.site_id IS NOT NULL
+               AND ds.site_id>0
+               AND d.last_seen IS NOT NULL
+               AND d.last_seen>=?
+               AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+             ORDER BY ds.site_id ASC
+            """,
+            (cutoff,),
+        )
+    except Exception:
+        return []
+    return [int(row[0]) for row in cur.fetchall() or [] if row and row[0] is not None]
+
+
 def _reconcile_site_workers(db_factory, logger) -> None:
     snapshots = _docker_site_worker_snapshots(logger)
     if snapshots is None:
         return
+    snapshots = _filter_current_site_worker_snapshots(snapshots, logger)
     live_worker_guids = [str(item.get("worker_guid") or "") for item in snapshots if str(item.get("worker_guid") or "").strip()]
     seen_sites: Dict[int, str] = {}
     duplicate_sites: Dict[int, List[str]] = {}
@@ -1046,7 +1113,7 @@ def main() -> None:
             expire_stale_leases(conn)
             mark_lost_workers(conn)
             prune_worker_history(conn, retention_seconds=worker_history_seconds)
-            site_ids = queued_site_ids(conn)
+            site_ids = sorted(set(queued_site_ids(conn)) | set(_online_site_ids(conn)))
             conn.commit()
         finally:
             conn.close()

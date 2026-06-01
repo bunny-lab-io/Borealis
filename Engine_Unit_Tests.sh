@@ -254,6 +254,7 @@ engine_python_files_for_domain() {
       ;;
     scheduler)
       emit_existing_paths \
+        "${test_root}/test_job_scheduler_queue.py" \
         "${test_root}/test_scheduled_jobs_api.py" \
         "${test_root}/test_scheduler_timing.py"
       ;;

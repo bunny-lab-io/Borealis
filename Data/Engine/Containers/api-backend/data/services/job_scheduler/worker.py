@@ -332,6 +332,38 @@ def _site_worker_scheduled_concurrency() -> int:
     return min(32, max(1, value))
 
 
+def _agent_online_window_seconds() -> int:
+    try:
+        return max(60, int(str(os.environ.get("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS") or "300").strip() or "300"))
+    except Exception:
+        return 300
+
+
+def _online_site_device_count(conn: sqlite3.Connection, *, site_id: int, now_ts: Optional[int] = None) -> int:
+    cutoff = int(now_ts if now_ts is not None else _now_ts()) - _agent_online_window_seconds()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT COUNT(DISTINCT d.guid)
+              FROM device_sites ds
+              JOIN devices d ON lower(d.hostname)=lower(ds.device_hostname)
+             WHERE ds.site_id=?
+               AND d.last_seen IS NOT NULL
+               AND d.last_seen>=?
+               AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+            """,
+            (int(site_id), cutoff),
+        )
+        row = cur.fetchone()
+    except Exception:
+        return 0
+    try:
+        return max(0, int(row[0] if row else 0))
+    except Exception:
+        return 0
+
+
 def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: threading.Lock) -> list[Dict[str, Any]]:
     with active_lock:
         links: list[Dict[str, Any]] = []
@@ -356,9 +388,23 @@ def _agent_socket_task_links(connected_device_count: int) -> list[Dict[str, Any]
     ]
 
 
-def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int) -> list[str]:
+def _agent_online_task_links(online_device_count: int) -> list[Dict[str, Any]]:
+    count = max(0, int(online_device_count or 0))
+    if count <= 0:
+        return []
+    noun = "Device" if count == 1 else "Devices"
+    return [
+        {
+            "kind": "agent_online",
+            "label": f"{count} {noun} Online",
+            "count": count,
+        }
+    ]
+
+
+def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int, online_device_count: int = 0) -> list[str]:
     current = [str(lane) for lane in lanes or [] if str(lane or "").strip()]
-    if connected_device_count > 0 and LANE_AGENT_SOCKETS not in current:
+    if (connected_device_count > 0 or online_device_count > 0) and LANE_AGENT_SOCKETS not in current:
         current.append(LANE_AGENT_SOCKETS)
     return current
 
@@ -928,12 +974,22 @@ def main() -> None:
         except Exception:
             return 0
 
+    def online_device_count(conn: sqlite3.Connection) -> int:
+        return _online_site_device_count(conn, site_id=site_id)
+
     def visible_links() -> list[Dict[str, Any]]:
         count = connected_device_count()
         return active_links() + _agent_socket_task_links(count)
 
-    def visible_lanes(lanes: list[str]) -> list[str]:
-        return _lanes_with_agent_sockets(lanes, connected_device_count())
+    def visible_links_for_conn(conn: sqlite3.Connection) -> list[Dict[str, Any]]:
+        socket_count = connected_device_count()
+        online_count = online_device_count(conn) if socket_count <= 0 else 0
+        return active_links() + _agent_socket_task_links(socket_count) + _agent_online_task_links(online_count)
+
+    def visible_lanes(lanes: list[str], conn: sqlite3.Connection) -> list[str]:
+        socket_count = connected_device_count()
+        online_count = online_device_count(conn) if socket_count <= 0 else 0
+        return _lanes_with_agent_sockets(lanes, socket_count, online_count)
 
     def prune_active_items() -> None:
         with active_lock:
@@ -996,8 +1052,8 @@ def main() -> None:
                             conn,
                             worker_guid=worker_guid,
                             status=WORKER_STATUS_RUNNING,
-                            lanes=visible_lanes(current_lanes),
-                            task_links=visible_links() + task_links,
+                            lanes=visible_lanes(current_lanes, conn),
+                            task_links=visible_links_for_conn(conn) + task_links,
                             claimed_count=claimed_count,
                         )
                     conn.commit()
@@ -1030,8 +1086,8 @@ def main() -> None:
                         conn,
                         worker_guid=worker_guid,
                         status=WORKER_STATUS_RUNNING,
-                        lanes=visible_lanes(active_lanes),
-                        task_links=visible_links(),
+                        lanes=visible_lanes(active_lanes, conn),
+                        task_links=visible_links_for_conn(conn),
                         claimed_count=claimed_count,
                     )
                     conn.commit()
@@ -1041,19 +1097,20 @@ def main() -> None:
                 continue
 
             agent_device_count = connected_device_count()
-            if agent_device_count > 0:
-                idle_since = None
-            elif idle_since is None:
-                idle_since = _now_ts()
             conn = db_factory()
             try:
+                online_device_total = online_device_count(conn) if agent_device_count <= 0 else 0
+                if agent_device_count > 0 or online_device_total > 0:
+                    idle_since = None
+                elif idle_since is None:
+                    idle_since = _now_ts()
                 heartbeat_worker(
                     conn,
                     worker_guid=worker_guid,
-                    status=WORKER_STATUS_RUNNING if agent_device_count > 0 else WORKER_STATUS_IDLE,
-                    lanes=_lanes_with_agent_sockets([], agent_device_count),
-                    task_links=_agent_socket_task_links(agent_device_count),
-                    idle_since=idle_since,
+                    status=WORKER_STATUS_RUNNING if (agent_device_count > 0 or online_device_total > 0) else WORKER_STATUS_IDLE,
+                    lanes=_lanes_with_agent_sockets([], agent_device_count, online_device_total),
+                    task_links=_agent_socket_task_links(agent_device_count) + _agent_online_task_links(online_device_total),
+                    idle_since=None if online_device_total > 0 else idle_since,
                     claimed_count=claimed_count,
                 )
                 conn.commit()

@@ -348,6 +348,52 @@ def test_spawn_site_worker_mounts_traefik_config_for_route_files(tmp_path: Path,
     assert list(dynamic_dir.glob("site-worker-*.yml"))
 
 
+def test_site_worker_reconcile_filters_stale_worker_image(monkeypatch) -> None:
+    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
+
+    stopped = []
+    monkeypatch.setattr(job_scheduler_manager, "_worker_image", lambda: "borealis-engine/site-worker:new")
+    monkeypatch.setattr(job_scheduler_manager, "_stop_site_worker_container", lambda name, logger: stopped.append(name) or True)
+    logger = SimpleNamespace(info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None)
+
+    current = job_scheduler_manager._filter_current_site_worker_snapshots(
+        [
+            {"container_name": "site-worker-old", "image": "borealis-engine/site-worker:old", "worker_guid": "old"},
+            {"container_name": "site-worker-new", "image": "borealis-engine/site-worker:new", "worker_guid": "new"},
+        ],
+        logger,
+    )
+
+    assert stopped == ["site-worker-old"]
+    assert [row["worker_guid"] for row in current] == ["new"]
+
+
+def test_online_site_worker_helpers_count_recent_site_devices(tmp_path: Path, monkeypatch) -> None:
+    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
+    from Data.Engine.services.job_scheduler import worker as site_worker
+
+    now = int(time.time())
+    conn = _connect_queue_db(tmp_path)
+    try:
+        conn.execute("CREATE TABLE devices(guid TEXT PRIMARY KEY, hostname TEXT, last_seen INTEGER, status TEXT)")
+        conn.execute("CREATE TABLE device_sites(device_hostname TEXT PRIMARY KEY, site_id INTEGER)")
+        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-1", "LAB-ONE", now - 30, "active"))
+        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-2", "LAB-TWO", now - 900, "active"))
+        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-3", "LAB-THREE", now - 30, "purged"))
+        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("lab-one", 7))
+        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("LAB-TWO", 8))
+        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("LAB-THREE", 9))
+        conn.commit()
+
+        monkeypatch.setenv("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS", "300")
+
+        assert job_scheduler_manager._online_site_ids(conn, now_ts=now, window_seconds=300) == [7]
+        assert site_worker._online_site_device_count(conn, site_id=7, now_ts=now) == 1
+        assert site_worker._online_site_device_count(conn, site_id=8, now_ts=now) == 0
+    finally:
+        conn.close()
+
+
 def test_worker_route_upsert_recovers_missing_registry_row_for_live_worker(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(tmp_path / "dynamic"))
     conn = _connect_queue_db(tmp_path)
