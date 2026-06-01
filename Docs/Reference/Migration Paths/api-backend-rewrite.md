@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M10: Process, Service, Software Ops` |
+| Active milestone | `M11: Agent Maintenance + Quick Jobs` |
 | Last updated | 2026-06-01 |
 | Latest implementation commit | `5a718a56` (`Stabilize M10 software refresh routing`). |
-| Current state | `M10` implementation is committed. Post-redeploy WebUI smoke passed for Process Management and Service Management. Software Management smoke found a site-worker route-churn gap: refresh worked before worker replacement, then icon override and direct refresh failed while the replacement worker was starting and before the Agent SYSTEM socket re-registered. A local fix now lets opted-in software refresh events queue inside the replacement site-worker until the Agent SYSTEM socket reconnects; post-redeploy software smoke is pending. |
-| Next safe step | Rebuild/redeploy Engine, then smoke M10 Software Management again in the WebUI: `Query Software Changes` and one override-triggered refresh during normal operation. If software smoke passes, update this tracker to mark `M10` Done and set next safe step to `M11`. Do not start `M11` until this tracker marks `M10` Done. |
+| Current state | `M10` is complete. Post-redeploy WebUI smoke passed for Process Management, Service Management, direct Software Management refresh, and icon override-triggered software refresh. Runtime logs show the failed pre-fix icon override at `09:27:03`, then successful post-fix software refresh requests at `09:48:50`, `09:50:18`, `09:50:51`, and `09:50:57`; the `09:50:51` request was the icon override refresh. `M11` is now active. |
+| Next safe step | Implement `M11`: move live quick-job and Agent maintenance dispatch that depends on active Agent sockets through the active same-site site-worker while keeping scheduler persistence and job history in the existing scheduler/database lane. Do not start `M12` until M11 quick-job and Agent maintenance smoke passes and this tracker marks `M11` Done. |
 
 ## Tracker Rules
 
@@ -45,8 +45,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M7: Remote Shell` | `Done` | Move interactive shell broker path to site-worker. |
 | `M8: Remote Desktop + Guacamole` | `Done` | Move VNC and Guacamole path to site-worker. |
 | `M9: Remote File Management` | `Done` | Move remote file operations and transfer state to site-worker. |
-| `M10: Process, Service, Software Ops` | `In Progress` | Move remaining live Agent task handlers to site-worker. |
-| `M11: Agent Maintenance + Quick Jobs` | `Not Started` | Move live quick-job and maintenance dispatch to site-worker. |
+| `M10: Process, Service, Software Ops` | `Done` | Move remaining live Agent task handlers to site-worker. |
+| `M11: Agent Maintenance + Quick Jobs` | `In Progress` | Move live quick-job and maintenance dispatch to site-worker. |
 | `M12: Ansible Execution Finalization` | `Not Started` | Ensure Ansible execution belongs to worker lane only. |
 | `M13: api-backend Cleanup` | `Not Started` | Remove obsolete remote-op proxy code and stale dependencies. |
 | `M14: Go Rewrite Prep` | `Not Started` | Freeze reduced Python API surface for Go rewrite design. |
@@ -189,19 +189,19 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Move remaining live Agent management handlers to site-worker. |
 | Migrates | Process list/control, service inventory/actions, software inventory/actions, and related live response events. |
 | Out Of Scope | Scheduled inventory storage, long-term reporting, Ansible execution, Go rewrite. |
 | Done When | Process, service, and software live operations run through site-worker and no longer depend on api-backend Agent socket registry. |
 | Validation | Manual process/service/software smoke, RBAC/token denial checks, focused route/worker tests. |
-| Handoff Note | Implementation commit `c76073f7` adds shared api-backend worker-bridge helpers and routes live process RPCs, service control events, and software inventory refresh events through the active same-site site-worker host-service internal routes. api-backend still owns login/RBAC, cached service/software inventory reads, service pending-state persistence, software override persistence, and quick-job queueing. Post-redeploy WebUI smoke remains pending; do not start `M11` until that smoke passes and this milestone is marked Done. |
+| Handoff Note | Implementation commit `c76073f7` adds shared api-backend worker-bridge helpers and routes live process RPCs, service control events, and software inventory refresh events through the active same-site site-worker host-service internal routes. Follow-up commit `5a718a56` stabilizes software refresh during site-worker route churn by retrying worker lookup briefly and allowing opted-in one-way software refresh events to queue inside the replacement site-worker until the Agent SYSTEM socket reconnects. Post-redeploy smoke passed for Process Management, Service Management, direct Software Management refresh, and icon override-triggered software refresh. api-backend still owns login/RBAC, cached service/software inventory reads, service pending-state persistence, software override persistence, and quick-job queueing. `M11` is now active. |
 
 ### M11: Agent Maintenance + Quick Jobs
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Move live quick-job and Agent maintenance dispatch that depends on the active Agent channel to site-worker. |
 | Migrates | Quick job run event dispatch, maintenance task dispatch, and live Agent delivery response handling. |
 | Out Of Scope | Scheduled job database ownership, job-scheduler manager lane, Ansible playbook execution finalization. |
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-01 | `M10` | Closed Process, Service, and Software Ops worker migration after operator smoke. Operator confirmed Process Management and Service Management worked without issues, then confirmed software icon override succeeded after the route-churn fix was rebuilt and redeployed. | Post-redeploy WebUI smoke passed by operator report. Runtime log review confirms successful software refresh requests after the fix at `09:48:50`, `09:50:18`, `09:50:51`, and `09:50:57`; the `09:50:51` request used `operator_icon_override:icon_override_adobe_refresh_manager`. | Operator reports on 2026-06-01; implementation commits `c76073f7` and `5a718a56`; tracker commit `953bd3c0`; log evidence in `Engine/Services/api-backend/logs/device_actions.log`. |
 | 2026-06-01 | `M10` | Fixed Software Management refresh during site-worker route churn. Runtime logs showed `Query Software Changes` succeeded at `09:25:47` and `09:25:53`, then site-worker replacement for site `1` began around `09:26:13`; the icon override at `09:27:03` and follow-up refreshes failed before LAB-OPERATOR-01 re-registered with the replacement worker at `09:28:25`. Software refresh requests now retry briefly while the new worker starts and queue opted-in one-way host-service events inside the site-worker until the Agent SYSTEM socket reconnects. | Local validation: `python3 -m py_compile` passed for touched backend/test files and `git diff --check` passed. Unit lanes are blocked on this host because Engine Python dependencies are missing (`pytest` and `sqlalchemy`); `./Engine_Unit_Tests.sh --domain devices` failed for missing `pytest` in `Unit_Test_Results/engine-20260601T093532Z`. Post-redeploy Software Management smoke remains pending. | Implementation commit `5a718a56`; runtime logs: `Engine/Services/api-backend/logs/device_actions.log`, `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/site-workers/ebeec7b0-688f-444e-be71-41598c5e2649.log`, and `Engine/Services/api-backend/logs/site-workers/a6df235c-8b6d-4834-9250-ee8bc3d4806d.log`. |
 | 2026-06-01 | `M10` | Recorded partial post-redeploy M10 smoke. Operator confirmed Process Management and Service Management are working correctly without issues through the WebUI. Software Management smoke remains pending before M10 can close. | Post-redeploy WebUI smoke passed for process and service management by operator report. | Operator report on 2026-06-01; implementation commit `c76073f7`; Site Workers UI follow-up through `61e6e4b4`. |
 | 2026-06-01 | `M10` | Implemented worker-routed process, service, and software live operations. Added shared api-backend worker bridge for internal site-worker host-service `status`, `event`, and `call`; process list/terminate now call worker-owned SYSTEM Agent sockets; service start/stop/restart and software inventory refresh requests now emit through the active same-site worker. Site Workers UI status pills were vertically centered and AG Grid sort-order numbers hidden. | Local validation passed: Python compile for touched backend/test files; focused device API pytest for process/service/software paths passed (`7 passed`); `test_site_worker_socket.py` passed (`10 passed`); `./Engine_Unit_Tests.sh --domain devices` passed when run with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT`; `git diff --check` passed. WebUI unit lane remains blocked until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. Post-redeploy M10 smoke remains pending. | Implementation commit `c76073f7`; UI commit `5e198907`; `Unit_Test_Results/engine-20260601T074913Z`; blocked WebUI run `Unit_Test_Results/engine-20260601T075442Z`. |
