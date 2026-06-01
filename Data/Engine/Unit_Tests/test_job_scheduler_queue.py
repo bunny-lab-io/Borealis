@@ -393,6 +393,7 @@ def test_spawn_site_worker_mounts_traefik_config_for_route_files(tmp_path: Path,
     docker_args = calls[0]
     mount = f"{project_root}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config"
     assert mount in docker_args
+    assert "borealis.site_worker_image=borealis-engine/site-worker:test" in docker_args
     assert list(dynamic_dir.glob("site-worker-*.yml"))
 
 
@@ -407,12 +408,18 @@ def test_site_worker_reconcile_filters_stale_worker_image(monkeypatch) -> None:
     current = job_scheduler_manager._filter_current_site_worker_snapshots(
         [
             {"container_name": "site-worker-old", "image": "borealis-engine/site-worker:old", "worker_guid": "old"},
+            {
+                "container_name": "site-worker-old-configured",
+                "image": "borealis-engine/site-worker:new",
+                "configured_image": "borealis-engine/site-worker:old",
+                "worker_guid": "old-configured",
+            },
             {"container_name": "site-worker-new", "image": "borealis-engine/site-worker:new", "worker_guid": "new"},
         ],
         logger,
     )
 
-    assert stopped == ["site-worker-old"]
+    assert stopped == ["site-worker-old", "site-worker-old-configured"]
     assert [row["worker_guid"] for row in current] == ["new"]
 
 

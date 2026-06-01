@@ -259,6 +259,7 @@ class SiteWorkerSocketRuntime:
         self._pending_host_event_ttl_seconds = max(30, min(900, pending_event_ttl))
         self._pending_host_event_lock = threading.RLock()
         self._pending_host_events: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
+        self._ansible_runner: Optional[Any] = None
         self._thread: Optional[threading.Thread] = None
         self._register_routes()
         self._register_file_management_routes()
@@ -272,6 +273,9 @@ class SiteWorkerSocketRuntime:
             self.service_log("site_worker_remote_ops", message, scope=self.worker_guid, level=level)
         except Exception:
             self.logger.debug("site-worker remote ops service log failed", exc_info=True)
+
+    def set_ansible_runner(self, runner: Any) -> None:
+        self._ansible_runner = runner
 
     def _register_routes(self) -> None:
         @self.app.route("/health", methods=["GET"])
@@ -352,6 +356,46 @@ class SiteWorkerSocketRuntime:
                 timeout=max(0.5, timeout),
             )
             return jsonify({"called": response is not None, "response": response}), 200
+
+        @self.app.route("/automation/ansible/run", methods=["POST"])
+        def _ansible_run():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            if self._ansible_runner is None:
+                return jsonify({"error": "ansible_runner_unavailable"}), 503
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            payload = data.get("queue_run") if isinstance(data.get("queue_run"), Mapping) else data
+            if not isinstance(payload, Mapping):
+                return jsonify({"error": "queue_run_payload_required"}), 400
+            allowed_keys = {
+                "hostname",
+                "playbook_rel_path",
+                "playbook_name",
+                "playbook_abs_path",
+                "playbook_content",
+                "credential_id",
+                "variable_values",
+                "payload_files",
+                "target_specifications",
+                "runtime_files",
+                "source",
+                "activity_id",
+                "scheduled_job_id",
+                "scheduled_run_id",
+                "scheduled_job_run_row_id",
+                "connection",
+            }
+            queue_payload = {key: payload.get(key) for key in allowed_keys if key in payload}
+            try:
+                run_id = self._ansible_runner.queue_run(**queue_payload)
+            except Exception as exc:
+                self._log(f"ansible queue failed err={exc}", level="ERROR")
+                return jsonify({"error": "ansible_queue_failed", "message": str(exc)}), 500
+            return jsonify({"queued": True, "run_id": run_id, "worker_guid": self.worker_guid}), 200
 
     def _require_internal_request(self) -> Optional[tuple[Dict[str, Any], int]]:
         if validate_internal_token(self.internal_secret, request.headers.get(INTERNAL_TOKEN_HEADER)):

@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.job_scheduler.queue import WORKER_STATUS_RUNNING, register_worker
 from Data.Engine.services.job_scheduler import worker as site_worker
+from Data.Engine.services.ansible import worker_dispatch
 from Data.Engine.services.remote_ops import worker_bridge
 
 from .conftest import EngineTestHarness
@@ -246,6 +248,57 @@ def test_quick_run_dispatches_through_site_worker_bridge(
     assert base64.b64decode(dispatched["script_content"]).decode("utf-8") == "Write-Output 'm11 quick job'\n"
     assert not any(event == "quick_job_run" for event, _payload, _to in socket_events)
     assert any(event == "device_activity_changed" for event, _payload, _to in socket_events)
+
+
+def test_ansible_dispatcher_queues_through_active_site_worker(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    _seed_worker_route(engine_harness, monkeypatch, tmp_path, worker_guid="worker-m12-ansible", port=61237)
+    calls: list[dict[str, Any]] = []
+
+    def _post_worker_json(_app, route, path, payload, *, timeout=30.0):
+        calls.append(
+            {
+                "route": dict(route or {}),
+                "path": path,
+                "payload": dict(payload or {}),
+                "timeout": timeout,
+            }
+        )
+        return {"queued": True, "run_id": "ansible-run-1"}, None
+
+    monkeypatch.setattr(worker_dispatch, "post_worker_json", _post_worker_json)
+
+    dispatcher = worker_dispatch.WorkerAnsibleDispatcher(
+        app=engine_harness.app,
+        adapters=type("Adapters", (), {"db_conn_factory": lambda _self: sqlite3.connect(str(engine_harness.db_path))})(),
+    )
+
+    run_id = dispatcher.queue_run(
+        hostname="borealis-engine-01",
+        playbook_rel_path="Ansible_Playbooks/ping.yml",
+        playbook_name="Ping",
+        playbook_content="- hosts: all\n",
+        target_specifications=[
+            {
+                "hostname": "test-device",
+                "inventory_hostname": "main_lab__test_device",
+                "site_id": 1,
+                "host_vars": {"ansible_connection": "ssh"},
+            }
+        ],
+        source="scheduled_job",
+        connection="ssh",
+    )
+
+    assert run_id == "ansible-run-1"
+    assert len(calls) == 1
+    assert calls[0]["path"] == "/automation/ansible/run"
+    assert calls[0]["route"]["worker_guid"] == "worker-m12-ansible"
+    assert calls[0]["payload"]["queue_run"]["playbook_name"] == "Ping"
+    assert calls[0]["payload"]["queue_run"]["target_specifications"][0]["site_id"] == 1
 
 
 def test_site_worker_local_dispatch_queues_quick_job_when_socket_reconnecting(monkeypatch) -> None:

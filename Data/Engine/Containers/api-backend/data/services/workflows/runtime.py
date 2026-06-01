@@ -27,7 +27,6 @@ from ..API.assemblies.execution import (
     prepare_variable_context,
 )
 from ..API.devices.session_dispatch import build_currentuser_dispatch_fields
-from ..ansible import EngineAnsibleRunner
 from ..ansible.ssh_auth import apply_ssh_credential_host_vars
 from ..assemblies.service import AssemblyRuntimeService
 from ..filters.matcher import DeviceFilterMatcher
@@ -432,7 +431,7 @@ class WorkflowRuntimeService:
         socketio: Any = None,
         service_log: Optional[Callable[[str, str, Optional[str]], None]] = None,
         logger: Optional[logging.Logger] = None,
-        ansible_runner: Optional[EngineAnsibleRunner] = None,
+        ansible_runner: Optional[Any] = None,
     ) -> None:
         self._db_conn_factory = db_conn_factory
         self._assembly_runtime = assembly_runtime
@@ -3064,11 +3063,18 @@ class WorkflowRuntimeService:
         credential = self._load_credential(credential_id) if credential_id is not None else None
 
         if execution_mode == "local":
+            local_site_ids = {
+                _coerce_int(target.get("site_id"), default=0)
+                for target in active_targets or []
+                if isinstance(target, Mapping) and _coerce_int(target.get("site_id"), default=0) > 0
+            }
+            local_site_id = next(iter(local_site_ids), 0) if len(local_site_ids) == 1 else 0
             target_specifications = [
                 {
                     "hostname": ENGINE_LOCAL_ALIAS,
                     "inventory_hostname": ENGINE_LOCAL_ALIAS,
                     "site_group": "site_local",
+                    "site_id": local_site_id,
                     "host_vars": {"ansible_connection": "local"},
                 }
             ]
@@ -3251,6 +3257,7 @@ class WorkflowRuntimeService:
                     "hostname": hostname,
                     "inventory_hostname": self._inventory_hostname(hostname, site_name=site_name, site_id=site_id),
                     "site_group": self._site_group(site_name, site_id=site_id),
+                    "site_id": site_id,
                     "host_vars": host_vars,
                 }
             )

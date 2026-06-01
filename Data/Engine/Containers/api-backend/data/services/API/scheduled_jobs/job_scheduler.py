@@ -1630,6 +1630,7 @@ class JobScheduler(OnboardingSchedulerMixin):
                         "hostname": str(hostname),
                         "inventory_hostname": host_alias,
                         "site_group": _site_group_name(site_name, site_id),
+                        "site_id": site_id,
                         "host_vars": host_vars,
                     }
                 ]
@@ -4539,6 +4540,7 @@ class JobScheduler(OnboardingSchedulerMixin):
                     "hostname": hostname,
                     "inventory_hostname": inventory_hostname,
                     "site_group": _site_group_name(site_name, site_id),
+                    "site_id": site_id,
                     "host_vars": host_vars,
                 }
             )

@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 from flask import Blueprint, jsonify, request
 
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
-from ...ansible import EngineAnsibleRunner
+from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
 from ...workflows import WorkflowRuntimeService
@@ -82,11 +82,10 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
         raise RuntimeError("Assembly cache is required to initialise the workflow runtime.")
 
     assembly_runtime = AssemblyRuntimeService(cache, logger=adapters.context.logger)
-    ansible_runner = EngineAnsibleRunner(
-        socketio=getattr(adapters.context, "socketio", None),
-        db_conn_factory=adapters.db_conn_factory,
-        service_log=adapters.service_log,
-        logger=adapters.context.logger.getChild("workflows.ansible"),
+    ansible_runner = WorkerAnsibleDispatcher(
+        app=app,
+        adapters=adapters,
+        logger=adapters.context.logger.getChild("workflows.ansible.worker_dispatch"),
     )
     runtime = WorkflowRuntimeService(
         db_conn_factory=adapters.db_conn_factory,

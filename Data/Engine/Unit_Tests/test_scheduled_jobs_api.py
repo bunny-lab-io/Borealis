@@ -1301,16 +1301,30 @@ def test_onboarding_redeploy_clears_history_and_dispatches(
 
 def test_scheduler_tick_enqueues_scheduled_run_when_dispatcher_configured(engine_harness: EngineTestHarness) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
-    now = 1_800_000_000
+    now = 1_700_000_000
     conn = sqlite3.connect(engine_harness.db_path)
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO devices(guid, hostname, site_id, last_seen, status, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?)
+            INSERT INTO sites(id, name, description, created_at, enrollment_code)
+            VALUES (?,?,?,?,?)
             """,
-            ("guid-host-1", "host-1", 9, now, "Online", now, now),
+            (9, "Queued Lab", "", now, "QUEUED-LAB"),
+        )
+        cur.execute(
+            """
+            INSERT INTO devices(guid, hostname, last_seen, status)
+            VALUES (?,?,?,?)
+            """,
+            ("guid-host-1", "host-1", now, "Online"),
+        )
+        cur.execute(
+            """
+            INSERT INTO device_sites(device_hostname, site_id, assigned_at)
+            VALUES (?,?,?)
+            """,
+            ("host-1", 9, now),
         )
         cur.execute(
             """
@@ -1341,16 +1355,32 @@ def test_scheduler_tick_enqueues_scheduled_run_when_dispatcher_configured(engine
     finally:
         conn.close()
 
-    scheduler.set_online_lookup(lambda: ["host-1"])
-    dispatched = []
-    scheduler.set_scheduled_run_dispatcher(lambda **kwargs: dispatched.append(kwargs) or 101)
+    scheduled_job_module.set_online_lookup(scheduler, lambda: ["host-1"])
 
     scheduler._tick_once()
 
-    assert dispatched
-    payload = dispatched[0]
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT kind, site_id, payload_json
+              FROM job_scheduler_work_items
+             WHERE job_id=?
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            (job_id,),
+        )
+        work_row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert work_row is not None
+    assert work_row[0] == "scheduled_run"
+    assert work_row[1] == 9
+    payload = json.loads(work_row[2])
     assert payload["job_id"] == job_id
-    assert payload["site_id"] == 9
     assert payload["run_mode"] == "system"
     assert payload["script_components"][0]["name"] == "Test Script"
     assert payload["task_link"]["path"] == f"/jobs/{job_id}?tab=job_history"
@@ -4190,6 +4220,7 @@ def test_tick_persists_activity_links_for_shared_ansible_runs(
     monkeypatch,
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
+    scheduler.set_scheduled_run_dispatcher(None)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -4388,6 +4419,7 @@ def test_tick_persists_activity_links_for_individual_ansible_runs(
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     scheduler._running = False
+    scheduler.set_scheduled_run_dispatcher(None)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -4807,6 +4839,7 @@ def test_tick_enqueues_individual_ansible_runs_despite_legacy_job_limit(
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     scheduler._running = False
+    scheduler.set_scheduled_run_dispatcher(None)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -5017,6 +5050,7 @@ def test_tick_enqueues_individual_ansible_runs_despite_legacy_global_limit(
 ) -> None:
     _client, scheduler = _scheduled_jobs_client(engine_harness)
     scheduler._running = False
+    scheduler.set_scheduled_run_dispatcher(None)
 
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:

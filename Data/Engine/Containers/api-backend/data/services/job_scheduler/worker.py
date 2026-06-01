@@ -380,6 +380,8 @@ def _build_worker_scheduler(settings, logger, db_factory, *, socket_runtime: Opt
         service_log=_service_log(logger),
         logger=logger.getChild("ansible.runner"),
     )
+    if socket_runtime is not None and hasattr(socket_runtime, "set_ansible_runner"):
+        socket_runtime.set_ansible_runner(ansible_runner)
     job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
     return scheduler
 

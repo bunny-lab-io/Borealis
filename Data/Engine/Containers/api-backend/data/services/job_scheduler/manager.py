@@ -19,7 +19,6 @@ from Data.Engine.config import PROJECT_ROOT, initialise_engine_logger, load_runt
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.security import signing
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
-from Data.Engine.services.ansible import EngineAnsibleRunner
 from Data.Engine.services.assemblies.service import AssemblyRuntimeService
 from Data.Engine.assembly_management import initialise_assembly_runtime
 
@@ -292,14 +291,6 @@ def _build_scheduler(settings, logger):
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
     job_scheduler.set_vpn_session_lookup(scheduler, _make_vpn_session_lookup(secret))
     job_scheduler.set_vpn_session_prepare(scheduler, _make_vpn_session_prepare(secret))
-    ansible_runner = EngineAnsibleRunner(
-        socketio=_NoopSocketIO(),
-        db_conn_factory=db_factory,
-        service_log=_service_log(logger),
-        logger=logger.getChild("ansible.runner"),
-    )
-    job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
-
     def _enqueue_onboarding(**kwargs):
         components = list(kwargs.get("components") or [])
         targets = list(kwargs.get("targets") or [])
@@ -492,6 +483,11 @@ def _docker_site_worker_snapshots(logger) -> Optional[List[Dict[str, Any]]]:
                 "site_id": site_id,
                 "container_name": name or f"site-worker-{worker_guid}",
                 "image": str(config.get("Image") or "").strip(),
+                "configured_image": str(
+                    labels.get("borealis.site_worker_image")
+                    or _env_value(env_items, "BOREALIS_SITE_WORKER_IMAGE")
+                    or ""
+                ).strip(),
                 "docker_state": docker_state or "running",
                 "exit_code": exit_code,
                 "remote_ops_port": remote_ops_port or site_worker_remote_ops_port(worker_guid, site_id),
@@ -527,9 +523,16 @@ def _filter_current_site_worker_snapshots(snapshots: Sequence[Mapping[str, Any]]
     for snapshot in snapshots or []:
         row = dict(snapshot)
         image = str(row.get("image") or "").strip()
+        configured_image = str(row.get("configured_image") or "").strip()
         container_name = str(row.get("container_name") or "").strip()
-        if desired_image and image and image != desired_image:
-            logger.info("site-worker image drift detected container=%s current=%s desired=%s", container_name, image, desired_image)
+        current_image = configured_image or image
+        if desired_image and current_image and current_image != desired_image:
+            logger.info(
+                "site-worker image drift detected container=%s current=%s desired=%s",
+                container_name,
+                current_image,
+                desired_image,
+            )
             if _stop_site_worker_container(container_name, logger):
                 continue
         current.append(row)
@@ -739,6 +742,8 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
         f"borealis.remote_ops_port={remote_ops_port}",
         "--label",
         f"borealis.remote_desktop_port={remote_desktop_port}",
+        "--label",
+        f"borealis.site_worker_image={image}",
         "--label",
         "borealis.created_by=job-scheduler",
     ]

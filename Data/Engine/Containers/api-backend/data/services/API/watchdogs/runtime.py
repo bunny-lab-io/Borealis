@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Seque
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
 
-from ...ansible import EngineAnsibleRunner
+from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import UserSiteAccessManager
 from ...filters.matcher import DeviceFilterMatcher
@@ -877,15 +877,18 @@ class WatchdogRuntimeService:
         self._site_access = UserSiteAccessManager(db_conn_factory, logger=self._logger)
         self._matcher = DeviceFilterMatcher(db_conn_factory=db_conn_factory)
         self._assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=self._logger) if assembly_cache is not None else None
-        self._ansible_runner = EngineAnsibleRunner(
-            socketio=socketio,
-            db_conn_factory=db_conn_factory,
-            service_log=service_log,
-            logger=self._logger.getChild("ansible"),
-        )
         self._app = app
         self._adapters = adapters
         self._context = context
+        self._ansible_runner = (
+            WorkerAnsibleDispatcher(
+                app=app,
+                adapters=adapters,
+                logger=self._logger.getChild("ansible.worker_dispatch"),
+            )
+            if app is not None and adapters is not None
+            else None
+        )
         self._github_integration = github_integration
         self._agent_release_manager = agent_release_manager
         self._running = False
@@ -3512,9 +3515,12 @@ class WatchdogRuntimeService:
     def _dispatch_ansible_assembly(
         self,
         *,
+        device: Mapping[str, Any],
         assembly_record: Mapping[str, Any],
         action: Mapping[str, Any],
     ) -> Dict[str, Any]:
+        if self._ansible_runner is None:
+            return {"status": "failed", "message": "Site-worker Ansible dispatcher is not available."}
         payload_doc = assembly_record.get("payload_json")
         if not isinstance(payload_doc, dict):
             payload_doc = _safe_json_loads(assembly_record.get("payload"), {})
@@ -3538,7 +3544,15 @@ class WatchdogRuntimeService:
             playbook_content=(document.get("script") or "").replace("\r\n", "\n"),
             variable_values=dict(action.get("variable_values") or {}),
             payload_files=document.get("files") if isinstance(document.get("files"), list) else [],
-            target_specifications=[],
+            target_specifications=[
+                {
+                    "hostname": ENGINE_LOCAL_ALIAS,
+                    "inventory_hostname": ENGINE_LOCAL_ALIAS,
+                    "site_group": "site_local",
+                    "site_id": _coerce_int(device.get("site_id"), 0),
+                    "host_vars": {"ansible_connection": "local"},
+                }
+            ],
             runtime_files=[],
             source="watchdog",
             activity_id=None,
@@ -3604,7 +3618,7 @@ class WatchdogRuntimeService:
                         incident=incident,
                     )
                 elif assembly_type == "ansible":
-                    response = self._dispatch_ansible_assembly(assembly_record=record, action=action)
+                    response = self._dispatch_ansible_assembly(device=device, assembly_record=record, action=action)
                 else:
                     response = self._dispatch_script_assembly(device=device, assembly_record=record, action=action, incident=incident)
                 response["type"] = action_type

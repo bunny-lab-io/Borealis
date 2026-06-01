@@ -26,12 +26,12 @@ from typing import TYPE_CHECKING, List, Optional
 
 from flask import jsonify, request
 
-from ...ansible import EngineAnsibleRunner
+from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
-from ...job_scheduler.queue import enqueue_onboarding_run
+from ...job_scheduler.queue import enqueue_onboarding_run, enqueue_scheduled_run, enqueue_scheduled_workflow_run
 from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
@@ -169,11 +169,10 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     if assembly_cache is None:
         raise RuntimeError("Assembly cache is required to initialise the scheduled job service.")
     assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=adapters.context.logger)
-    ansible_runner = EngineAnsibleRunner(
-        socketio=socketio,
-        db_conn_factory=adapters.db_conn_factory,
-        service_log=adapters.service_log,
-        logger=adapters.context.logger.getChild("ansible.runner"),
+    ansible_dispatcher = WorkerAnsibleDispatcher(
+        app=app,
+        adapters=adapters,
+        logger=adapters.context.logger.getChild("ansible.worker_dispatch"),
     )
 
     script_signer = adapters.script_signer
@@ -405,7 +404,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     job_scheduler.set_online_lookup(scheduler, _online_hostnames_snapshot)
     job_scheduler.set_vpn_session_lookup(scheduler, _active_vpn_session_snapshot)
     job_scheduler.set_vpn_session_prepare(scheduler, _prepare_vpn_session_snapshot)
-    job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
+    job_scheduler.set_server_ansible_runner(scheduler, ansible_dispatcher.queue_run)
     job_scheduler.set_credential_fetcher(scheduler, _load_decrypted_credential)
     job_scheduler.set_public_base_url_lookup(scheduler, _scheduler_public_base_url)
 
@@ -457,6 +456,27 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
             conn.close()
 
     job_scheduler.set_onboarding_run_dispatcher(scheduler, _enqueue_onboarding_run)
+
+    def _enqueue_scheduled_run(**kwargs):
+        conn = adapters.db_conn_factory()
+        try:
+            work_id = enqueue_scheduled_run(conn, **kwargs)
+            conn.commit()
+            return work_id
+        finally:
+            conn.close()
+
+    def _enqueue_scheduled_workflow(**kwargs):
+        conn = adapters.db_conn_factory()
+        try:
+            work_id = enqueue_scheduled_workflow_run(conn, **kwargs)
+            conn.commit()
+            return work_id
+        finally:
+            conn.close()
+
+    job_scheduler.set_scheduled_run_dispatcher(scheduler, _enqueue_scheduled_run)
+    job_scheduler.set_scheduled_workflow_dispatcher(scheduler, _enqueue_scheduled_workflow)
     emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
     if callable(emit_host_service_event):
         job_scheduler.set_host_service_emitter(scheduler, emit_host_service_event)

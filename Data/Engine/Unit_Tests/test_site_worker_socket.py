@@ -278,6 +278,40 @@ def test_site_worker_socket_registers_agent_and_dispatches_event(tmp_path: Path,
     assert not runtime.has_registered_agents()
 
 
+def test_site_worker_internal_ansible_route_queues_runner(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+    calls: list[dict] = []
+
+    class _Runner:
+        def queue_run(self, **kwargs):
+            calls.append(dict(kwargs))
+            return "runner-queued-1"
+
+    runtime.set_ansible_runner(_Runner())
+    client = runtime.app.test_client()
+    response = client.post(
+        "/automation/ansible/run",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "queue_run": {
+                "hostname": "borealis-engine-01",
+                "playbook_rel_path": "Ansible_Playbooks/ping.yml",
+                "playbook_name": "Ping",
+                "playbook_content": "- hosts: all\n",
+                "target_specifications": [{"hostname": "borealis-engine-01", "site_id": 7}],
+                "source": "workflow_run",
+                "connection": "local",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["run_id"] == "runner-queued-1"
+    assert calls[0]["playbook_name"] == "Ping"
+    assert calls[0]["target_specifications"][0]["site_id"] == 7
+
+
 def test_site_worker_socket_counts_unique_registered_devices(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, _token = _runtime(tmp_path)
