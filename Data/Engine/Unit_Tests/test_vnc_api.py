@@ -1445,6 +1445,68 @@ def test_vnc_establish_requests_agent_credential_refresh_when_cache_is_empty(
     assert engine_harness.context.worker_guacamole_requests[0]["payload"]["agent_id"] == "test-device-agent"
 
 
+def test_vnc_establish_requests_live_credential_through_site_worker(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    client = _client_with_admin_session(engine_harness)
+    fake_tunnel = _FakeTunnelService()
+    worker_calls: list[dict[str, Any]] = []
+
+    engine_harness.context.call_agent_event = lambda *_args, **_kwargs: None
+
+    def _worker_call(_app, worker_route, *, hostname, service_mode, event, payload, timeout_seconds):
+        worker_calls.append(
+            {
+                "worker_route": dict(worker_route or {}),
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event": event,
+                "payload": dict(payload or {}),
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return {
+            "status": "ok",
+            "agent_id": "test-device-agent",
+            "request_id": payload.get("request_id"),
+            "controller_password": "workerpw",
+            "credential_revision": 77,
+            "display_topology": [
+                {
+                    "id": "1",
+                    "display_index": 1,
+                    "label": "1",
+                    "left": 0,
+                    "top": 0,
+                    "right": 1280,
+                    "bottom": 720,
+                    "width": 1280,
+                    "height": 720,
+                    "primary": True,
+                }
+            ],
+            "ready": True,
+            "service_state": "RUNNING",
+            "listener_state": "listening",
+        }
+
+    monkeypatch.setattr(vnc_api, "_call_worker_host_service_event", _worker_call)
+    monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
+    monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: True)
+
+    response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["credential_revision"] == 77
+    assert worker_calls[0]["worker_route"]["worker_guid"] == "worker-vnc-route"
+    assert worker_calls[0]["hostname"] == "test-device"
+    assert worker_calls[0]["service_mode"] == "system"
+    assert worker_calls[0]["event"] == "vnc_credential_request"
+    assert engine_harness.context.worker_guacamole_requests[0]["payload"]["password"] == "workerpw"
+
+
 def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
     engine_harness: EngineTestHarness,
     monkeypatch,

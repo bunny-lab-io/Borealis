@@ -310,6 +310,53 @@ def test_site_worker_socket_counts_unique_registered_devices(tmp_path: Path, mon
     assert runtime.registered_device_count() == 2
 
 
+def test_site_worker_internal_host_service_call_bridge(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+    calls: list[dict] = []
+
+    def _call_host_service_event(hostname, service_mode, event_name, payload, *, timeout=30.0):
+        calls.append(
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": dict(payload or {}),
+                "timeout": timeout,
+            }
+        )
+        return {"status": "ok", "request_id": payload.get("request_id"), "controller_password": "unitpass"}
+
+    monkeypatch.setattr(runtime, "call_host_service_event", _call_host_service_event)
+
+    response = runtime.app.test_client().post(
+        "/remote-ops/host-service/call",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "hostname": "LAB-ONE",
+            "service_mode": "system",
+            "event_name": "vnc_credential_request",
+            "payload": {"request_id": "req-1"},
+            "timeout_seconds": 3,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "called": True,
+        "response": {"status": "ok", "request_id": "req-1", "controller_password": "unitpass"},
+    }
+    assert calls == [
+        {
+            "hostname": "LAB-ONE",
+            "service_mode": "system",
+            "event_name": "vnc_credential_request",
+            "payload": {"request_id": "req-1"},
+            "timeout": 3.0,
+        }
+    ]
+
+
 def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")

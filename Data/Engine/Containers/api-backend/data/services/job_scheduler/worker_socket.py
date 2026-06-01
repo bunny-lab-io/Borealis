@@ -255,6 +255,67 @@ class SiteWorkerSocketRuntime:
         def _agents():
             return jsonify({"agents": self.registry.snapshot(), "worker_guid": self.worker_guid, "site_id": self.site_id})
 
+        @self.app.route("/remote-ops/host-service/status", methods=["POST"])
+        def _host_service_status():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            hostname = str(data.get("hostname") or "").strip()
+            service_mode = str(data.get("service_mode") or data.get("mode") or "system").strip() or "system"
+            if not hostname:
+                return jsonify({"error": "hostname_required"}), 400
+            return jsonify({"registered": self.has_host_service_socket(hostname, service_mode)}), 200
+
+        @self.app.route("/remote-ops/host-service/event", methods=["POST"])
+        def _host_service_event():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            hostname = str(data.get("hostname") or "").strip()
+            service_mode = str(data.get("service_mode") or data.get("mode") or "system").strip() or "system"
+            event_name = str(data.get("event_name") or "").strip()
+            payload = data.get("payload")
+            if not hostname or not event_name:
+                return jsonify({"error": "hostname_and_event_name_required"}), 400
+            emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
+            return jsonify({"emitted": bool(emitted)}), 200
+
+        @self.app.route("/remote-ops/host-service/call", methods=["POST"])
+        def _host_service_call():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            hostname = str(data.get("hostname") or "").strip()
+            service_mode = str(data.get("service_mode") or data.get("mode") or "system").strip() or "system"
+            event_name = str(data.get("event_name") or "").strip()
+            payload = data.get("payload")
+            try:
+                timeout = float(data.get("timeout_seconds") or data.get("timeout") or 30.0)
+            except Exception:
+                timeout = 30.0
+            if not hostname or not event_name:
+                return jsonify({"error": "hostname_and_event_name_required"}), 400
+            response = self.call_host_service_event(
+                hostname,
+                service_mode,
+                event_name,
+                payload,
+                timeout=max(0.5, timeout),
+            )
+            return jsonify({"called": response is not None, "response": response}), 200
+
     def _require_internal_request(self) -> Optional[tuple[Dict[str, Any], int]]:
         if validate_internal_token(self.internal_secret, request.headers.get(INTERNAL_TOKEN_HEADER)):
             return None

@@ -33,6 +33,7 @@ from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
 from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
+from ...remote_ops.agent_socket_registry import normalize_service_mode
 from ...remote_ops.agent_routes import join_url, site_worker_route_urls
 from ...remote_ops.sessions import issue_remote_op_session
 from ...RemoteDesktop.guacamole_proxy import guacd_health, normalize_guacamole_performance_preference
@@ -492,54 +493,193 @@ def _context_call_agent_event(
         return None
 
 
+def _agent_service_mode(agent_id: str) -> str:
+    suffix = str(agent_id or "").rsplit("_", 1)[-1]
+    return normalize_service_mode(suffix) or "system"
+
+
+def _call_worker_host_service_event(
+    app: Any,
+    worker_route: Optional[Mapping[str, Any]],
+    *,
+    hostname: str,
+    service_mode: str,
+    event: str,
+    payload: Mapping[str, Any],
+    timeout_seconds: float,
+) -> Optional[Any]:
+    if app is None or not worker_route or not _normalize_text(hostname) or not _normalize_text(event):
+        return None
+    try:
+        result = _post_worker_remote_desktop(
+            app,
+            worker_route,
+            "/remote-ops/host-service/call",
+            {
+                "hostname": hostname,
+                "service_mode": service_mode or "system",
+                "event_name": event,
+                "payload": dict(payload or {}),
+                "timeout_seconds": max(0.5, float(timeout_seconds)),
+            },
+            timeout_seconds=max(1.0, float(timeout_seconds) + 1.0),
+        )
+    except Exception:
+        return None
+    if not bool(result.get("called")):
+        return None
+    return result.get("response")
+
+
+def _emit_worker_host_service_event(
+    app: Any,
+    worker_route: Optional[Mapping[str, Any]],
+    *,
+    hostname: str,
+    service_mode: str,
+    event: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    if app is None or not worker_route or not _normalize_text(hostname) or not _normalize_text(event):
+        return False
+    try:
+        result = _post_worker_remote_desktop(
+            app,
+            worker_route,
+            "/remote-ops/host-service/event",
+            {
+                "hostname": hostname,
+                "service_mode": service_mode or "system",
+                "event_name": event,
+                "payload": dict(payload or {}),
+            },
+            timeout_seconds=5.0,
+        )
+    except Exception:
+        return False
+    return bool(result.get("emitted"))
+
+
+def _emit_agent_or_worker_event(
+    context: Any,
+    app: Any,
+    worker_route: Optional[Mapping[str, Any]],
+    *,
+    agent_id: str,
+    hostname: str,
+    service_mode: str,
+    event: str,
+    payload: Mapping[str, Any],
+) -> bool:
+    if _context_emit_agent_event(context, agent_id, event, dict(payload or {})):
+        return True
+    return _emit_worker_host_service_event(
+        app,
+        worker_route,
+        hostname=hostname,
+        service_mode=service_mode,
+        event=event,
+        payload=payload,
+    )
+
+
+def _worker_host_service_registered(
+    app: Any,
+    worker_route: Optional[Mapping[str, Any]],
+    *,
+    hostname: str,
+    service_mode: str,
+) -> Optional[bool]:
+    if app is None or not worker_route or not _normalize_text(hostname):
+        return None
+    try:
+        result = _post_worker_remote_desktop(
+            app,
+            worker_route,
+            "/remote-ops/host-service/status",
+            {
+                "hostname": hostname,
+                "service_mode": service_mode or "system",
+            },
+            timeout_seconds=5.0,
+        )
+    except Exception:
+        return None
+    return bool(result.get("registered"))
+
+
 def _request_live_agent_vnc_credential(
     context: Any,
     agent_id: str,
     *,
     reason: str,
     timeout_seconds: float,
+    app: Any = None,
+    worker_route: Optional[Mapping[str, Any]] = None,
+    hostname: str = "",
+    service_mode: str = "system",
 ) -> Optional[Any]:
     request_id = uuid.uuid4().hex
-    response = _context_call_agent_event(
-        context,
-        agent_id,
-        "vnc_credential_request",
-        {
-            "agent_id": agent_id,
-            "request_id": request_id,
-            "reason": reason,
-        },
-        timeout_seconds=timeout_seconds,
+    event_payload = {
+        "agent_id": agent_id,
+        "request_id": request_id,
+        "reason": reason,
+    }
+
+    def _credential_from_response(response: Any) -> Optional[Any]:
+        if not isinstance(response, dict):
+            return None
+        response_agent = _normalize_text(response.get("agent_id") or agent_id)
+        if response_agent and response_agent != _normalize_text(agent_id):
+            return None
+        if _normalize_text(response.get("request_id")) and _normalize_text(response.get("request_id")) != request_id:
+            return None
+        controller_password = _normalize_text(
+            response.get("controller_password")
+            or response.get("vnc_password")
+            or response.get("password")
+        )[:8]
+        if not controller_password:
+            return None
+        try:
+            credential_revision = int(response.get("credential_revision") or 0)
+        except Exception:
+            credential_revision = 0
+        if credential_revision <= 0:
+            credential_revision = int(time.time() * 1000)
+        return SimpleNamespace(
+            agent_id=_normalize_text(agent_id),
+            controller_password=controller_password,
+            credential_revision=credential_revision,
+            display_topology=_clone_display_topology(response.get("display_topology")),
+            display_virtual_bounds=_clone_display_virtual_bounds(response.get("display_virtual_bounds")),
+            ready=bool(response.get("ready")),
+            service_state=_normalize_text(response.get("service_state")),
+            listener_state=_normalize_text(response.get("listener_state")),
+        )
+
+    credential = _credential_from_response(
+        _context_call_agent_event(
+            context,
+            agent_id,
+            "vnc_credential_request",
+            event_payload,
+            timeout_seconds=timeout_seconds,
+        )
     )
-    if not isinstance(response, dict):
-        return None
-    response_agent = _normalize_text(response.get("agent_id") or agent_id)
-    if response_agent and response_agent != _normalize_text(agent_id):
-        return None
-    if _normalize_text(response.get("request_id")) and _normalize_text(response.get("request_id")) != request_id:
-        return None
-    controller_password = _normalize_text(
-        response.get("controller_password")
-        or response.get("vnc_password")
-        or response.get("password")
-    )[:8]
-    if not controller_password:
-        return None
-    try:
-        credential_revision = int(response.get("credential_revision") or 0)
-    except Exception:
-        credential_revision = 0
-    if credential_revision <= 0:
-        credential_revision = int(time.time() * 1000)
-    return SimpleNamespace(
-        agent_id=_normalize_text(agent_id),
-        controller_password=controller_password,
-        credential_revision=credential_revision,
-        display_topology=_clone_display_topology(response.get("display_topology")),
-        display_virtual_bounds=_clone_display_virtual_bounds(response.get("display_virtual_bounds")),
-        ready=bool(response.get("ready")),
-        service_state=_normalize_text(response.get("service_state")),
-        listener_state=_normalize_text(response.get("listener_state")),
+    if credential is not None:
+        return credential
+
+    return _credential_from_response(
+        _call_worker_host_service_event(
+            app,
+            worker_route,
+            hostname=hostname,
+            service_mode=service_mode,
+            event="vnc_credential_request",
+            payload=event_payload,
+            timeout_seconds=timeout_seconds,
+        )
     )
 
 
@@ -764,6 +904,8 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 "error": "site_worker_unavailable",
                 "message": "No active site-worker route is available for this device site.",
             }, 409
+        device_hostname = _normalize_text(device.get("hostname") if isinstance(device, Mapping) else "")
+        device_service_mode = _agent_service_mode(agent_id)
         manager = ensure_vnc_collaboration_manager(adapters.context, logger=logger)
         _trace(
             "E01",
@@ -783,6 +925,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             agent_id,
             reason="vnc_establish",
             timeout_seconds=credential_wait_seconds,
+            app=app,
+            worker_route=worker_route,
+            hostname=device_hostname,
+            service_mode=device_service_mode,
         )
         recent_credential_refresh = False
         _trace(
@@ -870,11 +1016,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             tunnel_service.confirm_transport_success(agent_id, reason=reason)
 
         def _emit_vnc_start(reason: str) -> bool:
-            return _context_emit_agent_event(
+            return _emit_agent_or_worker_event(
                 adapters.context,
-                agent_id,
-                "vnc_start",
-                {
+                app,
+                worker_route,
+                agent_id=agent_id,
+                hostname=device_hostname,
+                service_mode=device_service_mode,
+                event="vnc_start",
+                payload={
                     "agent_id": agent_id,
                     "session_id": collaboration_session.session_id,
                     "controller_password": "",
@@ -888,6 +1038,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             )
 
         socket_registered = _agent_socket_registered(adapters.context, agent_id)
+        if socket_registered is not True:
+            worker_registered = _worker_host_service_registered(
+                app,
+                worker_route,
+                hostname=device_hostname,
+                service_mode=device_service_mode,
+            )
+            if worker_registered is not None:
+                socket_registered = worker_registered
         wait_profile = _ready_wait_profile(
             collaboration_session=collaboration_session,
             created=_created,
@@ -1783,7 +1942,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "not found"}), 404
         if collaboration_session is None:
             return jsonify({"error": "session_not_found"}), 404
-        _device, worker_route = _lookup_vnc_device_and_route(adapters, resolved_agent_id)
+        device, worker_route = _lookup_vnc_device_and_route(adapters, resolved_agent_id)
+        device_hostname = _normalize_text(device.get("hostname") if isinstance(device, Mapping) else "")
+        device_service_mode = _agent_service_mode(resolved_agent_id)
 
         current_snapshot = manager.session_snapshot(
             collaboration_session,
@@ -1830,11 +1991,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     )
                 except Exception:
                     logger.debug("Failed to disconnect worker VNC session %s", collaboration_session.session_id, exc_info=True)
-            _context_emit_agent_event(
+            _emit_agent_or_worker_event(
                 adapters.context,
-                resolved_agent_id,
-                "vnc_stop",
-                {"agent_id": resolved_agent_id, "reason": reason or "session_closed"},
+                app,
+                worker_route,
+                agent_id=resolved_agent_id,
+                hostname=device_hostname,
+                service_mode=device_service_mode,
+                event="vnc_stop",
+                payload={"agent_id": resolved_agent_id, "reason": reason or "session_closed"},
             )
         else:
             left_participant_id = _normalize_text(result.get("participant_id"))
@@ -1858,11 +2023,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         exc_info=True,
                     )
             if bool(result.get("reconnect_pending")):
-                _context_emit_agent_event(
+                _emit_agent_or_worker_event(
                     adapters.context,
-                    resolved_agent_id,
-                    "vnc_stop",
-                    {"agent_id": resolved_agent_id, "reason": reason or "operator_disconnect"},
+                    app,
+                    worker_route,
+                    agent_id=resolved_agent_id,
+                    hostname=device_hostname,
+                    service_mode=device_service_mode,
+                    event="vnc_stop",
+                    payload={"agent_id": resolved_agent_id, "reason": reason or "operator_disconnect"},
                 )
             if bool(result.get("controller_vacant")):
                 refreshed_session = manager.get_session_by_id(collaboration_session.session_id)
@@ -1874,11 +2043,15 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                             resolved_agent_id,
                             include_token=False,
                         )
-                    _context_emit_agent_event(
+                    _emit_agent_or_worker_event(
                         adapters.context,
-                        resolved_agent_id,
-                        "vnc_start",
-                        {
+                        app,
+                        worker_route,
+                        agent_id=resolved_agent_id,
+                        hostname=device_hostname,
+                        service_mode=device_service_mode,
+                        event="vnc_start",
+                        payload={
                             "agent_id": resolved_agent_id,
                             "session_id": refreshed_session.session_id,
                             "controller_password": "",
