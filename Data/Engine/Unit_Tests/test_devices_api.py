@@ -707,6 +707,72 @@ def test_agent_release_channel_branch_update_persists_and_emits(
     ]
 
 
+def test_device_update_agent_uses_acknowledged_system_call(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str, dict[str, Any]]] = []
+
+    def call_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 30.0,
+    ):
+        calls.append((hostname, service_mode, event, payload))
+        return {"status": "ok", "operation_id": payload["operation_id"]}
+
+    monkeypatch.setattr(engine_harness.context, "call_host_service_event", call_host_service_event, raising=False)
+    monkeypatch.setattr(
+        engine_harness.context,
+        "emit_host_service_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("emit fallback should not be used")),
+        raising=False,
+    )
+
+    client = admin_client(engine_harness)
+    response = client.post("/api/device/update-agent/test-device")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "queued"
+    assert payload["operation_id"]
+    assert calls
+    hostname, service_mode, event_name, dispatched = calls[0]
+    assert hostname == "test-device"
+    assert service_mode == "system"
+    assert event_name == "agent_update_request"
+    assert dispatched["operation_id"] == payload["operation_id"]
+    assert dispatched["hostname"] == "test-device"
+
+
+def test_device_update_agent_reports_agent_ack_error(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def call_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event: str,
+        payload: dict[str, Any],
+        *,
+        timeout: float = 30.0,
+    ):
+        return {"status": "error", "detail": "AutoUpdater task unavailable"}
+
+    monkeypatch.setattr(engine_harness.context, "call_host_service_event", call_host_service_event, raising=False)
+
+    client = admin_client(engine_harness)
+    response = client.post("/api/device/update-agent/test-device")
+
+    assert response.status_code == 409
+    payload = response.get_json()
+    assert payload["error"] == "agent_unavailable"
+    assert "AutoUpdater task unavailable" in payload["message"]
+
+
 def test_agent_release_channel_branch_update_rejects_blank_branch(
     engine_harness: EngineTestHarness,
 ) -> None:

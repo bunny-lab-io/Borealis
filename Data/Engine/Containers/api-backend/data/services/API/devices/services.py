@@ -1958,9 +1958,12 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "not found"}), 404
 
         requested_at = int(time.time())
+        operation_id = str(uuid.uuid4())
         agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
+        call_host_service_event = getattr(adapters.context, "call_host_service_event", None)
         emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
         event_payload = {
+            "operation_id": operation_id,
             "hostname": record.get("hostname") or hostname,
             "agent_id": agent_id,
             "requested_at": requested_at,
@@ -1968,7 +1971,33 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         }
 
         emitted = False
-        if callable(emit_host_service_event):
+        agent_error_detail = ""
+        agent_response: Any = None
+        if callable(call_host_service_event):
+            try:
+                agent_response = call_host_service_event(
+                    record.get("hostname") or hostname,
+                    "system",
+                    "agent_update_request",
+                    event_payload,
+                    timeout=30.0,
+                )
+            except Exception:
+                agent_response = None
+            if isinstance(agent_response, dict):
+                response_status = normalize_text(agent_response.get("status")).lower()
+                if response_status == "error":
+                    agent_error_detail = (
+                        normalize_text(agent_response.get("detail"))
+                        or normalize_text(agent_response.get("message"))
+                        or normalize_text(agent_response.get("error"))
+                        or "Agent rejected the AutoUpdater request."
+                    )
+                else:
+                    emitted = True
+            elif agent_response is not None:
+                emitted = True
+        elif callable(emit_host_service_event):
             try:
                 emitted = bool(
                     emit_host_service_event(
@@ -1982,12 +2011,19 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 emitted = False
 
         if not emitted:
+            message = (
+                f"The agent rejected the local AutoUpdater request: {agent_error_detail}"
+                if agent_error_detail
+                else "The agent SYSTEM socket is not available to start the local AutoUpdater task."
+            )
             _agent_update_log_event(
-                "device_agent_update_unavailable hostname={0} agent_id={1} operator={2} remote={3}".format(
+                "device_agent_update_unavailable hostname={0} agent_id={1} operation_id={2} operator={3} remote={4} detail={5}".format(
                     record.get("hostname") or hostname,
                     agent_id or "-",
+                    operation_id,
                     operator_id or "-",
                     _request_remote() or "-",
+                    agent_error_detail or "-",
                 ),
                 level="WARNING",
             )
@@ -1995,16 +2031,17 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 jsonify(
                     {
                         "error": "agent_unavailable",
-                        "message": "The agent SYSTEM socket is not available to start the local AutoUpdater task.",
+                        "message": message,
                     }
                 ),
                 409,
             )
 
         _agent_update_log_event(
-            "device_agent_update_request hostname={0} agent_id={1} operator={2} remote={3}".format(
+            "device_agent_update_request hostname={0} agent_id={1} operation_id={2} operator={3} remote={4}".format(
                 record.get("hostname") or hostname,
                 agent_id or "-",
+                operation_id,
                 operator_id or "-",
                 _request_remote() or "-",
             )
@@ -2015,6 +2052,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                     "status": "queued",
                     "hostname": record.get("hostname") or hostname,
                     "agent_id": agent_id,
+                    "operation_id": operation_id,
                     "requested_at": requested_at,
                 }
             ),

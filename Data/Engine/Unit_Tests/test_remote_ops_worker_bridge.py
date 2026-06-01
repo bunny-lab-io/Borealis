@@ -12,10 +12,19 @@ from .support.engine import admin_client, db_connection
 
 
 class _FakeSocketRuntime:
-    def __init__(self, *, emit_result: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        emit_result: bool = False,
+        registered: bool = False,
+        call_response: Any = None,
+    ) -> None:
         self.emit_result = emit_result
+        self.registered = registered
+        self.call_response = call_response
         self.emitted: list[dict[str, Any]] = []
         self.queued: list[dict[str, Any]] = []
+        self.called: list[dict[str, Any]] = []
 
     def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
         self.emitted.append(
@@ -27,6 +36,29 @@ class _FakeSocketRuntime:
             }
         )
         return self.emit_result
+
+    def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
+        return self.registered
+
+    def call_host_service_event(
+        self,
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        timeout: float = 30.0,
+    ) -> Any:
+        self.called.append(
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": payload,
+                "timeout": timeout,
+            }
+        )
+        return self.call_response
 
     def queue_host_service_event(
         self,
@@ -232,6 +264,71 @@ def test_site_worker_local_dispatch_queues_quick_job_when_socket_reconnecting(mo
     assert delivery_state == "queued"
     assert runtime.emitted[0]["hostname"] == "LAB-OPERATOR-01"
     assert runtime.queued[0]["event_name"] == "quick_job_run"
+    assert runtime.queued[0]["ttl_seconds"] == 180
+
+
+def test_site_worker_agent_maintenance_calls_registered_agent_socket() -> None:
+    runtime = _FakeSocketRuntime(
+        registered=True,
+        call_response={"status": "ok", "operation_id": "op-maintenance-1"},
+    )
+
+    delivered, delivery_state, response = site_worker._call_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "agent_maintenance_request",
+        {"operation_id": "op-maintenance-1", "release_channel": "unstable"},
+    )
+
+    assert delivered is True
+    assert delivery_state == "called"
+    assert response == {"status": "ok", "operation_id": "op-maintenance-1"}
+    assert runtime.called[0]["event_name"] == "agent_maintenance_request"
+    assert runtime.emitted == []
+    assert runtime.queued == []
+
+
+def test_site_worker_agent_maintenance_surfaces_agent_error() -> None:
+    runtime = _FakeSocketRuntime(
+        registered=True,
+        call_response={"status": "error", "detail": "release_channel missing"},
+    )
+
+    delivered, delivery_state, response = site_worker._call_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "agent_maintenance_request",
+        {"operation_id": "op-maintenance-2"},
+    )
+
+    assert delivered is False
+    assert delivery_state == "agent_error"
+    assert response == {"status": "error", "detail": "release_channel missing"}
+    assert runtime.called
+    assert runtime.emitted == []
+    assert runtime.queued == []
+
+
+def test_site_worker_agent_maintenance_queues_when_socket_reconnecting(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", raising=False)
+    runtime = _FakeSocketRuntime(emit_result=False, registered=False)
+
+    delivered, delivery_state, response = site_worker._call_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "agent_maintenance_request",
+        {"operation_id": "op-maintenance-3"},
+    )
+
+    assert delivered is True
+    assert delivery_state == "queued"
+    assert response is None
+    assert runtime.called == []
+    assert runtime.emitted[0]["event_name"] == "agent_maintenance_request"
+    assert runtime.queued[0]["event_name"] == "agent_maintenance_request"
     assert runtime.queued[0]["ttl_seconds"] == 180
 
 

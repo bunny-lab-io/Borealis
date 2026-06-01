@@ -174,6 +174,65 @@ def _emit_or_queue_socket_runtime_event(
     return False, "missing_socket"
 
 
+def _socket_response_status(response: Any) -> str:
+    if isinstance(response, Mapping):
+        return str(response.get("status") or response.get("state") or "").strip().lower()
+    return ""
+
+
+def _socket_response_detail(response: Any) -> str:
+    if isinstance(response, Mapping):
+        for key in ("detail", "message", "error"):
+            value = str(response.get(key) or "").strip()
+            if value:
+                return value
+        return str(dict(response))
+    if response is None:
+        return ""
+    return str(response).strip()
+
+
+def _call_or_queue_socket_runtime_event(
+    socket_runtime: SiteWorkerSocketRuntime,
+    hostname: str,
+    service_mode: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+    *,
+    timeout: float = 30.0,
+) -> tuple[bool, str, Any]:
+    """Call registered Agent sockets; queue allowlisted events only while socket is absent."""
+
+    has_socket = False
+    has_socket_fn = getattr(socket_runtime, "has_host_service_socket", None)
+    if callable(has_socket_fn):
+        try:
+            has_socket = bool(has_socket_fn(hostname, service_mode))
+        except Exception:
+            has_socket = False
+
+    call_event = getattr(socket_runtime, "call_host_service_event", None)
+    if has_socket and callable(call_event):
+        try:
+            response = call_event(hostname, service_mode, event_name, dict(payload or {}), timeout=max(0.5, float(timeout)))
+        except Exception:
+            return False, "error", None
+        if response is None:
+            return False, "no_response", None
+        if _socket_response_status(response) == "error":
+            return False, "agent_error", response
+        return True, "called", response
+
+    delivered, delivery_state = _emit_or_queue_socket_runtime_event(
+        socket_runtime,
+        hostname,
+        service_mode,
+        event_name,
+        payload,
+    )
+    return delivered, delivery_state, None
+
+
 def _host_service_event_payload(hostname: str, service_mode: str, event_name: str, payload: Any) -> Dict[str, Any]:
     request_payload: Dict[str, Any] = {
         "hostname": hostname,
@@ -533,6 +592,7 @@ def _run_agent_maintenance_item(
     item: Mapping[str, Any],
     *,
     socket_runtime: Optional[SiteWorkerSocketRuntime] = None,
+    logger: Any = None,
 ) -> str:
     payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
     run_id = int(payload.get("run_id") or item.get("run_id") or 0)
@@ -543,13 +603,15 @@ def _run_agent_maintenance_item(
         raise RuntimeError("agent maintenance work item payload incomplete")
     service_mode = str(payload.get("service_mode") or "system")
     event_name = str(payload.get("event_name") or "agent_maintenance_request")
+    agent_response: Any = None
     if socket_runtime is not None:
-        emitted, delivery_state = _emit_or_queue_socket_runtime_event(
+        emitted, delivery_state, agent_response = _call_or_queue_socket_runtime_event(
             socket_runtime,
             hostname,
             service_mode,
             event_name,
             dict(event_payload),
+            timeout=30.0,
         )
     else:
         response = _post_internal(
@@ -561,15 +623,50 @@ def _run_agent_maintenance_item(
         emitted = bool(response.get("emitted"))
         delivery_state = "emitted_or_queued" if emitted else "missing_socket"
     if not emitted:
-        error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
+        if delivery_state == "agent_error":
+            detail = _socket_response_detail(agent_response) or "Agent rejected the maintenance request."
+            error = f"Agent rejected maintenance request for host {hostname}: {detail}"
+        elif delivery_state == "no_response":
+            error = f"Agent did not acknowledge maintenance request for host {hostname} before timeout."
+        elif delivery_state == "error":
+            error = f"Site worker could not dispatch agent maintenance for host {hostname}."
+        else:
+            error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
+        if logger is not None:
+            try:
+                logger.warning(
+                    "agent maintenance dispatch failed | run=%s host=%s state=%s error=%s",
+                    run_id,
+                    hostname,
+                    delivery_state,
+                    error,
+                )
+            except Exception:
+                pass
         _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
         raise RuntimeError(error)
-    verb = "queued" if delivery_state == "queued" else "emitted"
+    verb = "queued" if delivery_state == "queued" else "delivered" if delivery_state == "called" else "emitted"
+    response_status = _socket_response_status(agent_response) if agent_response is not None else ""
     stdout = (
         f"Site worker {verb} agent maintenance operation_id={operation_id} "
         f"action={payload.get('action') or '-'} release_channel={payload.get('release_channel') or '-'} "
         f"branch={payload.get('branch') or '-'}\n"
     )
+    if response_status:
+        stdout += f"Agent response status={response_status}\n"
+    if logger is not None:
+        try:
+            logger.info(
+                "agent maintenance dispatch %s | run=%s host=%s operation_id=%s action=%s response=%s",
+                verb,
+                run_id,
+                hostname,
+                operation_id,
+                payload.get("action") or "-",
+                response_status or "-",
+            )
+        except Exception:
+            pass
     _update_agent_maintenance_run(db_factory, run_id=run_id, status="Running", stdout=stdout)
     return WORK_STATUS_SUCCEEDED
 
@@ -830,7 +927,13 @@ def _execute_work_item(
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
         elif item_kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
-            final_status = _run_agent_maintenance_item(settings, db_factory, item, socket_runtime=socket_runtime)
+            final_status = _run_agent_maintenance_item(
+                settings,
+                db_factory,
+                item,
+                socket_runtime=socket_runtime,
+                logger=logger,
+            )
         elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
             run_id = int(payload.get("run_id") or item.get("run_id") or 0)
