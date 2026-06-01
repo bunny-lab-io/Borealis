@@ -232,7 +232,7 @@ func (m *Manager) runTransfer(ctx context.Context, payload map[string]any) {
 	if ferr.Code == "transfer_canceled" {
 		status = "canceled"
 	}
-	_, _ = m.reportProgress(ctx, transferID, map[string]any{"status": status, "error": ferr.Message})
+	_, _ = m.reportProgress(ctx, transferID, m.transferBaseURL(payload), map[string]any{"status": status, "error": ferr.Message})
 }
 
 func (m *Manager) matchesTarget(payload map[string]any) bool {
@@ -663,6 +663,7 @@ func deleteItems(payload map[string]any) (map[string]any, error) {
 
 func (m *Manager) uploadTransfer(ctx context.Context, payload map[string]any) error {
 	transferID := cleanText(payload["transfer_id"])
+	transferBaseURL := m.transferBaseURL(payload)
 	targetPath, err := ensureDirectory(payload["target_path"])
 	if err != nil {
 		return err
@@ -676,11 +677,11 @@ func (m *Manager) uploadTransfer(ctx context.Context, payload map[string]any) er
 		bytesTotal += asInt64(row["size_bytes"])
 	}
 	progress := map[string]any{"bytes_complete": int64(0), "bytes_total": bytesTotal, "last_report_at": time.Time{}}
-	if snapshot, err := m.reportProgress(ctx, transferID, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": bytesTotal}); err == nil && isCanceled(snapshot) {
+	if snapshot, err := m.reportProgress(ctx, transferID, transferBaseURL, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": bytesTotal}); err == nil && isCanceled(snapshot) {
 		return newError("transfer_canceled", "Transfer canceled by operator.")
 	}
 	for _, row := range items {
-		if err := m.ensureTransferNotCanceled(ctx, transferID); err != nil {
+		if err := m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL); err != nil {
 			return err
 		}
 		itemID := cleanText(row["item_id"])
@@ -689,16 +690,16 @@ func (m *Manager) uploadTransfer(ctx context.Context, payload map[string]any) er
 			return err
 		}
 		destination := filepath.Join(append([]string{targetPath}, strings.Split(relativePath, "/")...)...)
-		if err := m.streamUploadItem(ctx, transferID, itemID, destination, progress, asBool(row["overwrite_existing"])); err != nil {
+		if err := m.streamUploadItem(ctx, transferBaseURL, transferID, itemID, destination, progress, asBool(row["overwrite_existing"])); err != nil {
 			return err
 		}
 	}
 	bytesComplete := asInt64(progress["bytes_complete"])
-	_, err = m.reportProgress(ctx, transferID, map[string]any{"status": "completed", "bytes_complete": bytesComplete, "bytes_total": bytesTotal})
+	_, err = m.reportProgress(ctx, transferID, transferBaseURL, map[string]any{"status": "completed", "bytes_complete": bytesComplete, "bytes_total": bytesTotal})
 	return err
 }
 
-func (m *Manager) streamUploadItem(ctx context.Context, transferID string, itemID string, destinationPath string, progress map[string]any, overwriteExisting bool) error {
+func (m *Manager) streamUploadItem(ctx context.Context, transferBaseURL string, transferID string, itemID string, destinationPath string, progress map[string]any, overwriteExisting bool) error {
 	if transferID == "" || itemID == "" {
 		return newError("invalid_request", "Upload item metadata is missing.")
 	}
@@ -714,7 +715,7 @@ func (m *Manager) streamUploadItem(ctx context.Context, transferID string, itemI
 			return mapOSError(err, parent)
 		}
 	}
-	req, err := m.authRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agent/files/transfers/%s/upload-item/%s", transferID, itemID), nil)
+	req, err := m.authRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agent/files/transfers/%s/upload-item/%s", transferID, itemID), nil, transferBaseURL)
 	if err != nil {
 		return err
 	}
@@ -751,7 +752,7 @@ func (m *Manager) streamUploadItem(ctx context.Context, transferID string, itemI
 			now := time.Now()
 			lastReport, _ := progress["last_report_at"].(time.Time)
 			if now.Sub(lastReport) >= transferProgressInterval {
-				snapshot, _ := m.reportProgress(ctx, transferID, map[string]any{
+				snapshot, _ := m.reportProgress(ctx, transferID, transferBaseURL, map[string]any{
 					"status":         "running",
 					"bytes_complete": asInt64(progress["bytes_complete"]),
 					"bytes_total":    asInt64(progress["bytes_total"]),
@@ -762,7 +763,7 @@ func (m *Manager) streamUploadItem(ctx context.Context, transferID string, itemI
 					return newError("transfer_canceled", "Transfer canceled by operator.")
 				}
 			} else if now.Sub(lastControlCheck) >= transferControlInterval {
-				if err := m.ensureTransferNotCanceled(ctx, transferID); err != nil {
+				if err := m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL); err != nil {
 					_ = tempFile.Close()
 					return err
 				}
@@ -796,6 +797,7 @@ func (m *Manager) streamUploadItem(ctx context.Context, transferID string, itemI
 
 func (m *Manager) downloadTransfer(ctx context.Context, payload map[string]any) error {
 	transferID := cleanText(payload["transfer_id"])
+	transferBaseURL := m.transferBaseURL(payload)
 	selections, err := normalizeSelectionRows(payload["items"])
 	if err != nil {
 		return err
@@ -803,7 +805,7 @@ func (m *Manager) downloadTransfer(ctx context.Context, payload map[string]any) 
 	if transferID == "" || len(selections) == 0 {
 		return newError("invalid_request", "Download manifest is missing transfer metadata.")
 	}
-	if err := m.ensureTransferNotCanceled(ctx, transferID); err != nil {
+	if err := m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL); err != nil {
 		return err
 	}
 	archiveRequired := asBool(payload["archive_required"])
@@ -819,13 +821,13 @@ func (m *Manager) downloadTransfer(ctx context.Context, payload map[string]any) 
 			mimeType = "application/octet-stream"
 		}
 		totalBytes := fileSize(sourcePath)
-		if snapshot, err := m.reportProgress(ctx, transferID, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": totalBytes}); err == nil && isCanceled(snapshot) {
+		if snapshot, err := m.reportProgress(ctx, transferID, transferBaseURL, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": totalBytes}); err == nil && isCanceled(snapshot) {
 			return newError("transfer_canceled", "Transfer canceled by operator.")
 		}
-		if err := m.ensureTransferNotCanceled(ctx, transferID); err != nil {
+		if err := m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL); err != nil {
 			return err
 		}
-		return m.postDownloadArtifact(ctx, transferID, sourcePath, artifactName, mimeType)
+		return m.postDownloadArtifact(ctx, transferBaseURL, transferID, sourcePath, artifactName, mimeType)
 	}
 	if requestedName == "" {
 		requestedName = "download.zip"
@@ -843,27 +845,44 @@ func (m *Manager) downloadTransfer(ctx context.Context, payload map[string]any) 
 	defer func() {
 		_ = os.Remove(archivePath)
 	}()
-	totalBytes, err := zipSelection(selections, archivePath, func() error { return m.ensureTransferNotCanceled(ctx, transferID) })
+	totalBytes, err := zipSelection(selections, archivePath, func() error { return m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL) })
 	if err != nil {
 		return err
 	}
-	if snapshot, err := m.reportProgress(ctx, transferID, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": totalBytes, "archive_name": archiveName}); err == nil && isCanceled(snapshot) {
+	if snapshot, err := m.reportProgress(ctx, transferID, transferBaseURL, map[string]any{"status": "running", "bytes_complete": 0, "bytes_total": totalBytes, "archive_name": archiveName}); err == nil && isCanceled(snapshot) {
 		return newError("transfer_canceled", "Transfer canceled by operator.")
 	}
-	if err := m.ensureTransferNotCanceled(ctx, transferID); err != nil {
+	if err := m.ensureTransferNotCanceled(ctx, transferID, transferBaseURL); err != nil {
 		return err
 	}
-	return m.postDownloadArtifact(ctx, transferID, archivePath, archiveName, "application/zip")
+	return m.postDownloadArtifact(ctx, transferBaseURL, transferID, archivePath, archiveName, "application/zip")
 }
 
-func (m *Manager) authRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
+func (m *Manager) transferBaseURL(payload map[string]any) string {
+	if baseURL := strings.TrimRight(cleanText(payload["transfer_base_url"]), "/"); baseURL != "" {
+		return baseURL
+	}
+	if m.authClient == nil {
+		return ""
+	}
+	return m.authClient.BaseURL()
+}
+
+func (m *Manager) authRequest(ctx context.Context, method string, path string, body io.Reader, baseURLOverride ...string) (*http.Request, error) {
 	if m.authClient == nil {
 		return nil, newError("client_unavailable", "The Borealis HTTP client is unavailable.")
 	}
 	if err := m.authClient.EnsureAuthenticated(ctx); err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, m.authClient.BaseURL()+path, body)
+	baseURL := ""
+	if len(baseURLOverride) > 0 {
+		baseURL = strings.TrimRight(strings.TrimSpace(baseURLOverride[0]), "/")
+	}
+	if baseURL == "" {
+		baseURL = m.authClient.BaseURL()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -875,8 +894,8 @@ func (m *Manager) authRequest(ctx context.Context, method string, path string, b
 	return req, nil
 }
 
-func (m *Manager) getJSON(ctx context.Context, path string) (map[string]any, error) {
-	req, err := m.authRequest(ctx, http.MethodGet, path, nil)
+func (m *Manager) getJSON(ctx context.Context, path string, baseURLOverride ...string) (map[string]any, error) {
+	req, err := m.authRequest(ctx, http.MethodGet, path, nil, baseURLOverride...)
 	if err != nil {
 		return nil, err
 	}
@@ -897,12 +916,12 @@ func (m *Manager) getJSON(ctx context.Context, path string) (map[string]any, err
 	return out, nil
 }
 
-func (m *Manager) postJSON(ctx context.Context, path string, payload map[string]any) (map[string]any, error) {
+func (m *Manager) postJSON(ctx context.Context, path string, payload map[string]any, baseURLOverride ...string) (map[string]any, error) {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	req, err := m.authRequest(ctx, http.MethodPost, path, bytes.NewReader(raw))
+	req, err := m.authRequest(ctx, http.MethodPost, path, bytes.NewReader(raw), baseURLOverride...)
 	if err != nil {
 		return nil, err
 	}
@@ -924,8 +943,8 @@ func (m *Manager) postJSON(ctx context.Context, path string, payload map[string]
 	return out, nil
 }
 
-func (m *Manager) ensureTransferNotCanceled(ctx context.Context, transferID string) error {
-	snapshot, err := m.getJSON(ctx, "/api/agent/files/transfers/"+transferID+"/status")
+func (m *Manager) ensureTransferNotCanceled(ctx context.Context, transferID string, baseURLOverride ...string) error {
+	snapshot, err := m.getJSON(ctx, "/api/agent/files/transfers/"+transferID+"/status", baseURLOverride...)
 	if err != nil {
 		return err
 	}
@@ -935,11 +954,11 @@ func (m *Manager) ensureTransferNotCanceled(ctx context.Context, transferID stri
 	return nil
 }
 
-func (m *Manager) reportProgress(ctx context.Context, transferID string, payload map[string]any) (map[string]any, error) {
-	return m.postJSON(ctx, "/api/agent/files/transfers/"+transferID+"/progress", payload)
+func (m *Manager) reportProgress(ctx context.Context, transferID string, transferBaseURL string, payload map[string]any) (map[string]any, error) {
+	return m.postJSON(ctx, "/api/agent/files/transfers/"+transferID+"/progress", payload, transferBaseURL)
 }
 
-func (m *Manager) postDownloadArtifact(ctx context.Context, transferID string, artifactPath string, artifactName string, mimeType string) error {
+func (m *Manager) postDownloadArtifact(ctx context.Context, transferBaseURL string, transferID string, artifactPath string, artifactName string, mimeType string) error {
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
@@ -948,7 +967,7 @@ func (m *Manager) postDownloadArtifact(ctx context.Context, transferID string, a
 		return err
 	}
 	defer cleanup()
-	req, err := m.authRequest(ctx, http.MethodPost, "/api/agent/files/transfers/"+transferID+"/content", body)
+	req, err := m.authRequest(ctx, http.MethodPost, "/api/agent/files/transfers/"+transferID+"/content", body, transferBaseURL)
 	if err != nil {
 		return err
 	}

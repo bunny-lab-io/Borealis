@@ -4,22 +4,34 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import logging
 import os
 import socket
+import tempfile
 import threading
 import time
 from contextlib import closing
+from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import jwt
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_socketio import SocketIO
 
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.API.devices.file_management import (
+    FILE_TRANSFER_SESSION_TTL_SECONDS,
+    FileTransferStore,
+    _normalize_text as _normalize_file_text,
+    _normalize_transfer_entries,
+    _sanitize_upload_name,
+    _transfer_status_snapshot,
+    _upload_manifest_from_form,
+)
 from Data.Engine.services.WebSocket.vpn_shell import (
     _CONNECT_TIMEOUT_SECONDS,
     _CONNECT_WAIT_WINDOW_SECONDS,
@@ -233,8 +245,14 @@ class SiteWorkerSocketRuntime:
         self._shell_sessions: Dict[str, ShellSession] = {}
         self._shell_sessions_by_agent: Dict[str, ShellSession] = {}
         self._shell_lock = threading.RLock()
+        self._file_transfer_store = FileTransferStore(
+            Path(tempfile.gettempdir()) / "Borealis" / "site_worker_file_management" / self.worker_guid,
+            ttl_seconds=FILE_TRANSFER_SESSION_TTL_SECONDS,
+            logger=logger.getChild("file_transfer_store"),
+        )
         self._thread: Optional[threading.Thread] = None
         self._register_routes()
+        self._register_file_management_routes()
         self._register_socket_handlers()
         self._register_shell_handlers()
         self._register_remote_desktop_routes()
@@ -324,6 +342,324 @@ class SiteWorkerSocketRuntime:
             level="WARNING",
         )
         return {"error": "unauthorized"}, 401
+
+    def _authenticate_transfer_agent(self) -> Dict[str, Any]:
+        token = _bearer_token()
+        if not token:
+            raise SocketAgentAuthError("missing_authorization")
+        try:
+            claims = self.jwt_service.decode(token)
+        except jwt.ExpiredSignatureError:
+            raise SocketAgentAuthError("token_expired")
+        except Exception:
+            raise SocketAgentAuthError("invalid_token")
+
+        guid = normalize_guid(str(claims.get("guid") or "").strip())
+        fingerprint = str(claims.get("ssl_key_fingerprint") or "").lower().strip()
+        try:
+            token_version = int(claims.get("token_version") or 0)
+        except Exception:
+            token_version = 0
+        if not guid or not fingerprint or token_version <= 0:
+            raise SocketAgentAuthError("invalid_claims")
+        service_mode = str(request.headers.get("X-Borealis-Agent-Context") or "").strip().upper()
+        if service_mode not in {"", "SYSTEM"}:
+            raise SocketAgentAuthError("context_not_allowed", status_code=403)
+
+        with closing(self.db_conn_factory()) as conn:
+            cur = conn.cursor()
+            required_token_version = device_purge_state.get_required_token_version(cur, guid)
+            if required_token_version is not None and token_version < required_token_version:
+                raise SocketAgentAuthError("device_purged")
+            cur.execute(
+                """
+                SELECT d.guid, d.ssl_key_fingerprint, d.token_version, d.status, d.hostname, ds.site_id
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 WHERE UPPER(d.guid) = ?
+                """,
+                (guid,),
+            )
+            rows = cur.fetchall()
+        row = rows[0] if rows else None
+        if row is None:
+            raise SocketAgentAuthError("device_not_found", status_code=404)
+        stored_guid, stored_fingerprint, stored_version, status, hostname, site_id = row
+        if normalize_guid(stored_guid) != guid:
+            raise SocketAgentAuthError("device_mismatch")
+        if str(stored_fingerprint or "").lower().strip() != fingerprint:
+            raise SocketAgentAuthError("fingerprint_mismatch", status_code=403)
+        if int(stored_version or 0) != token_version:
+            raise SocketAgentAuthError("token_version_mismatch", status_code=403)
+        if str(status or "active").strip().lower() in {"revoked", "decommissioned"}:
+            raise SocketAgentAuthError("device_revoked", status_code=403)
+        try:
+            device_site_id = int(site_id) if site_id is not None else 0
+        except Exception:
+            device_site_id = 0
+        if device_site_id <= 0:
+            raise SocketAgentAuthError("device_site_unassigned", status_code=403)
+        if int(self.site_id or 0) != device_site_id:
+            raise SocketAgentAuthError("device_site_mismatch", status_code=403)
+        return {"guid": guid, "hostname": str(hostname or ""), "site_id": device_site_id}
+
+    def _agent_transfer_session(self, transfer_id: str) -> tuple[Optional[Dict[str, Any]], Optional[tuple[Dict[str, Any], int]]]:
+        try:
+            auth = self._authenticate_transfer_agent()
+        except SocketAgentAuthError as exc:
+            return None, ({"error": exc.code}, exc.status_code)
+        session = self._file_transfer_store.get_session(transfer_id)
+        if session is None:
+            return None, ({"error": "transfer_not_found"}, 404)
+        if normalize_guid(auth.get("guid")) != normalize_guid(session.get("device_guid")):
+            return None, ({"error": "transfer_not_found"}, 404)
+        return session, None
+
+    def _register_file_management_routes(self) -> None:
+        @self.app.route("/remote-files/transfers/upload", methods=["POST"])
+        def _remote_files_upload():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            hostname = _normalize_file_text(request.form.get("hostname"))
+            device_guid = _normalize_file_text(request.form.get("device_guid"))
+            agent_id = _normalize_file_text(request.form.get("agent_id"))
+            operator_id = _normalize_file_text(request.form.get("operator_id")) or "unknown"
+            target_path = _normalize_file_text(request.form.get("target_path"))
+            transfer_base_url = _normalize_file_text(request.form.get("transfer_base_url"))
+            files = request.files.getlist("files")
+            manifest_items = _upload_manifest_from_form(request.form.get("manifest"), files)
+            try:
+                overwrite_keys = json.loads(_normalize_file_text(request.form.get("overwrite_keys")) or "[]")
+            except Exception:
+                overwrite_keys = []
+            if not hostname or not device_guid or not target_path or not files or not manifest_items:
+                return jsonify({"error": "invalid_request"}), 400
+            try:
+                snapshot = self._file_transfer_store.create_upload_session(
+                    hostname=hostname,
+                    device_guid=device_guid,
+                    agent_id=agent_id,
+                    operator_id=operator_id,
+                    target_path=target_path,
+                    files=files,
+                    manifest_items=manifest_items,
+                    overwrite_keys=overwrite_keys if isinstance(overwrite_keys, list) else [],
+                )
+            except ValueError as exc:
+                return jsonify({"error": _normalize_file_text(exc) or "upload_files_required"}), 400
+            session = self._file_transfer_store.get_session(snapshot["transfer_id"]) or {}
+            items = [
+                {
+                    "item_id": row.get("item_id"),
+                    "client_key": row.get("client_key"),
+                    "name": row.get("name"),
+                    "relative_path": row.get("relative_path"),
+                    "size_bytes": int(row.get("size_bytes") or 0),
+                    "overwrite_existing": bool(row.get("overwrite_existing")),
+                }
+                for row in session.get("upload_items") or []
+            ]
+            emitted = self.emit_host_service_event(
+                hostname,
+                "system",
+                "file_management_request",
+                {
+                    "action": "upload_start",
+                    "hostname": hostname,
+                    "agent_id": agent_id,
+                    "requested_by": operator_id,
+                    "transfer_id": snapshot["transfer_id"],
+                    "target_path": target_path,
+                    "transfer_base_url": transfer_base_url,
+                    "items": items,
+                },
+            )
+            if not emitted:
+                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
+                return jsonify({"error": "agent_unavailable"}), 503
+            return jsonify(snapshot), 202
+
+        @self.app.route("/remote-files/transfers/download", methods=["POST"])
+        def _remote_files_download():
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            data = request.get_json(silent=True) or {}
+            if not isinstance(data, Mapping):
+                data = {}
+            hostname = _normalize_file_text(data.get("hostname"))
+            device_guid = _normalize_file_text(data.get("device_guid"))
+            agent_id = _normalize_file_text(data.get("agent_id"))
+            operator_id = _normalize_file_text(data.get("operator_id")) or "unknown"
+            transfer_base_url = _normalize_file_text(data.get("transfer_base_url"))
+            selections = _normalize_transfer_entries(data.get("items") or data.get("paths") or data.get("path"))
+            archive_name = _sanitize_upload_name(data.get("archive_name")) or "download.zip"
+            archive_required = bool(data.get("archive_required"))
+            if not hostname or not device_guid or not selections:
+                return jsonify({"error": "invalid_request"}), 400
+            snapshot = self._file_transfer_store.create_download_session(
+                hostname=hostname,
+                device_guid=device_guid,
+                agent_id=agent_id,
+                operator_id=operator_id,
+                selections=selections,
+                archive_name=archive_name,
+            )
+            emitted = self.emit_host_service_event(
+                hostname,
+                "system",
+                "file_management_request",
+                {
+                    "action": "download_start",
+                    "hostname": hostname,
+                    "agent_id": agent_id,
+                    "requested_by": operator_id,
+                    "transfer_id": snapshot["transfer_id"],
+                    "archive_name": archive_name,
+                    "archive_required": archive_required,
+                    "transfer_base_url": transfer_base_url,
+                    "items": selections,
+                },
+            )
+            if not emitted:
+                self._file_transfer_store.mark_failed(snapshot["transfer_id"], "agent_unavailable")
+                return jsonify({"error": "agent_unavailable"}), 503
+            return jsonify(snapshot), 202
+
+        @self.app.route("/remote-files/transfers/<transfer_id>/status", methods=["GET"])
+        def _remote_files_status(transfer_id: str):
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            session = self._file_transfer_store.get_session(transfer_id)
+            if session is None:
+                return jsonify({"error": "transfer_not_found"}), 404
+            return jsonify(_transfer_status_snapshot(session)), 200
+
+        @self.app.route("/remote-files/transfers/<transfer_id>/cancel", methods=["POST"])
+        def _remote_files_cancel(transfer_id: str):
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            snapshot = self._file_transfer_store.request_cancel(transfer_id)
+            if snapshot is None:
+                return jsonify({"error": "transfer_not_found"}), 404
+            return jsonify(snapshot), 200
+
+        @self.app.route("/remote-files/transfers/<transfer_id>/content", methods=["GET"])
+        def _remote_files_content(transfer_id: str):
+            requirement = self._require_internal_request()
+            if requirement:
+                payload, status = requirement
+                return jsonify(payload), status
+            session = self._file_transfer_store.get_session(transfer_id)
+            if session is None:
+                return jsonify({"error": "transfer_not_found"}), 404
+            if _normalize_file_text(session.get("direction")) != "download":
+                return jsonify({"error": "content_not_available"}), 404
+            if _normalize_file_text(session.get("status")) != "completed":
+                return jsonify({"error": "transfer_not_ready"}), 409
+            result_path = _normalize_file_text(session.get("result_path"))
+            if not result_path or not Path(result_path).is_file():
+                return jsonify({"error": "content_not_available"}), 404
+            response = send_file(
+                result_path,
+                as_attachment=True,
+                download_name=_normalize_file_text(session.get("result_name")) or Path(result_path).name,
+                mimetype=_normalize_file_text(session.get("result_mime")) or "application/octet-stream",
+                max_age=0,
+            )
+            response.call_on_close(lambda: self._file_transfer_store.delete_session(transfer_id))
+            return response
+
+        @self.app.route("/api/agent/files/transfers/<transfer_id>/upload-item/<item_id>", methods=["GET"])
+        def _agent_upload_item(transfer_id: str, item_id: str):
+            session, error = self._agent_transfer_session(transfer_id)
+            if error:
+                payload, status = error
+                return jsonify(payload), status
+            assert session is not None
+            if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
+                return jsonify({"error": "transfer_canceled"}), 409
+            item = self._file_transfer_store.get_upload_item(transfer_id, item_id)
+            if item is None:
+                return jsonify({"error": "upload_item_not_found"}), 404
+            _session, upload_item = item
+            stored_path = _normalize_file_text(upload_item.get("stored_path"))
+            if not stored_path or not Path(stored_path).is_file():
+                return jsonify({"error": "upload_item_not_found"}), 404
+            return send_file(
+                stored_path,
+                as_attachment=True,
+                download_name=_normalize_file_text(upload_item.get("name")) or Path(stored_path).name,
+                mimetype="application/octet-stream",
+                max_age=0,
+            )
+
+        @self.app.route("/api/agent/files/transfers/<transfer_id>/status", methods=["GET"])
+        def _agent_transfer_status(transfer_id: str):
+            session, error = self._agent_transfer_session(transfer_id)
+            if error:
+                payload, status = error
+                return jsonify(payload), status
+            assert session is not None
+            return jsonify(_transfer_status_snapshot(session)), 200
+
+        @self.app.route("/api/agent/files/transfers/<transfer_id>/progress", methods=["POST"])
+        def _agent_transfer_progress(transfer_id: str):
+            session, error = self._agent_transfer_session(transfer_id)
+            if error:
+                payload, status = error
+                return jsonify(payload), status
+            body = request.get_json(silent=True) or {}
+            if not isinstance(body, Mapping):
+                body = {}
+            status_value = _normalize_file_text(body.get("status")).lower()
+            error_text = _normalize_file_text(body.get("error"))
+            if status_value == "failed":
+                snapshot = self._file_transfer_store.mark_failed(transfer_id, error_text or "transfer_failed")
+            elif status_value == "canceled":
+                snapshot = self._file_transfer_store.mark_canceled(transfer_id, error_text or "Transfer canceled by operator.")
+            else:
+                snapshot = self._file_transfer_store.mark_progress(
+                    transfer_id,
+                    status=status_value,
+                    bytes_complete=int(body.get("bytes_complete")) if body.get("bytes_complete") is not None else None,
+                    bytes_total=int(body.get("bytes_total")) if body.get("bytes_total") is not None else None,
+                    error=error_text,
+                    archive_name=_normalize_file_text(body.get("archive_name")),
+                )
+            if snapshot is None:
+                return jsonify({"error": "transfer_not_found"}), 404
+            return jsonify(snapshot), 200
+
+        @self.app.route("/api/agent/files/transfers/<transfer_id>/content", methods=["POST"])
+        def _agent_transfer_content(transfer_id: str):
+            session, error = self._agent_transfer_session(transfer_id)
+            if error:
+                payload, status = error
+                return jsonify(payload), status
+            assert session is not None
+            if bool(session.get("cancel_requested")) or _normalize_file_text(session.get("status")).lower() in {"canceling", "canceled"}:
+                self._file_transfer_store.mark_canceled(transfer_id, "Transfer canceled by operator.")
+                return jsonify({"error": "transfer_canceled"}), 409
+            file_storage = request.files.get("artifact")
+            if file_storage is None:
+                return jsonify({"error": "artifact_required"}), 400
+            snapshot = self._file_transfer_store.store_download_artifact(
+                transfer_id,
+                file_storage=file_storage,
+                archive_name=_normalize_file_text(request.form.get("archive_name")) or _normalize_file_text(request.form.get("filename")),
+                mime_type=_normalize_file_text(request.form.get("mime_type")),
+            )
+            if snapshot is None:
+                return jsonify({"error": "transfer_not_found"}), 404
+            return jsonify(snapshot), 200
 
     def _ensure_guacamole_proxy(self) -> bool:
         if self.guacamole_port <= 0:

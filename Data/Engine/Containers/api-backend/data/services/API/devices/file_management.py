@@ -38,11 +38,16 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Tuple
 
-from flask import Blueprint, g, jsonify, request, send_file
+import requests
+from flask import Blueprint, Response, g, jsonify, request, send_file, stream_with_context
 
 from ....auth.device_auth import require_device_auth
 from ....auth.guid_utils import normalize_guid
 from ...auth import UserSiteAccessManager
+from ...auth.secrets import require_app_secret
+from ...job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
+from ...remote_ops.agent_routes import site_worker_route_urls
 from .tunnel import _current_user, _require_login, _resolve_requested_agent_id
 
 if TYPE_CHECKING:  # pragma: no cover - typing helper
@@ -544,21 +549,23 @@ def _get_transfer_store(context: Any, logger) -> FileTransferStore:
         return store
 
 
-def _system_socket_available(adapters: "EngineServiceAdapters", hostname: str, agent_id: str) -> bool:
-    has_host_socket = getattr(adapters.context, "has_host_service_socket", None)
-    if callable(has_host_socket):
-        try:
-            if bool(has_host_socket(hostname, "system")):
-                return True
-        except Exception:
-            adapters.context.logger.debug("has_host_service_socket failed hostname=%s", hostname, exc_info=True)
-    registry = getattr(adapters.context, "agent_socket_registry", None)
-    if registry and hasattr(registry, "is_registered") and agent_id:
-        try:
-            return bool(registry.is_registered(agent_id))
-        except Exception:
-            adapters.context.logger.debug("agent socket registry lookup failed agent_id=%s", agent_id, exc_info=True)
-    return False
+def _system_socket_available(app, adapters: "EngineServiceAdapters", record: Dict[str, Any]) -> bool:
+    route, error = _worker_route_for_record(adapters, record)
+    if error or route is None:
+        return False
+    payload, rpc_error = _post_worker_json(
+        app,
+        route,
+        "/remote-ops/host-service/status",
+        {
+            "hostname": record.get("hostname") or "",
+            "service_mode": "system",
+        },
+        timeout=5.0,
+    )
+    if rpc_error:
+        return False
+    return bool((payload or {}).get("registered"))
 
 
 def _load_device_record(adapters: "EngineServiceAdapters", hostname: str) -> Optional[Dict[str, Any]]:
@@ -568,10 +575,11 @@ def _load_device_record(adapters: "EngineServiceAdapters", hostname: str) -> Opt
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT guid, hostname, agent_id, operating_system, last_seen
-              FROM devices
-             WHERE LOWER(hostname) = LOWER(?)
-          ORDER BY last_seen DESC
+            SELECT d.guid, d.hostname, d.agent_id, d.operating_system, d.last_seen, ds.site_id
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             WHERE LOWER(d.hostname) = LOWER(?)
+          ORDER BY d.last_seen DESC
              LIMIT 1
             """,
             (hostname,),
@@ -585,6 +593,7 @@ def _load_device_record(adapters: "EngineServiceAdapters", hostname: str) -> Opt
             "agent_id": _normalize_text(row[2]),
             "operating_system": _normalize_text(row[3]),
             "last_seen": int(row[4] or 0),
+            "site_id": int(row[5] or 0),
         }
     finally:
         if conn is not None:
@@ -592,6 +601,165 @@ def _load_device_record(adapters: "EngineServiceAdapters", hostname: str) -> Opt
                 conn.close()
             except Exception:
                 pass
+
+
+def _worker_route_url(worker_route: Dict[str, Any], path: str) -> str:
+    scheme = _normalize_text(worker_route.get("upstream_scheme")) or "http"
+    host = _normalize_text(worker_route.get("upstream_host")) or "127.0.0.1"
+    try:
+        port = int(worker_route.get("upstream_port") or 0)
+    except Exception:
+        port = 0
+    if port <= 0:
+        raise RuntimeError("site_worker_route_missing_port")
+    normalized_path = _normalize_text(path)
+    if not normalized_path.startswith("/"):
+        normalized_path = f"/{normalized_path}"
+    return f"{scheme}://{host}:{port}{normalized_path}"
+
+
+def _worker_route_for_record(
+    adapters: "EngineServiceAdapters",
+    record: Dict[str, Any],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
+    try:
+        site_id = int(record.get("site_id") or 0)
+    except Exception:
+        site_id = 0
+    if site_id <= 0:
+        return None, ({"error": "device_site_unassigned"}, 409)
+    conn = None
+    try:
+        conn = adapters.db_conn_factory()
+        ensure_job_scheduler_tables(conn)
+        route = active_worker_route_for_site(conn, site_id=site_id)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    if not route:
+        return None, ({"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."}, 503)
+    return dict(route), None
+
+
+def _worker_internal_headers(app) -> Dict[str, str]:
+    return {
+        INTERNAL_TOKEN_HEADER: internal_token(require_app_secret(app)),
+        "Accept": "application/json",
+    }
+
+
+def _post_worker_json(
+    app,
+    worker_route: Dict[str, Any],
+    path: str,
+    payload: Dict[str, Any],
+    *,
+    timeout: float = 30.0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
+    try:
+        response = requests.post(
+            _worker_route_url(worker_route, path),
+            headers={**_worker_internal_headers(app), "Content-Type": "application/json"},
+            json=dict(payload or {}),
+            timeout=max(1.0, float(timeout)),
+        )
+    except Exception:
+        return None, ({"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}, 503)
+    try:
+        data = response.json() if response.headers.get("content-type", "").lower().startswith("application/json") else {}
+    except Exception:
+        data = {}
+    if response.status_code >= 400:
+        return None, (data if isinstance(data, dict) else {"error": "site_worker_error"}, response.status_code)
+    return data if isinstance(data, dict) else {}, None
+
+
+def _get_worker_json(
+    app,
+    worker_route: Dict[str, Any],
+    path: str,
+    *,
+    timeout: float = 15.0,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
+    try:
+        response = requests.get(
+            _worker_route_url(worker_route, path),
+            headers=_worker_internal_headers(app),
+            timeout=max(1.0, float(timeout)),
+        )
+    except Exception:
+        return None, ({"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}, 503)
+    try:
+        data = response.json() if response.headers.get("content-type", "").lower().startswith("application/json") else {}
+    except Exception:
+        data = {}
+    if response.status_code >= 400:
+        return None, (data if isinstance(data, dict) else {"error": "site_worker_error"}, response.status_code)
+    return data if isinstance(data, dict) else {}, None
+
+
+def _post_worker_upload(
+    app,
+    worker_route: Dict[str, Any],
+    *,
+    hostname: str,
+    device_guid: str,
+    agent_id: str,
+    operator_id: str,
+    target_path: str,
+    transfer_base_url: str,
+    files: Iterable[Any],
+    manifest_items: Iterable[Dict[str, Any]],
+    overwrite_keys: Iterable[str],
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
+    import json as _json
+
+    multipart_files = []
+    for storage in files:
+        try:
+            storage.stream.seek(0)
+        except Exception:
+            pass
+        multipart_files.append(
+            (
+                "files",
+                (
+                    _sanitize_upload_name(getattr(storage, "filename", "")) or "upload.bin",
+                    storage.stream,
+                    _normalize_text(getattr(storage, "mimetype", "")) or "application/octet-stream",
+                ),
+            )
+        )
+    data = {
+        "hostname": hostname,
+        "device_guid": device_guid,
+        "agent_id": agent_id,
+        "operator_id": operator_id,
+        "target_path": target_path,
+        "transfer_base_url": transfer_base_url,
+        "manifest": _json.dumps(list(manifest_items or []), separators=(",", ":")),
+        "overwrite_keys": _json.dumps([_normalize_text(key) for key in overwrite_keys if _normalize_text(key)], separators=(",", ":")),
+    }
+    try:
+        response = requests.post(
+            _worker_route_url(worker_route, "/remote-files/transfers/upload"),
+            headers=_worker_internal_headers(app),
+            data=data,
+            files=multipart_files,
+            timeout=900.0,
+        )
+    except Exception:
+        return None, ({"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}, 503)
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    if response.status_code >= 400:
+        return None, (payload if isinstance(payload, dict) else {"error": "site_worker_error"}, response.status_code)
+    return payload if isinstance(payload, dict) else {}, None
 
 
 def _rpc_error_response(response: Any) -> Tuple[Dict[str, Any], int]:
@@ -630,20 +798,34 @@ def _rpc_error_response(response: Any) -> Tuple[Dict[str, Any], int]:
 def _call_file_management_rpc(
     adapters: "EngineServiceAdapters",
     *,
+    app,
+    record: Dict[str, Any],
     hostname: str,
     payload: Dict[str, Any],
     timeout: float = 30.0,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
-    caller = getattr(adapters.context, "call_host_service_event", None)
-    if not callable(caller):
-        return None, ({"error": "agent_unavailable", "message": "The file-management socket bridge is unavailable."}, 503)
-    try:
-        response = caller(hostname, "system", "file_management_request", payload, timeout=timeout)
-    except Exception:
-        adapters.context.logger.debug("file-management rpc failed hostname=%s", hostname, exc_info=True)
-        response = None
-    if response is None:
+    route, route_error = _worker_route_for_record(adapters, record)
+    if route_error:
+        return None, route_error
+    assert route is not None
+    data, worker_error = _post_worker_json(
+        app,
+        route,
+        "/remote-ops/host-service/call",
+        {
+            "hostname": hostname,
+            "service_mode": "system",
+            "event_name": "file_management_request",
+            "payload": payload,
+            "timeout_seconds": max(0.5, float(timeout)),
+        },
+        timeout=max(1.0, float(timeout) + 1.0),
+    )
+    if worker_error:
+        return None, worker_error
+    if not bool((data or {}).get("called")):
         return None, ({"error": "timeout", "message": "The device did not answer the file-management request in time."}, 504)
+    response = (data or {}).get("response")
     if not isinstance(response, dict):
         return None, ({"error": "invalid_agent_response", "message": "The device returned an invalid file-management response."}, 502)
     if response.get("ok") is False:
@@ -756,10 +938,12 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             payload, status = error
             return jsonify(payload), status
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "roots",
@@ -792,10 +976,12 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if not requested_path:
             return jsonify({"error": "path_required"}), 400
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "children",
@@ -820,6 +1006,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
     def _upload_conflicts_payload(record: Dict[str, Any], hostname: str, operator_id: str, target_path: str, items: list[Dict[str, Any]]):
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "upload_conflicts",
@@ -852,7 +1040,7 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if not target_path or not items:
             return jsonify({"error": "target_path_and_items_required"}), 400
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         payload, rpc_error = _upload_conflicts_payload(record, hostname, operator_id, target_path, items)
         if rpc_error:
@@ -881,10 +1069,12 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if not requested_path:
             return jsonify({"error": "path_required"}), 400
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "read_text",
@@ -923,10 +1113,12 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if not item_path:
             return jsonify({"error": "path_required"}), 400
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "write_text",
@@ -976,6 +1168,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "path_and_name_required"}), 400
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "mkdir",
@@ -1013,6 +1207,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "path_and_new_name_required"}), 400
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "rename",
@@ -1050,6 +1246,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "paths_and_destination_required"}), 400
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "move",
@@ -1087,6 +1285,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "paths_required"}), 400
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "delete",
@@ -1130,7 +1330,7 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         if len(upload_manifest) != len(files):
             return jsonify({"error": "upload_manifest_mismatch"}), 400
         assert record is not None
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         conflict_payload, rpc_error = _upload_conflicts_payload(record, hostname, operator_id, target_path, upload_manifest)
         conflicts: list[Dict[str, Any]] = []
@@ -1193,54 +1393,29 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
                     "skipped_count": len(skipped_names),
                 }
             )
-        try:
-            session = _store().create_upload_session(
-                hostname=record.get("hostname") or hostname,
-                device_guid=record.get("guid") or "",
-                agent_id=record.get("agent_id") or "",
-                operator_id=operator_id or "unknown",
-                target_path=target_path,
-                files=files_to_upload,
-                manifest_items=manifest_to_upload,
-                overwrite_keys=overwrite_keys,
-            )
-        except ValueError as exc:
-            return jsonify({"error": _normalize_text(exc) or "upload_files_required"}), 400
-        emitter = getattr(adapters.context, "emit_host_service_event", None)
-        emitted = False
-        if callable(emitter):
-            try:
-                emitted = bool(
-                    emitter(
-                        record.get("hostname") or hostname,
-                        "system",
-                        "file_management_request",
-                        {
-                            "action": "upload_start",
-                            "hostname": record.get("hostname") or hostname,
-                            "agent_id": record.get("agent_id") or "",
-                            "requested_by": operator_id,
-                            "transfer_id": session["transfer_id"],
-                            "target_path": target_path,
-                            "items": [
-                                {
-                                    "item_id": row.get("item_id"),
-                                    "client_key": row.get("client_key"),
-                                    "name": row.get("name"),
-                                    "relative_path": row.get("relative_path"),
-                                    "size_bytes": int(row.get("size_bytes") or 0),
-                                    "overwrite_existing": bool(row.get("overwrite_existing")),
-                                }
-                                for row in (_store().get_session(session["transfer_id"]) or {}).get("upload_items") or []
-                            ],
-                        },
-                    )
-                )
-            except Exception:
-                emitted = False
-        if not emitted:
-            _store().mark_failed(session["transfer_id"], "agent_unavailable")
-            return jsonify({"error": "agent_unavailable"}), 503
+        worker_route, route_error = _worker_route_for_record(adapters, record)
+        if route_error:
+            payload, status = route_error
+            return jsonify(payload), status
+        assert worker_route is not None
+        worker_urls = site_worker_route_urls(adapters.context, request, worker_route)
+        session, worker_error = _post_worker_upload(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or hostname,
+            device_guid=record.get("guid") or "",
+            agent_id=record.get("agent_id") or "",
+            operator_id=operator_id or "unknown",
+            target_path=target_path,
+            transfer_base_url=worker_urls["base"],
+            files=files_to_upload,
+            manifest_items=manifest_to_upload,
+            overwrite_keys=overwrite_keys,
+        )
+        if worker_error:
+            payload, status = worker_error
+            return jsonify(payload), status
+        assert session is not None
         _service_log_event(
             "file_management_upload_start hostname={hostname} operator={operator} remote={remote} transfer_id={transfer_id} items={items} bytes_total={bytes_total} target={target}".format(
                 hostname=record.get("hostname") or hostname,
@@ -1270,6 +1445,8 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "paths_and_destination_required"}), 400
         response, rpc_error = _call_file_management_rpc(
             adapters,
+            app=app,
+            record=record,
             hostname=record.get("hostname") or hostname,
             payload={
                 "action": "paste",
@@ -1307,44 +1484,36 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
         selections = _normalize_transfer_entries(body.get("items") or body.get("paths") or body.get("path"))
         if not selections:
             return jsonify({"error": "paths_required"}), 400
-        if not _system_socket_available(adapters, record.get("hostname") or hostname, record.get("agent_id") or ""):
+        if not _system_socket_available(app, adapters, record):
             return jsonify({"error": "agent_unavailable"}), 503
         archive_required = len(selections) != 1 or any(_normalize_text(row.get("kind")).lower() == "directory" for row in selections)
         archive_name = _guess_download_name(record.get("hostname") or hostname, selections, archive_required=archive_required)
-        session = _store().create_download_session(
-            hostname=record.get("hostname") or hostname,
-            device_guid=record.get("guid") or "",
-            agent_id=record.get("agent_id") or "",
-            operator_id=operator_id or "unknown",
-            selections=selections,
-            archive_name=archive_name,
+        worker_route, route_error = _worker_route_for_record(adapters, record)
+        if route_error:
+            payload, status = route_error
+            return jsonify(payload), status
+        assert worker_route is not None
+        worker_urls = site_worker_route_urls(adapters.context, request, worker_route)
+        session, worker_error = _post_worker_json(
+            app,
+            worker_route,
+            "/remote-files/transfers/download",
+            {
+                "hostname": record.get("hostname") or hostname,
+                "device_guid": record.get("guid") or "",
+                "agent_id": record.get("agent_id") or "",
+                "operator_id": operator_id or "unknown",
+                "items": selections,
+                "archive_name": archive_name,
+                "archive_required": archive_required,
+                "transfer_base_url": worker_urls["base"],
+            },
+            timeout=30.0,
         )
-        emitter = getattr(adapters.context, "emit_host_service_event", None)
-        emitted = False
-        if callable(emitter):
-            try:
-                emitted = bool(
-                    emitter(
-                        record.get("hostname") or hostname,
-                        "system",
-                        "file_management_request",
-                        {
-                            "action": "download_start",
-                            "hostname": record.get("hostname") or hostname,
-                            "agent_id": record.get("agent_id") or "",
-                            "requested_by": operator_id,
-                            "transfer_id": session["transfer_id"],
-                            "archive_name": archive_name,
-                            "archive_required": archive_required,
-                            "items": selections,
-                        },
-                    )
-                )
-            except Exception:
-                emitted = False
-        if not emitted:
-            _store().mark_failed(session["transfer_id"], "agent_unavailable")
-            return jsonify({"error": "agent_unavailable"}), 503
+        if worker_error:
+            payload, status = worker_error
+            return jsonify(payload), status
+        assert session is not None
         _service_log_event(
             "file_management_download_start hostname={hostname} operator={operator} remote={remote} transfer_id={transfer_id} items={items} archive={archive}".format(
                 hostname=record.get("hostname") or hostname,
@@ -1359,26 +1528,45 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/files/<hostname>/transfer/<transfer_id>/status", methods=["GET"])
     def get_transfer_status(hostname: str, transfer_id: str):
-        session, error = _validate_operator_transfer(hostname, transfer_id)
+        _user, record, _operator_id, error = _operator_context(hostname)
         if error:
             payload, status = error
             return jsonify(payload), status
-        assert session is not None
-        return jsonify(_transfer_status_snapshot(session))
+        assert record is not None
+        worker_route, route_error = _worker_route_for_record(adapters, record)
+        if route_error:
+            payload, status = route_error
+            return jsonify(payload), status
+        assert worker_route is not None
+        snapshot, worker_error = _get_worker_json(app, worker_route, f"/remote-files/transfers/{transfer_id}/status")
+        if worker_error:
+            payload, status = worker_error
+            return jsonify(payload), status
+        if _normalize_text((snapshot or {}).get("hostname")).lower() != _normalize_text(record.get("hostname") or hostname).lower():
+            return jsonify({"error": "transfer_not_found"}), 404
+        return jsonify(snapshot)
 
     @blueprint.route("/api/device/files/<hostname>/transfer/<transfer_id>/cancel", methods=["POST"])
     def cancel_transfer(hostname: str, transfer_id: str):
-        session, error = _validate_operator_transfer(hostname, transfer_id)
+        _user, record, _operator_id, error = _operator_context(hostname)
         if error:
             payload, status = error
             return jsonify(payload), status
-        assert session is not None
-        snapshot = _store().request_cancel(transfer_id)
-        if snapshot is None:
+        assert record is not None
+        worker_route, route_error = _worker_route_for_record(adapters, record)
+        if route_error:
+            payload, status = route_error
+            return jsonify(payload), status
+        assert worker_route is not None
+        snapshot, worker_error = _post_worker_json(app, worker_route, f"/remote-files/transfers/{transfer_id}/cancel", {}, timeout=10.0)
+        if worker_error:
+            payload, status = worker_error
+            return jsonify(payload), status
+        if _normalize_text((snapshot or {}).get("hostname")).lower() != _normalize_text(record.get("hostname") or hostname).lower():
             return jsonify({"error": "transfer_not_found"}), 404
         _service_log_event(
             "file_management_transfer_cancel hostname={hostname} operator={operator} remote={remote} transfer_id={transfer_id}".format(
-                hostname=_normalize_text(session.get("hostname")) or hostname,
+                hostname=record.get("hostname") or hostname,
                 operator=_normalize_text((_current_user(app) or {}).get("username")) or "unknown",
                 remote=_request_remote() or "-",
                 transfer_id=transfer_id,
@@ -1389,27 +1577,59 @@ def register_file_management(app, adapters: "EngineServiceAdapters") -> None:
 
     @blueprint.route("/api/device/files/<hostname>/transfer/<transfer_id>/content", methods=["GET"])
     def get_transfer_content(hostname: str, transfer_id: str):
-        session, error = _validate_operator_transfer(hostname, transfer_id)
+        _user, record, _operator_id, error = _operator_context(hostname)
         if error:
             payload, status = error
             return jsonify(payload), status
-        assert session is not None
-        if _normalize_text(session.get("direction")) != "download":
-            return jsonify({"error": "content_not_available"}), 404
-        if _normalize_text(session.get("status")) != "completed":
-            return jsonify({"error": "transfer_not_ready"}), 409
-        result_path = _normalize_text(session.get("result_path"))
-        if not result_path or not Path(result_path).is_file():
-            return jsonify({"error": "content_not_available"}), 404
-        response = send_file(
-            result_path,
-            as_attachment=True,
-            download_name=_normalize_text(session.get("result_name")) or Path(result_path).name,
-            mimetype=_normalize_text(session.get("result_mime")) or "application/octet-stream",
-            max_age=0,
+        assert record is not None
+        worker_route, route_error = _worker_route_for_record(adapters, record)
+        if route_error:
+            payload, status = route_error
+            return jsonify(payload), status
+        assert worker_route is not None
+        snapshot, worker_error = _get_worker_json(app, worker_route, f"/remote-files/transfers/{transfer_id}/status")
+        if worker_error:
+            payload, status = worker_error
+            return jsonify(payload), status
+        if _normalize_text((snapshot or {}).get("hostname")).lower() != _normalize_text(record.get("hostname") or hostname).lower():
+            return jsonify({"error": "transfer_not_found"}), 404
+        try:
+            worker_response = requests.get(
+                _worker_route_url(worker_route, f"/remote-files/transfers/{transfer_id}/content"),
+                headers=_worker_internal_headers(app),
+                stream=True,
+                timeout=900.0,
+            )
+        except Exception:
+            return jsonify({"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}), 503
+        if worker_response.status_code >= 400:
+            try:
+                payload = worker_response.json()
+            except Exception:
+                payload = {"error": "site_worker_error"}
+            finally:
+                worker_response.close()
+            return jsonify(payload), worker_response.status_code
+
+        def _stream():
+            try:
+                for chunk in worker_response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                worker_response.close()
+
+        headers = {}
+        for header in ("Content-Type", "Content-Length", "Content-Disposition"):
+            value = worker_response.headers.get(header)
+            if value:
+                headers[header] = value
+        return Response(
+            stream_with_context(_stream()),
+            status=worker_response.status_code,
+            headers=headers,
+            direct_passthrough=True,
         )
-        response.call_on_close(lambda: _store().delete_session(transfer_id))
-        return response
 
     @blueprint.route("/api/agent/files/transfers/<transfer_id>/upload-item/<item_id>", methods=["GET"])
     @require_device_auth(auth_manager)

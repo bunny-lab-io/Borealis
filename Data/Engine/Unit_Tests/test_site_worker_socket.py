@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import queue
@@ -355,6 +356,97 @@ def test_site_worker_internal_host_service_call_bridge(tmp_path: Path, monkeypat
             "timeout": 3.0,
         }
     ]
+
+
+def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+    emitted: list[dict] = []
+
+    def _emit_host_service_event(hostname, service_mode, event_name, payload):
+        emitted.append(
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": dict(payload or {}),
+            }
+        )
+        return True
+
+    monkeypatch.setattr(runtime, "emit_host_service_event", _emit_host_service_event)
+
+    response = runtime.app.test_client().post(
+        "/remote-files/transfers/upload",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        data={
+            "hostname": AGENT_HOSTNAME,
+            "device_guid": AGENT_GUID,
+            "agent_id": AGENT_ID,
+            "operator_id": "unit",
+            "target_path": r"C:\Temp",
+            "transfer_base_url": "https://engine.example/_borealis/site-workers/worker-socket-test",
+            "files": (io.BytesIO(b"payload"), "payload.txt"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 202
+    snapshot = response.get_json()
+    transfer_id = snapshot["transfer_id"]
+    stored_session = runtime._file_transfer_store.get_session(transfer_id)
+    assert stored_session is not None
+    assert stored_session["hostname"] == AGENT_HOSTNAME
+    assert emitted == [
+        {
+            "hostname": AGENT_HOSTNAME,
+            "service_mode": "system",
+            "event_name": "file_management_request",
+            "payload": {
+                "action": "upload_start",
+                "hostname": AGENT_HOSTNAME,
+                "agent_id": AGENT_ID,
+                "requested_by": "unit",
+                "transfer_id": transfer_id,
+                "target_path": r"C:\Temp",
+                "transfer_base_url": "https://engine.example/_borealis/site-workers/worker-socket-test",
+                "items": [
+                    {
+                        "item_id": stored_session["upload_items"][0]["item_id"],
+                        "client_key": "payload.txt",
+                        "name": "payload.txt",
+                        "relative_path": "payload.txt",
+                        "size_bytes": len(b"payload"),
+                        "overwrite_existing": False,
+                    }
+                ],
+            },
+        }
+    ]
+
+
+def test_site_worker_agent_upload_item_endpoint_serves_worker_local_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, token = _runtime(tmp_path)
+    snapshot = runtime._file_transfer_store.create_upload_session(
+        hostname=AGENT_HOSTNAME,
+        device_guid=AGENT_GUID,
+        agent_id=AGENT_ID,
+        operator_id="unit",
+        target_path=r"C:\Temp",
+        files=[type("_Storage", (), {"filename": "payload.txt", "save": lambda _self, dest: Path(dest).write_bytes(b"payload")})()],
+    )
+    session = runtime._file_transfer_store.get_session(snapshot["transfer_id"])
+    assert session is not None
+    item_id = session["upload_items"][0]["item_id"]
+
+    response = runtime.app.test_client().get(
+        f"/api/agent/files/transfers/{snapshot['transfer_id']}/upload-item/{item_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.data == b"payload"
 
 
 def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch) -> None:
