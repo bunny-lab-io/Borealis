@@ -155,6 +155,16 @@ def _emit_or_queue_socket_runtime_event(
             return True, "emitted"
     except Exception:
         return False, "error"
+    return _queue_socket_runtime_event(socket_runtime, hostname, service_mode, event_name, payload)
+
+
+def _queue_socket_runtime_event(
+    socket_runtime: SiteWorkerSocketRuntime,
+    hostname: str,
+    service_mode: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+) -> tuple[bool, str]:
     if not host_service_event_allows_pending(event_name):
         return False, "missing_socket"
     queue_event = getattr(socket_runtime, "queue_host_service_event", None)
@@ -218,6 +228,17 @@ def _call_or_queue_socket_runtime_event(
         except Exception:
             return False, "error", None
         if response is None:
+            queued, queue_state = _queue_socket_runtime_event(
+                socket_runtime,
+                hostname,
+                service_mode,
+                event_name,
+                payload,
+            )
+            if queued:
+                return True, "queued_after_no_response", None
+            if queue_state == "error":
+                return False, "error", None
             return False, "no_response", None
         if _socket_response_status(response) == "error":
             return False, "agent_error", response
@@ -647,7 +668,7 @@ def _run_agent_maintenance_item(
                 pass
         _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
         raise RuntimeError(error)
-    verb = "queued" if delivery_state == "queued" else "delivered" if delivery_state == "called" else "emitted"
+    verb = "queued" if delivery_state.startswith("queued") else "delivered" if delivery_state == "called" else "emitted"
     response_status = _socket_response_status(agent_response) if agent_response is not None else ""
     stdout = (
         f"Site worker {verb} agent maintenance operation_id={operation_id} "

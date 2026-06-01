@@ -385,6 +385,32 @@ def test_site_worker_agent_maintenance_queues_when_socket_reconnecting(monkeypat
     assert runtime.queued[0]["ttl_seconds"] == 180
 
 
+def test_site_worker_agent_maintenance_queues_after_registered_socket_timeout(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", raising=False)
+    runtime = _FakeSocketRuntime(
+        emit_result=False,
+        registered=True,
+        call_response=None,
+    )
+
+    delivered, delivery_state, response = site_worker._call_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "agent_maintenance_request",
+        {"operation_id": "op-maintenance-stale"},
+    )
+
+    assert delivered is True
+    assert delivery_state == "queued_after_no_response"
+    assert response is None
+    assert runtime.called[0]["event_name"] == "agent_maintenance_request"
+    assert runtime.emitted == []
+    assert runtime.queued[0]["event_name"] == "agent_maintenance_request"
+    assert runtime.queued[0]["payload"]["operation_id"] == "op-maintenance-stale"
+    assert runtime.queued[0]["ttl_seconds"] == 180
+
+
 def test_site_worker_local_dispatch_does_not_queue_unlisted_events() -> None:
     runtime = _FakeSocketRuntime(emit_result=False)
 
