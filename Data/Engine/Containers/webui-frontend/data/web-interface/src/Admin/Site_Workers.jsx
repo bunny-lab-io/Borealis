@@ -35,6 +35,8 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const WORKER_HISTORY_SECONDS = 300;
 const POLL_INTERVAL_MS = 3000;
+const BASE_ROW_HEIGHT = 44;
+const WORKER_REMOVE_SECONDS = 30;
 const AUTO_SIZE_COLUMNS = ["site_name", "container_id", "created_label", "status_label", "connected_devices", "assigned_tasks"];
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
@@ -246,6 +248,12 @@ function workStatusBucket(status) {
   return "pending";
 }
 
+function statusRank(status) {
+  const bucket = workStatusBucket(status);
+  const ranks = { running: 0, pending: 1, failed: 2, success: 3, skipped: 4 };
+  return ranks[bucket] ?? 5;
+}
+
 function emptyTaskCounts() {
   return {
     success: 0,
@@ -255,6 +263,37 @@ function emptyTaskCounts() {
     skipped: 0,
     total_tasks: 0,
   };
+}
+
+function terminalWorkerAgeSeconds(worker, nowSeconds) {
+  const stoppedAt = Number(worker?.stopped_at || worker?.updated_at || worker?.last_seen_at || worker?.started_at || 0);
+  if (stoppedAt > 0) return Math.max(0, Number(nowSeconds || 0) - stoppedAt);
+  return 0;
+}
+
+function workerStartedSeconds(worker) {
+  const startedAt = Number(worker?.started_at || 0);
+  return Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
+}
+
+function workerVisibleKey(worker) {
+  const workerGuid = String(worker?.worker_guid || "").trim();
+  if (workerGuid) return `guid:${workerGuid}`;
+  const containerName = String(worker?.container_name || "").trim();
+  if (containerName) return `container:${containerName}`;
+  const containerId = String(worker?.container_id || "").trim();
+  if (containerId) return `docker:${containerId}`;
+  return `site:${Number(worker?.site_id || 0)}:${workerStartedSeconds(worker)}:${String(worker?.status || "").trim()}`;
+}
+
+function isTerminalWorker(worker) {
+  const normalized = String(worker?.status || "").trim().toLowerCase();
+  return ["stopped", "lost"].includes(normalized);
+}
+
+function isActiveWorker(worker) {
+  const normalized = String(worker?.status || "").trim().toLowerCase();
+  return ["starting", "running", "idle"].includes(normalized);
 }
 
 function workIdentity(work) {
@@ -271,7 +310,22 @@ function workIdentity(work) {
   ].join(":");
 }
 
-function buildTaskCountsByWorker(payload) {
+function jobIdForWork(work) {
+  const taskLink = work?.task_link || {};
+  const value = work?.job_id || taskLink?.job_id || "";
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
+function jobPathForWork(work, jobId) {
+  const taskLink = work?.task_link || {};
+  const path = String(taskLink?.path || "").trim();
+  if (path) return path;
+  if (jobId) return `${APP_PATHS.job(jobId)}?tab=job_history`;
+  return "";
+}
+
+function buildTaskGroupsByWorker(payload) {
   const byWorker = new Map();
   const seen = new Set();
   const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
@@ -287,19 +341,59 @@ function buildTaskCountsByWorker(payload) {
     );
     if (!keys.size) return;
     const bucket = workStatusBucket(work?.status);
+    const jobId = jobIdForWork(work);
+    const jobKey = jobId ? `job:${jobId}` : `work:${work?.kind || "task"}:${work?.id || identity}`;
     keys.forEach((key) => {
-      const counts = byWorker.get(key) || emptyTaskCounts();
+      const workerGroups = byWorker.get(key) || new Map();
+      const group = workerGroups.get(jobKey) || {
+        key: jobKey,
+        job_id: jobId,
+        label: jobId ? `Job ID: ${jobId}` : "Task",
+        path: jobPathForWork(work, jobId),
+        counts: emptyTaskCounts(),
+        first_started_at: Number(work?.started_at || work?.created_at || 0),
+        last_activity_at: Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || 0),
+        rank: statusRank(work?.status),
+      };
+      const counts = group.counts;
       counts[bucket] = Number(counts[bucket] || 0) + 1;
       counts.total_tasks = Number(counts.total_tasks || 0) + 1;
-      byWorker.set(key, counts);
+      group.rank = Math.min(Number(group.rank ?? 5), statusRank(work?.status));
+      group.first_started_at = Math.min(
+        Number(group.first_started_at || work?.started_at || work?.created_at || 0),
+        Number(work?.started_at || work?.created_at || group.first_started_at || 0)
+      );
+      group.last_activity_at = Math.max(
+        Number(group.last_activity_at || 0),
+        Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || 0)
+      );
+      if (!group.path) group.path = jobPathForWork(work, jobId);
+      workerGroups.set(jobKey, group);
+      byWorker.set(key, workerGroups);
     });
   });
-  return byWorker;
+  const normalized = new Map();
+  byWorker.forEach((groups, key) => {
+    normalized.set(
+      key,
+      Array.from(groups.values()).sort((left, right) => {
+        if (left.rank !== right.rank) return left.rank - right.rank;
+        if (Number(left.job_id || 0) && Number(right.job_id || 0) && Number(left.job_id) !== Number(right.job_id)) {
+          return Number(left.job_id) - Number(right.job_id);
+        }
+        return Number(right.last_activity_at || 0) - Number(left.last_activity_at || 0);
+      })
+    );
+  });
+  return normalized;
 }
 
-function workerStatusMeta(worker, nowSeconds, idleTtlSeconds) {
+function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds = null) {
   const normalized = String(worker?.status || "").trim().toLowerCase();
   const connected = connectedDeviceCount(worker);
+  if (removalRemainingSeconds != null) {
+    return { label: `Removing in ${Math.max(0, Math.ceil(removalRemainingSeconds))}s`, tone: "stopped" };
+  }
   if (connected > 0 && !["lost", "stopped", "failed"].includes(normalized)) {
     return { label: "Running", tone: "running" };
   }
@@ -320,19 +414,54 @@ function workerStatusMeta(worker, nowSeconds, idleTtlSeconds) {
 
 function normalizeRows(payload, nowSeconds) {
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
-  const taskCountsByWorker = buildTaskCountsByWorker(payload);
+  const taskGroupsByWorker = buildTaskGroupsByWorker(payload);
   const idleTtlSeconds = Math.max(30, Number(payload?.worker_idle_ttl_seconds || 60));
+  const newestActiveBySite = new Map();
+  workers.forEach((worker) => {
+    const siteId = Number(worker?.site_id || 0);
+    if (siteId <= 0 || !isActiveWorker(worker)) return;
+    const startedAt = workerStartedSeconds(worker);
+    const key = workerVisibleKey(worker);
+    const existing = newestActiveBySite.get(siteId);
+    if (!existing || startedAt > existing.startedAt || (startedAt === existing.startedAt && key > existing.key)) {
+      newestActiveBySite.set(siteId, { key, startedAt });
+    }
+  });
+  const newestTerminalBySite = new Map();
+  workers.forEach((worker) => {
+    const siteId = Number(worker?.site_id || 0);
+    if (siteId <= 0 || newestActiveBySite.has(siteId) || !isTerminalWorker(worker)) return;
+    if (terminalWorkerAgeSeconds(worker, nowSeconds) >= WORKER_REMOVE_SECONDS) return;
+    const startedAt = workerStartedSeconds(worker);
+    const key = workerVisibleKey(worker);
+    const existing = newestTerminalBySite.get(siteId);
+    if (!existing || startedAt > existing.startedAt || (startedAt === existing.startedAt && key > existing.key)) {
+      newestTerminalBySite.set(siteId, { key, startedAt });
+    }
+  });
   return workers
     .filter((worker) => Number(worker?.site_id || 0) > 0)
+    .filter((worker) => {
+      const siteId = Number(worker?.site_id || 0);
+      const key = workerVisibleKey(worker);
+      const active = newestActiveBySite.get(siteId);
+      if (active) return key === active.key;
+      if (!isTerminalWorker(worker)) return true;
+      const terminal = newestTerminalBySite.get(siteId);
+      return Boolean(terminal && key === terminal.key);
+    })
     .map((worker, index) => {
       const siteId = Number(worker?.site_id || 0);
       const workerGuid = String(worker?.worker_guid || "").trim();
       const containerName = String(worker?.container_name || "").trim();
-      const status = workerStatusMeta(worker, nowSeconds, idleTtlSeconds);
-      const taskCounts =
-        (workerGuid && taskCountsByWorker.get(workerGuid)) ||
-        (containerName && taskCountsByWorker.get(containerName)) ||
-        emptyTaskCounts();
+      const removalRemainingSeconds = isTerminalWorker(worker)
+        ? WORKER_REMOVE_SECONDS - terminalWorkerAgeSeconds(worker, nowSeconds)
+        : null;
+      const status = workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds);
+      const taskGroups =
+        (workerGuid && taskGroupsByWorker.get(workerGuid)) ||
+        (containerName && taskGroupsByWorker.get(containerName)) ||
+        [];
       const containerId = String(worker?.container_id || "").trim();
       return {
         id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
@@ -346,7 +475,7 @@ function normalizeRows(payload, nowSeconds) {
         status_label: status.label,
         status_tone: status.tone,
         connected_devices: connectedDeviceCount(worker),
-        assigned_tasks: taskCounts,
+        assigned_task_groups: taskGroups,
         raw: worker,
       };
     })
@@ -384,17 +513,10 @@ function StatusPill({ label, tone }) {
 }
 
 function TaskResultsBar({ counts }) {
-  const total = Math.max(0, Number(counts?.total_tasks || 0));
-  if (total <= 0) {
-    return (
-      <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-        No assigned tasks
-      </Typography>
-    );
-  }
+  const total = Math.max(1, Number(counts?.total_tasks || 0));
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35, lineHeight: 1.7, fontFamily: gridFontFamily }}>
-      <Box sx={{ display: "flex", borderRadius: 1, overflow: "hidden", width: 240, maxWidth: "100%", height: 6 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35, lineHeight: 1.55, fontFamily: gridFontFamily, minWidth: 0 }}>
+      <Box sx={{ display: "flex", borderRadius: 1, overflow: "hidden", width: 220, maxWidth: "100%", height: 6 }}>
         {TASK_SECTIONS.map((section) => {
           const value = Number(counts?.[section.key] || 0);
           if (!value) return null;
@@ -548,7 +670,75 @@ function ConnectedDevicesCell(params) {
 }
 
 function AssignedTasksCell(params) {
-  return <TaskResultsBar counts={params?.data?.assigned_tasks || emptyTaskCounts()} />;
+  const groups = Array.isArray(params?.data?.assigned_task_groups) ? params.data.assigned_task_groups : [];
+  const navigate = params?.context?.navigate;
+  if (!groups.length) {
+    return (
+      <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+        No assigned tasks
+      </Typography>
+    );
+  }
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", justifyContent: "center", width: "100%", minHeight: "100%", py: 0.35 }}>
+      {groups.map((group) => (
+        <Box
+          key={group.key}
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "112px minmax(0, 1fr)",
+            alignItems: "center",
+            columnGap: 1.2,
+            minHeight: BASE_ROW_HEIGHT - 2,
+            width: "100%",
+            minWidth: 0,
+          }}
+        >
+          <Box
+            component="button"
+            type="button"
+            disabled={!group.path}
+            onMouseDown={stopGridEvent}
+            onClick={(event) => {
+              stopGridEvent(event);
+              if (group.path && navigate) navigate(String(group.path));
+            }}
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              p: 0,
+              border: 0,
+              background: "transparent",
+              color: BOREALIS_LINK_COLOR,
+              cursor: group.path ? "pointer" : "default",
+              font: "inherit",
+              fontSize: "0.8rem",
+              fontWeight: 700,
+              lineHeight: 1.4,
+              textDecoration: "none",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              transition: "color 160ms ease",
+              "&:hover": group.path
+                ? {
+                    color: BOREALIS_LINK_HOVER_COLOR,
+                    textDecoration: "underline",
+                  }
+                : undefined,
+              "&:disabled": {
+                opacity: 0.72,
+              },
+            }}
+          >
+            {group.label}
+          </Box>
+          <TaskResultsBar counts={group.counts || emptyTaskCounts()} />
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 export default function SiteWorkers() {
@@ -756,6 +946,9 @@ export default function SiteWorkers() {
         filter: false,
         suppressHeaderMenuButton: true,
         suppressHeaderContextMenu: true,
+        cellRendererParams: {
+          suppressMouseEventHandling: () => true,
+        },
         cellRenderer: AssignedTasksCell,
       },
     ],
@@ -816,7 +1009,10 @@ export default function SiteWorkers() {
               defaultColDef={defaultColDef}
               context={gridContext}
               theme={SITE_WORKER_GRID_THEME}
-              rowHeight={44}
+              rowHeight={BASE_ROW_HEIGHT}
+              getRowHeight={(params) =>
+                BASE_ROW_HEIGHT * Math.max(1, Array.isArray(params?.data?.assigned_task_groups) ? params.data.assigned_task_groups.length : 0)
+              }
               headerHeight={44}
               animateRows
               pagination
