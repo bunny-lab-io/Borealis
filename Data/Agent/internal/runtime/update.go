@@ -29,15 +29,7 @@ func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, erro
 		a.logger.Printf("update operation state failed: %v", err)
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
-	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
-		markUpdateOperationStatus(a.configPath, "failed", err.Error())
-		a.logger.Printf("local updater start failed: %v", err)
-		return map[string]any{
-			"status": "error",
-			"detail": err.Error(),
-		}, nil
-	}
-	markUpdateOperationStatus(a.configPath, "updater_started", "")
+	a.startLocalUpdaterAfterAck("update request")
 	return map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
@@ -74,19 +66,32 @@ func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) 
 		a.logger.Printf("release channel update failed: %v", err)
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
-	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
-		markUpdateOperationStatus(a.configPath, "failed", err.Error())
-		a.logger.Printf("local updater start failed after release channel change: %v", err)
-		return map[string]any{"status": "error", "detail": err.Error()}, nil
-	}
-	markUpdateOperationStatus(a.configPath, "updater_started", "")
 	a.logger.Printf("release channel updated release_channel=%s branch=%s operation_id=%s", operation.TargetChannel, operation.TargetBranch, operation.OperationID)
+	a.startLocalUpdaterAfterAck("release channel change")
 	return map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
 		"release_channel": operation.TargetChannel,
 		"branch":          operation.TargetBranch,
 	}, nil
+}
+
+func (a *Agent) startLocalUpdaterAfterAck(reason string) {
+	if a == nil {
+		return
+	}
+	configPath := a.configPath
+	logger := a.logger
+	go func() {
+		if err := startLocalUpdaterForRequest(configPath); err != nil {
+			markUpdateOperationStatus(configPath, "failed", err.Error())
+			if logger != nil {
+				logger.Printf("local updater start failed after %s: %v", reason, err)
+			}
+			return
+		}
+		markUpdateOperationStatus(configPath, "updater_started", "")
+	}()
 }
 
 func releaseChannelFromPayload(payload map[string]any) string {

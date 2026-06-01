@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 )
@@ -14,9 +15,9 @@ import (
 func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
 	originalStarter := startLocalUpdaterForRequest
 	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
-	startedUpdater := false
+	startedUpdater := make(chan struct{}, 1)
 	startLocalUpdaterForRequest = func(configPath string) error {
-		startedUpdater = true
+		startedUpdater <- struct{}{}
 		return nil
 	}
 
@@ -47,13 +48,22 @@ func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
 	if body["release_channel"] != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("release_channel = %v", body["release_channel"])
 	}
-	if !startedUpdater {
+	select {
+	case <-startedUpdater:
+	case <-time.After(time.Second):
 		t.Fatalf("local updater was not started")
 	}
 
-	loaded, err := agentconfig.Load(configPath)
-	if err != nil {
-		t.Fatal(err)
+	var loaded agentconfig.AgentConfig
+	for i := 0; i < 20; i++ {
+		loaded, err = agentconfig.Load(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Agent.Update.OperationID != "" && loaded.Agent.Update.Status == "updater_started" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelUnstable {
 		t.Fatalf("stored release_channel = %q", loaded.Agent.ReleaseChannel)
@@ -88,6 +98,82 @@ func TestHandleReleaseChannelChangedRejectsMissingChannel(t *testing.T) {
 	if body["status"] != "error" || body["detail"] != "release_channel missing" {
 		t.Fatalf("unexpected response: %#v", body)
 	}
+}
+
+func TestHandleAgentMaintenanceRequestAcksBeforeUpdaterStartCompletes(t *testing.T) {
+	originalStarter := startLocalUpdaterForRequest
+	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	startLocalUpdaterForRequest = func(configPath string) error {
+		started <- struct{}{}
+		<-release
+		return nil
+	}
+
+	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.com"
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	responseCh := make(chan any, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
+			"operation_id":    "op-ack-first",
+			"release_channel": "unstable",
+			"branch":          "feature/rewrite-api-backend-in-golang",
+			"kind":            "update_now",
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		responseCh <- response
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatalf("local updater was not started")
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("handler error: %v", err)
+	case response := <-responseCh:
+		body := response.(map[string]any)
+		if body["status"] != "ok" || body["operation_id"] != "op-ack-first" {
+			t.Fatalf("unexpected response: %#v", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("handler waited for updater start to finish before ack")
+	}
+
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Update.OperationID != "op-ack-first" || loaded.Agent.Update.Status != "config_written" {
+		t.Fatalf("update operation should be written before updater completion: %#v", loaded.Agent.Update)
+	}
+	close(release)
+	for i := 0; i < 20; i++ {
+		loaded, err = agentconfig.Load(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Agent.Update.Status == "updater_started" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("update operation did not reach updater_started: %#v", loaded.Agent.Update)
 }
 
 func TestReleaseChannelFromPayloadAliases(t *testing.T) {
