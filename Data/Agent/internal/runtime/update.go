@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	agenttransport "github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
 
 var startLocalUpdaterForRequest = startLocalUpdater
@@ -29,13 +30,13 @@ func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, erro
 		a.logger.Printf("update operation state failed: %v", err)
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
-	a.startLocalUpdaterAfterAck("update request")
-	return map[string]any{
+	response := map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
 		"release_channel": operation.TargetChannel,
 		"branch":          operation.TargetBranch,
-	}, nil
+	}
+	return a.responseWithUpdaterAfterAck(response, "update request"), nil
 }
 
 func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (any, error) {
@@ -67,16 +68,25 @@ func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) 
 		return map[string]any{"status": "error", "detail": err.Error()}, nil
 	}
 	a.logger.Printf("release channel updated release_channel=%s branch=%s operation_id=%s", operation.TargetChannel, operation.TargetBranch, operation.OperationID)
-	a.startLocalUpdaterAfterAck("release channel change")
-	return map[string]any{
+	response := map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
 		"release_channel": operation.TargetChannel,
 		"branch":          operation.TargetBranch,
-	}, nil
+	}
+	return a.responseWithUpdaterAfterAck(response, "release channel change"), nil
 }
 
-func (a *Agent) startLocalUpdaterAfterAck(reason string) {
+func (a *Agent) responseWithUpdaterAfterAck(response map[string]any, reason string) any {
+	if a == nil {
+		return response
+	}
+	return agenttransport.NewAfterAckResponse(response, func() {
+		a.startLocalUpdaterAsync(reason)
+	})
+}
+
+func (a *Agent) startLocalUpdaterAsync(reason string) {
 	if a == nil {
 		return
 	}

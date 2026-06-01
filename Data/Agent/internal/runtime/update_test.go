@@ -41,7 +41,7 @@ func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := response.(map[string]any)
+	body, afterAck := responseBody(t, response)
 	if body["status"] != "ok" {
 		t.Fatalf("status = %v", body["status"])
 	}
@@ -50,8 +50,14 @@ func TestHandleReleaseChannelChangedStoresUnstableBranch(t *testing.T) {
 	}
 	select {
 	case <-startedUpdater:
+		t.Fatalf("local updater started before ack callback")
+	case <-time.After(50 * time.Millisecond):
+	}
+	go afterAck()
+	select {
+	case <-startedUpdater:
 	case <-time.After(time.Second):
-		t.Fatalf("local updater was not started")
+		t.Fatalf("local updater was not started after ack callback")
 	}
 
 	var loaded agentconfig.AgentConfig
@@ -100,7 +106,7 @@ func TestHandleReleaseChannelChangedRejectsMissingChannel(t *testing.T) {
 	}
 }
 
-func TestHandleAgentMaintenanceRequestAcksBeforeUpdaterStartCompletes(t *testing.T) {
+func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T) {
 	originalStarter := startLocalUpdaterForRequest
 	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
 	started := make(chan struct{}, 1)
@@ -122,37 +128,23 @@ func TestHandleAgentMaintenanceRequestAcksBeforeUpdaterStartCompletes(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	responseCh := make(chan any, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
-			"operation_id":    "op-ack-first",
-			"release_channel": "unstable",
-			"branch":          "feature/rewrite-api-backend-in-golang",
-			"kind":            "update_now",
-		})
-		if err != nil {
-			errCh <- err
-			return
-		}
-		responseCh <- response
-	}()
-
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatalf("local updater was not started")
+	response, err := agent.handleAgentMaintenanceRequest(context.Background(), map[string]any{
+		"operation_id":    "op-ack-first",
+		"release_channel": "unstable",
+		"branch":          "feature/rewrite-api-backend-in-golang",
+		"kind":            "update_now",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, afterAck := responseBody(t, response)
+	if body["status"] != "ok" || body["operation_id"] != "op-ack-first" {
+		t.Fatalf("unexpected response: %#v", body)
 	}
 	select {
-	case err := <-errCh:
-		t.Fatalf("handler error: %v", err)
-	case response := <-responseCh:
-		body := response.(map[string]any)
-		if body["status"] != "ok" || body["operation_id"] != "op-ack-first" {
-			t.Fatalf("unexpected response: %#v", body)
-		}
-	case <-time.After(time.Second):
-		t.Fatalf("handler waited for updater start to finish before ack")
+	case <-started:
+		t.Fatalf("local updater started before ack callback")
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	loaded, err := agentconfig.Load(configPath)
@@ -161,6 +153,12 @@ func TestHandleAgentMaintenanceRequestAcksBeforeUpdaterStartCompletes(t *testing
 	}
 	if loaded.Agent.Update.OperationID != "op-ack-first" || loaded.Agent.Update.Status != "config_written" {
 		t.Fatalf("update operation should be written before updater completion: %#v", loaded.Agent.Update)
+	}
+	go afterAck()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatalf("local updater was not started after ack callback")
 	}
 	close(release)
 	for i := 0; i < 20; i++ {
@@ -174,6 +172,25 @@ func TestHandleAgentMaintenanceRequestAcksBeforeUpdaterStartCompletes(t *testing
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("update operation did not reach updater_started: %#v", loaded.Agent.Update)
+}
+
+type testAfterAckResponse interface {
+	AckPayload() any
+	AfterAck()
+}
+
+func responseBody(t *testing.T, response any) (map[string]any, func()) {
+	t.Helper()
+	afterAck := func() {}
+	if wrapped, ok := response.(testAfterAckResponse); ok {
+		afterAck = wrapped.AfterAck
+		response = wrapped.AckPayload()
+	}
+	body, ok := response.(map[string]any)
+	if !ok {
+		t.Fatalf("response is %T", response)
+	}
+	return body, afterAck
 }
 
 func TestReleaseChannelFromPayloadAliases(t *testing.T) {

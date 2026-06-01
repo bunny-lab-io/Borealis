@@ -18,6 +18,25 @@ import (
 
 type Handler func(context.Context, any) (any, error)
 
+type AfterAckResponse struct {
+	payload any
+	after   func()
+}
+
+func NewAfterAckResponse(payload any, after func()) AfterAckResponse {
+	return AfterAckResponse{payload: payload, after: after}
+}
+
+func (r AfterAckResponse) AckPayload() any {
+	return r.payload
+}
+
+func (r AfterAckResponse) AfterAck() {
+	if r.after != nil {
+		r.after()
+	}
+}
+
 type Client struct {
 	baseURL     string
 	headers     map[string]string
@@ -179,15 +198,24 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 			return nil
 		}
 		response, handlerErr := handler(ctx, payload)
+		afterAck := afterAckCallback(response)
+		response = ackPayload(response)
 		if ackID != "" {
 			if handlerErr != nil {
 				response = map[string]any{"error": "handler_error", "message": handlerErr.Error()}
+				afterAck = nil
 			}
 			ackPayload, err := json.Marshal([]any{response})
 			if err != nil {
 				return err
 			}
-			return c.write("43" + ackID + string(ackPayload))
+			if err := c.write("43" + ackID + string(ackPayload)); err != nil {
+				return err
+			}
+			if afterAck != nil {
+				go afterAck()
+			}
+			return nil
 		}
 		if handlerErr != nil {
 			return handlerErr
@@ -249,6 +277,25 @@ func socketURL(baseURL string) (string, error) {
 	}
 	parsed.RawQuery = "EIO=4&transport=websocket"
 	return parsed.String(), nil
+}
+
+type afterAckResponder interface {
+	AckPayload() any
+	AfterAck()
+}
+
+func ackPayload(response any) any {
+	if wrapped, ok := response.(afterAckResponder); ok {
+		return wrapped.AckPayload()
+	}
+	return response
+}
+
+func afterAckCallback(response any) func() {
+	if wrapped, ok := response.(afterAckResponder); ok {
+		return wrapped.AfterAck
+	}
+	return nil
 }
 
 func encodeEventPacket(event string, payload any) (string, error) {

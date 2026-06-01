@@ -82,6 +82,31 @@ func TestConnectAcksHandledEvent(t *testing.T) {
 	}
 }
 
+func TestConnectRunsAfterAckResponseCallback(t *testing.T) {
+	afterAckCh := make(chan struct{}, 1)
+	ack := runSocketAckScenario(t, `4211["agent_maintenance_request",{"operation_id":"op-1"}]`, func(client *Client) {
+		client.On("agent_maintenance_request", func(ctx context.Context, payload any) (any, error) {
+			return NewAfterAckResponse(
+				map[string]any{"status": "ok", "operation_id": "op-1"},
+				func() { afterAckCh <- struct{}{} },
+			), nil
+		})
+	})
+
+	if !strings.HasPrefix(ack, "4311") {
+		t.Fatalf("ack = %q, want ack id 11", ack)
+	}
+	values := decodeAckPayload(t, strings.TrimPrefix(ack, "4311"))
+	if values[0]["status"] != "ok" || values[0]["operation_id"] != "op-1" {
+		t.Fatalf("unexpected ack payload: %#v", values)
+	}
+	select {
+	case <-afterAckCh:
+	case <-time.After(time.Second):
+		t.Fatal("after-ack callback did not run")
+	}
+}
+
 func TestConnectAcksUnsupportedEvent(t *testing.T) {
 	ack := runSocketAckScenario(t, `429["missing_event",{}]`, nil)
 	if ack != `439[{"error":"unsupported_event"}]` {
