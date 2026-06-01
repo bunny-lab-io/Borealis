@@ -36,11 +36,12 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 
 const WORKER_HISTORY_SECONDS = 300;
 const POLL_INTERVAL_MS = 3000;
-const BASE_ROW_HEIGHT = 44;
+const BASE_ROW_HEIGHT = 56;
 const WORKER_REMOVE_SECONDS = 30;
 const AUTO_SIZE_COLUMNS = ["site_name", "container_id", "created_label", "connected_devices", "assigned_task_groups"];
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
+const PLACEHOLDER_TEXT_COLOR = "rgba(148,163,184,0.52)";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
@@ -197,6 +198,12 @@ const TASK_SECTIONS = [
   { key: "skipped", label: "Skipped", color: "#f0c36d" },
 ];
 
+const CONNECTION_SECTIONS = [
+  { key: "connected", label: "Connected", color: "#00d18c" },
+  { key: "disconnected", label: "Disconnected", color: "#f0c36d" },
+  { key: "offline", label: "Offline", color: "#999999" },
+];
+
 function stopGridEvent(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
@@ -226,6 +233,16 @@ function epochLabel(value) {
   } catch {
     return "not started";
   }
+}
+
+function durationLabel(seconds) {
+  const value = Math.max(0, Math.ceil(Number(seconds || 0)));
+  if (value >= 60) {
+    const minutes = Math.floor(value / 60);
+    const remainder = value % 60;
+    return `${minutes}m${String(remainder).padStart(2, "0")}s`;
+  }
+  return `${value}s`;
 }
 
 function siteNameFor(payload, siteId) {
@@ -266,6 +283,37 @@ function siteDeviceCount(payload, worker, siteId) {
   return Number.isFinite(mapped) && mapped > 0 ? mapped : 0;
 }
 
+function siteOnlineDeviceCount(payload, worker, siteId, connectedCount = 0) {
+  const direct = [
+    worker?.site_online_device_count,
+    worker?.siteOnlineDeviceCount,
+    worker?.online_device_count,
+    worker?.onlineDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const counts = payload?.site_online_device_counts || payload?.siteOnlineDeviceCounts || {};
+  const mapped = Number(counts[String(siteId)] || counts[siteId] || 0);
+  if (Number.isFinite(mapped) && mapped > 0) return mapped;
+  return Math.max(0, Number(connectedCount || 0));
+}
+
+function deviceConnectionBreakdown(payload, worker, siteId, connectedDevices, siteDevices) {
+  const connected = Math.max(0, Number(connectedDevices || 0));
+  const total = Math.max(0, Number(siteDevices || 0), connected);
+  const online = Math.max(connected, Math.min(total, siteOnlineDeviceCount(payload, worker, siteId, connected)));
+  const disconnected = Math.max(0, online - connected);
+  const offline = Math.max(0, total - connected - disconnected);
+  return {
+    connected_devices: connected,
+    site_device_count: total,
+    site_online_device_count: online,
+    disconnected_devices: disconnected,
+    offline_devices: offline,
+  };
+}
+
 function siteRecords(payload) {
   const sites = Array.isArray(payload?.sites) ? payload.sites : [];
   if (sites.length) {
@@ -275,25 +323,30 @@ function siteRecords(payload) {
         if (!Number.isFinite(siteId) || siteId <= 0) return null;
         const name = String(site?.name || site?.site_name || "").trim() || `Site ${siteId}`;
         const deviceCount = Number(site?.device_count || site?.site_device_count || 0);
+        const onlineDeviceCount = Number(site?.online_device_count || site?.site_online_device_count || 0);
         return {
           site_id: siteId,
           site_name: name,
           site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+          site_online_device_count: Number.isFinite(onlineDeviceCount) && onlineDeviceCount > 0 ? onlineDeviceCount : 0,
         };
       })
       .filter(Boolean);
   }
   const names = payload?.site_names || {};
   const counts = payload?.site_device_counts || {};
+  const onlineCounts = payload?.site_online_device_counts || {};
   return Object.entries(names)
     .map(([siteIdRaw, nameRaw]) => {
       const siteId = Number(siteIdRaw || 0);
       if (!Number.isFinite(siteId) || siteId <= 0) return null;
       const deviceCount = Number(counts[String(siteId)] || counts[siteId] || 0);
+      const onlineDeviceCount = Number(onlineCounts[String(siteId)] || onlineCounts[siteId] || 0);
       return {
         site_id: siteId,
         site_name: String(nameRaw || "").trim() || `Site ${siteId}`,
         site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+        site_online_device_count: Number.isFinite(onlineDeviceCount) && onlineDeviceCount > 0 ? onlineDeviceCount : 0,
       };
     })
     .filter(Boolean);
@@ -472,16 +525,16 @@ function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSe
   const normalized = String(worker?.status || "").trim().toLowerCase();
   const connected = connectedDeviceCount(worker);
   if (removalRemainingSeconds != null) {
-    return { label: `Removing in ${Math.max(0, Math.ceil(removalRemainingSeconds))}s`, tone: "stopped" };
+    return { label: `Removing in ${durationLabel(removalRemainingSeconds)}`, tone: "stopped" };
   }
   if (connected > 0 && !["lost", "stopped", "failed"].includes(normalized)) {
     return { label: "Running", tone: "running" };
   }
   if (normalized === "idle") {
     const idleSince = Number(worker?.idle_since || nowSeconds);
-    const remaining = Math.max(0, Math.ceil(Number(idleTtlSeconds || 60) - Math.max(0, nowSeconds - idleSince)));
+    const remaining = Math.max(0, Math.ceil(Number(idleTtlSeconds || 300) - Math.max(0, nowSeconds - idleSince)));
     if (remaining > 0) {
-      return { label: `Tearing Down in ${remaining}s`, tone: "idle" };
+      return { label: `Tearing Down in ${durationLabel(remaining)}`, tone: "idle" };
     }
     return { label: "Idle", tone: "idle" };
   }
@@ -495,7 +548,7 @@ function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSe
 function normalizeRows(payload, nowSeconds) {
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
   const taskGroupsByWorker = buildTaskGroupsByWorker(payload);
-  const idleTtlSeconds = Math.max(30, Number(payload?.worker_idle_ttl_seconds || 60));
+  const idleTtlSeconds = Math.max(300, Number(payload?.worker_idle_ttl_seconds || 300));
   const newestActiveBySite = new Map();
   workers.forEach((worker) => {
     const siteId = Number(worker?.site_id || 0);
@@ -546,6 +599,7 @@ function normalizeRows(payload, nowSeconds) {
       const containerId = String(worker?.container_id || "").trim();
       const connectedDevices = connectedDeviceCount(worker);
       const siteDevices = siteDeviceCount(payload, worker, siteId);
+      const deviceCounts = deviceConnectionBreakdown(payload, worker, siteId, connectedDevices, siteDevices);
       const row = {
         id: `site-worker-site-${siteId}`,
         worker_instance_id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
@@ -559,8 +613,11 @@ function normalizeRows(payload, nowSeconds) {
         status_label: status.label,
         status_tone: status.tone,
         status_sort: statusSortRank(status.label, status.tone),
-        connected_devices: connectedDevices,
-        site_device_count: siteDevices,
+        connected_devices: deviceCounts.connected_devices,
+        site_device_count: deviceCounts.site_device_count,
+        site_online_device_count: deviceCounts.site_online_device_count,
+        disconnected_devices: deviceCounts.disconnected_devices,
+        offline_devices: deviceCounts.offline_devices,
         assigned_task_groups: taskGroups,
         raw: worker,
       };
@@ -569,6 +626,8 @@ function normalizeRows(payload, nowSeconds) {
   siteRecords(payload).forEach((site) => {
     const siteId = Number(site?.site_id || 0);
     if (siteId <= 0 || rowsBySite.has(siteId)) return;
+    const siteDevices = Math.max(0, Number(site?.site_device_count || 0));
+    const onlineDevices = Math.max(0, Math.min(siteDevices, Number(site?.site_online_device_count || 0)));
     rowsBySite.set(siteId, {
       id: `site-worker-site-${siteId}`,
       worker_instance_id: `site-placeholder-${siteId}`,
@@ -583,7 +642,10 @@ function normalizeRows(payload, nowSeconds) {
       status_tone: "no_online",
       status_sort: statusSortRank("No Online Devices", "no_online"),
       connected_devices: 0,
-      site_device_count: Math.max(0, Number(site?.site_device_count || 0)),
+      site_device_count: siteDevices,
+      site_online_device_count: onlineDevices,
+      disconnected_devices: onlineDevices,
+      offline_devices: Math.max(0, siteDevices - onlineDevices),
       assigned_task_groups: [],
       raw: null,
     });
@@ -712,13 +774,14 @@ function ContainerCell(params) {
   const onRecreate = params?.context?.onRecreate;
   const busy = params?.context?.recreateBusyId === row.worker_guid;
   const canRecreate = Boolean(row.worker_guid);
+  const muted = row.container_id === "Unknown" || row.container_id === "N/A";
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.8, width: "100%", minWidth: 0 }}>
       <Typography
         component="span"
         title={row.container_id_full || row.container_name || row.container_id}
         sx={{
-          color: row.container_id === "Unknown" ? "rgba(148,163,184,0.78)" : "#f4f7ff",
+          color: muted ? PLACEHOLDER_TEXT_COLOR : "#f4f7ff",
           fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace',
           fontSize: "0.82rem",
           lineHeight: 1.4,
@@ -776,21 +839,102 @@ function ContainerCell(params) {
   );
 }
 
+function CreatedCell(params) {
+  const value = String(params?.data?.created_label || "").trim() || "N/A";
+  return (
+    <Typography
+      component="span"
+      sx={{
+        color: value === "N/A" ? PLACEHOLDER_TEXT_COLOR : "#f4f7ff",
+        fontSize: "0.84rem",
+        fontWeight: 700,
+        lineHeight: 1.35,
+        textAlign: "center",
+      }}
+    >
+      {value}
+    </Typography>
+  );
+}
+
 function StatusCell(params) {
   return <StatusPill label={params?.data?.status_label || "Unknown"} tone={params?.data?.status_tone || "unknown"} />;
 }
 
 function ConnectedDevicesCell(params) {
   const connected = Number(params?.data?.connected_devices || 0);
-  const total = Math.max(0, Number(params?.data?.site_device_count || 0));
+  const disconnected = Number(params?.data?.disconnected_devices || 0);
+  const offline = Number(params?.data?.offline_devices || 0);
+  const total = Math.max(0, Number(params?.data?.site_device_count || 0), connected + disconnected + offline);
+  const counts = { connected, disconnected, offline };
   return (
-    <Typography sx={{ color: "#f4f7ff", fontSize: "0.86rem", fontWeight: 700, lineHeight: 1.3 }}>
-      {connected}
-      <Box component="span" sx={{ color: "rgba(148,163,184,0.52)", fontWeight: 700 }}>
-        {" / "}
-        {total} Devices
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 0.35,
+        width: "100%",
+        minWidth: 0,
+        lineHeight: 1.25,
+      }}
+    >
+      <Typography sx={{ color: "#f4f7ff", fontSize: "0.78rem", fontWeight: 800, lineHeight: 1.1, textAlign: "center" }}>
+        {connected}
+        <Box component="span" sx={{ color: PLACEHOLDER_TEXT_COLOR, fontWeight: 800 }}>
+          {" / "}
+          {total} Devices
+        </Box>
+      </Typography>
+      <Box
+        sx={{
+          display: "flex",
+          borderRadius: 1,
+          overflow: "hidden",
+          width: 220,
+          maxWidth: "100%",
+          height: 6,
+          backgroundColor: "rgba(148,163,184,0.18)",
+        }}
+      >
+        {CONNECTION_SECTIONS.map((section) => {
+          const value = Number(counts[section.key] || 0);
+          if (!value || total <= 0) return null;
+          return (
+            <Box
+              key={section.key}
+              component="span"
+              sx={{
+                display: "block",
+                height: "100%",
+                width: `${Math.max(4, Math.round((value / total) * 100))}%`,
+                backgroundColor: section.color,
+              }}
+            />
+          );
+        })}
       </Box>
-    </Typography>
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          columnGap: 0.7,
+          rowGap: 0.1,
+          color: "#aaa",
+          fontSize: 10,
+          fontFamily: gridFontFamily,
+        }}
+      >
+        {CONNECTION_SECTIONS.filter((section) => Number(counts[section.key] || 0) > 0).map((section) => (
+          <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.35 }}>
+            <Box component="span" sx={{ width: 5, height: 5, borderRadius: 1, backgroundColor: section.color }} />
+            {counts[section.key]} {section.label}
+          </Box>
+        ))}
+      </Box>
+    </Box>
   );
 }
 
@@ -1081,6 +1225,7 @@ export default function SiteWorkers() {
         field: "container_id",
         minWidth: 260,
         flex: 1.05,
+        cellClass: "center-col",
         cellRendererParams: {
           suppressMouseEventHandling: () => true,
         },
@@ -1092,6 +1237,7 @@ export default function SiteWorkers() {
         minWidth: 185,
         flex: 0.75,
         cellClass: "center-col",
+        cellRenderer: CreatedCell,
       },
       {
         headerName: "Status",
@@ -1104,8 +1250,8 @@ export default function SiteWorkers() {
       {
         headerName: "Connected Devices",
         field: "connected_devices",
-        minWidth: 168,
-        flex: 0.55,
+        minWidth: 250,
+        flex: 0.85,
         cellClass: "auto-col-tight center-col",
         cellRenderer: ConnectedDevicesCell,
       },

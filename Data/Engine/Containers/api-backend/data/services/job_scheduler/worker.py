@@ -923,7 +923,7 @@ def main() -> None:
         remote_desktop_port = 0
     if remote_desktop_port <= 0:
         remote_desktop_port = site_worker_remote_desktop_port(worker_guid, site_id)
-    idle_ttl = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
+    idle_ttl = max(300, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "300").strip() or "300"))
     if not worker_guid or site_id <= 0:
         raise RuntimeError("site worker requires BOREALIS_SITE_WORKER_GUID and BOREALIS_SITE_WORKER_SITE_ID")
     socket_runtime = SiteWorkerSocketRuntime(

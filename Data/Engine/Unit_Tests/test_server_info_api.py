@@ -246,6 +246,16 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
             "INSERT OR REPLACE INTO device_sites(device_hostname, site_id, assigned_at) VALUES (?,?,?)",
             [("lab-01", 7, now), ("lab-02", 7, now)],
         )
+        cur.executemany(
+            """
+            INSERT OR REPLACE INTO devices(guid, hostname, last_seen, status, created_at)
+            VALUES (?,?,?,?,?)
+            """,
+            [
+                ("guid-lab-01", "lab-01", now - 30, "active", now),
+                ("guid-lab-02", "lab-02", now - 900, "active", now),
+            ],
+        )
         cur.execute(
             """
             INSERT INTO scheduled_jobs(
@@ -344,12 +354,15 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["worker_idle_ttl_seconds"] == 60
+    assert payload["worker_idle_ttl_seconds"] == 300
     assert payload["site_device_counts"]["7"] == 2
     assert payload["site_device_counts"].get("8", 0) == 0
-    assert {"id": 7, "name": "Bunny Lab", "device_count": 2} in payload["sites"]
-    assert {"id": 8, "name": "Empty Site", "device_count": 0} in payload["sites"]
+    assert payload["site_online_device_counts"]["7"] == 1
+    assert payload["site_online_device_counts"].get("8", 0) == 0
+    assert {"id": 7, "name": "Bunny Lab", "device_count": 2, "online_device_count": 1} in payload["sites"]
+    assert {"id": 8, "name": "Empty Site", "device_count": 0, "online_device_count": 0} in payload["sites"]
     assert payload["workers"][0]["site_device_count"] == 2
+    assert payload["workers"][0]["site_online_device_count"] == 1
     recent_ids = {row["id"] for row in payload["recent_work"]}
     assert len(recent_ids) == 1
     recent = payload["recent_work"][0]
@@ -357,6 +370,7 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
     assert recent["status"] == "succeeded"
     assert recent["site_name"] == "Bunny Lab"
     assert recent["site_device_count"] == 2
+    assert recent["site_online_device_count"] == 1
     assert recent["job_name"] == "Patch Bunny Lab"
     assert recent["target_count"] == 2
     assert recent["task_type"] == "Assembly"

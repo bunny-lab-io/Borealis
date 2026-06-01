@@ -1524,6 +1524,13 @@ def _attach_worker_container_metadata(rows: Sequence[Mapping[str, Any]]) -> List
     return enriched
 
 
+def _agent_online_window_seconds() -> int:
+    try:
+        return max(60, int(str(os.environ.get("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS") or "300").strip() or "300"))
+    except Exception:
+        return 300
+
+
 def _collect_worker_payload(
     adapters: "EngineServiceAdapters",
     *,
@@ -1531,12 +1538,13 @@ def _collect_worker_payload(
     include_container_metadata: bool = False,
 ) -> Dict[str, Any]:
     try:
-        worker_idle_ttl_seconds = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
+        worker_idle_ttl_seconds = max(300, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "300").strip() or "300"))
     except Exception:
-        worker_idle_ttl_seconds = 60
+        worker_idle_ttl_seconds = 300
     conn = adapters.db_conn_factory()
     site_names: Dict[int, str] = {}
     site_device_counts: Dict[int, int] = {}
+    site_online_device_counts: Dict[int, int] = {}
     job_names: Dict[int, str] = {}
     site_rows: List[Dict[str, Any]] = []
     try:
@@ -1578,11 +1586,31 @@ def _collect_worker_payload(
                 for row in cur.fetchall() or []
                 if row and row[0] is not None
             }
+            online_cutoff = int(time.time()) - _agent_online_window_seconds()
+            cur.execute(
+                f"""
+                SELECT ds.site_id, COUNT(DISTINCT d.guid)
+                  FROM device_sites ds
+                  JOIN devices d ON lower(d.hostname)=lower(ds.device_hostname)
+                 WHERE ds.site_id IN ({placeholders})
+                   AND d.last_seen IS NOT NULL
+                   AND d.last_seen>=?
+                   AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+              GROUP BY ds.site_id
+                """,
+                tuple(sorted(site_ids)) + (online_cutoff,),
+            )
+            site_online_device_counts = {
+                int(row[0]): int(row[1] or 0)
+                for row in cur.fetchall() or []
+                if row and row[0] is not None
+            }
         site_rows = [
             {
                 "id": int(site_id),
                 "name": site_name,
                 "device_count": int(site_device_counts.get(int(site_id), 0)),
+                "online_device_count": int(site_online_device_counts.get(int(site_id), 0)),
             }
             for site_id, site_name in sorted(site_names.items(), key=lambda item: (item[1].lower(), item[0]))
         ]
@@ -1599,6 +1627,7 @@ def _collect_worker_payload(
             if site_id > 0:
                 item["site_name"] = site_names.get(site_id) or f"Site {site_id}"
                 item["site_device_count"] = int(site_device_counts.get(site_id, 0))
+                item["site_online_device_count"] = int(site_online_device_counts.get(site_id, 0))
             job_id = int(item.get("job_id") or 0)
             job_name = job_names.get(job_id, "") if job_id > 0 else ""
             if job_name:
@@ -1621,6 +1650,7 @@ def _collect_worker_payload(
         "recent_work": recent_work,
         "site_names": {str(key): value for key, value in site_names.items()},
         "site_device_counts": {str(key): value for key, value in site_device_counts.items()},
+        "site_online_device_counts": {str(key): value for key, value in site_online_device_counts.items()},
         "sites": site_rows,
         "worker_idle_ttl_seconds": worker_idle_ttl_seconds,
     }

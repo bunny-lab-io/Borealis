@@ -760,7 +760,7 @@ def _spawn_site_worker(db_factory, *, site_id: int, logger) -> None:
             "-e",
             f"BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT={remote_desktop_port}",
             "-e",
-            "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=60",
+            "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=300",
             "-e",
             f"BOREALIS_INTERNAL_API_BASE_URL={_api_base_url()}",
             "-e",
