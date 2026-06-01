@@ -339,6 +339,115 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
     assert recent["task_link"]["path"] == "/jobs/55?tab=job_history"
 
 
+def test_server_workers_includes_short_container_id(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    client = _admin_client(engine_harness)
+    now = int(time.time())
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        ensure_job_scheduler_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO job_scheduler_workers(
+                worker_guid, container_name, site_id, status, started_at, last_seen_at,
+                current_lanes_json, claimed_count, task_links_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "worker-container-id",
+                "site-worker-worker-container-id",
+                7,
+                "running",
+                now - 60,
+                now,
+                "[]",
+                0,
+                "[]",
+                now - 60,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        server_info_api,
+        "_docker_inspect_container",
+        lambda _name: {
+            "Id": "fca35d6fd0d6b7d37d62c0d16f47f941d4e49ee644b19a2664898403c30e5efc",
+            "Config": {"Image": "borealis-engine/site-worker:test"},
+        },
+    )
+
+    response = client.get("/api/server/workers?history_seconds=60")
+
+    assert response.status_code == 200
+    worker = response.get_json()["workers"][0]
+    assert worker["container_id"] == "fca35d6fd0d6"
+    assert worker["container_id_full"].startswith("fca35d6fd0d6")
+    assert worker["container_image"] == "borealis-engine/site-worker:test"
+
+
+def test_recreate_site_worker_queues_scheduler_action(engine_harness: EngineTestHarness) -> None:
+    client = _admin_client(engine_harness)
+    now = int(time.time())
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        ensure_job_scheduler_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO job_scheduler_workers(
+                worker_guid, container_name, site_id, status, started_at, last_seen_at,
+                current_lanes_json, claimed_count, task_links_json, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "worker-recreate",
+                "site-worker-worker-recreate",
+                7,
+                "running",
+                now - 60,
+                now,
+                "[]",
+                0,
+                "[]",
+                now - 60,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.post("/api/server/workers/worker-recreate/recreate", json={})
+
+    assert response.status_code == 202
+    payload = response.get_json()
+    assert payload["queued"] is True
+    assert payload["worker_guid"] == "worker-recreate"
+    assert payload["container_name"] == "site-worker-worker-recreate"
+
+    conn = sqlite3.connect(engine_harness.db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT payload_json
+              FROM job_scheduler_work_items
+             WHERE kind='service_action'
+             ORDER BY id DESC
+             LIMIT 1
+            """
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    action_payload = json.loads(row[0])
+    assert action_payload["service_key"] == "site-worker"
+    assert action_payload["action"]["action"] == "recreate"
+    assert action_payload["action"]["worker_guid"] == "worker-recreate"
+    assert action_payload["action"]["container_name"] == "site-worker-worker-recreate"
+
+
 def test_worker_history_prunes_old_terminal_site_workers(engine_harness: EngineTestHarness) -> None:
     now = int(time.time())
     conn = sqlite3.connect(engine_harness.db_path)
@@ -570,6 +679,8 @@ def test_collect_service_rows_uses_compose_manifest(tmp_path: Path, engine_harne
     monkeypatch.setattr(server_info_api.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else "")
 
     def _fake_run_command(args, **_kwargs):
+        if args[:2] == ["/usr/bin/docker", "inspect"]:
+            return 1, "", "not found"
         assert args[:2] == ["/usr/bin/docker", "compose"]
         return (
             0,
@@ -678,6 +789,7 @@ def test_service_row_falls_back_to_human_systemd_timestamp() -> None:
 
 def test_restart_service_queues_detached_systemd_run(engine_harness: EngineTestHarness, monkeypatch) -> None:
     client = _admin_client(engine_harness)
+    monkeypatch.setattr(server_info_api, "_containerized_engine_enabled", lambda: False)
     monkeypatch.setattr(
         server_info_api,
         "_collect_service_rows",
@@ -725,6 +837,7 @@ def test_restart_service_queues_detached_systemd_run(engine_harness: EngineTestH
 
 def test_restart_postgresql_requires_valid_instance(engine_harness: EngineTestHarness, monkeypatch) -> None:
     client = _admin_client(engine_harness)
+    monkeypatch.setattr(server_info_api, "_containerized_engine_enabled", lambda: False)
     monkeypatch.setattr(
         server_info_api,
         "_collect_service_rows",

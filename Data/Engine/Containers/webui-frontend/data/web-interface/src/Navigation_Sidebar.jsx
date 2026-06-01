@@ -227,6 +227,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         to: APP_PATHS.engineStatus,
       },
       {
+        icon: SiteWorkersIcon,
+        label: "Site Workers",
+        navKey: "site-workers",
+        to: APP_PATHS.siteWorkers,
+      },
+      {
         icon: MetadataFieldsIcon,
         label: "Metadata Fields",
         navKey: "metadata-fields",

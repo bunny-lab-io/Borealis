@@ -545,7 +545,16 @@ export function buildAppRoutes() {
                 },
                 {
                   path: "site-workers",
-                  element: <Navigate to={APP_PATHS.engineStatus} replace />,
+                  handle: {
+                    title: "Site Workers",
+                    breadcrumb: "Site Workers",
+                    navKey: "site-workers",
+                    pageKey: "site-workers",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/adminRoutes.jsx"),
+                    "SiteWorkersRoute"
+                  ),
                 },
                 {
                   path: "metadata-fields",

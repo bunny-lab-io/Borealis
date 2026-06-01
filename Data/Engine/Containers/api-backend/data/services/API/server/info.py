@@ -11,6 +11,7 @@
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
 # - GET /api/server/site-worker-settings (Operator Admin Session) - Returns profile-managed site-worker scheduled-lane capacity.
+# - POST /api/server/workers/<worker_guid>/recreate (Operator Admin Session) - Queues a site-worker container stop so scheduler redeploys it.
 # ======================================================
 
 from __future__ import annotations
@@ -1492,7 +1493,43 @@ def _build_overview_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]
     }
 
 
-def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_seconds: int = 60) -> Dict[str, Any]:
+def _short_container_id(value: Any) -> str:
+    text = str(value or "").strip()
+    if text.startswith("sha256:"):
+        text = text.split(":", 1)[1]
+    return text[:12] if text else ""
+
+
+def _attach_worker_container_metadata(rows: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    enriched: List[Dict[str, Any]] = []
+    for row in rows or []:
+        item = dict(row or {})
+        container_name = str(item.get("container_name") or "").strip()
+        if container_name:
+            try:
+                inspected = _docker_inspect_container(container_name)
+            except Exception:
+                inspected = {}
+            if isinstance(inspected, Mapping):
+                container_id_full = str(inspected.get("Id") or "").strip()
+                container_id = _short_container_id(container_id_full)
+                if container_id:
+                    item["container_id"] = container_id
+                    item["container_id_full"] = container_id_full
+                config = inspected.get("Config") if isinstance(inspected.get("Config"), Mapping) else {}
+                image = str(config.get("Image") or "").strip()
+                if image:
+                    item["container_image"] = image
+        enriched.append(item)
+    return enriched
+
+
+def _collect_worker_payload(
+    adapters: "EngineServiceAdapters",
+    *,
+    history_seconds: int = 60,
+    include_container_metadata: bool = False,
+) -> Dict[str, Any]:
     try:
         worker_idle_ttl_seconds = max(30, int(str(os.environ.get("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS") or "60").strip() or "60"))
     except Exception:
@@ -1521,6 +1558,8 @@ def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_second
         conn.commit()
     finally:
         conn.close()
+    if include_container_metadata:
+        rows = _attach_worker_container_metadata(rows)
     active = [row for row in rows if str(row.get("status") or "").lower() in {"starting", "running", "idle"}]
     active_site_workers = [row for row in active if int(row.get("site_id") or 0) > 0]
     active_managers = [row for row in active if int(row.get("site_id") or 0) <= 0]
@@ -1533,6 +1572,57 @@ def _collect_worker_payload(adapters: "EngineServiceAdapters", *, history_second
         "site_names": {str(key): value for key, value in site_names.items()},
         "worker_idle_ttl_seconds": worker_idle_ttl_seconds,
     }
+
+
+def _queue_site_worker_recreate(
+    adapters: "EngineServiceAdapters",
+    *,
+    worker_guid: str,
+) -> Tuple[bool, Dict[str, Any], str, int]:
+    normalized_guid = str(worker_guid or "").strip()
+    if not normalized_guid:
+        return False, {}, "A site-worker id is required.", 400
+    conn = adapters.db_conn_factory()
+    try:
+        rows = list_worker_snapshots(conn, include_stopped_since=86400)
+        worker = next(
+            (
+                dict(row)
+                for row in rows
+                if str(row.get("worker_guid") or "").strip() == normalized_guid
+                and int(row.get("site_id") or 0) > 0
+            ),
+            None,
+        )
+        if not worker:
+            conn.commit()
+            return False, {}, "Site worker not found.", 404
+        container_name = str(worker.get("container_name") or "").strip()
+        if not container_name:
+            conn.commit()
+            return False, {}, "Site worker has no tracked container.", 409
+        work_id = enqueue_service_action(
+            conn,
+            service_key="site-worker",
+            action={
+                "id": "recreate",
+                "label": "Re-Create Site Worker",
+                "action": "recreate",
+                "worker_guid": normalized_guid,
+                "container_name": container_name,
+                "site_id": int(worker.get("site_id") or 0),
+            },
+        )
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False, {}, str(exc), 500
+    finally:
+        conn.close()
+    return True, {"worker": worker, "container_name": container_name, "work_item_id": work_id}, "", 202
 
 
 def _collect_agent_release_channels_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
@@ -1796,7 +1886,37 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             history_seconds = int(request.args.get("history_seconds") or 60)
         except Exception:
             history_seconds = 60
-        return jsonify(_collect_worker_payload(adapters, history_seconds=max(0, min(history_seconds, 86400))))
+        return jsonify(
+            _collect_worker_payload(
+                adapters,
+                history_seconds=max(0, min(history_seconds, 86400)),
+                include_container_metadata=True,
+            )
+        )
+
+    @blueprint.route("/api/server/workers/<worker_guid>/recreate", methods=["POST"])
+    def recreate_site_worker(worker_guid: str) -> Any:
+        admin_error = auth.require_admin()
+        if admin_error:
+            return jsonify(admin_error[0]), admin_error[1]
+        queued, payload, error_message, status_code = _queue_site_worker_recreate(adapters, worker_guid=worker_guid)
+        if not queued:
+            code = "site_worker_recreate_failed" if status_code >= 500 else "site_worker_recreate_unavailable"
+            return _error_response(code, error_message or "Unable to queue site-worker re-create.", status_code)
+        worker = payload.get("worker") or {}
+        return (
+            jsonify(
+                {
+                    "queued": True,
+                    "worker_guid": str(worker.get("worker_guid") or worker_guid),
+                    "site_id": int(worker.get("site_id") or 0),
+                    "site_name": str(worker.get("site_name") or ""),
+                    "container_name": str(payload.get("container_name") or ""),
+                    "work_item_id": int(payload.get("work_item_id") or 0),
+                }
+            ),
+            202,
+        )
 
     @blueprint.route("/api/server/agent-release-channels", methods=["GET"])
     def get_agent_release_channels() -> Any:

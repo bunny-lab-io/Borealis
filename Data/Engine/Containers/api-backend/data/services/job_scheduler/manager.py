@@ -842,6 +842,8 @@ def _run_service_action(payload: Mapping[str, Any], *, logger) -> str:
     action_mode = str(action.get("mode") or "").strip().lower()
     if not service_key or not action_name:
         raise RuntimeError("service action payload incomplete")
+    if service_key == "site-worker" and action_name == "recreate":
+        return _run_site_worker_recreate_action(action, logger=logger)
     docker_bin = shutil.which("docker") or ""
     if not docker_bin:
         raise RuntimeError("docker CLI unavailable")
@@ -879,6 +881,55 @@ def _run_service_action(payload: Mapping[str, Any], *, logger) -> str:
     helper_id = str(completed.stdout or "").strip().splitlines()[0] if str(completed.stdout or "").strip() else helper_name
     logger.info("queued service action helper=%s service=%s action=%s", helper_id, service_key, action_name)
     return helper_id
+
+
+def _run_site_worker_recreate_action(action: Mapping[str, Any], *, logger) -> str:
+    docker_bin = shutil.which("docker") or ""
+    if not docker_bin:
+        raise RuntimeError("docker CLI unavailable")
+    worker_guid = str(action.get("worker_guid") or "").strip()
+    container_name = str(action.get("container_name") or "").strip()
+    if not container_name and worker_guid:
+        container_name = f"site-worker-{worker_guid}"
+    if not container_name:
+        raise RuntimeError("site-worker recreate payload missing container name")
+
+    inspect = subprocess.run([docker_bin, "inspect", container_name], capture_output=True, text=True, check=False, timeout=15)
+    if inspect.returncode != 0:
+        message = str(inspect.stderr or inspect.stdout or "").strip()
+        if container_name.startswith("site-worker-") and "No such" in message:
+            logger.info("site-worker recreate skipped missing container=%s worker_guid=%s", container_name, worker_guid or "-")
+            return "missing"
+        raise RuntimeError(message or f"docker inspect failed for {container_name}")
+
+    try:
+        parsed = json.loads(str(inspect.stdout or "[]"))
+    except Exception as exc:
+        raise RuntimeError(f"docker inspect parse failed for {container_name}: {exc}") from exc
+    inspected = parsed[0] if isinstance(parsed, list) and parsed and isinstance(parsed[0], Mapping) else {}
+    config = inspected.get("Config") if isinstance(inspected.get("Config"), Mapping) else {}
+    labels = config.get("Labels") if isinstance(config.get("Labels"), Mapping) else {}
+    names = [
+        str(inspected.get("Name") or "").strip().lstrip("/"),
+        container_name,
+    ]
+    role = str(labels.get("borealis.role") or "").strip().lower()
+    label_worker_guid = str(labels.get("borealis.worker_guid") or "").strip()
+    is_site_worker = role == "site-worker" or any(name.startswith("site-worker-") for name in names if name)
+    if not is_site_worker:
+        raise RuntimeError(f"refusing to stop non-site-worker container {container_name}")
+    if worker_guid and label_worker_guid and label_worker_guid != worker_guid:
+        raise RuntimeError(f"site-worker guid mismatch for {container_name}")
+
+    stopped = subprocess.run([docker_bin, "stop", container_name], capture_output=True, text=True, check=False, timeout=30)
+    if stopped.returncode != 0:
+        message = str(stopped.stderr or stopped.stdout or "").strip()
+        if "No such" in message:
+            logger.info("site-worker recreate skipped missing container=%s worker_guid=%s", container_name, worker_guid or "-")
+            return "missing"
+        raise RuntimeError(message or f"docker stop failed for {container_name}")
+    logger.info("site-worker recreate stopped container=%s worker_guid=%s", container_name, worker_guid or "-")
+    return str(stopped.stdout or container_name).strip() or container_name
 
 
 def _process_service_actions(db_factory, logger) -> None:

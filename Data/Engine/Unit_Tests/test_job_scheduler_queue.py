@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
+from Data.Engine.services.job_scheduler import manager as scheduler_manager
 from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
@@ -79,6 +81,52 @@ def _seed_running_site_work(conn, *, worker_guid: str = "worker-1", site_id: int
     assert item is not None
     assert item["status"] == WORK_STATUS_RUNNING
     return int(item["id"])
+
+
+def test_service_action_recreates_only_site_worker_containers(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(list(args))
+        if list(args[:3]) == ["/usr/bin/docker", "inspect", "site-worker-worker-1"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Name": "/site-worker-worker-1",
+                            "Config": {
+                                "Labels": {
+                                    "borealis.role": "site-worker",
+                                    "borealis.worker_guid": "worker-1",
+                                }
+                            },
+                        }
+                    ]
+                ),
+                stderr="",
+            )
+        if list(args[:3]) == ["/usr/bin/docker", "stop", "site-worker-worker-1"]:
+            return SimpleNamespace(returncode=0, stdout="site-worker-worker-1\n", stderr="")
+        raise AssertionError(f"unexpected docker call: {args!r}")
+
+    monkeypatch.setattr(scheduler_manager.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else "")
+    monkeypatch.setattr(scheduler_manager.subprocess, "run", fake_run)
+
+    result = scheduler_manager._run_service_action(
+        {
+            "service_key": "site-worker",
+            "action": {
+                "action": "recreate",
+                "container_name": "site-worker-worker-1",
+                "worker_guid": "worker-1",
+            },
+        },
+        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+    )
+
+    assert result == "site-worker-worker-1"
+    assert ["/usr/bin/docker", "stop", "site-worker-worker-1"] in calls
 
 
 def _work_item_row(conn, work_id: int):

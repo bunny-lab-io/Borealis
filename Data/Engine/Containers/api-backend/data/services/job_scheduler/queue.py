@@ -692,7 +692,14 @@ def enqueue_service_action(
     normalized_service = str(service_key or "").strip().lower()
     action_name = str(action.get("action") or "").strip().lower()
     action_mode = str(action.get("mode") or "").strip().lower()
-    dedupe = f"service-action:{normalized_service}:{action_name}:{action_mode}:{now // 60}"
+    action_scope = str(
+        action.get("scope")
+        or action.get("worker_guid")
+        or action.get("container_name")
+        or ""
+    ).strip().lower()
+    scope_key = hashlib.sha256(action_scope.encode("utf-8", errors="ignore")).hexdigest()[:16] if action_scope else "global"
+    dedupe = f"service-action:{normalized_service}:{action_name}:{action_mode}:{scope_key}:{now // 60}"
     return _insert_work_item(
         conn,
         dedupe_key=dedupe,

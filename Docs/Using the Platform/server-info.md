@@ -45,6 +45,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/timezones` - timezone options.
     - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
+    - `POST /api/server/workers/<worker_guid>/recreate` - queue a site-worker container re-create.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
