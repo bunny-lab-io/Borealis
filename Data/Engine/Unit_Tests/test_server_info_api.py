@@ -238,6 +238,10 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
             "INSERT OR IGNORE INTO sites(id, name, description, created_at) VALUES (?,?,?,?)",
             (7, "Bunny Lab", "", now),
         )
+        cur.execute(
+            "INSERT OR IGNORE INTO sites(id, name, description, created_at) VALUES (?,?,?,?)",
+            (8, "Empty Site", "", now),
+        )
         cur.executemany(
             "INSERT OR REPLACE INTO device_sites(device_hostname, site_id, assigned_at) VALUES (?,?,?)",
             [("lab-01", 7, now), ("lab-02", 7, now)],
@@ -342,6 +346,9 @@ def test_server_workers_includes_recent_terminal_work(engine_harness: EngineTest
     payload = response.get_json()
     assert payload["worker_idle_ttl_seconds"] == 60
     assert payload["site_device_counts"]["7"] == 2
+    assert payload["site_device_counts"].get("8", 0) == 0
+    assert {"id": 7, "name": "Bunny Lab", "device_count": 2} in payload["sites"]
+    assert {"id": 8, "name": "Empty Site", "device_count": 0} in payload["sites"]
     assert payload["workers"][0]["site_device_count"] == 2
     recent_ids = {row["id"] for row in payload["recent_work"]}
     assert len(recent_ids) == 1

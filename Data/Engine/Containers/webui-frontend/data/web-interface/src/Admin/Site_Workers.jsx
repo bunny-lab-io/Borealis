@@ -185,6 +185,7 @@ const TONE_STYLES = {
   pending: { border: "rgba(251,191,36,0.5)", bg: "rgba(120,53,15,0.2)", text: "#fde68a" },
   failed: { border: "rgba(251,113,133,0.52)", bg: "rgba(127,29,29,0.22)", text: "#fecdd3" },
   stopped: { border: "rgba(148,163,184,0.3)", bg: "rgba(30,41,59,0.22)", text: "#cbd5e1" },
+  no_online: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.18)", text: "#94a3b8" },
   unknown: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.2)", text: "#cbd5e1" },
 };
 
@@ -263,6 +264,50 @@ function siteDeviceCount(payload, worker, siteId) {
   const counts = payload?.site_device_counts || payload?.siteDeviceCounts || {};
   const mapped = Number(counts[String(siteId)] || counts[siteId] || 0);
   return Number.isFinite(mapped) && mapped > 0 ? mapped : 0;
+}
+
+function siteRecords(payload) {
+  const sites = Array.isArray(payload?.sites) ? payload.sites : [];
+  if (sites.length) {
+    return sites
+      .map((site) => {
+        const siteId = Number(site?.id || site?.site_id || 0);
+        if (!Number.isFinite(siteId) || siteId <= 0) return null;
+        const name = String(site?.name || site?.site_name || "").trim() || `Site ${siteId}`;
+        const deviceCount = Number(site?.device_count || site?.site_device_count || 0);
+        return {
+          site_id: siteId,
+          site_name: name,
+          site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+        };
+      })
+      .filter(Boolean);
+  }
+  const names = payload?.site_names || {};
+  const counts = payload?.site_device_counts || {};
+  return Object.entries(names)
+    .map(([siteIdRaw, nameRaw]) => {
+      const siteId = Number(siteIdRaw || 0);
+      if (!Number.isFinite(siteId) || siteId <= 0) return null;
+      const deviceCount = Number(counts[String(siteId)] || counts[siteId] || 0);
+      return {
+        site_id: siteId,
+        site_name: String(nameRaw || "").trim() || `Site ${siteId}`,
+        site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+      };
+    })
+    .filter(Boolean);
+}
+
+function statusSortRank(label, tone) {
+  const normalizedLabel = String(label || "").trim().toLowerCase();
+  const normalizedTone = String(tone || "").trim().toLowerCase();
+  if (normalizedLabel === "running" || normalizedTone === "running") return 0;
+  if (normalizedLabel === "starting" || normalizedTone === "pending") return 1;
+  if (normalizedLabel === "no online devices" || normalizedTone === "no_online") return 2;
+  if (normalizedLabel.includes("tearing down") || normalizedLabel === "idle" || normalizedTone === "idle") return 3;
+  if (normalizedTone === "failed" || normalizedTone === "stopped") return 4;
+  return 5;
 }
 
 function workStatusBucket(status) {
@@ -474,7 +519,8 @@ function normalizeRows(payload, nowSeconds) {
       newestTerminalBySite.set(siteId, { key, startedAt });
     }
   });
-  return workers
+  const rowsBySite = new Map();
+  workers
     .filter((worker) => Number(worker?.site_id || 0) > 0)
     .filter((worker) => {
       const siteId = Number(worker?.site_id || 0);
@@ -500,7 +546,7 @@ function normalizeRows(payload, nowSeconds) {
       const containerId = String(worker?.container_id || "").trim();
       const connectedDevices = connectedDeviceCount(worker);
       const siteDevices = siteDeviceCount(payload, worker, siteId);
-      return {
+      const row = {
         id: `site-worker-site-${siteId}`,
         worker_instance_id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
         worker_guid: workerGuid,
@@ -512,13 +558,42 @@ function normalizeRows(payload, nowSeconds) {
         created_label: epochLabel(worker?.started_at),
         status_label: status.label,
         status_tone: status.tone,
+        status_sort: statusSortRank(status.label, status.tone),
         connected_devices: connectedDevices,
         site_device_count: siteDevices,
         assigned_task_groups: taskGroups,
         raw: worker,
       };
-    })
-    .sort((left, right) => String(left.site_name || "").localeCompare(String(right.site_name || "")));
+      rowsBySite.set(siteId, row);
+    });
+  siteRecords(payload).forEach((site) => {
+    const siteId = Number(site?.site_id || 0);
+    if (siteId <= 0 || rowsBySite.has(siteId)) return;
+    rowsBySite.set(siteId, {
+      id: `site-worker-site-${siteId}`,
+      worker_instance_id: `site-placeholder-${siteId}`,
+      worker_guid: "",
+      site_id: siteId,
+      site_name: String(site?.site_name || "").trim() || `Site ${siteId}`,
+      container_name: "",
+      container_id: "N/A",
+      container_id_full: "",
+      created_label: "N/A",
+      status_label: "No Online Devices",
+      status_tone: "no_online",
+      status_sort: statusSortRank("No Online Devices", "no_online"),
+      connected_devices: 0,
+      site_device_count: Math.max(0, Number(site?.site_device_count || 0)),
+      assigned_task_groups: [],
+      raw: null,
+    });
+  });
+  return Array.from(rowsBySite.values()).sort((left, right) => {
+    const leftRank = Number(left.status_sort || 0);
+    const rightRank = Number(right.status_sort || 0);
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return String(left.site_name || "").localeCompare(String(right.site_name || ""));
+  });
 }
 
 function StatusPill({ label, tone }) {
@@ -656,45 +731,47 @@ function ContainerCell(params) {
       >
         {row.container_id}
       </Typography>
-      <Box
-        component="button"
-        type="button"
-        disabled={!canRecreate || busy}
-        onMouseDown={stopGridEvent}
-        onClick={(event) => {
-          stopGridEvent(event);
-          if (!canRecreate || busy) return;
-          onRecreate?.(row);
-        }}
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          p: 0,
-          m: 0,
-          border: 0,
-          background: "transparent",
-          color: BOREALIS_LINK_COLOR,
-          cursor: !canRecreate || busy ? "default" : "pointer",
-          font: "inherit",
-          fontSize: "0.82rem",
-          fontWeight: 700,
-          lineHeight: 1.45,
-          textDecoration: "none",
-          whiteSpace: "nowrap",
-          transition: "color 160ms ease, opacity 160ms ease",
-          "&:hover": !canRecreate || busy
-            ? undefined
-            : {
-                color: BOREALIS_LINK_HOVER_COLOR,
-                textDecoration: "underline",
-              },
-          "&:disabled": {
-            opacity: 0.6,
-          },
-        }}
-      >
-        {busy ? "[Queued...]" : "[Re-Create]"}
-      </Box>
+      {canRecreate ? (
+        <Box
+          component="button"
+          type="button"
+          disabled={busy}
+          onMouseDown={stopGridEvent}
+          onClick={(event) => {
+            stopGridEvent(event);
+            if (busy) return;
+            onRecreate?.(row);
+          }}
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            p: 0,
+            m: 0,
+            border: 0,
+            background: "transparent",
+            color: BOREALIS_LINK_COLOR,
+            cursor: busy ? "default" : "pointer",
+            font: "inherit",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            lineHeight: 1.45,
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+            transition: "color 160ms ease, opacity 160ms ease",
+            "&:hover": busy
+              ? undefined
+              : {
+                  color: BOREALIS_LINK_HOVER_COLOR,
+                  textDecoration: "underline",
+                },
+            "&:disabled": {
+              opacity: 0.6,
+            },
+          }}
+        >
+          {busy ? "[Queued...]" : "[Re-Create]"}
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -981,11 +1058,19 @@ export default function SiteWorkers() {
   const columnDefs = useMemo(
     () => [
       {
+        headerName: "Status Sort",
+        field: "status_sort",
+        hide: true,
+        sort: "asc",
+        sortIndex: 0,
+      },
+      {
         headerName: "Site",
         field: "site_name",
         minWidth: 220,
         flex: 1,
         sort: "asc",
+        sortIndex: 1,
         cellRendererParams: {
           suppressMouseEventHandling: () => true,
         },
@@ -1011,8 +1096,8 @@ export default function SiteWorkers() {
       {
         headerName: "Status",
         field: "status_label",
-        minWidth: 118,
-        flex: 0.35,
+        minWidth: 160,
+        flex: 0.45,
         cellClass: "auto-col-tight center-col",
         cellRenderer: StatusCell,
       },
@@ -1078,7 +1163,7 @@ export default function SiteWorkers() {
               </Alert>
             ) : (
               <Typography sx={{ color: "rgba(148,163,184,0.88)", fontSize: "0.86rem" }}>
-                {rows.length} active or recent site workers
+                {rows.length} sites
               </Typography>
             )}
             {lastUpdatedLabel ? (

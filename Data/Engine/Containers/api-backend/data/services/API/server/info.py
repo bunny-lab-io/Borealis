@@ -1538,11 +1538,12 @@ def _collect_worker_payload(
     site_names: Dict[int, str] = {}
     site_device_counts: Dict[int, int] = {}
     job_names: Dict[int, str] = {}
+    site_rows: List[Dict[str, Any]] = []
     try:
         rows = list_worker_snapshots(conn, include_stopped_since=history_seconds)
         active_work = list_active_work_items(conn)
         recent_work = list_recent_work_items(conn, history_seconds=history_seconds)
-        site_ids = {
+        referenced_site_ids = {
             int(row.get("site_id") or 0)
             for row in [*rows, *active_work, *recent_work]
             if int(row.get("site_id") or 0) > 0
@@ -1553,10 +1554,16 @@ def _collect_worker_payload(
             if int(row.get("job_id") or 0) > 0
         }
         cur = conn.cursor()
+        cur.execute("SELECT id, name FROM sites ORDER BY lower(name), id")
+        for row in cur.fetchall() or []:
+            if not row or row[0] is None:
+                continue
+            site_id = int(row[0])
+            site_name = str(row[1] or "").strip() or f"Site {site_id}"
+            site_names[site_id] = site_name
+        site_ids = set(site_names.keys()) | referenced_site_ids
         if site_ids:
             placeholders = ",".join("?" for _ in site_ids)
-            cur.execute(f"SELECT id, name FROM sites WHERE id IN ({placeholders})", tuple(sorted(site_ids)))
-            site_names = {int(row[0]): str(row[1] or "").strip() for row in cur.fetchall() or [] if row and row[0] is not None}
             cur.execute(
                 f"""
                 SELECT site_id, COUNT(DISTINCT device_hostname)
@@ -1571,6 +1578,14 @@ def _collect_worker_payload(
                 for row in cur.fetchall() or []
                 if row and row[0] is not None
             }
+        site_rows = [
+            {
+                "id": int(site_id),
+                "name": site_name,
+                "device_count": int(site_device_counts.get(int(site_id), 0)),
+            }
+            for site_id, site_name in sorted(site_names.items(), key=lambda item: (item[1].lower(), item[0]))
+        ]
         if job_ids:
             placeholders = ",".join("?" for _ in job_ids)
             cur.execute(f"SELECT id, name FROM scheduled_jobs WHERE id IN ({placeholders})", tuple(sorted(job_ids)))
@@ -1606,6 +1621,7 @@ def _collect_worker_payload(
         "recent_work": recent_work,
         "site_names": {str(key): value for key, value in site_names.items()},
         "site_device_counts": {str(key): value for key, value in site_device_counts.items()},
+        "sites": site_rows,
         "worker_idle_ttl_seconds": worker_idle_ttl_seconds,
     }
 
