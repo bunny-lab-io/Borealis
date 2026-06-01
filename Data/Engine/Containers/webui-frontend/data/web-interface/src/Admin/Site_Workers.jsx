@@ -120,7 +120,7 @@ const GRID_SHELL_SX = {
     color: "#7dd3fc",
     background: "rgba(125,211,252,0.08)",
   },
-  "& .ag-sort-order, & .ag-sort-indicator-number": {
+  "& .ag-sort-order, & .ag-sort-indicator-number, & [data-ref='eSortOrder']": {
     display: "none !important",
   },
   "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
@@ -682,7 +682,7 @@ function StatusPill({ label, tone }) {
         color: style.text,
         fontSize: "0.78rem",
         fontWeight: 700,
-        lineHeight: 1,
+        lineHeight: "24px",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
@@ -1203,19 +1203,17 @@ export default function SiteWorkers() {
   const columnDefs = useMemo(
     () => [
       {
-        headerName: "Status Sort",
-        field: "status_sort",
-        hide: true,
-        sort: "asc",
-        sortIndex: 0,
-      },
-      {
         headerName: "Site",
         field: "site_name",
         minWidth: 220,
         flex: 1,
         sort: "asc",
-        sortIndex: 1,
+        comparator: (left, right, leftNode, rightNode) => {
+          const leftRank = Number(leftNode?.data?.status_sort || 0);
+          const rightRank = Number(rightNode?.data?.status_sort || 0);
+          if (leftRank !== rightRank) return leftRank - rightRank;
+          return String(left || "").localeCompare(String(right || ""));
+        },
         cellRendererParams: {
           suppressMouseEventHandling: () => true,
         },
