@@ -10,9 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M10: Process, Service, Software Ops` |
 | Last updated | 2026-06-01 |
-| Latest implementation commit | `c76073f7` (`Route process service software ops through site workers`). |
-| Current state | `M10` implementation is committed and awaiting post-redeploy smoke. api-backend remains the authenticated REST/RBAC/database broker for process, service, and software pages, while live process RPCs, service control events, and software inventory refresh events route through the active same-site site-worker host-service bridge. Site Workers UI follow-up commit `5e198907` fixes status pill vertical alignment and hides AG Grid multi-sort numbering. |
-| Next safe step | Have the operator rebuild/redeploy the Engine from branch head, then smoke M10 in the WebUI: process list and End Task, service list and start/stop/restart, software refresh plus one override-triggered refresh. Do not start `M11` until post-redeploy M10 smoke passes and this tracker marks `M10` Done. |
+| Latest implementation commit | `61e6e4b4` (`Remove Site Workers status text nudge`). |
+| Current state | `M10` implementation is committed. Post-redeploy WebUI smoke passed for Process Management and Service Management. Software Management smoke is still pending. api-backend remains the authenticated REST/RBAC/database broker for process, service, and software pages, while live process RPCs, service control events, and software inventory refresh events route through the active same-site site-worker host-service bridge. |
+| Next safe step | Smoke the remaining M10 Software Management paths in the WebUI: `Query Software Changes` and one override-triggered refresh. If software smoke passes, update this tracker to mark `M10` Done and set next safe step to `M11`. Do not start `M11` until this tracker marks `M10` Done. |
 
 ## Tracker Rules
 
@@ -249,6 +249,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-01 | `M10` | Recorded partial post-redeploy M10 smoke. Operator confirmed Process Management and Service Management are working correctly without issues through the WebUI. Software Management smoke remains pending before M10 can close. | Post-redeploy WebUI smoke passed for process and service management by operator report. | Operator report on 2026-06-01; implementation commit `c76073f7`; Site Workers UI follow-up through `61e6e4b4`. |
 | 2026-06-01 | `M10` | Implemented worker-routed process, service, and software live operations. Added shared api-backend worker bridge for internal site-worker host-service `status`, `event`, and `call`; process list/terminate now call worker-owned SYSTEM Agent sockets; service start/stop/restart and software inventory refresh requests now emit through the active same-site worker. Site Workers UI status pills were vertically centered and AG Grid sort-order numbers hidden. | Local validation passed: Python compile for touched backend/test files; focused device API pytest for process/service/software paths passed (`7 passed`); `test_site_worker_socket.py` passed (`10 passed`); `./Engine_Unit_Tests.sh --domain devices` passed when run with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT`; `git diff --check` passed. WebUI unit lane remains blocked until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`. Post-redeploy M10 smoke remains pending. | Implementation commit `c76073f7`; UI commit `5e198907`; `Unit_Test_Results/engine-20260601T074913Z`; blocked WebUI run `Unit_Test_Results/engine-20260601T075442Z`. |
 | 2026-06-01 | `M9` | Closed Remote File Management worker migration after operator smoke. After Engine/Agent redeploy, operator confirmed File Management behavior worked as expected through the WebUI. `M10` is now active. | Post-redeploy File Management smoke passed by operator report. | Operator report on 2026-06-01; implementation commit `a62dae99`; UI follow-up commit `ecd2c41f`. |
 | 2026-06-01 | `M9` | Implemented worker-owned File Management transfer state. Operator `/api/device/files/<hostname>/*` endpoints still perform api-backend login/RBAC/device-scope checks, then call the active same-site site-worker over internal routes for live file RPCs, upload/download transfer creation, status, cancel, and content streaming. Site-worker now owns FileTransferStore, staged upload bytes, completed download artifacts, Agent transfer helper endpoints, and worker-local Agent file events. Agent upload/download code now honors `transfer_base_url` for status, progress, upload-item fetches, cancellation checks, and artifact upload. | Local validation passed: Python compile for touched Engine files, direct focused pytest for File Management and site-worker socket tests passed (`17 passed`), `./Engine_Unit_Tests.sh --domain files` passed, `./Engine_Unit_Tests.sh --domain remote-access` passed, `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed, and `git diff --check` passed. Post-redeploy browser File Management smoke remains pending. | Implementation commit `a62dae99`; `Unit_Test_Results/engine-20260601T061939Z`; `Unit_Test_Results/agent-20260601T062212Z`. |
@@ -332,7 +333,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 - M7 complete: Remote Shell opens through the site-worker route and worker-owned WireGuard shell bridge.
 - M8 complete: Remote Desktop/Guacamole opens through the site-worker route; LAB-OPERATOR-01 connected successfully three times after redeploy.
 - M9 complete: live File Management RPCs and transfer state route through the active same-site site-worker, and post-redeploy File Management smoke passed.
-- M10 implementation committed: live process RPCs, service control events, and software inventory refresh events now route through the active same-site site-worker host-service bridge. Post-redeploy M10 smoke remains pending before marking M10 Done.
+- M10 implementation committed: live process RPCs, service control events, and software inventory refresh events now route through the active same-site site-worker host-service bridge. Post-redeploy Process Management and Service Management smoke passed; Software Management smoke remains pending before marking M10 Done.
 
 ## Remaining Work
 
@@ -359,7 +360,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Agent socket smoke | `M6` | `Done` | LAB-OPERATOR-01 registered through site-worker route after redeploy/reapproval, and later remote shell/desktop smokes confirmed worker-owned Agent socket dispatch. |
 | Agent unit tests | `M5`, `M6`, `M9` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover, M6 stale-route refresh, and M9 transfer URL routing (`Unit_Test_Results/agent-20260601T062212Z`). |
 | Engine devices lane | `M10` | `Done` for local implementation | `./Engine_Unit_Tests.sh --domain devices` passed with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT=/tmp/borealis-codex-test-auth-tokens-m10` to avoid root-owned runtime JWT secret path. Results: `Unit_Test_Results/engine-20260601T074913Z`. |
-| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7`, `M8`, and `M9`; `Pending` for `M10` | Shell, desktop, and File Management passed against LAB-OPERATOR-01. Process/service/software M10 smoke is next. |
+| Manual remote-op smoke | `M7`-`M11` | `Done` for `M7`, `M8`, and `M9`; `Partial` for `M10` | Shell, desktop, and File Management passed against LAB-OPERATOR-01. M10 process/service smoke passed by operator report; Software Management smoke remains pending. |
 
 ## Fresh Codex Prompt
 
@@ -368,7 +369,7 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include M10 implementation commit `c76073f7` and tracker updates showing M10 smoke is pending.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should include M10 implementation commit `c76073f7`, Site Workers UI follow-ups through `61e6e4b4`, and tracker updates showing M10 software smoke is pending.
 
 M1 through M9 are Done. M10 is active.
 
@@ -446,20 +447,16 @@ Current M10 state:
 - Site Workers UI follow-up commit `5e198907` vertically centers status pill text and hides AG Grid multi-sort numbering.
 - Local validation passed: py_compile for touched backend/test files, focused M10 pytest (`7 passed`), `test_site_worker_socket.py` (`10 passed`), `./Engine_Unit_Tests.sh --domain devices` with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT`, and `git diff --check`.
 - WebUI unit lane remains blocked until runtime cache exists at `Engine/Services/webui-frontend/cache/web-interface/Unit_Tests`.
-- Post-redeploy M10 smoke remains pending. Do not mark M10 Done yet.
+- Post-redeploy Process Management and Service Management smoke passed by operator report on 2026-06-01.
+- Post-redeploy Software Management smoke remains pending. Do not mark M10 Done yet.
 
 Next work:
-1. Have operator rebuild/redeploy Engine from branch head.
-2. Smoke M10 in WebUI against LAB-OPERATOR-01 or another online device:
-   - Processes tab loads live process list.
-   - End Task returns expected success/failure for a safe test process.
-   - Services tab loads cached service inventory and shows `agent_socket` as available when worker socket is connected.
-   - Service action start/stop/restart dispatches and records pending state.
+1. Smoke remaining M10 Software Management paths in WebUI:
    - Installed Software `Query Software Changes` queues a refresh.
    - Software icon override or clear-icon action persists rule and requests refresh.
-3. If smoke passes, update this tracker: mark M10 Done, add validation row, set next safe step to M11.
-4. If smoke fails, fix only M10 regression, validate, commit, push, and retry smoke.
-5. Do not start `M11` until M10 smoke passes and this tracker marks M10 `Done`.
+2. If software smoke passes, update this tracker: mark M10 Done, add validation row, set next safe step to M11.
+3. If software smoke fails, fix only M10 regression, validate, commit, push, and retry smoke.
+4. Do not start `M11` until M10 smoke passes and this tracker marks M10 `Done`.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
