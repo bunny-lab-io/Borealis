@@ -20,7 +20,9 @@ import pytest
 from Data.Engine import database as engine_database
 from Data.Engine.auth import jwt_service as jwt_service_module
 from Data.Engine.services.API.devices import management as device_management
+from Data.Engine.services.API.devices import processes as processes_module
 from Data.Engine.services.API.devices import routes as device_routes
+from Data.Engine.services.API.devices import services as services_module
 from Data.Engine.services.API.devices import software_icons as software_icons_module
 from Data.Engine.services.API.devices import software_uninstall as software_uninstall_module
 from Data.Engine.services.API.devices.agent_role_health import normalize_agent_role_health, serialize_agent_role_health
@@ -84,6 +86,32 @@ def _patch_repo_call(monkeypatch: pytest.MonkeyPatch, calls: dict) -> None:
         raise request_exception("network error")
 
     monkeypatch.setattr(github_integration.requests, "get", fake_get)
+
+
+def _patch_services_worker_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        services_module,
+        "worker_route_for_device",
+        lambda _adapters, _record: ({"worker_guid": "worker-device-test", "upstream_port": 60123}, None),
+    )
+    monkeypatch.setattr(
+        services_module,
+        "worker_host_service_registered",
+        lambda _app, _route, *, hostname, service_mode: hostname == "test-device" and service_mode == "system",
+    )
+
+
+def _patch_process_worker_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        processes_module,
+        "worker_route_for_device",
+        lambda _adapters, _record: ({"worker_guid": "worker-process-test", "upstream_port": 60124}, None),
+    )
+    monkeypatch.setattr(
+        processes_module,
+        "worker_host_service_registered",
+        lambda _app, _route, *, hostname, service_mode: hostname == "test-device" and service_mode == "system",
+    )
 
 
 def test_tunnel_service_creation_is_singleton_under_concurrency(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -528,9 +556,13 @@ def test_device_details(engine_harness: EngineTestHarness) -> None:
     assert payload["summary"]["hostname"] == "test-device"
 
 
-def test_device_services_action_and_refresh(engine_harness: EngineTestHarness) -> None:
+def test_device_services_action_and_refresh(
+    engine_harness: EngineTestHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = admin_client(engine_harness)
     now_ts = int(time.time())
+    emitted_events: list[tuple[str, str, str, dict[str, Any]]] = []
     set_device_services(
         engine_harness,
         {
@@ -545,7 +577,14 @@ def test_device_services_action_and_refresh(engine_harness: EngineTestHarness) -
             ],
         },
     )
-    engine_harness.context.emit_host_service_event = lambda hostname, mode, event, payload: True
+    _patch_services_worker_route(monkeypatch)
+    monkeypatch.setattr(
+        services_module,
+        "emit_worker_host_service_event",
+        lambda _app, _route, *, hostname, service_mode, event, payload: (
+            emitted_events.append((hostname, service_mode, event, payload)) or True
+        ),
+    )
 
     response = client.get("/api/device/services/test-device")
     assert response.status_code == 200
@@ -562,6 +601,8 @@ def test_device_services_action_and_refresh(engine_harness: EngineTestHarness) -
     service_entry = action_payload["services"][0]
     assert service_entry["pending_action"] == "restart"
     assert service_entry["desired_status"] == "running"
+    assert emitted_events
+    assert emitted_events[-1][2] == "service_control_action"
 
     device_client = engine_harness.app.test_client()
     refresh_response = device_client.post(
@@ -1248,11 +1289,7 @@ def test_device_software_uninstall_queues_quick_job(engine_harness: EngineTestHa
     )
 
     targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
-    monkeypatch.setattr(
-        engine_harness.context,
-        "has_host_service_socket",
-        lambda hostname, mode: hostname == "test-device" and mode == "system",
-    )
+    _patch_services_worker_route(monkeypatch)
     monkeypatch.setattr(
         engine_harness.context,
         "emit_host_service_event",
@@ -1335,43 +1372,42 @@ def test_device_processes_snapshot_uses_system_socket(
 ) -> None:
     client = admin_client(engine_harness)
     calls: list[tuple[str, str, str, dict[str, Any], float]] = []
-
-    monkeypatch.setattr(
-        engine_harness.context,
-        "has_host_service_socket",
-        lambda hostname, mode: hostname == "test-device" and mode == "system",
-        raising=False,
-    )
+    _patch_process_worker_route(monkeypatch)
 
     def _call_host_service_event(
+        _app,
+        _route,
+        *,
         hostname: str,
         service_mode: str,
         event: str,
         payload: dict[str, Any],
-        *,
-        timeout: float,
+        timeout_seconds: float,
     ):
-        calls.append((hostname, service_mode, event, payload, timeout))
-        return {
-            "ok": True,
-            "reported_at": 1_700_000_900,
-            "refresh_interval_ms": 5000,
-            "processes": [
-                {
-                    "id": "4242:1700000000",
-                    "pid": 4242,
-                    "parent_pid": 1,
-                    "name": "chrome.exe",
-                    "cpu_percent": 32.5,
-                    "memory_percent": 4.2,
-                    "memory_bytes": 536870912,
-                    "command_line": "chrome.exe --type=renderer",
-                    "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-                }
-            ],
-        }
+        calls.append((hostname, service_mode, event, payload, timeout_seconds))
+        return (
+            {
+                "ok": True,
+                "reported_at": 1_700_000_900,
+                "refresh_interval_ms": 5000,
+                "processes": [
+                    {
+                        "id": "4242:1700000000",
+                        "pid": 4242,
+                        "parent_pid": 1,
+                        "name": "chrome.exe",
+                        "cpu_percent": 32.5,
+                        "memory_percent": 4.2,
+                        "memory_bytes": 536870912,
+                        "command_line": "chrome.exe --type=renderer",
+                        "executable_path": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    }
+                ],
+            },
+            None,
+        )
 
-    monkeypatch.setattr(engine_harness.context, "call_host_service_event", _call_host_service_event, raising=False)
+    monkeypatch.setattr(processes_module, "call_worker_host_service_event", _call_host_service_event)
 
     response = client.get("/api/device/processes/test-device")
 
@@ -1399,13 +1435,7 @@ def test_device_process_terminate_sends_system_socket_request_and_notifies(
     client = admin_client(engine_harness)
     calls: list[tuple[str, str, str, dict[str, Any], float]] = []
     socket_events: list[tuple[str, Any]] = []
-
-    monkeypatch.setattr(
-        engine_harness.context,
-        "has_host_service_socket",
-        lambda hostname, mode: hostname == "test-device" and mode == "system",
-        raising=False,
-    )
+    _patch_process_worker_route(monkeypatch)
     monkeypatch.setattr(
         engine_harness.context.socketio,
         "emit",
@@ -1414,23 +1444,28 @@ def test_device_process_terminate_sends_system_socket_request_and_notifies(
     )
 
     def _call_host_service_event(
+        _app,
+        _route,
+        *,
         hostname: str,
         service_mode: str,
         event: str,
         payload: dict[str, Any],
-        *,
-        timeout: float,
+        timeout_seconds: float,
     ):
-        calls.append((hostname, service_mode, event, payload, timeout))
-        return {
-            "ok": True,
-            "reported_at": 1_700_001_100,
-            "refresh_interval_ms": 5000,
-            "terminated_pids": [4242],
-            "processes": [],
-        }
+        calls.append((hostname, service_mode, event, payload, timeout_seconds))
+        return (
+            {
+                "ok": True,
+                "reported_at": 1_700_001_100,
+                "refresh_interval_ms": 5000,
+                "terminated_pids": [4242],
+                "processes": [],
+            },
+            None,
+        )
 
-    monkeypatch.setattr(engine_harness.context, "call_host_service_event", _call_host_service_event, raising=False)
+    monkeypatch.setattr(processes_module, "call_worker_host_service_event", _call_host_service_event)
 
     response = client.post("/api/device/processes/test-device/terminate", json={"pid": 4242})
 
@@ -2637,10 +2672,11 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
     )
 
     targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    _patch_services_worker_route(monkeypatch)
     monkeypatch.setattr(
-        engine_harness.context,
-        "emit_host_service_event",
-        lambda hostname, service_mode, event, payload: (
+        services_module,
+        "emit_worker_host_service_event",
+        lambda _app, _route, *, hostname, service_mode, event, payload: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )
@@ -2716,10 +2752,11 @@ def test_device_software_icon_override_can_clear_icon_and_request_refresh(
     )
 
     targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    _patch_services_worker_route(monkeypatch)
     monkeypatch.setattr(
-        engine_harness.context,
-        "emit_host_service_event",
-        lambda hostname, service_mode, event, payload: (
+        services_module,
+        "emit_worker_host_service_event",
+        lambda _app, _route, *, hostname, service_mode, event, payload: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )
@@ -3360,10 +3397,11 @@ def test_device_software_refresh_route_requests_system_refresh(
 ) -> None:
     client = admin_client(engine_harness)
     targeted_events: list[tuple[str, str, str, dict[str, Any]]] = []
+    _patch_services_worker_route(monkeypatch)
     monkeypatch.setattr(
-        engine_harness.context,
-        "emit_host_service_event",
-        lambda hostname, service_mode, event, payload: (
+        services_module,
+        "emit_worker_host_service_event",
+        lambda _app, _route, *, hostname, service_mode, event, payload: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )

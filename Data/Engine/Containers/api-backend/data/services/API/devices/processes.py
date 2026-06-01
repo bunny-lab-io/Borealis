@@ -16,6 +16,11 @@ from typing import Any, Dict, Optional, Tuple
 from flask import Blueprint, jsonify, request
 
 from ...auth import UserSiteAccessManager
+from ...remote_ops.worker_bridge import (
+    call_worker_host_service_event,
+    worker_host_service_registered,
+    worker_route_for_device,
+)
 from .tunnel import _current_user, _require_login, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
@@ -115,10 +120,11 @@ def register_processes(app, adapters: "EngineServiceAdapters") -> None:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT hostname, agent_id, operating_system, last_seen
-                  FROM devices
-                 WHERE LOWER(hostname) = LOWER(?)
-              ORDER BY last_seen DESC
+                SELECT d.hostname, d.agent_id, d.operating_system, d.last_seen, ds.site_id
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 WHERE LOWER(d.hostname) = LOWER(?)
+              ORDER BY d.last_seen DESC
                  LIMIT 1
                 """,
                 (hostname,),
@@ -131,6 +137,7 @@ def register_processes(app, adapters: "EngineServiceAdapters") -> None:
                 "agent_id": _clean_text(row[1]),
                 "operating_system": _clean_text(row[2]),
                 "last_seen": row[3] or 0,
+                "site_id": int(row[4] or 0),
             }
         finally:
             if conn is not None:
@@ -139,21 +146,15 @@ def register_processes(app, adapters: "EngineServiceAdapters") -> None:
                 except Exception:
                     pass
 
-    def _agent_socket_available(hostname: str, agent_id: str) -> bool:
-        has_host_socket = getattr(adapters.context, "has_host_service_socket", None)
-        if callable(has_host_socket):
-            try:
-                if bool(has_host_socket(hostname, "system")):
-                    return True
-            except Exception:
-                logger.debug("has_host_service_socket failed hostname=%s", hostname, exc_info=True)
-        registry = getattr(adapters.context, "agent_socket_registry", None)
-        if registry and hasattr(registry, "is_registered") and agent_id:
-            try:
-                return bool(registry.is_registered(agent_id))
-            except Exception:
-                logger.debug("agent_socket_registry lookup failed agent_id=%s", agent_id, exc_info=True)
-        return False
+    def _system_socket_available(record: Dict[str, Any], worker_route: Dict[str, Any]) -> bool:
+        if not worker_route:
+            return False
+        return worker_host_service_registered(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or "",
+            service_mode="system",
+        )
 
     def _resolve_process_request_context(hostname: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], int]:
         requirement = _require_login(app)
@@ -179,31 +180,24 @@ def register_processes(app, adapters: "EngineServiceAdapters") -> None:
         timeout: float,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
         normalized_hostname = record.get("hostname") or hostname
-        agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
-        if not _agent_socket_available(normalized_hostname, agent_id):
+        worker_route, route_error = worker_route_for_device(adapters, record)
+        if route_error is not None:
+            return None, route_error
+        assert worker_route is not None
+        if not _system_socket_available(record, worker_route):
             return None, ({"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}, 503)
 
-        response = None
-        caller = getattr(adapters.context, "call_host_service_event", None)
-        if callable(caller):
-            try:
-                response = caller(
-                    normalized_hostname,
-                    "system",
-                    "process_management_request",
-                    payload,
-                    timeout=timeout,
-                )
-            except Exception:
-                logger.debug("process-management host rpc failed hostname=%s", normalized_hostname, exc_info=True)
-
-        if response is None and agent_id:
-            agent_caller = getattr(adapters.context, "call_agent_event", None)
-            if callable(agent_caller):
-                try:
-                    response = agent_caller(agent_id, "process_management_request", payload, timeout=timeout)
-                except Exception:
-                    logger.debug("process-management agent rpc failed agent_id=%s", agent_id, exc_info=True)
+        response, worker_error = call_worker_host_service_event(
+            app,
+            worker_route,
+            hostname=normalized_hostname,
+            service_mode="system",
+            event="process_management_request",
+            payload=payload,
+            timeout_seconds=timeout,
+        )
+        if worker_error is not None:
+            return None, worker_error
 
         if response is None:
             return None, ({"error": "timeout", "message": "The device did not answer the process request in time."}, 504)

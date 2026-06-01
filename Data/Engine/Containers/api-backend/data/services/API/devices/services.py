@@ -36,6 +36,11 @@ from ...auth import UserSiteAccessManager
 from ....auth.guid_utils import normalize_guid
 from ...activity_history import insert_activity_history_row, update_activity_history_row
 from ...job_scheduler.queue import enqueue_agent_maintenance_run
+from ...remote_ops.worker_bridge import (
+    emit_worker_host_service_event,
+    worker_host_service_registered,
+    worker_route_for_device,
+)
 from ..assemblies.execution import dispatch_inline_quick_job
 from .software_icons import (
     canonicalize_software_icon_override_resource,
@@ -486,10 +491,11 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             cur = conn.cursor()
             cur.execute(
                 """
-                SELECT hostname, agent_id, services, software, operating_system, last_seen
-                  FROM devices
-                 WHERE LOWER(hostname) = LOWER(?)
-              ORDER BY last_seen DESC
+                SELECT d.hostname, d.agent_id, d.services, d.software, d.operating_system, d.last_seen, ds.site_id
+                  FROM devices AS d
+             LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+                 WHERE LOWER(d.hostname) = LOWER(?)
+              ORDER BY d.last_seen DESC
                  LIMIT 1
                 """,
                 (hostname,),
@@ -504,6 +510,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 "software": row[3],
                 "operating_system": normalize_text(row[4]),
                 "last_seen": row[5] or 0,
+                "site_id": int(row[6] or 0),
             }
         finally:
             if conn is not None:
@@ -805,8 +812,6 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
     ) -> Tuple[bool, Dict[str, Any]]:
         requested_at = int(time.time())
         agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
-        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
-        emit_agent_event = getattr(adapters.context, "emit_agent_event", None)
         event_payload = {
             "hostname": record.get("hostname") or hostname,
             "agent_id": agent_id,
@@ -816,23 +821,16 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         }
 
         emitted = False
-        if callable(emit_host_service_event):
-            try:
-                emitted = bool(
-                    emit_host_service_event(
-                        record.get("hostname") or hostname,
-                        "system",
-                        "software_inventory_refresh_request",
-                        event_payload,
-                    )
-                )
-            except Exception:
-                emitted = False
-        if not emitted and callable(emit_agent_event) and agent_id:
-            try:
-                emitted = bool(emit_agent_event(agent_id, "software_inventory_refresh_request", event_payload))
-            except Exception:
-                emitted = False
+        worker_route, route_error = worker_route_for_device(adapters, record)
+        if route_error is None and worker_route is not None:
+            emitted = emit_worker_host_service_event(
+                app,
+                worker_route,
+                hostname=record.get("hostname") or hostname,
+                service_mode="system",
+                event="software_inventory_refresh_request",
+                payload=event_payload,
+            )
 
         log_payload = {
             "hostname": record.get("hostname") or hostname,
@@ -862,21 +860,16 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             )
         return emitted, log_payload
 
-    def _agent_socket_available(hostname: str, agent_id: str) -> bool:
-        has_host_socket = getattr(adapters.context, "has_host_service_socket", None)
-        if callable(has_host_socket):
-            try:
-                if bool(has_host_socket(hostname, "system")):
-                    return True
-            except Exception:
-                logger.debug("has_host_service_socket failed hostname=%s", hostname, exc_info=True)
-        registry = getattr(adapters.context, "agent_socket_registry", None)
-        if registry and hasattr(registry, "is_registered") and agent_id:
-            try:
-                return bool(registry.is_registered(agent_id))
-            except Exception:
-                logger.debug("agent_socket_registry lookup failed agent_id=%s", agent_id, exc_info=True)
-        return False
+    def _agent_socket_available(record: Dict[str, Any]) -> bool:
+        worker_route, route_error = worker_route_for_device(adapters, record)
+        if route_error or worker_route is None:
+            return False
+        return worker_host_service_registered(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or "",
+            service_mode="system",
+        )
 
     def _normalize_software_platform(operating_system: Any) -> str:
         value = normalize_text(operating_system).lower()
@@ -1189,7 +1182,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         response = {
             "hostname": record.get("hostname") or hostname,
             "agent_id": agent_id,
-            "agent_socket": _agent_socket_available(record.get("hostname") or hostname, agent_id),
+            "agent_socket": _agent_socket_available(record),
             "reported_at": services_payload.get("reported_at") or 0,
             "refresh_interval_seconds": 60,
             "count": len(services_payload.get("services") or []),
@@ -1233,8 +1226,6 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": "service_not_found"}), 404
 
         agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
-        emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
-        emit_agent_event = getattr(adapters.context, "emit_agent_event", None)
         event_payload = {
             "hostname": record.get("hostname") or hostname,
             "agent_id": agent_id,
@@ -1245,23 +1236,16 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         }
 
         emitted = False
-        if callable(emit_host_service_event):
-            try:
-                emitted = bool(
-                    emit_host_service_event(
-                        record.get("hostname") or hostname,
-                        "system",
-                        "service_control_action",
-                        event_payload,
-                    )
-                )
-            except Exception:
-                emitted = False
-        if not emitted and callable(emit_agent_event) and agent_id:
-            try:
-                emitted = bool(emit_agent_event(agent_id, "service_control_action", event_payload))
-            except Exception:
-                emitted = False
+        worker_route, route_error = worker_route_for_device(adapters, record)
+        if route_error is None and worker_route is not None:
+            emitted = emit_worker_host_service_event(
+                app,
+                worker_route,
+                hostname=record.get("hostname") or hostname,
+                service_mode="system",
+                event="service_control_action",
+                payload=event_payload,
+            )
         if not emitted:
             _service_log_event(
                 "device_services_action_unavailable hostname={0} agent_id={1} service_name={2} action={3} operator={4} remote={5}".format(
@@ -1604,7 +1588,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             )
 
         agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
-        if not _agent_socket_available(record.get("hostname") or hostname, agent_id):
+        if not _agent_socket_available(record):
             _agent_update_log_event(
                 "device_software_uninstall_unavailable hostname={0} agent_id={1} software_name={2} source={3} operator={4} remote={5}".format(
                     record.get("hostname") or hostname,
@@ -1794,10 +1778,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
             online_records = [
                 record
                 for record in candidate_records
-                if _agent_socket_available(
-                    normalize_text(record.get("hostname")),
-                    _resolve_requested_agent_id(adapters, record.get("agent_id")),
-                )
+                if _agent_socket_available(record)
             ]
             refresh_record = random.choice(online_records or candidate_records)
             refresh_hostname = normalize_text(refresh_record.get("hostname"))
@@ -1871,7 +1852,7 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                 continue
 
             agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
-            if not _agent_socket_available(hostname_value, agent_id):
+            if not _agent_socket_available(record):
                 errors.append(
                     {
                         "hostname": hostname_value,
