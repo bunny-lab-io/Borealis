@@ -464,7 +464,8 @@ function normalizeRows(payload, nowSeconds) {
         [];
       const containerId = String(worker?.container_id || "").trim();
       return {
-        id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
+        id: `site-worker-site-${siteId}`,
+        worker_instance_id: workerGuid || containerName || `site-worker-${siteId}-${index}`,
         worker_guid: workerGuid,
         site_id: siteId,
         site_name: String(worker?.site_name || siteNameFor(payload, siteId)).trim() || `Site ${siteId}`,
