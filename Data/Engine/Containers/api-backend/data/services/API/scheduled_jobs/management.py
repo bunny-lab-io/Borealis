@@ -567,7 +567,26 @@ def _register_internal_job_scheduler_routes(
         emitter = getattr(adapters.context, "emit_host_service_event", None)
         if not callable(emitter):
             return _internal_error("host_service_emitter_unavailable", 503)
-        emitted = bool(emitter(hostname, service_mode, event_name, payload))
+        try:
+            if "allow_pending" in body or "pending_ttl_seconds" in body:
+                try:
+                    pending_ttl_seconds = int(body.get("pending_ttl_seconds") or 180)
+                except Exception:
+                    pending_ttl_seconds = 180
+                emitted = bool(
+                    emitter(
+                        hostname,
+                        service_mode,
+                        event_name,
+                        payload,
+                        allow_pending=bool(body.get("allow_pending")),
+                        pending_ttl_seconds=pending_ttl_seconds,
+                    )
+                )
+            else:
+                emitted = bool(emitter(hostname, service_mode, event_name, payload))
+        except TypeError:
+            emitted = bool(emitter(hostname, service_mode, event_name, payload))
         return jsonify({"emitted": emitted})
 
     @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])

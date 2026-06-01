@@ -397,11 +397,21 @@ def register_realtime(socket_server: SocketIO, context: EngineContext) -> None:
     def _call_agent_event(agent_id: str, event: str, payload: Any, *, timeout: float = 30.0) -> Any:
         return agent_registry.call(agent_id, event, payload, timeout=timeout)
 
-    setattr(context, "emit_agent_event", _emit_agent_event)
-    setattr(context, "call_agent_event", _call_agent_event)
-    setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
-    setattr(context, "call_host_service_event", agent_registry.call_to_host)
-    setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
+    setattr(context, "legacy_emit_agent_event", _emit_agent_event)
+    setattr(context, "legacy_call_agent_event", _call_agent_event)
+    setattr(context, "legacy_emit_host_service_event", agent_registry.emit_to_host)
+    setattr(context, "legacy_call_host_service_event", agent_registry.call_to_host)
+    setattr(context, "legacy_has_host_service_socket", agent_registry.is_host_mode_registered)
+    if not callable(getattr(context, "emit_agent_event", None)):
+        setattr(context, "emit_agent_event", _emit_agent_event)
+    if not callable(getattr(context, "call_agent_event", None)):
+        setattr(context, "call_agent_event", _call_agent_event)
+    if not callable(getattr(context, "emit_host_service_event", None)):
+        setattr(context, "emit_host_service_event", agent_registry.emit_to_host)
+    if not callable(getattr(context, "call_host_service_event", None)):
+        setattr(context, "call_host_service_event", agent_registry.call_to_host)
+    if not callable(getattr(context, "has_host_service_socket", None)):
+        setattr(context, "has_host_service_socket", agent_registry.is_host_mode_registered)
 
     def _prewarm_vnc_credential(agent_id: str) -> None:
         normalized_agent_id = _normalize_text(agent_id)

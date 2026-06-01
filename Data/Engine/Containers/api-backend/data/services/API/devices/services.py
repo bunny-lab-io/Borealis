@@ -1960,7 +1960,6 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         requested_at = int(time.time())
         agent_id = _resolve_requested_agent_id(adapters, record.get("agent_id"))
         emit_host_service_event = getattr(adapters.context, "emit_host_service_event", None)
-        emit_agent_event = getattr(adapters.context, "emit_agent_event", None)
         event_payload = {
             "hostname": record.get("hostname") or hostname,
             "agent_id": agent_id,
@@ -1979,11 +1978,6 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
                         event_payload,
                     )
                 )
-            except Exception:
-                emitted = False
-        if not emitted and callable(emit_agent_event) and agent_id:
-            try:
-                emitted = bool(emit_agent_event(agent_id, "agent_update_request", event_payload))
             except Exception:
                 emitted = False
 

@@ -467,6 +467,9 @@ def register_api(app: Flask, context: EngineContext) -> None:
 
         if adapters is None:
             adapters = EngineServiceAdapters(context)
+            from ..remote_ops.worker_bridge import install_context_worker_bridge
+
+            install_context_worker_bridge(app, adapters)
         registrar = _GROUP_REGISTRARS.get(group)
         if registrar is None:
             context.logger.info("Engine API group '%s' is not implemented; skipping.", group)

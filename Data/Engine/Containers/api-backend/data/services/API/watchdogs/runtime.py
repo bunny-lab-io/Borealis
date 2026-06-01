@@ -3469,13 +3469,10 @@ class WatchdogRuntimeService:
             )
         )
         emit_host_service_event = getattr(self._context, "emit_host_service_event", None) if self._context is not None else None
-        emit_agent_event = getattr(self._context, "emit_agent_event", None) if self._context is not None else None
         emitted = False
         run_mode = _clean_text(action.get("run_mode") or "system").lower()
         if callable(emit_host_service_event) and run_mode in VALID_SCRIPT_RUN_MODES:
             emitted = bool(emit_host_service_event(hostname, run_mode, "quick_job_run", payload))
-        if not emitted and callable(emit_agent_event) and _clean_text(device.get("agent_id")):
-            emitted = bool(emit_agent_event(_clean_text(device.get("agent_id")), "quick_job_run", payload))
         if not emitted:
             return {"status": "failed", "message": "No compatible agent socket is connected for quick job delivery."}
         return {"status": "queued", "activity_id": activity_id, "message": "Script assembly queued successfully."}
@@ -3626,7 +3623,6 @@ class WatchdogRuntimeService:
         if updated_services is None:
             return {"type": "service_control", "status": "failed", "message": f"Service {service_name} was not found."}
         emit_host_service_event = getattr(self._context, "emit_host_service_event", None) if self._context is not None else None
-        emit_agent_event = getattr(self._context, "emit_agent_event", None) if self._context is not None else None
         event_payload = {
             "hostname": hostname,
             "agent_id": _clean_text(device.get("agent_id")),
@@ -3638,8 +3634,6 @@ class WatchdogRuntimeService:
         emitted = False
         if callable(emit_host_service_event):
             emitted = bool(emit_host_service_event(hostname, "system", "service_control_action", event_payload))
-        if not emitted and callable(emit_agent_event) and _clean_text(device.get("agent_id")):
-            emitted = bool(emit_agent_event(_clean_text(device.get("agent_id")), "service_control_action", event_payload))
         if not emitted:
             return {"type": "service_control", "status": "failed", "message": "No agent socket is connected for service remediation."}
         conn = self._conn()

@@ -65,6 +65,57 @@ def worker_route_for_device(
     return dict(route), None
 
 
+def device_record_for_hostname(
+    adapters: Any,
+    hostname: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
+    normalized_hostname = _normalize_text(hostname)
+    if not normalized_hostname:
+        return None, ({"error": "hostname_required"}, 400)
+
+    conn = None
+    try:
+        conn = adapters.db_conn_factory()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT d.hostname, d.agent_id, ds.site_id
+              FROM devices AS d
+         LEFT JOIN device_sites AS ds ON ds.device_hostname = d.hostname
+             WHERE LOWER(d.hostname)=LOWER(?)
+          ORDER BY d.last_seen DESC
+             LIMIT 1
+            """,
+            (normalized_hostname,),
+        )
+        row = cur.fetchone()
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    if not row:
+        return None, ({"error": "device_not_found"}, 404)
+    return {
+        "hostname": _normalize_text(row[0]) or normalized_hostname,
+        "agent_id": _normalize_text(row[1]),
+        "site_id": int(row[2] or 0),
+    }, None
+
+
+def worker_route_for_hostname(
+    adapters: Any,
+    hostname: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]], Optional[Dict[str, Any]]]:
+    record, record_error = device_record_for_hostname(adapters, hostname)
+    if record_error is not None or record is None:
+        return None, record_error, record
+    route, route_error = worker_route_for_device(adapters, record)
+    return route, route_error, record
+
+
 def worker_internal_headers(app: Any) -> Dict[str, str]:
     return {
         INTERNAL_TOKEN_HEADER: internal_token(require_app_secret(app)),
@@ -177,11 +228,81 @@ def emit_worker_host_service_event(
     return bool((response_payload or {}).get("emitted") or (response_payload or {}).get("queued"))
 
 
+def install_context_worker_bridge(app: Any, adapters: Any) -> None:
+    """Install site-worker-backed host-service helpers on Engine context."""
+
+    def _emit_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        allow_pending: bool = False,
+        pending_ttl_seconds: int = 180,
+    ) -> bool:
+        worker_route, route_error, record = worker_route_for_hostname(adapters, hostname)
+        if route_error is not None or worker_route is None or record is None:
+            return False
+        return emit_worker_host_service_event(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or hostname,
+            service_mode=service_mode or "system",
+            event=event_name,
+            payload=payload if isinstance(payload, Mapping) else {"payload": payload},
+            allow_pending=allow_pending,
+            pending_ttl_seconds=pending_ttl_seconds,
+        )
+
+    def _call_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        timeout: float = 30.0,
+    ) -> Any:
+        worker_route, route_error, record = worker_route_for_hostname(adapters, hostname)
+        if route_error is not None or worker_route is None or record is None:
+            return None
+        response, error = call_worker_host_service_event(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or hostname,
+            service_mode=service_mode or "system",
+            event=event_name,
+            payload=payload if isinstance(payload, Mapping) else {"payload": payload},
+            timeout_seconds=timeout,
+        )
+        if error is not None:
+            return None
+        return response
+
+    def _has_host_service_socket(hostname: str, service_mode: str = "system") -> bool:
+        worker_route, route_error, record = worker_route_for_hostname(adapters, hostname)
+        if route_error is not None or worker_route is None or record is None:
+            return False
+        return worker_host_service_registered(
+            app,
+            worker_route,
+            hostname=record.get("hostname") or hostname,
+            service_mode=service_mode or "system",
+        )
+
+    setattr(adapters.context, "emit_host_service_event", _emit_host_service_event)
+    setattr(adapters.context, "call_host_service_event", _call_host_service_event)
+    setattr(adapters.context, "has_host_service_socket", _has_host_service_socket)
+    setattr(adapters.context, "site_worker_host_service_bridge_enabled", True)
+
+
 __all__ = [
     "call_worker_host_service_event",
+    "device_record_for_hostname",
     "emit_worker_host_service_event",
+    "install_context_worker_bridge",
     "post_worker_json",
     "worker_host_service_registered",
+    "worker_route_for_hostname",
     "worker_internal_headers",
     "worker_route_for_device",
     "worker_route_url",
