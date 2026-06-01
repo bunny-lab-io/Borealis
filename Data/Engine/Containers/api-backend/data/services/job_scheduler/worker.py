@@ -17,6 +17,7 @@ from Data.Engine.services.ansible import EngineAnsibleRunner
 from Data.Engine.services.assemblies.service import AssemblyRuntimeService
 from Data.Engine.assembly_management import initialise_assembly_runtime
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
+from Data.Engine.services.remote_ops.worker_bridge import host_service_event_allows_pending
 
 from .queue import (
     LANE_ONBOARDING,
@@ -138,6 +139,54 @@ def _post_internal(secret: str, path: str, payload: Mapping[str, Any], *, timeou
     return dict(parsed or {}) if isinstance(parsed, Mapping) else {}
 
 
+def _pending_host_event_ttl_seconds() -> int:
+    return _positive_int_env("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", 180)
+
+
+def _emit_or_queue_socket_runtime_event(
+    socket_runtime: SiteWorkerSocketRuntime,
+    hostname: str,
+    service_mode: str,
+    event_name: str,
+    payload: Mapping[str, Any],
+) -> tuple[bool, str]:
+    try:
+        if socket_runtime.emit_host_service_event(hostname, service_mode, event_name, dict(payload or {})):
+            return True, "emitted"
+    except Exception:
+        return False, "error"
+    if not host_service_event_allows_pending(event_name):
+        return False, "missing_socket"
+    queue_event = getattr(socket_runtime, "queue_host_service_event", None)
+    if not callable(queue_event):
+        return False, "missing_socket"
+    try:
+        if queue_event(
+            hostname,
+            service_mode,
+            event_name,
+            dict(payload or {}),
+            ttl_seconds=_pending_host_event_ttl_seconds(),
+        ):
+            return True, "queued"
+    except Exception:
+        return False, "error"
+    return False, "missing_socket"
+
+
+def _host_service_event_payload(hostname: str, service_mode: str, event_name: str, payload: Any) -> Dict[str, Any]:
+    request_payload: Dict[str, Any] = {
+        "hostname": hostname,
+        "service_mode": service_mode,
+        "event_name": event_name,
+        "payload": payload,
+    }
+    if host_service_event_allows_pending(event_name):
+        request_payload["allow_pending"] = True
+        request_payload["pending_ttl_seconds"] = _pending_host_event_ttl_seconds()
+    return request_payload
+
+
 def _positive_ints(values) -> list[int]:
     results = []
     for value in values or []:
@@ -218,23 +267,31 @@ def _build_worker_scheduler(settings, logger, db_factory, *, socket_runtime: Opt
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
     job_scheduler.set_public_base_url_lookup(scheduler, lambda: _public_base_url(settings, secret))
     if socket_runtime is not None:
-        job_scheduler.set_host_service_emitter(scheduler, socket_runtime.emit_host_service_event)
+        def _emit_via_socket_runtime(hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
+            delivered, _delivery = _emit_or_queue_socket_runtime_event(
+                socket_runtime,
+                hostname,
+                service_mode,
+                event_name,
+                payload if isinstance(payload, Mapping) else {"payload": payload},
+            )
+            return delivered
+
+        job_scheduler.set_host_service_emitter(scheduler, _emit_via_socket_runtime)
     else:
-        job_scheduler.set_host_service_emitter(
-            scheduler,
-            lambda hostname, service_mode, event_name, payload: bool(
+        def _emit_via_internal_api(hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
+            return bool(
                 _post_internal(
                     secret,
                     "/api/internal/job-scheduler/host-service-event",
-                    {
-                        "hostname": hostname,
-                        "service_mode": service_mode,
-                        "event_name": event_name,
-                        "payload": payload,
-                    },
+                    _host_service_event_payload(hostname, service_mode, event_name, payload),
                     timeout=20.0,
                 ).get("emitted")
-            ),
+            )
+
+        job_scheduler.set_host_service_emitter(
+            scheduler,
+            _emit_via_internal_api,
         )
     job_scheduler.set_workflow_run_launcher(
         scheduler,
@@ -487,26 +544,29 @@ def _run_agent_maintenance_item(
     service_mode = str(payload.get("service_mode") or "system")
     event_name = str(payload.get("event_name") or "agent_maintenance_request")
     if socket_runtime is not None:
-        emitted = socket_runtime.emit_host_service_event(hostname, service_mode, event_name, dict(event_payload))
+        emitted, delivery_state = _emit_or_queue_socket_runtime_event(
+            socket_runtime,
+            hostname,
+            service_mode,
+            event_name,
+            dict(event_payload),
+        )
     else:
         response = _post_internal(
             str(settings.secret_key or ""),
             "/api/internal/job-scheduler/host-service-event",
-            {
-                "hostname": hostname,
-                "service_mode": service_mode,
-                "event_name": event_name,
-                "payload": dict(event_payload),
-            },
+            _host_service_event_payload(hostname, service_mode, event_name, dict(event_payload)),
             timeout=30.0,
         )
         emitted = bool(response.get("emitted"))
+        delivery_state = "emitted_or_queued" if emitted else "missing_socket"
     if not emitted:
         error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
         _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
         raise RuntimeError(error)
+    verb = "queued" if delivery_state == "queued" else "emitted"
     stdout = (
-        f"Site worker emitted agent maintenance operation_id={operation_id} "
+        f"Site worker {verb} agent maintenance operation_id={operation_id} "
         f"action={payload.get('action') or '-'} release_channel={payload.get('release_channel') or '-'} "
         f"branch={payload.get('branch') or '-'}\n"
     )

@@ -4,10 +4,49 @@ import base64
 from typing import Any
 
 from Data.Engine.services.job_scheduler.queue import WORKER_STATUS_RUNNING, register_worker
+from Data.Engine.services.job_scheduler import worker as site_worker
 from Data.Engine.services.remote_ops import worker_bridge
 
 from .conftest import EngineTestHarness
 from .support.engine import admin_client, db_connection
+
+
+class _FakeSocketRuntime:
+    def __init__(self, *, emit_result: bool = False) -> None:
+        self.emit_result = emit_result
+        self.emitted: list[dict[str, Any]] = []
+        self.queued: list[dict[str, Any]] = []
+
+    def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
+        self.emitted.append(
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": payload,
+            }
+        )
+        return self.emit_result
+
+    def queue_host_service_event(
+        self,
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        ttl_seconds: Any = None,
+    ) -> bool:
+        self.queued.append(
+            {
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event_name": event_name,
+                "payload": payload,
+                "ttl_seconds": ttl_seconds,
+            }
+        )
+        return True
 
 
 def _seed_worker_route(
@@ -96,6 +135,8 @@ def test_context_host_service_bridge_targets_active_site_worker(
     assert calls[-1]["payload"]["service_mode"] == "system"
     assert calls[-1]["payload"]["event_name"] == "quick_job_run"
     assert calls[-1]["payload"]["payload"]["job_id"] == 77
+    assert calls[-1]["payload"]["allow_pending"] is True
+    assert calls[-1]["payload"]["pending_ttl_seconds"] == 180
 
 
 def test_realtime_bootstrap_preserves_site_worker_host_service_bridge(
@@ -164,6 +205,8 @@ def test_quick_run_dispatches_through_site_worker_bridge(
     assert call["path"] == "/remote-ops/host-service/event"
     assert call["route"]["worker_guid"] == "worker-m11-bridge"
     assert call["payload"]["event_name"] == "quick_job_run"
+    assert call["payload"]["allow_pending"] is True
+    assert call["payload"]["pending_ttl_seconds"] == 180
     dispatched = call["payload"]["payload"]
     assert dispatched["target_hostname"] == "test-device"
     assert dispatched["script_type"] == "powershell"
@@ -171,3 +214,39 @@ def test_quick_run_dispatches_through_site_worker_bridge(
     assert base64.b64decode(dispatched["script_content"]).decode("utf-8") == "Write-Output 'm11 quick job'\n"
     assert not any(event == "quick_job_run" for event, _payload, _to in socket_events)
     assert any(event == "device_activity_changed" for event, _payload, _to in socket_events)
+
+
+def test_site_worker_local_dispatch_queues_quick_job_when_socket_reconnecting(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", raising=False)
+    runtime = _FakeSocketRuntime(emit_result=False)
+
+    delivered, delivery_state = site_worker._emit_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "quick_job_run",
+        {"job_id": 106},
+    )
+
+    assert delivered is True
+    assert delivery_state == "queued"
+    assert runtime.emitted[0]["hostname"] == "LAB-OPERATOR-01"
+    assert runtime.queued[0]["event_name"] == "quick_job_run"
+    assert runtime.queued[0]["ttl_seconds"] == 180
+
+
+def test_site_worker_local_dispatch_does_not_queue_unlisted_events() -> None:
+    runtime = _FakeSocketRuntime(emit_result=False)
+
+    delivered, delivery_state = site_worker._emit_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "process_control_request",
+        {"request_id": "req-1"},
+    )
+
+    assert delivered is False
+    assert delivery_state == "missing_socket"
+    assert runtime.emitted
+    assert runtime.queued == []

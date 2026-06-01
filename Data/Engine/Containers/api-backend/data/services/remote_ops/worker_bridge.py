@@ -10,6 +10,13 @@ from ..auth.secrets import require_app_secret
 from ..job_scheduler.queue import active_worker_route_for_site, ensure_job_scheduler_tables
 from ..job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 
+PENDING_HOST_SERVICE_EVENTS = {
+    "agent_maintenance_request",
+    "agent_update_request",
+    "quick_job_run",
+    "software_inventory_refresh_request",
+}
+
 
 def _normalize_text(value: Any) -> str:
     if value is None:
@@ -18,6 +25,10 @@ def _normalize_text(value: Any) -> str:
         return str(value).strip()
     except Exception:
         return ""
+
+
+def host_service_event_allows_pending(event_name: Any) -> bool:
+    return _normalize_text(event_name).lower() in PENDING_HOST_SERVICE_EVENTS
 
 
 def worker_route_url(worker_route: Mapping[str, Any], path: str) -> str:
@@ -250,7 +261,7 @@ def install_context_worker_bridge(app: Any, adapters: Any) -> None:
             service_mode=service_mode or "system",
             event=event_name,
             payload=payload if isinstance(payload, Mapping) else {"payload": payload},
-            allow_pending=allow_pending,
+            allow_pending=bool(allow_pending or host_service_event_allows_pending(event_name)),
             pending_ttl_seconds=pending_ttl_seconds,
         )
 
@@ -299,6 +310,7 @@ __all__ = [
     "call_worker_host_service_event",
     "device_record_for_hostname",
     "emit_worker_host_service_event",
+    "host_service_event_allows_pending",
     "install_context_worker_bridge",
     "post_worker_json",
     "worker_host_service_registered",
