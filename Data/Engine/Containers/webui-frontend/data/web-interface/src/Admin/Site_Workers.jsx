@@ -200,7 +200,7 @@ const TASK_SECTIONS = [
 
 const CONNECTION_SECTIONS = [
   { key: "connected", label: "Connected", color: "#00d18c" },
-  { key: "disconnected", label: "Disconnected", color: "#f0c36d" },
+  { key: "disconnected", label: "Disconnected", color: "#ff4f4f" },
   { key: "offline", label: "Offline", color: "#999999" },
 ];
 
