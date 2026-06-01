@@ -689,7 +689,9 @@ function StatusPill({ label, tone }) {
         verticalAlign: "middle",
       }}
     >
-      {label}
+      <Box component="span" sx={{ display: "inline-block", transform: "translateY(-1px)" }}>
+        {label}
+      </Box>
     </Box>
   );
 }
@@ -786,9 +788,9 @@ function ContainerCell(params) {
         title={row.container_id_full || row.container_name || row.container_id}
         sx={{
           color: muted ? PLACEHOLDER_TEXT_COLOR : "#f4f7ff",
-          fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace',
-          fontSize: "0.82rem",
-          lineHeight: 1.4,
+          fontSize: "0.84rem",
+          fontWeight: 700,
+          lineHeight: 1.35,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
