@@ -581,7 +581,7 @@ def test_device_services_action_and_refresh(
     monkeypatch.setattr(
         services_module,
         "emit_worker_host_service_event",
-        lambda _app, _route, *, hostname, service_mode, event, payload: (
+        lambda _app, _route, *, hostname, service_mode, event, payload, **_kwargs: (
             emitted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )
@@ -2676,7 +2676,7 @@ def test_device_software_icon_override_persists_rule_and_requests_refresh(
     monkeypatch.setattr(
         services_module,
         "emit_worker_host_service_event",
-        lambda _app, _route, *, hostname, service_mode, event, payload: (
+        lambda _app, _route, *, hostname, service_mode, event, payload, **_kwargs: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )
@@ -2756,7 +2756,7 @@ def test_device_software_icon_override_can_clear_icon_and_request_refresh(
     monkeypatch.setattr(
         services_module,
         "emit_worker_host_service_event",
-        lambda _app, _route, *, hostname, service_mode, event, payload: (
+        lambda _app, _route, *, hostname, service_mode, event, payload, **_kwargs: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )
@@ -3401,7 +3401,7 @@ def test_device_software_refresh_route_requests_system_refresh(
     monkeypatch.setattr(
         services_module,
         "emit_worker_host_service_event",
-        lambda _app, _route, *, hostname, service_mode, event, payload: (
+        lambda _app, _route, *, hostname, service_mode, event, payload, **_kwargs: (
             targeted_events.append((hostname, service_mode, event, payload)) or True
         ),
     )

@@ -358,6 +358,54 @@ def test_site_worker_internal_host_service_call_bridge(tmp_path: Path, monkeypat
     ]
 
 
+def test_site_worker_queues_pending_host_service_event_until_agent_registers(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path)
+
+    response = runtime.app.test_client().post(
+        "/remote-ops/host-service/event",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "hostname": AGENT_HOSTNAME,
+            "service_mode": "system",
+            "event_name": "software_inventory_refresh_request",
+            "payload": {"reason": "unit"},
+            "allow_pending": True,
+            "pending_ttl_seconds": 180,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"emitted": False, "queued": True}
+
+    client = runtime.socketio.test_client(
+        runtime.app,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert client.is_connected()
+
+    ack = client.emit(
+        "connect_agent",
+        {
+            "agent_id": AGENT_ID,
+            "hostname": AGENT_HOSTNAME,
+            "service_mode": "system",
+        },
+        callback=True,
+    )
+
+    assert ack["status"] == "ok"
+    received = client.get_received()
+    assert any(
+        item["name"] == "software_inventory_refresh_request"
+        and item["args"]
+        and item["args"][0].get("reason") == "unit"
+        for item in received
+    )
+    client.disconnect()
+
+
 def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, _token = _runtime(tmp_path)

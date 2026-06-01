@@ -155,6 +155,8 @@ def emit_worker_host_service_event(
     service_mode: str,
     event: str,
     payload: Mapping[str, Any],
+    allow_pending: bool = False,
+    pending_ttl_seconds: int = 180,
 ) -> bool:
     response_payload, error = post_worker_json(
         app,
@@ -165,12 +167,14 @@ def emit_worker_host_service_event(
             "service_mode": service_mode or "system",
             "event_name": event,
             "payload": dict(payload or {}),
+            "allow_pending": bool(allow_pending),
+            "pending_ttl_seconds": int(pending_ttl_seconds or 0),
         },
         timeout=5.0,
     )
     if error:
         return False
-    return bool((response_payload or {}).get("emitted"))
+    return bool((response_payload or {}).get("emitted") or (response_payload or {}).get("queued"))
 
 
 __all__ = [

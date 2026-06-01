@@ -52,6 +52,8 @@ from Data.Engine.services.remote_ops.agent_socket_registry import (
     infer_guid_from_agent_id,
     infer_hostname_from_agent_id,
     normalize_helper_contexts,
+    normalize_host_key,
+    normalize_service_mode,
 )
 from Data.Engine.services.remote_ops.sessions import RemoteOpSessionError, verify_remote_op_session
 from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
@@ -250,6 +252,13 @@ class SiteWorkerSocketRuntime:
             ttl_seconds=FILE_TRANSFER_SESSION_TTL_SECONDS,
             logger=logger.getChild("file_transfer_store"),
         )
+        try:
+            pending_event_ttl = int(os.environ.get("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS") or "180")
+        except Exception:
+            pending_event_ttl = 180
+        self._pending_host_event_ttl_seconds = max(30, min(900, pending_event_ttl))
+        self._pending_host_event_lock = threading.RLock()
+        self._pending_host_events: Dict[tuple[str, str], list[Dict[str, Any]]] = {}
         self._thread: Optional[threading.Thread] = None
         self._register_routes()
         self._register_file_management_routes()
@@ -301,10 +310,20 @@ class SiteWorkerSocketRuntime:
             service_mode = str(data.get("service_mode") or data.get("mode") or "system").strip() or "system"
             event_name = str(data.get("event_name") or "").strip()
             payload = data.get("payload")
+            allow_pending = bool(data.get("allow_pending"))
             if not hostname or not event_name:
                 return jsonify({"error": "hostname_and_event_name_required"}), 400
             emitted = self.emit_host_service_event(hostname, service_mode, event_name, payload)
-            return jsonify({"emitted": bool(emitted)}), 200
+            queued = False
+            if not emitted and allow_pending:
+                queued = self.queue_host_service_event(
+                    hostname,
+                    service_mode,
+                    event_name,
+                    payload,
+                    ttl_seconds=data.get("pending_ttl_seconds"),
+                )
+            return jsonify({"emitted": bool(emitted), "queued": bool(queued)}), 200
 
         @self.app.route("/remote-ops/host-service/call", methods=["POST"])
         def _host_service_call():
@@ -929,6 +948,7 @@ class SiteWorkerSocketRuntime:
                     _remote_addr() or "-",
                 )
             )
+            self._drain_pending_host_service_events(inferred_hostname, service_mode)
             return {"status": "ok", "worker_guid": self.worker_guid, "site_id": self.site_id}
 
         @self.socketio.on("disconnect")
@@ -1467,6 +1487,88 @@ class SiteWorkerSocketRuntime:
 
     def emit_host_service_event(self, hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
         return self.registry.emit_to_host(hostname, service_mode, event_name, payload)
+
+    def queue_host_service_event(
+        self,
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        *,
+        ttl_seconds: Any = None,
+    ) -> bool:
+        host_key = normalize_host_key(hostname)
+        mode_key = normalize_service_mode(service_mode)
+        normalized_event = str(event_name or "").strip()
+        if not host_key or not mode_key or not normalized_event:
+            return False
+        try:
+            requested_ttl = int(ttl_seconds or self._pending_host_event_ttl_seconds)
+        except Exception:
+            requested_ttl = self._pending_host_event_ttl_seconds
+        now = _now_ts()
+        expires_at = now + max(1, min(900, requested_ttl))
+        entry = {
+            "event_name": normalized_event,
+            "payload": payload,
+            "queued_at": now,
+            "expires_at": expires_at,
+        }
+        key = (host_key, mode_key)
+        with self._pending_host_event_lock:
+            current = [
+                row
+                for row in self._pending_host_events.get(key, [])
+                if int(row.get("expires_at") or 0) >= now
+            ]
+            current.append(entry)
+            self._pending_host_events[key] = current[-20:]
+        self._log(
+            "host_service_event_queued hostname={0} service_mode={1} event={2} expires_at={3}".format(
+                host_key,
+                mode_key,
+                normalized_event,
+                expires_at,
+            )
+        )
+        return True
+
+    def _drain_pending_host_service_events(self, hostname: str, service_mode: str) -> None:
+        host_key = normalize_host_key(hostname)
+        mode_key = normalize_service_mode(service_mode)
+        if not host_key or not mode_key:
+            return
+        key = (host_key, mode_key)
+        with self._pending_host_event_lock:
+            pending = list(self._pending_host_events.pop(key, []))
+        if not pending:
+            return
+        now = _now_ts()
+        remaining: list[Dict[str, Any]] = []
+        delivered = 0
+        expired = 0
+        for entry in pending:
+            if int(entry.get("expires_at") or 0) < now:
+                expired += 1
+                continue
+            if self.emit_host_service_event(host_key, mode_key, str(entry.get("event_name") or ""), entry.get("payload")):
+                delivered += 1
+            else:
+                remaining.append(entry)
+        if remaining:
+            with self._pending_host_event_lock:
+                existing = self._pending_host_events.get(key, [])
+                self._pending_host_events[key] = (remaining + existing)[-20:]
+        if delivered or expired:
+            self._log(
+                "host_service_event_drain hostname={0} service_mode={1} delivered={2} expired={3} remaining={4}".format(
+                    host_key,
+                    mode_key,
+                    delivered,
+                    expired,
+                    len(remaining),
+                )
+            )
 
     def call_host_service_event(
         self,

@@ -821,16 +821,23 @@ def register_services(app, adapters: "EngineServiceAdapters") -> None:
         }
 
         emitted = False
-        worker_route, route_error = worker_route_for_device(adapters, record)
-        if route_error is None and worker_route is not None:
-            emitted = emit_worker_host_service_event(
-                app,
-                worker_route,
-                hostname=record.get("hostname") or hostname,
-                service_mode="system",
-                event="software_inventory_refresh_request",
-                payload=event_payload,
-            )
+        deadline = time.time() + 8.0
+        while True:
+            worker_route, route_error = worker_route_for_device(adapters, record)
+            if route_error is None and worker_route is not None:
+                emitted = emit_worker_host_service_event(
+                    app,
+                    worker_route,
+                    hostname=record.get("hostname") or hostname,
+                    service_mode="system",
+                    event="software_inventory_refresh_request",
+                    payload=event_payload,
+                    allow_pending=True,
+                    pending_ttl_seconds=180,
+                )
+            if emitted or time.time() >= deadline:
+                break
+            time.sleep(0.5)
 
         log_payload = {
             "hostname": record.get("hostname") or hostname,
