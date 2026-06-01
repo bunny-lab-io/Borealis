@@ -689,9 +689,7 @@ function StatusPill({ label, tone }) {
         verticalAlign: "middle",
       }}
     >
-      <Box component="span" sx={{ display: "inline-block", transform: "translateY(-2px)" }}>
-        {label}
-      </Box>
+      {label}
     </Box>
   );
 }
