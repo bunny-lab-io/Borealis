@@ -120,6 +120,9 @@ const GRID_SHELL_SX = {
     color: "#7dd3fc",
     background: "rgba(125,211,252,0.08)",
   },
+  "& .ag-sort-order, & .ag-sort-indicator-number": {
+    display: "none !important",
+  },
   "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
     display: "flex",
     alignItems: "center",
@@ -154,6 +157,7 @@ const GRID_SHELL_SX = {
   },
   "& .ag-center-cols-container .ag-cell.center-col .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell.center-col .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell.center-col .ag-cell-value": {
     display: "flex",
+    alignItems: "center",
     justifyContent: "center",
   },
   "& .ag-row": {
@@ -858,7 +862,11 @@ function CreatedCell(params) {
 }
 
 function StatusCell(params) {
-  return <StatusPill label={params?.data?.status_label || "Unknown"} tone={params?.data?.status_tone || "unknown"} />;
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+      <StatusPill label={params?.data?.status_label || "Unknown"} tone={params?.data?.status_tone || "unknown"} />
+    </Box>
+  );
 }
 
 function ConnectedDevicesCell(params) {
