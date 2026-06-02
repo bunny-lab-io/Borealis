@@ -19,6 +19,7 @@ type agentMetadataFieldStore interface {
 func registerAgentReadRoutes(mux *http.ServeMux, auth *authService, signer *agentJWTSigner, dpop *dpopVerifier) {
 	mux.HandleFunc("GET /api/agent/metadata/{field_number}", agentMetadataFieldHandler(auth, signer, dpop))
 	mux.HandleFunc("GET /api/agent/software-management/overrides", agentSoftwareManagementOverridesHandler(auth, signer, dpop))
+	registerAgentUpdateRoutes(mux, auth, signer, dpop)
 }
 
 func agentMetadataFieldHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier) http.HandlerFunc {
