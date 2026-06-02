@@ -21,51 +21,62 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles           map[string]operatorProfile
-	err                error
-	search             []deviceSearchMatch
-	searchErr          error
-	searchProfile      operatorProfile
-	searchQuery        string
-	devices            []map[string]any
-	deviceErr          error
-	deviceProfile      operatorProfile
-	deviceFilter       deviceListFilter
-	deviceDetail       map[string]any
-	deviceDetailStatus int
-	deviceDetailErr    error
-	deviceDetailGUID   string
-	deviceDetailHost   string
-	sites              []map[string]any
-	siteErr            error
-	siteProfile        operatorProfile
-	siteMap            map[string]map[string]any
-	siteMapErr         error
-	siteMapHostnames   []string
-	views              []map[string]any
-	viewErr            error
-	viewByID           map[int64]map[string]any
-	viewIDSeen         int64
-	createdView        deviceViewMutation
-	updatedView        deviceViewMutation
-	deletedViewID      int64
-	viewMutationStatus int
-	metadataFields     []map[string]any
-	metadataErr        error
-	deviceMetadata     map[string]any
-	deviceMetaStatus   int
-	deviceMetaErr      error
-	deviceMetaID       string
-	deviceMetaProfile  operatorProfile
-	serverWorkers      map[string]any
-	serverWorkerErr    error
-	workerHistory      int
-	workerContainers   bool
-	githubToken        map[string]any
-	tokenRefreshReq    agentTokenRefreshRequest
-	tokenRefreshResult agentTokenRefreshResult
-	tokenRefreshStatus int
-	tokenRefreshErr    error
+	profiles            map[string]operatorProfile
+	err                 error
+	search              []deviceSearchMatch
+	searchErr           error
+	searchProfile       operatorProfile
+	searchQuery         string
+	devices             []map[string]any
+	deviceErr           error
+	deviceProfile       operatorProfile
+	deviceFilter        deviceListFilter
+	deviceDetail        map[string]any
+	deviceDetailStatus  int
+	deviceDetailErr     error
+	deviceDetailGUID    string
+	deviceDetailHost    string
+	sites               []map[string]any
+	siteErr             error
+	siteProfile         operatorProfile
+	siteMap             map[string]map[string]any
+	siteMapErr          error
+	siteMapHostnames    []string
+	views               []map[string]any
+	viewErr             error
+	viewByID            map[int64]map[string]any
+	viewIDSeen          int64
+	createdView         deviceViewMutation
+	updatedView         deviceViewMutation
+	deletedViewID       int64
+	viewMutationStatus  int
+	metadataFields      []map[string]any
+	metadataErr         error
+	deviceMetadata      map[string]any
+	deviceMetaStatus    int
+	deviceMetaErr       error
+	deviceMetaID        string
+	deviceMetaProfile   operatorProfile
+	serverWorkers       map[string]any
+	serverWorkerErr     error
+	workerHistory       int
+	workerContainers    bool
+	githubToken         map[string]any
+	tokenRefreshReq     agentTokenRefreshRequest
+	tokenRefreshResult  agentTokenRefreshResult
+	tokenRefreshStatus  int
+	tokenRefreshErr     error
+	deviceAuthRecord    deviceBearerAuthRecord
+	deviceAuthFound     bool
+	requiredVersion     *int
+	agentHashLookupGUID string
+	agentHashLookupID   string
+	agentHashLookup     map[string]any
+	agentHashUpdateReq  agentHashUpdateRequest
+	agentHashUpdate     map[string]any
+	agentHashStatus     int
+	agentHashErr        error
+	agentHashList       []map[string]any
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -338,6 +349,58 @@ func (s *fakeOperatorStore) refreshAgentToken(_ context.Context, request agentTo
 	return result, status, nil
 }
 
+func (s *fakeOperatorStore) requiredDeviceTokenVersion(_ context.Context, _ string) (*int, error) {
+	return s.requiredVersion, nil
+}
+
+func (s *fakeOperatorStore) deviceBearerAuthRecord(_ context.Context, _ string) (deviceBearerAuthRecord, bool, error) {
+	if !s.deviceAuthFound {
+		return deviceBearerAuthRecord{}, false, nil
+	}
+	return s.deviceAuthRecord, true, nil
+}
+
+func (s *fakeOperatorStore) lookupAgentHash(_ context.Context, _ string, agentGUID string, agentID string) (map[string]any, int, error) {
+	s.agentHashLookupGUID = agentGUID
+	s.agentHashLookupID = agentID
+	if s.agentHashErr != nil {
+		status := s.agentHashStatus
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return nil, status, s.agentHashErr
+	}
+	status := s.agentHashStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return copyMap(s.agentHashLookup), status, nil
+}
+
+func (s *fakeOperatorStore) updateAgentHash(_ context.Context, _ string, request agentHashUpdateRequest) (map[string]any, int, error) {
+	s.agentHashUpdateReq = request
+	if s.agentHashErr != nil {
+		status := s.agentHashStatus
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return nil, status, s.agentHashErr
+	}
+	status := s.agentHashStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return copyMap(s.agentHashUpdate), status, nil
+}
+
+func (s *fakeOperatorStore) listAgentHashes(_ context.Context) ([]map[string]any, error) {
+	agents := make([]map[string]any, 0, len(s.agentHashList))
+	for _, agent := range s.agentHashList {
+		agents = append(agents, copyMap(agent))
+	}
+	return agents, nil
+}
+
 func testAuthService(profile operatorProfile) *authService {
 	auth, _ := testAuthServiceWithStore(profile)
 	return auth
@@ -559,6 +622,56 @@ func TestAgentTokenRefreshHandlerRejectsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestAgentHashHandlerUpdatesAuthenticatedDeviceHash(t *testing.T) {
+	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
+	signer := testAgentJWTSigner(t)
+	signer.now = func() time.Time { return time.Unix(1700000000, 0) }
+	token, err := signer.issueAccessToken(guid, "fingerprint", 3, agentAccessTokenTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.deviceAuthFound = true
+	store.deviceAuthRecord = deviceBearerAuthRecord{
+		GUID:         guid,
+		Fingerprint:  "fingerprint",
+		TokenVersion: 3,
+		Status:       "active",
+	}
+	store.agentHashUpdate = map[string]any{
+		"status":     "ok",
+		"agent_hash": "build-123",
+		"agent_guid": guid,
+		"agent_id":   "LAB-OPERATOR-01_SYSTEM",
+		"hostname":   "LAB-OPERATOR-01",
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/agent/hash",
+		strings.NewReader(`{"agent_hash":"build-123","agent_id":"LAB-OPERATOR-01_SYSTEM","agent_guid":"2540DA38-E2B1-45B9-9113-BF7CF0E1778A"}`),
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+
+	agentHashHandler(auth, signer, &dpopVerifier{seenJTI: map[string]time.Time{}}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.agentHashUpdateReq.AgentHash != "build-123" || store.agentHashUpdateReq.AgentID != "LAB-OPERATOR-01_SYSTEM" || store.agentHashUpdateReq.AgentGUID != guid {
+		t.Fatalf("unexpected update request %+v", store.agentHashUpdateReq)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" || payload["agent_hash"] != "build-123" || payload["hostname"] != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected agent hash payload %+v", payload)
+	}
+}
+
 func TestDPoPVerifierRejectsReplay(t *testing.T) {
 	_, privateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -570,10 +683,10 @@ func TestDPoPVerifierRejectsReplay(t *testing.T) {
 		seenJTI: map[string]time.Time{},
 		now:     func() time.Time { return now },
 	}
-	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now); err != nil {
+	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now, ""); err != nil {
 		t.Fatalf("expected first DPoP proof accepted, got %v", err)
 	}
-	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now); !errors.Is(err, errDPoPReplay) {
+	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now, ""); !errors.Is(err, errDPoPReplay) {
 		t.Fatalf("expected replay error, got %v", err)
 	}
 }

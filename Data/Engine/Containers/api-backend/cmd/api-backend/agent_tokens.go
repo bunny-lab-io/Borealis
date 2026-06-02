@@ -82,6 +82,7 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	}
 	verifier := &dpopVerifier{seenJTI: map[string]time.Time{}}
 	mux.HandleFunc("POST "+agentTokenRefreshRoutePath, agentTokenRefreshHandler(auth, signer, verifier))
+	registerAgentHashRoutes(mux, auth, signer, verifier)
 	return nil
 }
 
@@ -116,7 +117,7 @@ func agentTokenRefreshHandler(auth *authService, signer *agentJWTSigner, dpop *d
 		proof := strings.TrimSpace(r.Header.Get("DPoP"))
 		jkt := ""
 		if proof != "" {
-			verifiedJKT, err := dpop.verify(r.Method, absoluteRequestURL(r), proof, now)
+			verifiedJKT, err := dpop.verify(r.Method, absoluteRequestURL(r), proof, now, "")
 			if err != nil {
 				if errors.Is(err, errDPoPReplay) {
 					writeJSON(w, http.StatusBadRequest, map[string]any{"error": "dpop_replayed"})
@@ -564,7 +565,7 @@ func signJWT(header map[string]any, claims map[string]any, key ed25519.PrivateKe
 	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature), nil
 }
 
-func (v *dpopVerifier) verify(method string, htu string, proof string, now time.Time) (string, error) {
+func (v *dpopVerifier) verify(method string, htu string, proof string, now time.Time, accessToken string) (string, error) {
 	if v == nil {
 		return "", errDPoPInvalid
 	}
@@ -612,6 +613,7 @@ func (v *dpopVerifier) verify(method string, htu string, proof string, now time.
 		HTU string  `json:"htu"`
 		JTI string  `json:"jti"`
 		IAT float64 `json:"iat"`
+		ATH string  `json:"ath"`
 	}
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
 		return "", errDPoPInvalid
@@ -628,6 +630,12 @@ func (v *dpopVerifier) verify(method string, htu string, proof string, now time.
 	iat := time.Unix(int64(claims.IAT), 0).UTC()
 	if now.Sub(iat) > dpopProofSkew || iat.Sub(now) > dpopProofSkew {
 		return "", errDPoPInvalid
+	}
+	if strings.TrimSpace(claims.ATH) != "" && strings.TrimSpace(accessToken) != "" {
+		sum := sha256.Sum256([]byte(accessToken))
+		if claims.ATH != base64.RawURLEncoding.EncodeToString(sum[:]) {
+			return "", errDPoPInvalid
+		}
 	}
 
 	v.mu.Lock()
