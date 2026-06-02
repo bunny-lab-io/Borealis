@@ -26,7 +26,7 @@ type deviceSearchStore interface {
 }
 
 func registerDeviceSearchRoutes(mux *http.ServeMux, auth *authService) {
-	mux.HandleFunc("/api/devices/search", deviceSearchHandler(auth))
+	mux.HandleFunc("GET /api/devices/search", deviceSearchHandler(auth))
 }
 
 func deviceSearchHandler(auth *authService) http.HandlerFunc {

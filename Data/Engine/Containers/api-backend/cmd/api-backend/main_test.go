@@ -21,6 +21,10 @@ type fakeOperatorStore struct {
 	searchErr     error
 	searchProfile operatorProfile
 	searchQuery   string
+	devices       []map[string]any
+	deviceErr     error
+	deviceProfile operatorProfile
+	deviceFilter  deviceListFilter
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -46,6 +50,23 @@ func (s *fakeOperatorStore) searchDevicesByHostname(_ context.Context, profile o
 	matches := append([]deviceSearchMatch(nil), s.search...)
 	sortDeviceSearchMatches(matches, query)
 	return matches, nil
+}
+
+func (s *fakeOperatorStore) listDevices(_ context.Context, profile operatorProfile, filter deviceListFilter) ([]map[string]any, error) {
+	s.deviceProfile = profile
+	s.deviceFilter = filter
+	if s.deviceErr != nil {
+		return nil, s.deviceErr
+	}
+	devices := make([]map[string]any, 0, len(s.devices))
+	for _, device := range s.devices {
+		copyDevice := make(map[string]any, len(device))
+		for key, value := range device {
+			copyDevice[key] = value
+		}
+		devices = append(devices, copyDevice)
+	}
+	return devices, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -276,6 +297,53 @@ func TestDeviceSearchHandlerReturnsSortedMatches(t *testing.T) {
 	}
 	if store.searchProfile.Username != "operator" || store.searchQuery != "lab" {
 		t.Fatalf("expected search called with operator profile/query, got %+v %q", store.searchProfile, store.searchQuery)
+	}
+}
+
+func TestDeviceListHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices", nil)
+	deviceListHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDeviceListHandlerReturnsDevicesAndFilters(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.devices = []map[string]any{
+		{
+			"hostname":   "LAB-OPERATOR-01",
+			"agent_guid": "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+			"status":     "online",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices?only_agents=true&connection_type=ssh&hostname=lab-operator-01", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceListHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Devices []map[string]any `json:"devices"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Devices) != 1 || payload.Devices[0]["hostname"] != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected device payload %+v", payload)
+	}
+	if !store.deviceFilter.OnlyAgents || store.deviceFilter.ConnectionType != "ssh" || store.deviceFilter.Hostname != "lab-operator-01" {
+		t.Fatalf("unexpected device filters %+v", store.deviceFilter)
+	}
+	if store.deviceProfile.Username != "operator" {
+		t.Fatalf("expected operator profile, got %+v", store.deviceProfile)
 	}
 }
 

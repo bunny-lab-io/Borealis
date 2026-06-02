@@ -92,6 +92,7 @@ func main() {
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
 	registerAuthRoutes(mux, auth)
 	registerServerTimeRoutes(mux, auth)
+	registerDeviceRoutes(mux, auth)
 	registerDeviceSearchRoutes(mux, auth)
 	mux.Handle("/", proxy)
 
