@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +40,17 @@ type fakeOperatorStore struct {
 	sites               []map[string]any
 	siteErr             error
 	siteProfile         operatorProfile
+	siteMutationPayload map[string]any
+	siteMutationStatus  int
+	siteCreatedName     string
+	siteCreatedDesc     string
+	siteDeletedIDs      []int64
+	siteAssignedID      int64
+	siteAssignedHosts   []string
+	siteRenamedID       int64
+	siteRenamedName     string
+	siteAutoID          int64
+	siteAutoUntil       *int64
 	siteMap             map[string]map[string]any
 	siteMapErr          error
 	siteMapHostnames    []string
@@ -50,6 +62,16 @@ type fakeOperatorStore struct {
 	directoryProviders  []map[string]any
 	directorySites      []map[string]any
 	directoryErr        error
+	enrollmentCodes     []map[string]any
+	approvals           []map[string]any
+	approvalErr         error
+	approvalProfile     operatorProfile
+	approvalStatusID    string
+	approvalStatus      string
+	approvalGUID        string
+	approvalResolution  string
+	approvalPayload     map[string]any
+	approvalHTTPStatus  int
 	views               []map[string]any
 	viewErr             error
 	viewByID            map[int64]map[string]any
@@ -188,6 +210,64 @@ func (s *fakeOperatorStore) siteDeviceMap(_ context.Context, profile operatorPro
 	return mapping, nil
 }
 
+func (s *fakeOperatorStore) createSite(_ context.Context, name string, description string) (map[string]any, int, error) {
+	s.siteCreatedName = name
+	s.siteCreatedDesc = description
+	if s.siteErr != nil {
+		return nil, 0, s.siteErr
+	}
+	status := s.siteMutationStatus
+	if status == 0 {
+		status = http.StatusCreated
+	}
+	if s.siteMutationPayload != nil {
+		return copyMap(s.siteMutationPayload), status, nil
+	}
+	return map[string]any{"id": int64(99), "name": name, "description": description}, status, nil
+}
+
+func (s *fakeOperatorStore) deleteSites(_ context.Context, ids []int64) (map[string]any, int, error) {
+	s.siteDeletedIDs = append([]int64(nil), ids...)
+	if s.siteErr != nil {
+		return nil, 0, s.siteErr
+	}
+	return map[string]any{"status": "ok", "deleted": int64(len(ids))}, http.StatusOK, nil
+}
+
+func (s *fakeOperatorStore) assignDevicesToSite(_ context.Context, siteID int64, hostnames []string) (map[string]any, int, error) {
+	s.siteAssignedID = siteID
+	s.siteAssignedHosts = append([]string(nil), hostnames...)
+	if s.siteErr != nil {
+		return nil, 0, s.siteErr
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *fakeOperatorStore) renameSite(_ context.Context, siteID int64, newName string) (map[string]any, int, error) {
+	s.siteRenamedID = siteID
+	s.siteRenamedName = newName
+	if s.siteErr != nil {
+		return nil, 0, s.siteErr
+	}
+	if s.siteMutationPayload != nil {
+		return copyMap(s.siteMutationPayload), http.StatusOK, nil
+	}
+	return map[string]any{"id": siteID, "name": newName}, http.StatusOK, nil
+}
+
+func (s *fakeOperatorStore) updateSiteAutoApproval(_ context.Context, siteID int64, autoApproveUntil *int64) (map[string]any, int, error) {
+	s.siteAutoID = siteID
+	s.siteAutoUntil = autoApproveUntil
+	if s.siteErr != nil {
+		return nil, 0, s.siteErr
+	}
+	until := int64(0)
+	if autoApproveUntil != nil {
+		until = *autoApproveUntil
+	}
+	return map[string]any{"id": siteID, "auto_approve_until": until}, http.StatusOK, nil
+}
+
 func (s *fakeOperatorStore) listUsers(_ context.Context) ([]map[string]any, error) {
 	if s.userErr != nil {
 		return nil, s.userErr
@@ -239,6 +319,48 @@ func (s *fakeOperatorStore) listDirectorySites(_ context.Context) ([]map[string]
 		sites = append(sites, copyMap(site))
 	}
 	return sites, nil
+}
+
+func (s *fakeOperatorStore) listEnrollmentCodes(_ context.Context) ([]map[string]any, error) {
+	if s.approvalErr != nil {
+		return nil, s.approvalErr
+	}
+	codes := make([]map[string]any, 0, len(s.enrollmentCodes))
+	for _, code := range s.enrollmentCodes {
+		codes = append(codes, copyMap(code))
+	}
+	return codes, nil
+}
+
+func (s *fakeOperatorStore) listDeviceApprovals(_ context.Context, profile operatorProfile, _ string) ([]map[string]any, error) {
+	s.approvalProfile = profile
+	if s.approvalErr != nil {
+		return nil, s.approvalErr
+	}
+	approvals := make([]map[string]any, 0, len(s.approvals))
+	for _, approval := range s.approvals {
+		approvals = append(approvals, copyMap(approval))
+	}
+	return approvals, nil
+}
+
+func (s *fakeOperatorStore) setDeviceApprovalStatus(_ context.Context, profile operatorProfile, approvalID string, status string, guid string, resolution string) (map[string]any, int, error) {
+	s.approvalProfile = profile
+	s.approvalStatusID = approvalID
+	s.approvalStatus = status
+	s.approvalGUID = guid
+	s.approvalResolution = resolution
+	if s.approvalErr != nil {
+		return nil, 0, s.approvalErr
+	}
+	responseStatus := s.approvalHTTPStatus
+	if responseStatus == 0 {
+		responseStatus = http.StatusOK
+	}
+	if s.approvalPayload != nil {
+		return copyMap(s.approvalPayload), responseStatus, nil
+	}
+	return map[string]any{"status": status}, responseStatus, nil
 }
 
 func (s *fakeOperatorStore) listDeviceViews(_ context.Context) ([]map[string]any, error) {
@@ -1195,6 +1317,22 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 	}
 }
 
+func TestSiteListHandlerCreatesSite(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/sites", strings.NewReader(`{"name":"New Site","description":"Fresh"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteListHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.siteCreatedName != "New Site" || store.siteCreatedDesc != "Fresh" {
+		t.Fatalf("unexpected site create request name=%q desc=%q", store.siteCreatedName, store.siteCreatedDesc)
+	}
+}
+
 func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.siteMap = map[string]map[string]any{
@@ -1223,6 +1361,40 @@ func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	}
 	if len(store.siteMapHostnames) != 1 || store.siteMapHostnames[0] != "LAB-OPERATOR-01" {
 		t.Fatalf("unexpected host filter %+v", store.siteMapHostnames)
+	}
+}
+
+func TestSiteAssignHandlerAssignsDevices(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/sites/assign", strings.NewReader(`{"site_id":7,"hostnames":["LAB-01","LAB-02"]}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteAssignHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.siteAssignedID != 7 || len(store.siteAssignedHosts) != 2 || store.siteAssignedHosts[1] != "LAB-02" {
+		t.Fatalf("unexpected assignment id=%d hosts=%+v", store.siteAssignedID, store.siteAssignedHosts)
+	}
+}
+
+func TestSiteAutoApprovalHandlerUpdatesSite(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	until := time.Now().Unix() + 3600
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/sites/7/auto-approval", strings.NewReader(`{"auto_approve_until":`+strconv.FormatInt(until, 10)+`}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.SetPathValue("site_id", "7")
+	siteAutoApprovalHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.siteAutoID != 7 || store.siteAutoUntil == nil || *store.siteAutoUntil != until {
+		t.Fatalf("unexpected auto approval id=%d until=%v", store.siteAutoID, store.siteAutoUntil)
 	}
 }
 
@@ -1361,6 +1533,72 @@ func TestDirectorySitesHandlerReturnsSites(t *testing.T) {
 	}
 	if len(payload.Sites) != 1 || payload.Sites[0]["name"] != "Bunny Lab" {
 		t.Fatalf("unexpected directory sites payload %+v", payload)
+	}
+}
+
+func TestAdminEnrollmentCodesHandlerReturnsCodes(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.enrollmentCodes = []map[string]any{{"id": "site:1", "site_id": int64(1), "site_name": "Bunny Lab", "code": "ABCD"}}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/enrollment-codes", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	adminEnrollmentCodesHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Codes []map[string]any `json:"codes"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Codes) != 1 || payload.Codes[0]["code"] != "ABCD" {
+		t.Fatalf("unexpected codes payload %+v", payload)
+	}
+}
+
+func TestAdminDeviceApprovalsHandlerReturnsApprovals(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.approvals = []map[string]any{{"id": "approval-1", "status": "pending", "hostname_claimed": "LAB-01"}}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/admin/device-approvals?status=pending", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	adminDeviceApprovalsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.approvalProfile.Username != "operator" {
+		t.Fatalf("expected profile captured, got %+v", store.approvalProfile)
+	}
+	var payload struct {
+		Approvals []map[string]any `json:"approvals"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Approvals) != 1 || payload.Approvals[0]["id"] != "approval-1" {
+		t.Fatalf("unexpected approvals payload %+v", payload)
+	}
+}
+
+func TestAdminDeviceApprovalApproveHandlerUpdatesStatus(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/admin/device-approvals/approval-1/approve", strings.NewReader(`{"guid":"2540DA38-E2B1-45B9-9113-BF7CF0E1778A","conflict_resolution":"overwrite"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.SetPathValue("approval_id", "approval-1")
+	adminDeviceApprovalApproveHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.approvalStatusID != "approval-1" || store.approvalStatus != "approved" || store.approvalResolution != "overwrite" {
+		t.Fatalf("unexpected approval mutation id=%q status=%q resolution=%q", store.approvalStatusID, store.approvalStatus, store.approvalResolution)
 	}
 }
 
@@ -1535,7 +1773,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		method  string
 		path    string
 	}{
-		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
 		{name: "device metadata update", handler: deviceMetadataFieldsHandler(auth, fallback), method: http.MethodPut, path: "/api/devices/device-1/metadata_fields/7"},
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
@@ -1551,8 +1788,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 8 {
-		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 7 {
+		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
 	}
 }
 
