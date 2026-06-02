@@ -15,6 +15,7 @@ import (
 func registerServerTimeRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("/api/server/time", serverTimeHandler(auth))
 	mux.HandleFunc("/api/server/timezones", serverTimezonesHandler(auth))
+	mux.HandleFunc("/api/server/timezone", serverTimezoneBlockedHandler(auth))
 }
 
 func serverTimeHandler(auth *authService) http.HandlerFunc {
@@ -47,8 +48,25 @@ func serverTimezonesHandler(auth *authService) http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, map[string]any{
 			"current_timezone": currentTimezoneID(),
-			"change_supported": timezoneChangeSupported(),
+			"change_supported": false,
 			"timezones":        listAvailableTimezones(),
+		})
+	}
+}
+
+func serverTimezoneBlockedHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":   "timezone_change_unsupported",
+			"message": "Timezone changes are managed manually on the Engine host CLI.",
 		})
 	}
 }
@@ -118,11 +136,6 @@ func timezoneFromZoneinfoPath(path string) string {
 		return strings.TrimSpace(timezoneID)
 	}
 	return ""
-}
-
-func timezoneChangeSupported() bool {
-	_, err := exec.LookPath("timedatectl")
-	return err == nil
 }
 
 func listAvailableTimezones() []string {
