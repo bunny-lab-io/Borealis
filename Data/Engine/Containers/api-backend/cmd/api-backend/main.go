@@ -105,6 +105,7 @@ func main() {
 	registerMetadataRoutes(mux, auth, proxy)
 	registerDeviceRoutes(mux, auth)
 	registerSoftwareRoutes(mux, auth, proxy)
+	registerProcessRoutes(mux, auth, proxy)
 	registerDeviceViewRoutes(mux, auth, proxy)
 	registerDeviceFilterRoutes(mux, auth, proxy)
 	registerDeviceSearchRoutes(mux, auth)
