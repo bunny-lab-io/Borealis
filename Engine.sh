@@ -987,7 +987,9 @@ write_compose_env() {
   runtime_owner_uid="$(resolve_runtime_owner_uid)"
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
-  log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
+  if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
+    log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
+  fi
 
   cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
@@ -1804,7 +1806,7 @@ deploy_engine() {
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
-  write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -1865,7 +1867,7 @@ service_action() {
       build_images "${mode}" "${service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
-      write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+      BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
