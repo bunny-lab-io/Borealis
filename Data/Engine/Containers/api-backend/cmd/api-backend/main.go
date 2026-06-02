@@ -110,6 +110,7 @@ func main() {
 	registerDeviceSearchRoutes(mux, auth)
 	registerSiteRoutes(mux, auth, proxy)
 	registerUserRoutes(mux, auth, proxy)
+	registerUserSiteAssignmentRoutes(mux, auth, proxy)
 	registerDirectoryRoutes(mux, auth, proxy)
 	registerCredentialRoutes(mux, auth, proxy)
 	registerAdminDeviceRoutes(mux, auth, proxy)
