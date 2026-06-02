@@ -26,6 +26,18 @@ type fakeUserMutationStore struct {
 	rolePayload  map[string]any
 	roleStatus   int
 	roleErr      error
+
+	mfaUsername    string
+	mfaEnabled     bool
+	mfaResetSecret bool
+	mfaPayload     map[string]any
+	mfaStatus      int
+	mfaErr         error
+
+	resetUsername string
+	resetPayload  map[string]any
+	resetStatus   int
+	resetErr      error
 }
 
 func (s *fakeUserMutationStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -67,6 +79,37 @@ func (s *fakeUserMutationStore) updateUserRole(_ context.Context, profile operat
 		status = http.StatusOK
 	}
 	return s.rolePayload, status, s.roleErr
+}
+
+func (s *fakeUserMutationStore) updateUserMFA(_ context.Context, username string, enabled bool, resetSecret bool) (map[string]any, int, error) {
+	s.mfaUsername = username
+	s.mfaEnabled = enabled
+	s.mfaResetSecret = resetSecret
+	if s.mfaPayload == nil {
+		s.mfaPayload = map[string]any{"status": "ok"}
+	}
+	status := s.mfaStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.mfaPayload, status, s.mfaErr
+}
+
+func (s *fakeUserMutationStore) resetOwnMFA(_ context.Context, username string) (map[string]any, int, error) {
+	s.resetUsername = username
+	if s.resetPayload == nil {
+		s.resetPayload = map[string]any{
+			"status":                       "ok",
+			"username":                     username,
+			"mfa_enabled":                  true,
+			"setup_required_on_next_login": true,
+		}
+	}
+	status := s.resetStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.resetPayload, status, s.resetErr
 }
 
 func userMutationRequest(method string, path string, body string) *http.Request {
@@ -144,6 +187,43 @@ func TestUserSubtreeRejectsInvalidRole(t *testing.T) {
 	}
 	if store.roleUsername != "" {
 		t.Fatalf("expected store not to be called, got %q", store.roleUsername)
+	}
+}
+
+func TestUserSubtreeMFADispatchesToGoStore(t *testing.T) {
+	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := userMutationAuthService(store)
+
+	recorder := httptest.NewRecorder()
+	userSubtreeHandler(auth, http.NotFoundHandler()).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users/example_user/mfa", `{"enabled":true,"reset_secret":true}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.mfaUsername != "example_user" || !store.mfaEnabled || !store.mfaResetSecret {
+		t.Fatalf("expected MFA update example_user true true, got %q %v %v", store.mfaUsername, store.mfaEnabled, store.mfaResetSecret)
+	}
+}
+
+func TestOwnMFAResetDispatchesCurrentUser(t *testing.T) {
+	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "User"}}
+	auth := userMutationAuthService(store)
+
+	recorder := httptest.NewRecorder()
+	ownMFAResetHandler(auth).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/auth/mfa/reset", `{}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.resetUsername != "operator" {
+		t.Fatalf("expected reset username operator, got %q", store.resetUsername)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["setup_required_on_next_login"] != true {
+		t.Fatalf("expected setup_required_on_next_login true, got %+v", payload)
 	}
 }
 

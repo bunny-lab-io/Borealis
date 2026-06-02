@@ -18,6 +18,8 @@ type userListStore interface {
 type userMutationStore interface {
 	deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error)
 	updateUserRole(ctx context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error)
+	updateUserMFA(ctx context.Context, username string, enabled bool, resetSecret bool) (map[string]any, int, error)
+	resetOwnMFA(ctx context.Context, username string) (map[string]any, int, error)
 }
 
 type userRow struct {
@@ -96,6 +98,10 @@ func userSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFu
 			userRoleUpdate(w, r, auth, username)
 			return
 		}
+		if action == "mfa" && r.Method == http.MethodPost {
+			userMFAUpdate(w, r, auth, username)
+			return
+		}
 
 		if fallback != nil {
 			fallback.ServeHTTP(w, r)
@@ -165,6 +171,59 @@ func userRoleUpdate(w http.ResponseWriter, r *http.Request, auth *authService, u
 		return
 	}
 	writeJSON(w, status, payload)
+}
+
+func userMFAUpdate(w http.ResponseWriter, r *http.Request, auth *authService, username string) {
+	_, store, ok := userMutationRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	enabled := boolFromAny(body["enabled"])
+	resetSecret := boolFromAny(body["reset_secret"])
+	ctx, cancel := userTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.updateUserMFA(ctx, username, enabled, resetSecret)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func ownMFAResetHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				unauthorizedAuthFailure().write(w)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		store, ok := auth.store.(userMutationStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "users_unavailable"})
+			return
+		}
+		ctx, cancel := userTimeoutContext(r.Context(), auth)
+		defer cancel()
+		payload, status, err := store.resetOwnMFA(ctx, profile.Username)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
 }
 
 func userMutationRequestContext(w http.ResponseWriter, r *http.Request, auth *authService) (operatorProfile, userMutationStore, bool) {
@@ -407,6 +466,102 @@ func (s *postgresOperatorStore) updateUserRole(ctx context.Context, profile oper
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) updateUserMFA(ctx context.Context, username string, enabled bool, resetSecret bool) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "invalid username"}, http.StatusBadRequest, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	var source sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(auth_source, 'local') FROM engine.users WHERE LOWER(username)=LOWER($1)", usernameNorm).Scan(&source); errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	} else if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if strings.EqualFold(nullString(source), directoryAuth) && !enabled {
+		return map[string]any{"error": "directory_mfa_required"}, http.StatusForbidden, nil
+	}
+
+	now := time.Now().Unix()
+	var result sql.Result
+	if enabled {
+		if resetSecret {
+			result, err = tx.ExecContext(ctx, "UPDATE engine.users SET mfa_enabled=0, mfa_disabled=0, mfa_secret=NULL, updated_at=$1 WHERE LOWER(username)=LOWER($2)", now, usernameNorm)
+		} else {
+			result, err = tx.ExecContext(ctx, "UPDATE engine.users SET mfa_disabled=0, updated_at=$1 WHERE LOWER(username)=LOWER($2)", now, usernameNorm)
+		}
+	} else {
+		if resetSecret {
+			result, err = tx.ExecContext(ctx, "UPDATE engine.users SET mfa_enabled=0, mfa_disabled=1, mfa_secret=NULL, updated_at=$1 WHERE LOWER(username)=LOWER($2)", now, usernameNorm)
+		} else {
+			result, err = tx.ExecContext(ctx, "UPDATE engine.users SET mfa_disabled=1, updated_at=$1 WHERE LOWER(username)=LOWER($2)", now, usernameNorm)
+		}
+	}
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if updated == 0 {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) resetOwnMFA(ctx context.Context, username string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "unauthorized"}, http.StatusUnauthorized, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	var enabled sql.NullInt64
+	if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END FROM engine.users WHERE LOWER(username)=LOWER($1)", usernameNorm).Scan(&enabled); errors.Is(err, sql.ErrNoRows) {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	} else if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE engine.users SET mfa_enabled=0, mfa_secret=NULL, updated_at=$1 WHERE LOWER(username)=LOWER($2)", time.Now().Unix(), usernameNorm); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	mfaEnabled := truthyInt(enabled) == 1
+	return map[string]any{
+		"status":                       "ok",
+		"username":                     usernameNorm,
+		"mfa_enabled":                  mfaEnabled,
+		"setup_required_on_next_login": mfaEnabled,
+	}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) userAuthSource(ctx context.Context, username string) (string, bool, error) {

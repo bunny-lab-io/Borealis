@@ -241,6 +241,7 @@ func countUserPasskeys(ctx context.Context, conn *sql.Conn, username string) (in
 func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("POST /api/auth/logout", authLogoutHandler())
 	mux.HandleFunc("/api/auth/me", authMeHandler(auth))
+	mux.HandleFunc("/api/auth/mfa/reset", ownMFAResetHandler(auth))
 	mux.HandleFunc("/api/auth/passkeys", authPasskeysHandler(auth, fallback))
 	mux.HandleFunc("/api/auth/passkeys/", authPasskeyByIDHandler(auth, fallback))
 }
