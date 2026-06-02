@@ -4,8 +4,6 @@
 #
 # API Endpoints (if applicable):
 # - GET /api/server/time (Operator Session) - Returns the server clock in multiple formats.
-# - GET /api/server/timezones (Operator Admin Session) - Returns the current server timezone and the selectable timezone inventory.
-# - POST /api/server/timezone (Operator Admin Session) - Changes the engine host timezone.
 # - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot, including Compose-backed service rows in container mode.
 # - POST /api/server/services/<service_key>/action (Operator Admin Session) - Queues a Compose-backed Engine.sh service action in container mode.
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
@@ -35,7 +33,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
-from zoneinfo import available_timezones
 
 from cryptography import x509
 from flask import Blueprint, Flask, jsonify, request
@@ -274,43 +271,6 @@ def _serialize_time(now_local: datetime, now_utc: datetime, *, timezone_id: str 
         "timezone_id": str(timezone_id or "").strip(),
         "display": display,
     }
-
-
-def _list_available_timezones() -> List[str]:
-    try:
-        zones = sorted(str(item).strip() for item in available_timezones() if str(item or "").strip())
-    except Exception:
-        zones = []
-    return zones
-
-
-def _timezone_change_supported() -> bool:
-    return bool(shutil.which("timedatectl"))
-
-
-def _set_system_timezone(timezone_id: str) -> Tuple[bool, str]:
-    normalized = str(timezone_id or "").strip()
-    if not normalized:
-        return False, "A timezone identifier is required."
-
-    timedatectl_bin = shutil.which("timedatectl") or ""
-    if not timedatectl_bin:
-        return False, "timedatectl is unavailable on this engine host."
-
-    code, _out, err = _run_command(
-        [timedatectl_bin, "set-timezone", normalized],
-        timeout=_SYSTEMD_COMMAND_TIMEOUT_SECONDS,
-    )
-    if code != 0:
-        return False, str(err or "Unable to set server timezone.").strip()
-
-    try:
-        os.environ.pop("TZ", None)
-        if hasattr(time, "tzset"):
-            time.tzset()
-    except Exception:
-        pass
-    return True, ""
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1310,7 +1270,6 @@ def _collect_host_payload(context: Any) -> Dict[str, Any]:
         "server_time": _serialize_time(now_local, now_utc, timezone_id=timezone_id),
         "timezone": now_local.tzname() or "",
         "timezone_id": timezone_id,
-        "timezone_change_supported": _timezone_change_supported(),
         "uptime_seconds": _uptime_seconds(),
         "public_base_url": str(getattr(context, "public_base_url", "") or "").strip(),
         "public_hostname": str(resolve_public_hostname(context) or "").strip(),
@@ -1906,55 +1865,6 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         now_local = now_utc.astimezone()
         payload = _serialize_time(now_local, now_utc, timezone_id=_current_timezone_id())
         return jsonify(payload)
-
-    @blueprint.route("/api/server/timezones", methods=["GET"])
-    def server_timezones() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        current_timezone = _current_timezone_id()
-        return jsonify(
-            {
-                "current_timezone": current_timezone,
-                "change_supported": _timezone_change_supported(),
-                "timezones": _list_available_timezones(),
-            }
-        )
-
-    @blueprint.route("/api/server/timezone", methods=["POST"])
-    def set_server_timezone() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-
-        body = request.get_json(silent=True) or {}
-        timezone_id = str(body.get("timezone") or "").strip()
-        if not timezone_id:
-            return _error_response("timezone_required", "A timezone identifier is required.", 400)
-
-        available = _list_available_timezones()
-        if timezone_id not in available:
-            return _error_response("invalid_timezone", "Unsupported timezone identifier.", 400)
-
-        if not _timezone_change_supported():
-            return _error_response(
-                "timezone_change_unsupported",
-                "Timezone changes are unavailable on this engine host.",
-                409,
-            )
-
-        changed, error_message = _set_system_timezone(timezone_id)
-        if not changed:
-            return _error_response("timezone_change_failed", error_message or "Unable to change server timezone.", 500)
-
-        host_payload = _collect_host_payload(adapters.context)
-        return jsonify(
-            {
-                "status": "ok",
-                "timezone": timezone_id,
-                "host": host_payload,
-            }
-        )
 
     @blueprint.route("/api/server/overview", methods=["GET"])
     def server_overview() -> Any:

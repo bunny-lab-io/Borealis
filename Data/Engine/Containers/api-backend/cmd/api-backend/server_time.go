@@ -7,15 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
 
 func registerServerTimeRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("/api/server/time", serverTimeHandler(auth))
-	mux.HandleFunc("/api/server/timezones", serverTimezonesHandler(auth))
-	mux.HandleFunc("/api/server/timezone", serverTimezoneBlockedHandler(auth))
 }
 
 func serverTimeHandler(auth *authService) http.HandlerFunc {
@@ -32,42 +29,6 @@ func serverTimeHandler(auth *authService) http.HandlerFunc {
 		nowUTC := time.Now().UTC()
 		nowLocal := nowUTC.Local()
 		writeJSON(w, http.StatusOK, serializeServerTime(nowLocal, nowUTC, currentTimezoneID()))
-	}
-}
-
-func serverTimezonesHandler(auth *authService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
-			return
-		}
-		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"current_timezone": currentTimezoneID(),
-			"change_supported": false,
-			"timezones":        listAvailableTimezones(),
-		})
-	}
-}
-
-func serverTimezoneBlockedHandler(auth *authService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeMethodNotAllowed(w, http.MethodPost)
-			return
-		}
-		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error":   "timezone_change_unsupported",
-			"message": "Timezone changes are managed manually on the Engine host CLI.",
-		})
 	}
 }
 
@@ -136,74 +97,6 @@ func timezoneFromZoneinfoPath(path string) string {
 		return strings.TrimSpace(timezoneID)
 	}
 	return ""
-}
-
-func listAvailableTimezones() []string {
-	if timedatectl, err := exec.LookPath("timedatectl"); err == nil {
-		ctx, cancel := contextWithTimeout(5 * time.Second)
-		defer cancel()
-		output, err := exec.CommandContext(ctx, timedatectl, "list-timezones").Output()
-		if err == nil {
-			zones := splitTimezoneLines(string(output))
-			if len(zones) > 0 {
-				return zones
-			}
-		}
-	}
-
-	zones := make([]string, 0, 512)
-	root := "/usr/share/zoneinfo"
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return nil
-		}
-		zone := filepath.ToSlash(rel)
-		if includeZoneinfoName(zone) {
-			zones = append(zones, zone)
-		}
-		return nil
-	})
-	sort.Strings(zones)
-	return zones
-}
-
-func splitTimezoneLines(output string) []string {
-	seen := map[string]struct{}{}
-	zones := make([]string, 0, 512)
-	for _, line := range strings.Split(output, "\n") {
-		zone := strings.TrimSpace(line)
-		if !includeZoneinfoName(zone) {
-			continue
-		}
-		if _, ok := seen[zone]; ok {
-			continue
-		}
-		seen[zone] = struct{}{}
-		zones = append(zones, zone)
-	}
-	sort.Strings(zones)
-	return zones
-}
-
-func includeZoneinfoName(zone string) bool {
-	if zone == "" {
-		return false
-	}
-	if strings.HasPrefix(zone, ".") || strings.Contains(zone, "/.") {
-		return false
-	}
-	if strings.HasPrefix(zone, "posix/") || strings.HasPrefix(zone, "right/") {
-		return false
-	}
-	switch zone {
-	case "localtime", "posixrules", "zone.tab", "zone1970.tab", "iso3166.tab", "tzdata.zi", "leapseconds":
-		return false
-	}
-	return true
 }
 
 func contextWithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {

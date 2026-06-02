@@ -787,10 +787,6 @@ export default function ServerInfo() {
   const [releaseChannelsError, setReleaseChannelsError] = useState("");
   const [releaseDefaultChannel, setReleaseDefaultChannel] = useState("stable");
   const [releaseRepo, setReleaseRepo] = useState("");
-  const [timezoneMeta, setTimezoneMeta] = useState({
-    currentTimezone: "",
-    changeSupported: null,
-  });
   const hasOverviewRef = useRef(Boolean(loaderData?.overview));
 
   const sendScopedNotification = useAppNotifications();
@@ -827,28 +823,6 @@ export default function ServerInfo() {
     }
   }, []);
 
-  const fetchTimezoneOptions = useCallback(async () => {
-    try {
-      const response = await fetch("/api/server/timezones", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      const currentTimezone = String(payload?.current_timezone || "").trim();
-      const changeSupported =
-        typeof payload?.change_supported === "boolean" ? payload.change_supported : null;
-      setTimezoneMeta({
-        currentTimezone,
-        changeSupported,
-      });
-    } catch {
-      /* timezone metadata fallback is best-effort */
-    }
-  }, []);
-
   const fetchServerTimeSnapshot = useCallback(async () => {
     setServerTimeLoading(true);
     try {
@@ -861,14 +835,6 @@ export default function ServerInfo() {
         throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       }
       setServerTimeSnapshot(payload);
-      const snapshotTimezoneId = String(payload?.timezone_id || "").trim();
-      const snapshotTimezone = String(payload?.timezone || "").trim();
-      if (snapshotTimezoneId || snapshotTimezone) {
-        setTimezoneMeta((current) => ({
-          currentTimezone: current?.currentTimezone || snapshotTimezoneId || snapshotTimezone,
-          changeSupported: current?.changeSupported ?? null,
-        }));
-      }
     } catch {
       /* server time fallback is best-effort */
     } finally {
@@ -927,9 +893,8 @@ export default function ServerInfo() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    fetchTimezoneOptions();
     fetchServerTimeSnapshot();
-  }, [fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin]);
+  }, [fetchServerTimeSnapshot, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -939,14 +904,10 @@ export default function ServerInfo() {
       !String(hostPayload?.server_time?.utc || "").trim() &&
       !String(hostPayload?.server_time?.display || "").trim();
     const missingTimezoneId = !String(hostPayload?.timezone_id || "").trim();
-    const missingChangeSupport = typeof hostPayload?.timezone_change_supported !== "boolean";
     if (missingClock || missingTimezoneId) {
       fetchServerTimeSnapshot();
     }
-    if (missingTimezoneId || missingChangeSupport) {
-      fetchTimezoneOptions();
-    }
-  }, [fetchOverview, fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin, overview]);
+  }, [fetchServerTimeSnapshot, isAdmin, overview]);
 
   useEffect(() => {
     if (!boostPollingUntil || boostPollingUntil <= Date.now()) return undefined;
@@ -1229,7 +1190,7 @@ export default function ServerInfo() {
   const stableChannel = agentReleaseChannels?.channels?.stable || {};
   const unstableChannel = agentReleaseChannels?.channels?.unstable || {};
   const effectiveTimezoneId = String(
-    host?.timezone_id || timezoneMeta.currentTimezone || serverTimeSnapshot?.timezone_id || ""
+    host?.timezone_id || serverTimeSnapshot?.timezone_id || ""
   ).trim();
   const effectiveTimezoneLabel = String(
     effectiveTimezoneId || host?.timezone || serverTimeSnapshot?.timezone || ""

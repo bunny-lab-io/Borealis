@@ -49,6 +49,17 @@ The Engine container deployment system auto-detects host vCPU and RAM on every `
 
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
 
+## Configure the Timezone
+Before you do anything, be sure to set the timezone on the Engine host using the following command as an example, everything deployed into the Engine will inherit this timezone via `TZ` environment variables.
+```sh
+sudo timedatectl set-timezone America/Denver
+```
+
+If the time itself is somehow off despite having the correct timezone, you can correct it with the following command:
+```sh
+date -s "1 JAN 2025 03:30:00"
+```
+
 ## Install the Engine
 Use the following one-line installer command when starting from a fresh Linux host:
 
@@ -84,8 +95,6 @@ Change the host timezone from the Linux shell, then redeploy the Engine so conta
 sudo timedatectl set-timezone America/Denver
 sudo bash Engine.sh deploy prod
 ```
-
-In containerized deployments, the WebUI timezone picker is read-only when host-level timezone changes are unavailable from inside the Engine container.
 
 ## First Run Checklist
 After deployment finishes:

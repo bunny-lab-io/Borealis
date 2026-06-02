@@ -83,72 +83,14 @@ def test_server_overview_requires_admin(engine_harness: EngineTestHarness) -> No
     assert operator_response.status_code == 403
 
 
-def test_server_timezones_requires_admin(engine_harness: EngineTestHarness) -> None:
-    anonymous_client = engine_harness.app.test_client()
-    response = anonymous_client.get("/api/server/timezones")
-    assert response.status_code == 401
-
-    operator_client = _user_client(engine_harness)
-    operator_response = operator_client.post("/api/server/timezone", json={"timezone": "UTC"})
-    assert operator_response.status_code == 403
-
-
-def test_server_timezones_lists_options(engine_harness: EngineTestHarness, monkeypatch) -> None:
+def test_server_timezone_management_routes_removed(engine_harness: EngineTestHarness) -> None:
     client = _admin_client(engine_harness)
-    monkeypatch.setattr(server_info_api, "_current_timezone_id", lambda: "America/Denver")
-    monkeypatch.setattr(server_info_api, "_timezone_change_supported", lambda: True)
-    monkeypatch.setattr(server_info_api, "_list_available_timezones", lambda: ["America/Denver", "UTC"])
 
-    response = client.get("/api/server/timezones")
-    assert response.status_code == 200
-    payload = response.get_json()
+    list_response = client.get("/api/server/timezones")
+    assert list_response.status_code == 404
 
-    assert payload["current_timezone"] == "America/Denver"
-    assert payload["change_supported"] is True
-    assert payload["timezones"] == ["America/Denver", "UTC"]
-
-
-def test_set_server_timezone_validates_and_changes(engine_harness: EngineTestHarness, monkeypatch) -> None:
-    client = _admin_client(engine_harness)
-    monkeypatch.setattr(server_info_api, "_list_available_timezones", lambda: ["UTC", "America/Denver"])
-    monkeypatch.setattr(server_info_api, "_timezone_change_supported", lambda: True)
-
-    missing = client.post("/api/server/timezone", json={})
-    assert missing.status_code == 400
-
-    invalid = client.post("/api/server/timezone", json={"timezone": "Mars/Olympus"})
-    assert invalid.status_code == 400
-
-    calls = {}
-
-    def _fake_set_system_timezone(timezone_id: str):
-        calls["timezone"] = timezone_id
-        return True, ""
-
-    monkeypatch.setattr(server_info_api, "_set_system_timezone", _fake_set_system_timezone)
-    monkeypatch.setattr(
-        server_info_api,
-        "_collect_host_payload",
-        lambda _context: {
-            "timezone": "MDT",
-            "timezone_id": "America/Denver",
-            "timezone_change_supported": True,
-            "server_time": {
-                "display": "2026-04-05 02:55:00 MDT",
-                "timezone": "MDT",
-                "timezone_id": "America/Denver",
-            },
-        },
-    )
-
-    response = client.post("/api/server/timezone", json={"timezone": "America/Denver"})
-    assert response.status_code == 200
-    payload = response.get_json()
-
-    assert payload["status"] == "ok"
-    assert payload["timezone"] == "America/Denver"
-    assert payload["host"]["timezone_id"] == "America/Denver"
-    assert calls["timezone"] == "America/Denver"
+    change_response = client.post("/api/server/timezone", json={"timezone": "America/Denver"})
+    assert change_response.status_code in {404, 405}
 
 
 def test_server_overview_includes_operator_session_count(engine_harness: EngineTestHarness, monkeypatch) -> None:

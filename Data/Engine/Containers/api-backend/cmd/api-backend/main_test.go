@@ -3064,58 +3064,6 @@ func TestServerTimeHandlerRequiresAuthentication(t *testing.T) {
 	}
 }
 
-func TestServerTimezonesHandlerRequiresAdmin(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), "Administrator permissions") {
-		t.Fatalf("expected admin auth message, got %s", recorder.Body.String())
-	}
-}
-
-func TestServerTimezonesHandlerReportsManualTimezoneManagement(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["change_supported"] != false {
-		t.Fatalf("expected timezone change unsupported, got %+v", payload)
-	}
-}
-
-func TestServerTimezonePostBlocked(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/server/timezone", strings.NewReader(`{"timezone":"America/Denver"}`))
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverTimezoneBlockedHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), "timezone_change_unsupported") {
-		t.Fatalf("expected unsupported payload, got %s", recorder.Body.String())
-	}
-}
-
 func TestServerTimeHandlerReturnsNativePayload(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 

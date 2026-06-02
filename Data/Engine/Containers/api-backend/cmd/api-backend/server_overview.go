@@ -108,20 +108,19 @@ func collectOverviewHostPayload() map[string]any {
 	timezoneID := currentTimezoneID()
 	hostname, _ := os.Hostname()
 	return map[string]any{
-		"hostname":                  hostname,
-		"kernel":                    runtime.GOOS,
-		"architecture":              runtime.GOARCH,
-		"engine_mode":               firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
-		"webui_mode":                normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
-		"server_time":               serializeServerTime(nowLocal, nowUTC, timezoneID),
-		"timezone":                  nowLocal.Format("MST"),
-		"timezone_id":               timezoneID,
-		"timezone_change_supported": false,
-		"uptime_seconds":            readProcUptimeSeconds(),
-		"public_base_url":           strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
-		"public_hostname":           strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
-		"public_https_port":         parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
-		"deployment_profile":        deploymentProfilePayload(),
+		"hostname":           hostname,
+		"kernel":             runtime.GOOS,
+		"architecture":       runtime.GOARCH,
+		"engine_mode":        firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
+		"webui_mode":         normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
+		"server_time":        serializeServerTime(nowLocal, nowUTC, timezoneID),
+		"timezone":           nowLocal.Format("MST"),
+		"timezone_id":        timezoneID,
+		"uptime_seconds":     readProcUptimeSeconds(),
+		"public_base_url":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
+		"public_hostname":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
+		"public_https_port":  parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
+		"deployment_profile": deploymentProfilePayload(),
 	}
 }
 

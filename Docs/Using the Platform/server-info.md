@@ -25,7 +25,6 @@ Use service actions for focused restart, rebuild, reload, or WireGuard reconcile
 
 Admins can adjust:
 
-- Engine timezone.
 - Agent release channel targets.
 
 Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
@@ -42,8 +41,6 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     - `GET /api/server/overview` - dashboard snapshot.
     - `GET /api/server/time` - server clock.
-    - `GET /api/server/timezones` - timezone options.
-    - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
     - `POST /api/server/workers/<worker_guid>/recreate` - queue a site-worker container re-create.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
