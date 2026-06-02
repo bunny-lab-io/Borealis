@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -28,6 +30,11 @@ type fakeSoftwareIconStore struct {
 	auditRows    []map[string]any
 	auditErr     error
 	auditProfile operatorProfile
+
+	overrideSnapshot softwareOverrideContext
+	overrideStatus   int
+	overrideErr      error
+	overrideHostname string
 }
 
 func (s *fakeSoftwareIconStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -61,6 +68,18 @@ func (s *fakeSoftwareIconStore) loadDeviceServices(_ context.Context, _ operator
 func (s *fakeSoftwareIconStore) listSoftwareAudit(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
 	s.auditProfile = profile
 	return s.auditRows, s.auditErr
+}
+
+func (s *fakeSoftwareIconStore) loadDeviceSoftwareContext(_ context.Context, _ operatorProfile, hostname string) (softwareOverrideContext, int, error) {
+	s.overrideHostname = hostname
+	status := s.overrideStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.overrideErr != nil {
+		return softwareOverrideContext{}, status, s.overrideErr
+	}
+	return s.overrideSnapshot, status, nil
 }
 
 func softwareIconTestAuth(store *fakeSoftwareIconStore) *authService {
@@ -290,6 +309,159 @@ func TestSoftwareRefreshHandlerQueuesWorkerEvent(t *testing.T) {
 	}
 	if payload["status"] != "queued" || payload["hostname"] != "LAB-OPERATOR-01" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
 		t.Fatalf("unexpected refresh response %#v", payload)
+	}
+}
+
+func TestDeviceSoftwareIconOverridePersistsRuleAndQueuesRefresh(t *testing.T) {
+	iconPath := filepath.Join(t.TempDir(), "software_icons_overrides.json")
+	t.Setenv("BOREALIS_SOFTWARE_ICON_OVERRIDES_PATH", iconPath)
+	if err := os.WriteFile(iconPath, []byte(`{"windows_icon_overrides":[]}`), 0o600); err != nil {
+		t.Fatalf("seed icon overrides: %v", err)
+	}
+	var sawEvent bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/event" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
+		}
+		sawEvent = true
+		if body["event_name"] != "software_inventory_refresh_request" || body["allow_pending"] != true {
+			t.Fatalf("unexpected event body %#v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"queued": true})
+	}))
+	defer worker.Close()
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		overrideSnapshot: softwareOverrideContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+			Software: []map[string]any{
+				{
+					"name":    "Contoso Agent",
+					"version": "1.0",
+					"source":  "local_installed",
+					"metadata": map[string]any{
+						"publisher": "Contoso",
+					},
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	body := bytes.NewReader([]byte(`{"name":"Contoso Agent","version":"1.0","source":"local_installed","display_icon":"C:\\Program Files\\Contoso\\agent.exe,2"}`))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/software/LAB-OPERATOR-01/icon-override", body)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawEvent {
+		t.Fatalf("expected refresh event")
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	rule := response["rule"].(map[string]any)
+	if rule["rule_id"] != "icon_override_contoso_agent" || rule["display_icon"] != `C:\Program Files\Contoso\agent.exe,2` || response["refresh_requested"] != true {
+		t.Fatalf("unexpected response %#v", response)
+	}
+	content, err := os.ReadFile(iconPath)
+	if err != nil {
+		t.Fatalf("read icon override file: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(content, &persisted); err != nil {
+		t.Fatalf("persisted decode failed: %v", err)
+	}
+	rows := persisted["windows_icon_overrides"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["rule_id"] != "icon_override_contoso_agent" {
+		t.Fatalf("unexpected persisted rows %#v", persisted)
+	}
+}
+
+func TestDeviceSoftwareUninstallBlockAndUnblockPersistsRules(t *testing.T) {
+	blockPath := filepath.Join(t.TempDir(), "software_uninstall_blocklist.json")
+	t.Setenv("BOREALIS_SOFTWARE_UNINSTALL_BLOCKLIST_PATH", blockPath)
+	if err := os.WriteFile(blockPath, []byte(`{"windows_quiet_uninstall_blocklist":[]}`), 0o600); err != nil {
+		t.Fatalf("seed blocklist: %v", err)
+	}
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		overrideSnapshot: softwareOverrideContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Software: []map[string]any{
+				{
+					"name":    "Contoso Agent",
+					"version": "1.0",
+					"source":  "local_installed",
+					"metadata": map[string]any{
+						"publisher":              "Contoso",
+						"quiet_uninstall_string": `"C:\Program Files\Contoso\uninstall.exe" /S`,
+						"uninstall_string":       `"C:\Program Files\Contoso\uninstall.exe"`,
+					},
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	blockBody := []byte(`{"name":"Contoso Agent","version":"1.0","source":"local_installed","reason":"Needs manual review"}`)
+	blockRecorder := httptest.NewRecorder()
+	blockRequest := httptest.NewRequest(http.MethodPost, "/api/device/software/LAB-OPERATOR-01/uninstall-block", bytes.NewReader(blockBody))
+	blockRequest.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(blockRecorder, blockRequest)
+	if blockRecorder.Code != http.StatusOK {
+		t.Fatalf("expected block 200, got %d body=%s", blockRecorder.Code, blockRecorder.Body.String())
+	}
+	content, err := os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatalf("read blocklist: %v", err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(content, &persisted); err != nil {
+		t.Fatalf("persisted decode failed: %v", err)
+	}
+	rows := persisted["windows_quiet_uninstall_blocklist"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["rule_id"] != "uninstall_block_contoso_agent_1_0" {
+		t.Fatalf("unexpected blocklist rows %#v", persisted)
+	}
+
+	unblockRecorder := httptest.NewRecorder()
+	unblockRequest := httptest.NewRequest(http.MethodPost, "/api/device/software/LAB-OPERATOR-01/uninstall-unblock", bytes.NewReader(blockBody))
+	unblockRequest.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(unblockRecorder, unblockRequest)
+	if unblockRecorder.Code != http.StatusOK {
+		t.Fatalf("expected unblock 200, got %d body=%s", unblockRecorder.Code, unblockRecorder.Body.String())
+	}
+	if err := json.Unmarshal(unblockRecorder.Body.Bytes(), &persisted); err != nil {
+		t.Fatalf("unblock response decode failed: %v", err)
+	}
+	removed := persisted["removed_rule_ids"].([]any)
+	if len(removed) != 1 || removed[0] != "uninstall_block_contoso_agent_1_0" {
+		t.Fatalf("unexpected unblock response %#v", persisted)
+	}
+	content, err = os.ReadFile(blockPath)
+	if err != nil {
+		t.Fatalf("read blocklist after unblock: %v", err)
+	}
+	if err := json.Unmarshal(content, &persisted); err != nil {
+		t.Fatalf("persisted decode failed: %v", err)
+	}
+	rows = persisted["windows_quiet_uninstall_blocklist"].([]any)
+	if len(rows) != 0 {
+		t.Fatalf("expected empty blocklist, got %#v", persisted)
 	}
 }
 
