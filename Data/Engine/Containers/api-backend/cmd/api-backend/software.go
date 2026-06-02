@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type softwareIconAsset struct {
@@ -20,6 +21,7 @@ type softwareIconStore interface {
 
 func registerSoftwareRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/device/software/icon/{icon_hash}", softwareIconHandler(auth))
+	mux.HandleFunc("POST /api/device/software/{hostname}/refresh", softwareRefreshHandler(auth))
 	mux.HandleFunc("GET /api/device/services/{hostname}", deviceServicesHandler(auth))
 	mux.HandleFunc("GET /api/software/audit", softwareAuditHandler(auth))
 	mux.HandleFunc("/api/software/", softwareSubtreeHandler(fallback))
@@ -77,6 +79,83 @@ func softwareSubtreeHandler(fallback http.Handler) http.HandlerFunc {
 			return
 		}
 		fallback.ServeHTTP(w, r)
+	}
+}
+
+func softwareRefreshHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		store, ok := auth.store.(deviceProcessStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "software_refresh_unavailable"})
+			return
+		}
+		hostname := r.PathValue("hostname")
+		requestedAt := time.Now().Unix()
+		deadline := time.Now().Add(8 * time.Second)
+		var lastSnapshot deviceProcessContext
+		for {
+			ctx, cancel := requestTimeout(r.Context(), auth)
+			snapshot, status, err := store.loadDeviceProcessContext(ctx, profile, hostname)
+			cancel()
+			if err != nil {
+				writeJSON(w, status, map[string]any{"error": err.Error()})
+				return
+			}
+			lastSnapshot = snapshot
+			if snapshot.Route != nil {
+				eventPayload := map[string]any{
+					"hostname":     snapshot.Hostname,
+					"agent_id":     snapshot.AgentID,
+					"requested_at": requestedAt,
+					"requested_by": firstText(cleanText(profile.Username), "unknown"),
+					"reason":       "operator_query_software_updates",
+				}
+				result, workerStatus, workerErr := emitWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
+					"hostname":            snapshot.Hostname,
+					"service_mode":        "system",
+					"event_name":          "software_inventory_refresh_request",
+					"payload":             eventPayload,
+					"allow_pending":       true,
+					"pending_ttl_seconds": int64(180),
+				}, 6*time.Second)
+				if workerErr == nil && (boolFromAny(result["emitted"]) || boolFromAny(result["queued"])) {
+					writeJSON(w, http.StatusOK, map[string]any{
+						"status":       "queued",
+						"hostname":     snapshot.Hostname,
+						"agent_id":     snapshot.AgentID,
+						"requested_at": requestedAt,
+					})
+					return
+				}
+				_ = workerStatus
+				_ = workerErr
+			}
+			if time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-r.Context().Done():
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "request_canceled"})
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":        "agent_unavailable",
+			"message":      "The agent SYSTEM socket is not available to query software changes right now.",
+			"hostname":     firstText(lastSnapshot.Hostname, hostname),
+			"agent_id":     lastSnapshot.AgentID,
+			"requested_at": requestedAt,
+		})
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -230,6 +231,65 @@ func TestDeviceServicesHandlerPropagatesStoreNotFound(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSoftwareRefreshHandlerQueuesWorkerEvent(t *testing.T) {
+	var sawEvent bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
+		}
+		if r.URL.Path != "/remote-ops/host-service/event" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		sawEvent = true
+		if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "software_inventory_refresh_request" {
+			t.Fatalf("unexpected event body %#v", body)
+		}
+		if body["allow_pending"] != true || body["pending_ttl_seconds"].(float64) != 180 {
+			t.Fatalf("unexpected pending flags %#v", body)
+		}
+		payload, _ := body["payload"].(map[string]any)
+		if payload["requested_by"] != "operator" || payload["reason"] != "operator_query_software_updates" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
+			t.Fatalf("unexpected refresh payload %#v", payload)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"emitted": false, "queued": true})
+	}))
+	defer worker.Close()
+
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/software/LAB-OPERATOR-01/refresh", bytes.NewReader([]byte(`{}`)))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawEvent {
+		t.Fatalf("expected worker event")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["status"] != "queued" || payload["hostname"] != "LAB-OPERATOR-01" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
+		t.Fatalf("unexpected refresh response %#v", payload)
 	}
 }
 
