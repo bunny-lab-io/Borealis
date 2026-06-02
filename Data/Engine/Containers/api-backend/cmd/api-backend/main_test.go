@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -59,6 +62,10 @@ type fakeOperatorStore struct {
 	workerHistory      int
 	workerContainers   bool
 	githubToken        map[string]any
+	tokenRefreshReq    agentTokenRefreshRequest
+	tokenRefreshResult agentTokenRefreshResult
+	tokenRefreshStatus int
+	tokenRefreshErr    error
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -308,6 +315,29 @@ func (s *fakeOperatorStore) githubTokenState(_ context.Context) map[string]any {
 	return payload
 }
 
+func (s *fakeOperatorStore) refreshAgentToken(_ context.Context, request agentTokenRefreshRequest) (agentTokenRefreshResult, int, error) {
+	s.tokenRefreshReq = request
+	if s.tokenRefreshErr != nil {
+		status := s.tokenRefreshStatus
+		if status == 0 {
+			status = http.StatusUnauthorized
+		}
+		return agentTokenRefreshResult{}, status, s.tokenRefreshErr
+	}
+	status := s.tokenRefreshStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	result := s.tokenRefreshResult
+	if result.GUID == "" {
+		result.GUID = request.GUID
+	}
+	if result.TokenVersion == 0 {
+		result.TokenVersion = 1
+	}
+	return result, status, nil
+}
+
 func testAuthService(profile operatorProfile) *authService {
 	auth, _ := testAuthServiceWithStore(profile)
 	return auth
@@ -467,6 +497,129 @@ func TestAuthMeHandlerReturnsOperatorProfile(t *testing.T) {
 	if payload["username"] != "operator" || payload["role"] != "Admin" || payload["passkey_count"].(float64) != 2 {
 		t.Fatalf("unexpected /api/auth/me payload %+v", payload)
 	}
+}
+
+func TestAgentTokenRefreshHandlerReturnsAccessTokenAndWorkerRoute(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	siteID := int64(7)
+	store.tokenRefreshResult = agentTokenRefreshResult{
+		GUID:         "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+		Fingerprint:  "fingerprint",
+		TokenVersion: 3,
+		SiteID:       &siteID,
+		Route: &agentWorkerRoute{
+			WorkerGUID:      "worker-1",
+			SiteID:          7,
+			RoutePathPrefix: "/_borealis/site-workers/worker-1",
+			Generation:      4,
+		},
+	}
+	signer := testAgentJWTSigner(t)
+	signer.now = func() time.Time { return time.Unix(1700000000, 0) }
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/agent/token/refresh",
+		strings.NewReader(`{"guid":"2540DA38-E2B1-45B9-9113-BF7CF0E1778A","refresh_token":"refresh-secret"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	request.Header.Set("X-Forwarded-Host", "borealis.example.test")
+	agentTokenRefreshHandler(auth, signer, &dpopVerifier{seenJTI: map[string]time.Time{}}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.tokenRefreshReq.GUID != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" || store.tokenRefreshReq.RefreshToken != "refresh-secret" {
+		t.Fatalf("unexpected token refresh request %+v", store.tokenRefreshReq)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["token_type"] != "Bearer" || payload["expires_in"].(float64) != 900 || payload["access_token"] == "" {
+		t.Fatalf("unexpected token payload %+v", payload)
+	}
+	remoteOps := payload["remote_ops_route"].(map[string]any)
+	if remoteOps["available"] != true || remoteOps["socket_url"] != "https://borealis.example.test/_borealis/site-workers/worker-1/socket.io/" {
+		t.Fatalf("unexpected remote ops payload %+v", remoteOps)
+	}
+}
+
+func TestAgentTokenRefreshHandlerRejectsInvalidRequest(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/agent/token/refresh", strings.NewReader(`{"guid":""}`))
+
+	agentTokenRefreshHandler(auth, testAgentJWTSigner(t), &dpopVerifier{seenJTI: map[string]time.Time{}}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDPoPVerifierRejectsReplay(t *testing.T) {
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1700000000, 0)
+	proof := testDPoPProof(t, privateKey, "POST", "https://borealis.example.test/api/agent/token/refresh", "jti-1", now)
+	verifier := &dpopVerifier{
+		seenJTI: map[string]time.Time{},
+		now:     func() time.Time { return now },
+	}
+	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now); err != nil {
+		t.Fatalf("expected first DPoP proof accepted, got %v", err)
+	}
+	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now); !errors.Is(err, errDPoPReplay) {
+		t.Fatalf("expected replay error, got %v", err)
+	}
+}
+
+func testAgentJWTSigner(t *testing.T) *agentJWTSigner {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := newAgentJWTSignerFromKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer
+}
+
+func testDPoPProof(t *testing.T, privateKey ed25519.PrivateKey, method string, htu string, jti string, issuedAt time.Time) string {
+	t.Helper()
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	header := map[string]any{
+		"alg": "EdDSA",
+		"typ": "dpop+jwt",
+		"jwk": map[string]any{
+			"kty": "OKP",
+			"crv": "Ed25519",
+			"x":   base64.RawURLEncoding.EncodeToString(publicKey),
+		},
+	}
+	claims := map[string]any{
+		"htm": method,
+		"htu": htu,
+		"jti": jti,
+		"iat": issuedAt.Unix(),
+	}
+	headerJSON, err := json.Marshal(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimsJSON, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingInput := base64.RawURLEncoding.EncodeToString(headerJSON) + "." + base64.RawURLEncoding.EncodeToString(claimsJSON)
+	signature := ed25519.Sign(privateKey, []byte(signingInput))
+	return signingInput + "." + base64.RawURLEncoding.EncodeToString(signature)
 }
 
 func TestDeviceSearchHandlerRequiresAuthentication(t *testing.T) {

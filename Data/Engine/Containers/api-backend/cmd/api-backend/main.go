@@ -91,6 +91,10 @@ func main() {
 	mux.HandleFunc("/health", healthHandler(cfg, state))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
 	registerAuthRoutes(mux, auth)
+	if err := registerAgentTokenRoutes(mux, auth); err != nil {
+		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
+		log.Fatalf("failed to initialise Agent token routes: %v", err)
+	}
 	registerServerTimeRoutes(mux, auth)
 	registerAgentReleaseChannelRoutes(mux, auth, proxy)
 	registerServerSettingsRoutes(mux, auth, proxy)
