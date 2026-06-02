@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,8 @@ type fakeOperatorStore struct {
 	viewErr          error
 	viewByID         map[int64]map[string]any
 	viewIDSeen       int64
+	metadataFields   []map[string]any
+	metadataErr      error
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -143,6 +146,21 @@ func (s *fakeOperatorStore) getDeviceView(_ context.Context, viewID int64) (map[
 		copyView[key] = value
 	}
 	return copyView, true, nil
+}
+
+func (s *fakeOperatorStore) listMetadataDefinitions(_ context.Context) ([]map[string]any, error) {
+	if s.metadataErr != nil {
+		return nil, s.metadataErr
+	}
+	fields := make([]map[string]any, 0, len(s.metadataFields))
+	for _, field := range s.metadataFields {
+		copyField := make(map[string]any, len(field))
+		for key, value := range field {
+			copyField[key] = value
+		}
+		fields = append(fields, copyField)
+	}
+	return fields, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -761,6 +779,77 @@ func TestSiteWorkerSettingsLoadsConfigFileWhenEnvUnset(t *testing.T) {
 	profile := payload["deployment_profile"].(map[string]any)
 	if got := profile["name"]; got != "Unprofiled" {
 		t.Fatalf("expected unprofiled fallback, got %#v", got)
+	}
+}
+
+func TestMetadataFieldsHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/metadata_fields", nil)
+	metadataFieldsHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestMetadataFieldsHandlerReturnsDefinitions(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.metadataFields = []map[string]any{
+		{
+			"field_number":  1,
+			"field_key":     "field_001",
+			"default_label": "Field 001",
+			"label":         "Rack",
+			"description":   "Rack",
+			"updated_at":    int64(1700000000),
+			"updated_by":    "operator",
+			"value_limit":   1024,
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/metadata_fields", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	metadataFieldsHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Fields     []map[string]any `json:"fields"`
+		Count      int              `json:"count"`
+		ValueLimit int              `json:"value_limit"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 1 || payload.ValueLimit != 1024 {
+		t.Fatalf("unexpected metadata payload %+v", payload)
+	}
+	if got := payload.Fields[0]["label"]; got != "Rack" {
+		t.Fatalf("expected custom label, got %#v", got)
+	}
+}
+
+func TestBuildMetadataDefinitionsReturnsDefaultFiveHundredFields(t *testing.T) {
+	fields := buildMetadataDefinitions(map[int]metadataDefinitionRow{
+		7: {
+			FieldNumber: sql.NullInt64{Int64: 7, Valid: true},
+			Description: sql.NullString{String: "Location Code", Valid: true},
+			UpdatedAt:   sql.NullInt64{Int64: 1700000000, Valid: true},
+			UpdatedBy:   sql.NullString{String: "operator", Valid: true},
+		},
+	})
+	if len(fields) != 500 {
+		t.Fatalf("expected 500 fields, got %d", len(fields))
+	}
+	if fields[0]["field_key"] != "field_001" || fields[0]["label"] != "Field 001" {
+		t.Fatalf("unexpected first field %+v", fields[0])
+	}
+	if fields[6]["field_key"] != "field_007" || fields[6]["label"] != "Location Code" {
+		t.Fatalf("unexpected custom field %+v", fields[6])
 	}
 }
 
