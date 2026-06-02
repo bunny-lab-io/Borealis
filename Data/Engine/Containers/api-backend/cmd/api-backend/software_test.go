@@ -35,6 +35,11 @@ type fakeSoftwareIconStore struct {
 	overrideStatus   int
 	overrideErr      error
 	overrideHostname string
+
+	persistedServiceHost       string
+	persistedServices          []map[string]any
+	persistedServicesReported  int64
+	persistedDeviceServicesErr error
 }
 
 func (s *fakeSoftwareIconStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -80,6 +85,13 @@ func (s *fakeSoftwareIconStore) loadDeviceSoftwareContext(_ context.Context, _ o
 		return softwareOverrideContext{}, status, s.overrideErr
 	}
 	return s.overrideSnapshot, status, nil
+}
+
+func (s *fakeSoftwareIconStore) persistDeviceServices(_ context.Context, hostname string, services []map[string]any, reportedAt int64) error {
+	s.persistedServiceHost = hostname
+	s.persistedServices = services
+	s.persistedServicesReported = reportedAt
+	return s.persistedDeviceServicesErr
 }
 
 func softwareIconTestAuth(store *fakeSoftwareIconStore) *authService {
@@ -230,6 +242,83 @@ func TestDeviceServicesHandlerReturnsCachedServicesAndWorkerSocket(t *testing.T)
 		t.Fatalf("response decode failed: %v", err)
 	}
 	if payload["agent_socket"] != true || payload["count"].(float64) != 1 || payload["refresh_interval_seconds"].(float64) != serviceRefreshPeriod {
+		t.Fatalf("unexpected response %#v", payload)
+	}
+}
+
+func TestDeviceServiceActionMarksPendingAndEmitsWorkerEvent(t *testing.T) {
+	var sawEvent bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
+		}
+		switch r.URL.Path {
+		case "/remote-ops/host-service/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+		case "/remote-ops/host-service/event":
+			sawEvent = true
+			if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "service_control_action" {
+				t.Fatalf("unexpected event body %#v", body)
+			}
+			payload, _ := body["payload"].(map[string]any)
+			if payload["service_name"] != "Spooler" || payload["action"] != "restart" || payload["requested_by"] != "operator" {
+				t.Fatalf("unexpected service event payload %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"emitted": true})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		serviceSnapshot: deviceServicesSnapshot{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Reported: 1700000000,
+			Route:    routeForTestWorker(t, worker.URL),
+			Services: []map[string]any{
+				{
+					"service_id":     "spooler",
+					"name":           "Spooler",
+					"display_name":   "Print Spooler",
+					"status_code":    "running",
+					"status":         "Running",
+					"captured_at":    int64(1700000000),
+					"pending_action": "",
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/services/LAB-OPERATOR-01/action", bytes.NewReader([]byte(`{"service_name":"Spooler","action":"restart"}`)))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawEvent {
+		t.Fatalf("expected worker event")
+	}
+	if store.persistedServiceHost != "LAB-OPERATOR-01" || len(store.persistedServices) != 1 {
+		t.Fatalf("unexpected persisted services host=%q rows=%#v", store.persistedServiceHost, store.persistedServices)
+	}
+	if store.persistedServices[0]["pending_action"] != "restart" || store.persistedServices[0]["desired_status"] != "running" {
+		t.Fatalf("unexpected persisted service %#v", store.persistedServices[0])
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["action"] != "restart" || payload["action_label"] != "Restarting..." || payload["count"].(float64) != 1 {
 		t.Fatalf("unexpected response %#v", payload)
 	}
 }

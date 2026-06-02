@@ -28,6 +28,10 @@ type deviceServicesStore interface {
 	loadDeviceServices(ctx context.Context, profile operatorProfile, hostname string) (deviceServicesSnapshot, int, error)
 }
 
+type deviceServiceActionStore interface {
+	persistDeviceServices(ctx context.Context, hostname string, services []map[string]any, reportedAt int64) error
+}
+
 type deviceServicesSnapshot struct {
 	Hostname string
 	AgentID  string
@@ -79,6 +83,100 @@ func deviceServicesHandler(auth *authService) http.HandlerFunc {
 			"refresh_interval_seconds": serviceRefreshPeriod,
 			"count":                    len(snapshot.Services),
 			"services":                 snapshot.Services,
+		})
+	}
+}
+
+func deviceServiceActionHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			return
+		}
+		serviceName := firstText(cleanText(body["service_name"]), cleanText(body["name"]))
+		action := normalizeServiceActionValue(body["action"])
+		if serviceName == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "service_name_required"})
+			return
+		}
+		if action == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_action"})
+			return
+		}
+		store, ok := auth.store.(deviceServicesStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_services_unavailable"})
+			return
+		}
+		actionStore, ok := auth.store.(deviceServiceActionStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_service_action_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		snapshot, status, err := store.loadDeviceServices(ctx, profile, r.PathValue("hostname"))
+		cancel()
+		if err != nil {
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		requestedAt := time.Now().Unix()
+		updatedServices, reportedAt, found := markServiceControlPending(snapshot.Services, serviceName, action, requestedAt, firstText(cleanText(profile.Username), "unknown"), snapshot.Reported)
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "service_not_found"})
+			return
+		}
+		if snapshot.Route == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "agent_unavailable"})
+			return
+		}
+		eventPayload := map[string]any{
+			"hostname":      snapshot.Hostname,
+			"agent_id":      snapshot.AgentID,
+			"service_name":  serviceName,
+			"action":        action,
+			"requested_at":  requestedAt,
+			"requested_by":  firstText(cleanText(profile.Username), "unknown"),
+			"service_label": serviceActionLabel(action),
+		}
+		result, _, workerErr := emitWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
+			"hostname":     snapshot.Hostname,
+			"service_mode": "system",
+			"event_name":   "service_control_action",
+			"payload":      eventPayload,
+		}, 6*time.Second)
+		if workerErr != nil || !boolFromAny(result["emitted"]) {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "agent_unavailable"})
+			return
+		}
+		persistCtx, persistCancel := requestTimeout(r.Context(), auth)
+		err = actionStore.persistDeviceServices(persistCtx, snapshot.Hostname, updatedServices, reportedAt)
+		persistCancel()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "persist_failed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":       "ok",
+			"hostname":     firstText(snapshot.Hostname, r.PathValue("hostname")),
+			"agent_id":     snapshot.AgentID,
+			"service_name": serviceName,
+			"action":       action,
+			"action_label": serviceActionLabel(action),
+			"requested_at": requestedAt,
+			"reported_at":  reportedAt,
+			"count":        len(updatedServices),
+			"services":     updatedServices,
 		})
 	}
 }
@@ -145,6 +243,37 @@ func (s *postgresOperatorStore) loadDeviceServices(ctx context.Context, profile 
 	return snapshot, http.StatusOK, nil
 }
 
+func (s *postgresOperatorStore) persistDeviceServices(ctx context.Context, hostname string, services []map[string]any, reportedAt int64) error {
+	hostname = cleanText(hostname)
+	if hostname == "" {
+		return errors.New("hostname_required")
+	}
+	payload, err := json.Marshal(map[string]any{
+		"reported_at": reportedAt,
+		"services":    services,
+	})
+	if err != nil {
+		return err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	result, err := conn.ExecContext(ctx, `
+		UPDATE engine.devices
+		   SET services = $1
+		 WHERE LOWER(hostname) = LOWER($2)
+	`, string(payload), hostname)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return errors.New("not found")
+	}
+	return nil
+}
+
 func normalizeDeviceServicePayload(raw sql.NullString) ([]map[string]any, int64) {
 	payload := normalizeServicePayloadShape(raw)
 	reportedAt := coerceInt64(payload["reported_at"])
@@ -180,6 +309,58 @@ func normalizeDeviceServicePayload(raw sql.NullString) ([]map[string]any, int64)
 		return strings.ToLower(cleanText(services[left]["description"])) < strings.ToLower(cleanText(services[right]["description"]))
 	})
 	return services, reportedAt
+}
+
+func markServiceControlPending(services []map[string]any, serviceName string, action string, requestedAt int64, requestedBy string, reportedAt int64) ([]map[string]any, int64, bool) {
+	serviceID := serviceIDForName(serviceName)
+	pendingAction := normalizeServiceActionValue(action)
+	desiredStatus := desiredServiceStatus(pendingAction)
+	if serviceID == "" || pendingAction == "" || desiredStatus == "" {
+		return nil, reportedAt, false
+	}
+	found := false
+	updated := make([]map[string]any, 0, len(services))
+	for _, service := range services {
+		next := copyMap(service)
+		if cleanText(next["service_id"]) == serviceID {
+			next["pending_action"] = pendingAction
+			next["desired_status"] = desiredStatus
+			next["pending_requested_at"] = requestedAt
+			next["pending_requested_by"] = cleanText(requestedBy)
+			found = true
+		}
+		if capturedAt := coerceInt64(next["captured_at"]); capturedAt > reportedAt {
+			reportedAt = capturedAt
+		}
+		updated = append(updated, next)
+	}
+	sort.SliceStable(updated, func(left, right int) bool {
+		leftName := strings.ToLower(firstText(cleanText(updated[left]["display_name"]), cleanText(updated[left]["name"])))
+		rightName := strings.ToLower(firstText(cleanText(updated[right]["display_name"]), cleanText(updated[right]["name"])))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		leftService := strings.ToLower(cleanText(updated[left]["name"]))
+		rightService := strings.ToLower(cleanText(updated[right]["name"]))
+		if leftService != rightService {
+			return leftService < rightService
+		}
+		return strings.ToLower(cleanText(updated[left]["description"])) < strings.ToLower(cleanText(updated[right]["description"]))
+	})
+	return updated, reportedAt, found
+}
+
+func serviceActionLabel(action string) string {
+	switch normalizeServiceActionValue(action) {
+	case "start":
+		return "Starting..."
+	case "stop":
+		return "Stopping..."
+	case "restart":
+		return "Restarting..."
+	default:
+		return ""
+	}
 }
 
 func normalizeServicePayloadShape(raw sql.NullString) map[string]any {
