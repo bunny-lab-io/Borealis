@@ -2193,6 +2193,75 @@ func TestServerLogEntriesHandlerReturnsParsedEntries(t *testing.T) {
 	}
 }
 
+func TestServerLogRetentionHandlerUpdatesPolicy(t *testing.T) {
+	logRoot := t.TempDir()
+	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
+	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte("active\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logRoot, "engine.log.2026-06-01"), []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":5}}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	overrides := payload["retention_overrides"].(map[string]any)
+	if got := overrides["engine.log"]; got != float64(5) {
+		t.Fatalf("expected retention override 5, got %#v", got)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":null}}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected clear 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if got := loadLogRetention(logRoot)["engine.log"]; got != nil {
+		t.Fatalf("expected cleared override, got %#v", got)
+	}
+}
+
+func TestServerLogDeleteHandlerDeletesFamily(t *testing.T) {
+	logRoot := t.TempDir()
+	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
+	for _, name := range []string{"engine.log", "engine.log.2026-06-01", "other.log"} {
+		if err := os.WriteFile(filepath.Join(logRoot, name), []byte("line\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/server/logs/engine.log?scope=family", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(logRoot, "engine.log")); !os.IsNotExist(err) {
+		t.Fatalf("expected active log deleted, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logRoot, "engine.log.2026-06-01")); !os.IsNotExist(err) {
+		t.Fatalf("expected rotated log deleted, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(logRoot, "other.log")); err != nil {
+		t.Fatalf("expected other log retained, err=%v", err)
+	}
+}
+
 func TestSiteWorkerSettingsHandlerRequiresAdmin(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
 

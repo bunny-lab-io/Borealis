@@ -54,6 +54,14 @@ func serverLogsHandler(auth *authService, fallback http.Handler) http.HandlerFun
 
 func serverLogEntriesHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/api/server/logs/retention" {
+			serverLogRetentionUpdate(w, r, auth)
+			return
+		}
+		if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/server/logs/") {
+			serverLogDelete(w, r, auth)
+			return
+		}
 		if r.Method != http.MethodGet {
 			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
 			return
@@ -88,6 +96,80 @@ func serverLogEntriesHandler(auth *authService, fallback http.Handler) http.Hand
 		}
 		writeJSON(w, http.StatusOK, payload)
 	}
+}
+
+func serverLogRetentionUpdate(w http.ResponseWriter, r *http.Request, auth *authService) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && err.Error() != "EOF" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	updates := parseLogRetentionUpdates(payload["retention"])
+	root := resolveLogRoot()
+	retention := loadLogRetention(root)
+	changed := 0
+	for key, days := range updates {
+		if days == nil {
+			if _, ok := retention[key]; ok {
+				delete(retention, key)
+				changed++
+			}
+			continue
+		}
+		if int(coerceInt64(retention[key])) != *days {
+			retention[key] = *days
+			changed++
+		}
+	}
+	if err := saveLogRetention(root, retention); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "retention_save_failed", "detail": err.Error()})
+		return
+	}
+	retention = loadLogRetention(root)
+	deleted := applyLogRetention(root, retention, defaultLogRetentionDays)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":              "ok",
+		"logs":                logDomainSnapshot(root, retention, defaultLogRetentionDays),
+		"retention_overrides": retention,
+		"retention_deleted":   deleted,
+		"changed":             changed,
+	})
+}
+
+func serverLogDelete(w http.ResponseWriter, r *http.Request, auth *authService) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	prefix := "/api/server/logs/"
+	logName := strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	root := resolveLogRoot()
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	var deleted []string
+	var err error
+	if scope == "family" {
+		deleted, err = deleteLogFamily(root, logName)
+	} else {
+		var file string
+		file, err = deleteLogFile(root, logName)
+		if file != "" {
+			deleted = []string{file}
+		}
+	}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found", "message": "Log file not found."})
+		return
+	}
+	retention := loadLogRetention(root)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "deleted",
+		"deleted": deleted,
+		"logs":    logDomainSnapshot(root, retention, defaultLogRetentionDays),
+	})
 }
 
 func resolveLogRoot() string {
@@ -175,6 +257,71 @@ func loadLogRetention(root string) map[string]any {
 		retention[canonical] = days
 	}
 	return retention
+}
+
+func saveLogRetention(root string, retention map[string]any) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	cleaned := map[string]int{}
+	for key, value := range retention {
+		canonical := canonicalLogName(key)
+		days := int(coerceInt64(value))
+		if canonical == "" || days <= 0 {
+			continue
+		}
+		cleaned[canonical] = days
+	}
+	content, err := json.MarshalIndent(map[string]any{"overrides": cleaned}, "", "  ")
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(root, "retention_policy.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(content, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func parseLogRetentionUpdates(value any) map[string]*int {
+	updates := map[string]*int{}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			addLogRetentionUpdate(updates, key, item)
+		}
+	case []any:
+		for _, item := range typed {
+			entry := asMap(item)
+			name := firstText(cleanText(entry["file"]), cleanText(entry["name"]))
+			addLogRetentionUpdate(updates, name, entry["days"])
+		}
+	}
+	return updates
+}
+
+func addLogRetentionUpdate(updates map[string]*int, name string, value any) {
+	canonical := canonicalLogName(name)
+	if canonical == "" {
+		return
+	}
+	if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+		return
+	}
+	if boolean, ok := value.(bool); ok && !boolean {
+		return
+	}
+	if value == nil {
+		updates[canonical] = nil
+		return
+	}
+	days := int(coerceInt64(value))
+	if days <= 0 {
+		updates[canonical] = nil
+		return
+	}
+	updates[canonical] = &days
 }
 
 func logRetentionDays(retention map[string]any, base string, defaultDays int) int {
@@ -330,6 +477,78 @@ func readLogEntries(root string, filename string, limit int) (map[string]any, in
 		"size_bytes":     info.Size(),
 		"modified":       info.ModTime().UTC().Format(time.RFC3339),
 	}, http.StatusOK, nil
+}
+
+func resolveLogPath(root string, filename string) (string, string, error) {
+	canonical := canonicalLogName(filename)
+	if canonical == "" {
+		return "", "", os.ErrNotExist
+	}
+	path := filepath.Clean(filepath.Join(root, canonical))
+	rootClean, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	if !strings.HasPrefix(pathAbs, rootClean+string(os.PathSeparator)) && pathAbs != rootClean {
+		return "", "", os.ErrNotExist
+	}
+	info, err := os.Stat(pathAbs)
+	if err != nil || info.IsDir() {
+		return "", "", os.ErrNotExist
+	}
+	return pathAbs, canonical, nil
+}
+
+func deleteLogFile(root string, filename string) (string, error) {
+	path, canonical, err := resolveLogPath(root, filename)
+	if err != nil {
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+func deleteLogFamily(root string, filename string) ([]string, error) {
+	base := logBaseName(filename)
+	if base == "" {
+		base = filename
+	}
+	canonical := canonicalLogName(base)
+	if canonical == "" {
+		return nil, os.ErrNotExist
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	prefix := canonical + "."
+	deleted := []string{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name != canonical && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if _, _, err := resolveLogPath(root, name); err != nil {
+			continue
+		}
+		if err := os.Remove(filepath.Join(root, name)); err == nil {
+			deleted = append(deleted, name)
+		}
+	}
+	if len(deleted) == 0 {
+		return nil, os.ErrNotExist
+	}
+	sort.Strings(deleted)
+	return deleted, nil
 }
 
 func tailLogLines(path string, limit int) ([]string, int, bool, error) {
