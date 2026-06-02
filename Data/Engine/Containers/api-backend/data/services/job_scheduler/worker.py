@@ -956,12 +956,25 @@ def _heartbeat_until(
     work_id: int,
     task_links: list[Dict[str, Any]],
     task_links_getter=None,
+    logger=None,
 ) -> None:
     while not stop_event.wait(20.0):
         visible_links = task_links_getter() if callable(task_links_getter) else task_links
         conn = db_factory()
         try:
             heartbeat_work_item(conn, work_id=int(work_id), lease_owner=worker_guid, lease_seconds=300)
+            conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if logger is not None:
+                logger.warning("work item heartbeat failed work_id=%s err=%s", work_id, exc)
+        finally:
+            conn.close()
+        conn = db_factory()
+        try:
             heartbeat_worker(
                 conn,
                 worker_guid=worker_guid,
@@ -970,6 +983,13 @@ def _heartbeat_until(
                 task_links=visible_links,
             )
             conn.commit()
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if logger is not None:
+                logger.warning("worker heartbeat failed worker_guid=%s err=%s", worker_guid, exc)
         finally:
             conn.close()
 
@@ -995,7 +1015,13 @@ def _execute_work_item(
     heartbeat = threading.Thread(
         target=_heartbeat_until,
         args=(stop_event, db_factory),
-        kwargs={"worker_guid": worker_guid, "work_id": int(item["id"]), "task_links": task_links, "task_links_getter": task_links_getter},
+        kwargs={
+            "worker_guid": worker_guid,
+            "work_id": int(item["id"]),
+            "task_links": task_links,
+            "task_links_getter": task_links_getter,
+            "logger": logger,
+        },
         daemon=True,
     )
     heartbeat.start()
@@ -1130,6 +1156,11 @@ def _execute_work_item(
             )
         else:
             complete_work_item(conn, work_id=int(item["id"]), status=final_status, error=error)
+        conn.commit()
+    finally:
+        conn.close()
+    conn = db_factory()
+    try:
         heartbeat_worker(
             conn,
             worker_guid=worker_guid,
