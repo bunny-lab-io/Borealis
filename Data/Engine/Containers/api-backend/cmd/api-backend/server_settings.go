@@ -38,17 +38,75 @@ func siteWorkerSettingsHandler(auth *authService) http.HandlerFunc {
 
 func ansibleRunnerSettingsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
-			return
-		}
-		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
+		switch r.Method {
+		case http.MethodGet:
+			if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+				failure.write(w)
+				return
+			}
 
-		writeJSON(w, http.StatusOK, collectAnsibleRunnerSettingsPayload())
+			writeJSON(w, http.StatusOK, collectAnsibleRunnerSettingsPayload())
+		case http.MethodPut:
+			updateAnsibleRunnerSettings(w, r, auth)
+		default:
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet+", "+http.MethodPut)
+		}
 	}
+}
+
+func updateAnsibleRunnerSettings(w http.ResponseWriter, r *http.Request, auth *authService) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+
+	normalized := map[string]int{}
+	for _, field := range []struct {
+		name  string
+		label string
+	}{
+		{name: "job_concurrency_limit", label: "Per-job concurrency"},
+		{name: "global_concurrency_limit", label: "Global concurrency"},
+	} {
+		raw, ok := body[field.name]
+		if !ok || raw == nil || strings.TrimSpace(cleanText(raw)) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid_ansible_runner_settings",
+				"message": field.label + " is required.",
+			})
+			return
+		}
+		parsed, err := intFromAny(raw)
+		if err != nil || parsed < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{
+				"error":   "invalid_ansible_runner_settings",
+				"message": field.label + " must be a whole number greater than 0.",
+			})
+			return
+		}
+		normalized[field.name] = parsed
+	}
+
+	if err := saveAnsibleRunnerSettings(normalized); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":   "ansible_runner_settings_save_failed",
+			"message": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":         "ok",
+		"ansible_runner": collectAnsibleRunnerSettingsPayload(),
+	})
 }
 
 func collectSiteWorkerSettingsPayload() map[string]any {
@@ -101,6 +159,34 @@ func loadAnsibleRunnerSettings() map[string]any {
 			coercePositiveInt(defaults["global_concurrency_limit"], defaultAnsibleRunnerGlobalLimit),
 		),
 	}
+}
+
+func saveAnsibleRunnerSettings(settings map[string]int) error {
+	path := ansibleRunnerSettingsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content, err := json.MarshalIndent(map[string]int{
+		"global_concurrency_limit": settings["global_concurrency_limit"],
+		"job_concurrency_limit":    settings["job_concurrency_limit"],
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	content = append(content, '\n')
+	tmpPath := pathWithoutExtension(path) + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func pathWithoutExtension(path string) string {
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path
+	}
+	return strings.TrimSuffix(path, ext)
 }
 
 func defaultAnsibleRunnerSettings() map[string]any {

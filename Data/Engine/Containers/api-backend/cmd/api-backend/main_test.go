@@ -2194,7 +2194,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 	}{
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "server overview update", handler: serverOverviewHandler(auth, fallback), method: http.MethodPost, path: "/api/server/overview"},
-		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
 		{name: "passkeys unsupported method", handler: authPasskeysHandler(auth, fallback), method: http.MethodPost, path: "/api/auth/passkeys"},
@@ -2208,8 +2207,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 8 {
-		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 7 {
+		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -2672,6 +2671,63 @@ func TestAnsibleRunnerSettingsHandlerReturnsConfigPayload(t *testing.T) {
 	}
 	if got := payload["global_concurrency_limit"]; got != float64(18) {
 		t.Fatalf("expected global limit 18, got %#v", got)
+	}
+}
+
+func TestAnsibleRunnerSettingsHandlerPersistsConfigPayload(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "ansible_runner_settings.json")
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH", settingsPath)
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/server/ansible-runner-settings", strings.NewReader(`{"job_concurrency_limit":"8","global_concurrency_limit":18}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected status %#v", payload["status"])
+	}
+	ansibleRunner := payload["ansible_runner"].(map[string]any)
+	if got := ansibleRunner["job_concurrency_limit"]; got != float64(8) {
+		t.Fatalf("expected job limit 8, got %#v", got)
+	}
+	if got := ansibleRunner["global_concurrency_limit"]; got != float64(18) {
+		t.Fatalf("expected global limit 18, got %#v", got)
+	}
+	loaded := loadJSONSettingsFile(settingsPath)
+	if got := loaded["job_concurrency_limit"]; got != float64(8) {
+		t.Fatalf("expected persisted job limit 8, got %#v", got)
+	}
+	if got := loaded["global_concurrency_limit"]; got != float64(18) {
+		t.Fatalf("expected persisted global limit 18, got %#v", got)
+	}
+}
+
+func TestAnsibleRunnerSettingsHandlerRejectsInvalidPayload(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "ansible_runner_settings.json")
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH", settingsPath)
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/server/ansible-runner-settings", strings.NewReader(`{"job_concurrency_limit":0,"global_concurrency_limit":18}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "invalid_ansible_runner_settings") {
+		t.Fatalf("expected invalid settings error, got %s", recorder.Body.String())
+	}
+	if _, err := os.Stat(settingsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected settings file to remain absent, err=%v", err)
 	}
 }
 
