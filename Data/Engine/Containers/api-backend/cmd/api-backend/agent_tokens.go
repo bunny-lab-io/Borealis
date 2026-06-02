@@ -87,6 +87,7 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	registerAgentReadRoutes(mux, auth, signer, verifier)
 	registerAgentScriptRoutes(mux, auth, signer, verifier, scriptSigner)
 	registerAgentHashRoutes(mux, auth, signer, verifier)
+	registerRemoteOpsSessionRoutes(mux, auth, signer)
 	return nil
 }
 

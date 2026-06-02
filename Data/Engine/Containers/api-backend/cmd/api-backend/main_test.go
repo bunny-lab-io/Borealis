@@ -115,6 +115,11 @@ type fakeOperatorStore struct {
 	agentHashStatus     int
 	agentHashErr        error
 	agentHashList       []map[string]any
+	remoteOpsReq        remoteOpsSessionRequest
+	remoteOpsProfile    operatorProfile
+	remoteOpsResult     remoteOpsSessionResult
+	remoteOpsStatus     int
+	remoteOpsErr        error
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -637,6 +642,23 @@ func (s *fakeOperatorStore) listAgentHashes(_ context.Context) ([]map[string]any
 	return agents, nil
 }
 
+func (s *fakeOperatorStore) createRemoteOpsSession(_ context.Context, profile operatorProfile, request remoteOpsSessionRequest) (remoteOpsSessionResult, int, error) {
+	s.remoteOpsProfile = profile
+	s.remoteOpsReq = request
+	if s.remoteOpsErr != nil {
+		status := s.remoteOpsStatus
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return remoteOpsSessionResult{}, status, s.remoteOpsErr
+	}
+	status := s.remoteOpsStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.remoteOpsResult, status, nil
+}
+
 func testAuthService(profile operatorProfile) *authService {
 	auth, _ := testAuthServiceWithStore(profile)
 	return auth
@@ -972,6 +994,98 @@ func TestDPoPVerifierRejectsReplay(t *testing.T) {
 	}
 	if _, err := verifier.verify("POST", "https://borealis.example.test/api/agent/token/refresh", proof, now, ""); !errors.Is(err, errDPoPReplay) {
 		t.Fatalf("expected replay error, got %v", err)
+	}
+}
+
+func TestRemoteOpsSessionHandlerIssuesScopedToken(t *testing.T) {
+	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.example.test")
+	auth, store := testAuthServiceWithStore(operatorProfile{ID: 7, Username: "operator", Role: "Admin"})
+	siteID := int64(3)
+	store.remoteOpsResult = remoteOpsSessionResult{
+		Device: remoteOpsSessionDevice{
+			GUID:     "00000000-0000-4000-8000-000000000123",
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			SiteID:   &siteID,
+			SiteName: "Bunny Lab",
+		},
+		Route: &agentWorkerRoute{
+			WorkerGUID:      "worker-1",
+			SiteID:          siteID,
+			RoutePathPrefix: "/_borealis/site-workers/worker-1",
+			Generation:      4,
+		},
+	}
+	signer := testAgentJWTSigner(t)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/remote-ops/session", strings.NewReader(`{"hostname":"LAB-OPERATOR-01","capabilities":["shell","remote-desktop","shell"],"ttl_seconds":42}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	remoteOpsSessionHandler(auth, signer).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.remoteOpsReq.Hostname != "LAB-OPERATOR-01" {
+		t.Fatalf("expected hostname capture, got %+v", store.remoteOpsReq)
+	}
+	if got := strings.Join(store.remoteOpsReq.Capabilities, ","); got != "remote_shell,remote_desktop" {
+		t.Fatalf("unexpected capabilities %q", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	session := payload["session"].(map[string]any)
+	if session["expires_in"] != float64(42) {
+		t.Fatalf("expected ttl 42, got %+v", session)
+	}
+	worker := session["worker"].(map[string]any)
+	urls := worker["urls"].(map[string]any)
+	if got := urls["socket_io"]; got != "https://borealis.example.test/_borealis/site-workers/worker-1/socket.io/" {
+		t.Fatalf("unexpected socket url %#v", got)
+	}
+	claims, err := signer.verifyAccessToken(cleanText(session["token"]))
+	if err != nil {
+		t.Fatalf("expected valid remote-op JWT, got %v", err)
+	}
+	if claims["typ"] != remoteOpSessionTokenType || claims["aud"] != remoteOpSessionAudience || claims["worker_guid"] != "worker-1" {
+		t.Fatalf("unexpected claims %+v", claims)
+	}
+	caps := claims["capabilities"].([]any)
+	if len(caps) != 2 || caps[0] != "remote_shell" || caps[1] != "remote_desktop" {
+		t.Fatalf("unexpected token caps %+v", caps)
+	}
+}
+
+func TestRemoteOpsSessionHandlerRejectsInvalidCapability(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/remote-ops/session", strings.NewReader(`{"hostname":"LAB","capability":"bogus"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+
+	remoteOpsSessionHandler(auth, testAgentJWTSigner(t)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRemoteOpsSessionHandlerReportsMissingWorker(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	siteID := int64(3)
+	store.remoteOpsResult = remoteOpsSessionResult{
+		Device: remoteOpsSessionDevice{GUID: "00000000-0000-4000-8000-000000000123", Hostname: "LAB", SiteID: &siteID},
+		Route:  nil,
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/remote-ops/session", strings.NewReader(`{"hostname":"LAB","capability":"shell"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	remoteOpsSessionHandler(auth, testAgentJWTSigner(t)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
