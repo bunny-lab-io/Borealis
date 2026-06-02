@@ -47,6 +47,9 @@ type fakeOperatorStore struct {
 	passkeys            []map[string]any
 	passkeyErr          error
 	passkeyUsername     string
+	directoryProviders  []map[string]any
+	directorySites      []map[string]any
+	directoryErr        error
 	views               []map[string]any
 	viewErr             error
 	viewByID            map[int64]map[string]any
@@ -214,6 +217,28 @@ func (s *fakeOperatorStore) listUserPasskeys(_ context.Context, username string)
 		passkeys = append(passkeys, copyPasskey)
 	}
 	return passkeys, nil
+}
+
+func (s *fakeOperatorStore) listDirectoryProviders(_ context.Context) ([]map[string]any, error) {
+	if s.directoryErr != nil {
+		return nil, s.directoryErr
+	}
+	providers := make([]map[string]any, 0, len(s.directoryProviders))
+	for _, provider := range s.directoryProviders {
+		providers = append(providers, copyMap(provider))
+	}
+	return providers, nil
+}
+
+func (s *fakeOperatorStore) listDirectorySites(_ context.Context) ([]map[string]any, error) {
+	if s.directoryErr != nil {
+		return nil, s.directoryErr
+	}
+	sites := make([]map[string]any, 0, len(s.directorySites))
+	for _, site := range s.directorySites {
+		sites = append(sites, copyMap(site))
+	}
+	return sites, nil
 }
 
 func (s *fakeOperatorStore) listDeviceViews(_ context.Context) ([]map[string]any, error) {
@@ -1255,6 +1280,90 @@ func TestUsersHandlerReturnsUsers(t *testing.T) {
 	}
 }
 
+func TestDirectoryProvidersHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/directory/providers", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	directoryProvidersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDirectoryProvidersHandlerReturnsProviders(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.directoryProviders = []map[string]any{
+		{
+			"id":                     int64(1),
+			"name":                   "Bunny LDAP",
+			"provider_type":          "ldap",
+			"enabled":                true,
+			"server_urls":            []string{"ldaps://ldap.example.test"},
+			"bind_password_present":  true,
+			"group_mappings":         []map[string]any{{"group_dn": "cn=admins,dc=example,dc=test", "role": "Admin"}},
+			"site_mappings":          []map[string]any{{"id": int64(1), "label": "Lab", "site_ids": []int64{1}}},
+			"sync_interval_seconds":  int64(60),
+			"username_attribute":     "uid",
+			"display_name_attribute": "displayName",
+			"email_attribute":        "mail",
+			"member_of_attribute":    "memberOf",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/directory/providers", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	directoryProvidersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Providers []map[string]any `json:"providers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Providers) != 1 || payload.Providers[0]["name"] != "Bunny LDAP" {
+		t.Fatalf("unexpected directory providers payload %+v", payload)
+	}
+}
+
+func TestDirectorySitesHandlerReturnsSites(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.directorySites = []map[string]any{
+		{
+			"id":              int64(1),
+			"name":            "Bunny Lab",
+			"description":     "Lab site",
+			"created_at":      int64(1700000000),
+			"device_count":    int64(12),
+			"enrollment_code": "BUNNY",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/directory/sites", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	directorySitesHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Sites []map[string]any `json:"sites"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Sites) != 1 || payload.Sites[0]["name"] != "Bunny Lab" {
+		t.Fatalf("unexpected directory sites payload %+v", payload)
+	}
+}
+
 func TestDeviceViewListHandlerReturnsViews(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.views = []map[string]any{
@@ -1433,6 +1542,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
 		{name: "passkeys unsupported method", handler: authPasskeysHandler(auth, fallback), method: http.MethodPost, path: "/api/auth/passkeys"},
+		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -1441,8 +1551,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 7 {
-		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 8 {
+		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
 	}
 }
 
