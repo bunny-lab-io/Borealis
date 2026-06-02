@@ -44,6 +44,9 @@ type fakeOperatorStore struct {
 	siteMapHostnames    []string
 	users               []map[string]any
 	userErr             error
+	passkeys            []map[string]any
+	passkeyErr          error
+	passkeyUsername     string
 	views               []map[string]any
 	viewErr             error
 	viewByID            map[int64]map[string]any
@@ -195,6 +198,22 @@ func (s *fakeOperatorStore) listUsers(_ context.Context) ([]map[string]any, erro
 		users = append(users, copyUser)
 	}
 	return users, nil
+}
+
+func (s *fakeOperatorStore) listUserPasskeys(_ context.Context, username string) ([]map[string]any, error) {
+	s.passkeyUsername = username
+	if s.passkeyErr != nil {
+		return nil, s.passkeyErr
+	}
+	passkeys := make([]map[string]any, 0, len(s.passkeys))
+	for _, passkey := range s.passkeys {
+		copyPasskey := make(map[string]any, len(passkey))
+		for key, value := range passkey {
+			copyPasskey[key] = value
+		}
+		passkeys = append(passkeys, copyPasskey)
+	}
+	return passkeys, nil
 }
 
 func (s *fakeOperatorStore) listDeviceViews(_ context.Context) ([]map[string]any, error) {
@@ -576,6 +595,54 @@ func TestAuthMeHandlerReturnsOperatorProfile(t *testing.T) {
 	}
 	if payload["username"] != "operator" || payload["role"] != "Admin" || payload["passkey_count"].(float64) != 2 {
 		t.Fatalf("unexpected /api/auth/me payload %+v", payload)
+	}
+}
+
+func TestAuthPasskeysHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/passkeys", nil)
+	authPasskeysHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAuthPasskeysHandlerReturnsCurrentUserPasskeys(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.passkeys = []map[string]any{
+		{
+			"id":           int64(3),
+			"label":        "YubiKey",
+			"created_at":   int64(1700000000),
+			"last_used_at": int64(1700000100),
+			"transports":   []string{"usb"},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/passkeys", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	authPasskeysHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Status       string           `json:"status"`
+		Passkeys     []map[string]any `json:"passkeys"`
+		PasskeyCount int              `json:"passkey_count"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Status != "ok" || payload.PasskeyCount != 1 || len(payload.Passkeys) != 1 || payload.Passkeys[0]["label"] != "YubiKey" {
+		t.Fatalf("unexpected passkey payload %+v", payload)
+	}
+	if store.passkeyUsername != "operator" {
+		t.Fatalf("expected operator passkey lookup, got %q", store.passkeyUsername)
 	}
 }
 
@@ -1365,6 +1432,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
+		{name: "passkeys unsupported method", handler: authPasskeysHandler(auth, fallback), method: http.MethodPost, path: "/api/auth/passkeys"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -1373,8 +1441,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 6 {
-		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 7 {
+		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
 	}
 }
 
