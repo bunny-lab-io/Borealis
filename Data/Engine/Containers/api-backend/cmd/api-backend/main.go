@@ -30,6 +30,7 @@ type gatewayConfig struct {
 	LegacyURL          *url.URL
 	LegacyReadyTimeout time.Duration
 	HealthTimeout      time.Duration
+	AuthTimeout        time.Duration
 	ShutdownTimeout    time.Duration
 }
 
@@ -75,6 +76,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg, state))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
+	registerServerTimeRoutes(mux, cfg)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
@@ -157,6 +159,7 @@ func loadConfig() (gatewayConfig, error) {
 		LegacyURL:          legacyURL,
 		LegacyReadyTimeout: envDurationSeconds("BOREALIS_GO_API_LEGACY_READY_TIMEOUT_SECONDS", 120*time.Second),
 		HealthTimeout:      envDurationSeconds("BOREALIS_GO_API_HEALTH_TIMEOUT_SECONDS", 2*time.Second),
+		AuthTimeout:        envDurationSeconds("BOREALIS_GO_API_AUTH_TIMEOUT_SECONDS", 3*time.Second),
 		ShutdownTimeout:    envDurationSeconds("BOREALIS_GO_API_SHUTDOWN_TIMEOUT_SECONDS", 20*time.Second),
 	}, nil
 }
@@ -323,6 +326,13 @@ func writeJSON(w http.ResponseWriter, status int, payload map[string]any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func writeMethodNotAllowed(w http.ResponseWriter, allowed string) {
+	w.Header().Set("Allow", allowed)
+	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
+		"error": "method_not_allowed",
+	})
 }
 
 func terminateLegacy(cmd *exec.Cmd, exited <-chan error, timeout time.Duration) error {
