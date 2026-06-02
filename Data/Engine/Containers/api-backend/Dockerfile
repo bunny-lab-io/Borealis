@@ -34,10 +34,11 @@ RUN python -m pip install --upgrade pip \
 
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
+COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend
 COPY Data/Engine/Containers/api-backend/healthcheck.py /usr/local/bin/borealis-api-healthcheck
 
-RUN chmod +x /usr/local/bin/borealis-api-backend /usr/local/bin/borealis-api-healthcheck
+RUN chmod +x /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-api-backend /usr/local/bin/borealis-api-healthcheck
 
 EXPOSE 5000
 

@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M15: Rewrite Target Decision Gate` |
+| Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-02 |
-| Latest implementation commit | `978c8393` (`Remove api-backend remote-op fallbacks`). |
-| Current state | Worker-first migration is feature-complete through `M14`. api-backend no longer owns live Agent Socket.IO, Remote Shell, direct Agent VNC/tunnel dispatch, stale Agent socket fallbacks, live quick-job dispatch, Agent maintenance dispatch, file/process/service/software live dispatch, or Ansible execution. Reduced api-backend surface is documented below. The Go rewrite has not started. |
-| Next safe step | Decision gate only: choose whether to proceed with api-backend Go rewrite, pause after worker-first migration, or open a separate site-worker runtime modernization path. Do not write Go replacement code until this decision is explicit. |
+| Latest implementation commit | Current branch head (`Go api-backend gateway bootstrap`). |
+| Current state | Worker-first migration is feature-complete through `M14`, `M15` selected api-backend as the rewrite target, and `M16` bootstrapped a Go api-backend gateway. The Go binary now owns public loopback port `5000`, supervises the Python compatibility backend on `127.0.0.1:5001`, serves Go-native health/status endpoints, and reverse-proxies unported routes. |
+| Next safe step | Continue `M17`: port reduced API domains into Go one domain at a time while keeping live Agent-channel paths worker-owned and keeping Python fallback until route parity is proven. |
 
 ## Tracker Rules
 
@@ -50,7 +50,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M12: Ansible Execution Finalization` | `Done` | Ensure Ansible execution belongs to worker lane only. |
 | `M13: api-backend Cleanup` | `Done` | Remove obsolete remote-op proxy code and stale dependencies. |
 | `M14: Go Rewrite Prep` | `Done` | Freeze reduced Python API surface for Go rewrite design. |
-| `M15: Rewrite Target Decision Gate` | `In Progress` | Decide whether next rewrite target remains api-backend or shifts to site-worker runtime. |
+| `M15: Rewrite Target Decision Gate` | `Done` | Decide whether next rewrite target remains api-backend or shifts to site-worker runtime. |
+| `M16: Go Gateway Bootstrap` | `Done` | Put a Go api-backend process in front of the Python compatibility backend. |
+| `M17: Go API Domain Porting` | `In Progress` | Port reduced api-backend domains into native Go handlers behind the gateway. |
 
 ## Milestone Definitions
 
@@ -250,13 +252,37 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Decide whether the next rewrite target should remain `api-backend`, shift to `site-worker`, or pause after worker-first migration. |
 | Migrates | Nothing. This is an operator/design decision before implementation. |
 | Out Of Scope | Writing Go code, schema migrations, route changes, Agent protocol changes, UI changes. |
 | Done When | Operator selects the next implementation path and this tracker records the selected path, scope, validation gate, and first implementation milestone. |
 | Validation | Source map review, dependency review, runtime ownership review, and explicit operator decision. |
-| Handoff Note | Active. Recommendation: api-backend Go rewrite is still useful, but no longer urgent for live remote-operation stability. Site-worker is now the operational hot path and deserves its own future modernization track after package/source split. |
+| Handoff Note | Done. Operator selected api-backend Go rewrite. Site-worker modernization remains a separate future track after shared package/source split. |
+
+### M16: Go Gateway Bootstrap
+
+| Field | Definition |
+| --- | --- |
+| Status | `Done` |
+| Goal | Introduce a Go api-backend binary as the container entrypoint without breaking existing Python route behavior. |
+| Migrates | Container process ownership, `/health`, and `/api/system/go-backend/status` to Go. Unported routes remain behind a supervised Python compatibility backend. |
+| Out Of Scope | Full API parity, auth/session/database rewrite, schema changes, site-worker rewrite, Agent protocol changes. |
+| Done When | `Data/Engine/Containers/api-backend/dist/api-backend` is built by `build-api-backend.sh`, Engine deploy auto-builds the Go binary before the api-backend image, Go listens on port `5000`, Python fallback listens on `127.0.0.1:5001`, container health checks pass, and proxied routes retain existing behavior. |
+| Validation | Go unit tests, shell syntax checks, Engine redeploy, internal/public API smoke, container health inspection, and `git diff --check`. |
+| Handoff Note | Done. `Engine.sh deploy prod` rebuilt the Go binary and api-backend image, deployed `borealis-engine/api-backend:sha-f0ad256598f5`, and api-backend/job-scheduler both reached healthy state. Internal `/health` returns Go status with healthy Python fallback; public `/api/system/go-backend/status` reaches the Go gateway; proxied authenticated routes preserve `401` behavior and include `X-Borealis-Api-Backend: go`. |
+
+### M17: Go API Domain Porting
+
+| Field | Definition |
+| --- | --- |
+| Status | `In Progress` |
+| Goal | Replace reduced Python api-backend domains with native Go handlers behind the gateway. |
+| Migrates | Auth/session, token, enrollment, device inventory, server/admin, automation, workflow, watchdog, notification, and scheduler database/control-plane routes as discrete domain slices. |
+| Out Of Scope | Moving live Agent-channel paths back into api-backend, rewriting site-worker runtime, changing Agent protocol without a domain-specific need, or deleting Python fallback before route parity. |
+| Done When | Each ported domain has Go handlers, matching API behavior, focused tests, smoke validation, and Python fallback is bypassed only for that domain. Final completion requires all reduced api-backend routes to be Go-native or intentionally retained with documented reason. |
+| Validation | Go tests per domain, focused Engine domain tests where practical, auth/RBAC denial checks, runtime smoke after redeploy, `git diff --check`. |
+| Handoff Note | Active. Start with low-risk read-only control-plane domains, then move auth/session primitives before mutation-heavy device/admin/scheduler routes. Keep Python compatibility backend running until domain parity is proven. |
 
 ### M14 Current Surface Inventory
 
@@ -302,7 +328,7 @@ Rewrite target recommendation:
 - Keep api-backend Go rewrite as the correct next target if the goal is control-plane maintainability, dependency reduction, cleaner request lifecycle, typed API contracts, and removal of Flask/Eventlet from the central Engine service.
 - Do not treat api-backend Go rewrite as urgent for remote-operation stability. Worker-first migration already moved the risky live paths into site-workers.
 - Treat site-worker modernization as a separate future track, not a replacement for this tracker. Site-worker now owns latency-sensitive and stateful live operations, but it still imports shared Python modules from api-backend source. Rewrite or heavy refactor should start only after splitting site-worker/shared packages from api-backend packaging.
-- Best next path: pause implementation at `M15`, make an explicit operator decision, then either start api-backend Go implementation with the reduced surface above or open a new site-worker runtime modernization tracker.
+- Selected path: api-backend Go implementation proceeds from the reduced surface above. Site-worker modernization remains a separate future tracker after package/source split.
 
 Readiness verdict:
 
@@ -314,6 +340,7 @@ Readiness verdict:
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-02 | `M15`/`M16` | Operator selected api-backend Go rewrite. Added Go api-backend module, binary build script, container entrypoint handoff, Python fallback bind override, Dockerfile binary copy, Engine deploy prebuild hook, Go-native health/status routes, reverse proxy to Python compatibility backend, and focused Go unit tests. | `bash -n` for `Engine.sh`, api-backend build script, and entrypoint; `go test ./...` under `Data/Engine/Containers/api-backend`; `sudo bash Engine.sh deploy prod`; internal `curl http://127.0.0.1:5000/health`; public `curl -k https://borealis.bunny-lab.io/api/system/go-backend/status`; proxied public authenticated route returned `401` with `X-Borealis-Api-Backend: go`; Docker health for api-backend and job-scheduler healthy. | Go gateway running in `borealis-engine-api-backend` as image `borealis-engine/api-backend:sha-f0ad256598f5`; Python compatibility backend supervised on `127.0.0.1:5001`; `/health` reports `backend=go` and `legacy.healthy=true`. |
 | 2026-06-02 | `M14`/`M15` | Completed final pre-Go readiness review. Re-evaluated rewrite target after worker-first migration. Marked M14 Done, added M15 decision gate, recorded that api-backend Go rewrite remains valuable for control-plane modernization but is no longer urgent for remote-operation stability, and recorded that direct site-worker rewrite should wait for source/package split. | Source and dependency review over api-backend registration, WebSocket handlers, Dockerfiles, and `engine-requirements.txt` / `engine-worker-requirements.txt`; `git diff --check` passed. | Pre-Go migration is feature-complete. Go implementation has not started. |
 | 2026-06-02 | `M14` | Started Go rewrite prep without writing Go code. Added the post-M13 reduced api-backend surface inventory, split remaining api-backend responsibilities from worker-owned live-operation paths, and documented rewrite non-goals. | Source review via `find` and `rg` over `Data/Engine/Containers/api-backend/data/services/API`, `services/WebSocket`, and app registration files. `git diff --check` passed. | M14 is documentation/design-only at this point. api-backend Go implementation remains intentionally not started. |
 | 2026-06-02 | `M13` | Completed api-backend cleanup after worker-first ownership reached remote access, Agent maintenance, quick jobs, file/process/service/software operations, and Ansible execution. Removed api-backend live Agent socket registry bootstrap, remote shell Socket.IO handlers, direct Agent VNC/tunnel dispatch fallbacks, and stale socket-binding correction logic. Legacy Agent Socket.IO registration against api-backend now rejects with `site_worker_route_required`. VNC credential/start/stop and VPN tunnel start/stop dispatch through the site-worker host-service bridge only. | Local validation passed: `python3 -m py_compile` for touched M13 source/test files, focused remote-op pytest (`37 passed`), full `test_vnc_api.py` (`34 passed`), full `test_vpn_tunnel_service.py` (`3 passed`), `bash -n Engine_Unit_Tests.sh`, `./Engine_Unit_Tests.sh --domain remote-access`, `./Engine_Unit_Tests.sh --domain devices`, and `git diff --check`. Both Engine domain runs used cached test Python plus isolated auth-token roots. | Implementation commit `978c8393`; passing lanes wrote to `Unit_Test_Results/engine-20260602T034304Z` and `Unit_Test_Results/engine-20260602T034548Z`. `M14` is now active for reduced-surface documentation only; Go rewrite implementation is not started. |
@@ -418,16 +445,16 @@ Readiness verdict:
 - M12 complete: api-backend Ansible entrypoints dispatch through site-worker routes, job-scheduler manager no longer keeps a local Ansible runner fallback, site-worker owns direct Ansible execution, and operator smoke passed with Jobs `112` and `113`.
 - M13 complete: obsolete api-backend remote-operation proxy code and stale live Agent fallbacks are removed or rejected.
 - M14 complete: reduced api-backend surface and worker-owned exclusions are documented.
-- M15 active: choose next implementation target. api-backend Go rewrite is ready to start if selected, but site-worker modernization should be tracked separately after source/package split.
+- M15 complete: operator selected api-backend Go rewrite; site-worker modernization remains a separate future track after source/package split.
+- M16 complete: Go api-backend gateway owns port `5000`, supervises Python compatibility backend on `127.0.0.1:5001`, serves Go-native health/status, and proxies unported routes.
+- M17 active: port reduced api-backend domains into Go behind the gateway while keeping live Agent-channel paths worker-owned.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Resolve `M15` decision gate before implementation:
-  - Proceed with api-backend Go rewrite when operator wants control-plane modernization and dependency reduction.
-  - Pause this migration if worker-first runtime-risk reduction is enough for now.
-  - Open a separate site-worker modernization tracker if operator wants to target worker hot-path performance or runtime simplification first.
-- If site-worker modernization is selected, split shared `Data.Engine.services` modules and worker-only packaging before rewriting worker runtime.
+- Continue `M17` by porting reduced api-backend domains into Go in small slices. Recommended order: read-only server/status endpoints, auth/session/token primitives, enrollment/token refresh, device inventory reads, admin/server mutation endpoints, automation/scheduler/workflow/watchdog domains.
+- Keep Python compatibility backend until all reduced api-backend routes have native Go parity or an explicit retained-Python exception.
+- Keep site-worker modernization separate; if selected later, split shared `Data.Engine.services` modules and worker-only packaging before rewriting worker runtime.
 
 ## Validation Matrix
 
@@ -447,6 +474,7 @@ Readiness verdict:
 | Agent unit tests | `M5`, `M6`, `M9`, `M11` | `Done` | `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh --domain go-agent` passed for M5 route cutover, M6 stale-route refresh, M9 transfer URL routing (`Unit_Test_Results/agent-20260601T062212Z`), M11 Agent maintenance ack-before-updater-start fix (`Unit_Test_Results/agent-20260601T221350Z`), and M11 transport post-ack updater fix (`Unit_Test_Results/agent-20260601T222632Z`). |
 | Engine devices lane | `M10`, `M11` | `Done` for local implementation | `./Engine_Unit_Tests.sh --domain devices` passed with isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT=/tmp/borealis-codex-test-auth-tokens-m10` for M10 (`Unit_Test_Results/engine-20260601T074913Z`) and isolated `BOREALIS_ENGINE_AUTH_TOKEN_ROOT=/tmp/borealis-codex-test-auth-tokens-m11-ack-devices` for M11 (`Unit_Test_Results/engine-20260601T113722Z`). |
 | Manual remote-op smoke | `M7`-`M12` | `Done` | Shell, desktop, File Management, Process Management, Service Management, and Software Management passed against LAB-OPERATOR-01. M12 manual Ansible Quick Job `112` and Scheduled Job `113` passed on LAB-DOCS-01. M11 quick-job smoke passed after replacement-worker handoff fixes, and Agent maintenance smoke passed with job `121` / run `975` on LAB-OPERATOR-01 after site-worker ACK-required dispatch and heartbeat stabilization. |
+| Go api-backend gateway | `M16` | `Done` | `go test ./...` passed under `Data/Engine/Containers/api-backend`; `sudo bash Engine.sh deploy prod` rebuilt/deployed api-backend; `/health` reports Go backend with healthy Python fallback; public `/api/system/go-backend/status` works; proxied public authenticated route returns expected `401` with `X-Borealis-Api-Backend: go`; api-backend and job-scheduler containers are healthy. |
 
 ## Fresh Codex Prompt
 
@@ -455,9 +483,9 @@ Use this prompt when starting a new Codex conversation:
 ```text
 Read /opt/Borealis/AGENTS.md first, then read Docs/index.md and Docs/Reference/Migration Paths/api-backend-rewrite.md.
 
-We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after `60886af8`, with M13 implementation commit `978c8393`, tracker commit `852f0ebb`, and M14 surface inventory commit `60886af8`.
+We are on branch feature/rewrite-api-backend-in-golang for PR #232, "Rewrite api-backend in Golang". Branch head should be at or after the M16 Go gateway bootstrap commit.
 
-M1 through M14 are Done. M15 rewrite target decision gate is active. Do not write Go replacement code until operator explicitly selects the implementation target.
+M1 through M16 are Done. M17 Go API domain porting is active. Go api-backend gateway owns public loopback port `5000`, supervises Python compatibility backend on `127.0.0.1:5001`, serves Go-native `/health` and `/api/system/go-backend/status`, and proxies unported routes.
 
 Completed M1 state:
 - api-backend Ansible/runtime-heavy dependency split has been implemented.
@@ -572,12 +600,24 @@ Completed M14 state:
 - Worker-owned exclusions are documented: Agent Socket.IO registry/dispatch, Remote Shell, Remote Desktop/Guacamole path, File Management transfer state, process/service/software live dispatch, quick-job/maintenance live dispatch, Engine-side Ansible execution, and site-worker route/lifecycle behavior.
 - Final recommendation: api-backend Go rewrite remains useful for control-plane modernization, but is no longer urgent for remote-operation stability. Site-worker modernization should be a separate future track after shared package/source split.
 
+Completed M15/M16 state:
+- Operator selected api-backend Go rewrite as the active target.
+- `Data/Engine/Containers/api-backend/build-api-backend.sh` builds `Data/Engine/Containers/api-backend/dist/api-backend`.
+- `Engine.sh deploy prod` auto-builds the Go api-backend binary before computing/building the api-backend image.
+- api-backend container entrypoint runs `/usr/local/bin/borealis-api-backend-go`.
+- Go gateway listens on `127.0.0.1:5000`.
+- Python compatibility backend is supervised by Go and listens on `127.0.0.1:5001` via `BOREALIS_ENGINE_HOST` / `BOREALIS_ENGINE_PORT`.
+- Go-native `/health` returns backend `go` and requires the Python fallback to be healthy.
+- Go-native `/api/system/go-backend/status` returns gateway and fallback status.
+- Unported routes reverse-proxy to Python fallback and include response header `X-Borealis-Api-Backend: go`.
+- M16 validation passed: Go tests, shell syntax checks, Engine deploy, internal/public smoke, proxied route smoke, and container health checks.
+
 Next work:
-1. Continue `M15` only.
-2. Ask operator to choose the next implementation path: api-backend Go rewrite, pause after worker-first migration, or separate site-worker modernization tracker.
-3. If api-backend Go rewrite is selected, start from the M14 reduced surface inventory and keep live Agent paths worker-owned.
-4. If site-worker modernization is selected, first split shared `Data.Engine.services` modules and worker-only packaging.
-5. Do not implement Go replacement code until the M15 decision is recorded.
+1. Continue `M17` only.
+2. Port reduced api-backend domains into Go behind the gateway, one domain slice at a time.
+3. Keep live Agent paths worker-owned; do not reintroduce api-backend Agent Socket.IO dispatch.
+4. Keep Python fallback until route parity is proven for each ported domain.
+5. Start with low-risk read-only server/status endpoints, then auth/session/token primitives before mutation-heavy device/admin/scheduler routes.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
@@ -626,7 +666,7 @@ Validation constraints from prior session:
     - `site-worker` is live remote-operation owner for Agent sockets, remote shell, remote desktop, remote file management, process/service/software operations, Agent maintenance, quick jobs that need live dispatch, and Ansible execution.
     - Traefik hotloads per-site-worker routes from dynamic files so worker route changes do not require Traefik container recreation.
     - Legacy api-backend remote-op fallback is intentionally removed or rejected after Agent ops route cutover.
-    - The next rewrite is a decision gate: api-backend Go rewrite can proceed from the reduced surface, or site-worker modernization can become a separate tracker after package/source split.
+- Go api-backend gateway is active. Continue porting reduced API domains into Go while keeping site-worker modernization separate after package/source split.
 
     ### Debug flow
 

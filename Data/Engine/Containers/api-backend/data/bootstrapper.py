@@ -9,8 +9,8 @@
 
 The bootstrapper assembles configuration via :func:`Data.Engine.config.load_runtime_config`
 before delegating to :func:`Data.Engine.server.create_app`. The shipped Engine
-runtime is fixed to loopback HTTP on ``127.0.0.1:5000`` and expects the
-embedded Borealis Traefik edge to own all public HTTPS traffic.
+runtime defaults to loopback HTTP on ``127.0.0.1:5000`` and expects the
+embedded Borealis Traefik edge or Go gateway to own all public traffic.
 """
 
 from __future__ import annotations
@@ -29,6 +29,19 @@ from .server import EngineContext, create_app
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 5000
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    if value < 1 or value > 65535:
+        return default
+    return value
 
 
 def _bootstrap_logger() -> logging.Logger:
@@ -70,9 +83,19 @@ def _build_runtime_config() -> Dict[str, Any]:
             "notifications",
         )
 
+    host = (
+        os.environ.get("BOREALIS_ENGINE_HOST")
+        or os.environ.get("BOREALIS_API_HOST")
+        or DEFAULT_HOST
+    )
+    port = _env_int(
+        "BOREALIS_ENGINE_PORT",
+        _env_int("BOREALIS_API_PORT", DEFAULT_PORT),
+    )
+
     return {
-        "HOST": DEFAULT_HOST,
-        "PORT": DEFAULT_PORT,
+        "HOST": str(host).strip() or DEFAULT_HOST,
+        "PORT": port,
         "API_GROUPS": api_groups,
     }
 

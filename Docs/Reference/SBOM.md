@@ -26,6 +26,8 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - PostgreSQL container image (`postgres:17-bookworm`) - PostgreSQL License plus Debian package licenses - https://www.postgresql.org/about/licence/
 - Traefik container image (`traefik:v3.3`) - MIT - https://github.com/traefik/traefik/blob/master/LICENSE.md
 - Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) - Apache-2.0 - https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE
+- Go standard library/runtime (compiled into the Go api-backend gateway) - BSD-3-Clause - https://go.dev/LICENSE
+- Go toolchain (native Linux api-backend build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 - Python (system Python on Linux) - PSF License - https://docs.python.org/3/license.html
 - Flask - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 - flask-cors - MIT - https://spdx.org/licenses/MIT.html

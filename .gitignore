@@ -15,6 +15,7 @@
 /Dependencies/VPN_Tunnel_Adapter/
 /Dependencies/UltraVNC_Server/
 /Data/Engine/Python_API_Endpoints/
+/Data/Engine/Containers/api-backend/dist/
 
 # Misc Files/Folders
 .vs/s

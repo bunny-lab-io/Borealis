@@ -1237,9 +1237,21 @@ except Exception:
 PY
 }
 
+prepare_service_build_artifacts() {
+  local service="$1"
+  case "${service}" in
+    api-backend)
+      log_status "${service}" "Building Go binary" "${C_YELLOW}"
+      BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
+        "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1
+      ;;
+  esac
+}
+
 build_service_image() {
   local service="$1"
   local mode="$2"
+  prepare_service_build_artifacts "${service}"
   local image_hash
   image_hash="$(compute_service_hash "${service}" "${mode}")"
   local tag="borealis-engine/${service}:sha-${image_hash:0:12}"
