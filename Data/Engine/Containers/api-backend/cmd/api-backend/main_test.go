@@ -18,38 +18,42 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles          map[string]operatorProfile
-	err               error
-	search            []deviceSearchMatch
-	searchErr         error
-	searchProfile     operatorProfile
-	searchQuery       string
-	devices           []map[string]any
-	deviceErr         error
-	deviceProfile     operatorProfile
-	deviceFilter      deviceListFilter
-	sites             []map[string]any
-	siteErr           error
-	siteProfile       operatorProfile
-	siteMap           map[string]map[string]any
-	siteMapErr        error
-	siteMapHostnames  []string
-	views             []map[string]any
-	viewErr           error
-	viewByID          map[int64]map[string]any
-	viewIDSeen        int64
-	metadataFields    []map[string]any
-	metadataErr       error
-	deviceMetadata    map[string]any
-	deviceMetaStatus  int
-	deviceMetaErr     error
-	deviceMetaID      string
-	deviceMetaProfile operatorProfile
-	serverWorkers     map[string]any
-	serverWorkerErr   error
-	workerHistory     int
-	workerContainers  bool
-	githubToken       map[string]any
+	profiles           map[string]operatorProfile
+	err                error
+	search             []deviceSearchMatch
+	searchErr          error
+	searchProfile      operatorProfile
+	searchQuery        string
+	devices            []map[string]any
+	deviceErr          error
+	deviceProfile      operatorProfile
+	deviceFilter       deviceListFilter
+	sites              []map[string]any
+	siteErr            error
+	siteProfile        operatorProfile
+	siteMap            map[string]map[string]any
+	siteMapErr         error
+	siteMapHostnames   []string
+	views              []map[string]any
+	viewErr            error
+	viewByID           map[int64]map[string]any
+	viewIDSeen         int64
+	createdView        deviceViewMutation
+	updatedView        deviceViewMutation
+	deletedViewID      int64
+	viewMutationStatus int
+	metadataFields     []map[string]any
+	metadataErr        error
+	deviceMetadata     map[string]any
+	deviceMetaStatus   int
+	deviceMetaErr      error
+	deviceMetaID       string
+	deviceMetaProfile  operatorProfile
+	serverWorkers      map[string]any
+	serverWorkerErr    error
+	workerHistory      int
+	workerContainers   bool
+	githubToken        map[string]any
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -156,6 +160,65 @@ func (s *fakeOperatorStore) getDeviceView(_ context.Context, viewID int64) (map[
 		copyView[key] = value
 	}
 	return copyView, true, nil
+}
+
+func (s *fakeOperatorStore) createDeviceView(_ context.Context, request deviceViewMutation) (map[string]any, int, error) {
+	s.createdView = request
+	if s.viewErr != nil {
+		return nil, 0, s.viewErr
+	}
+	status := s.viewMutationStatus
+	if status == 0 {
+		status = http.StatusCreated
+	}
+	return map[string]any{
+		"id":      int64(99),
+		"name":    *request.Name,
+		"columns": stringSliceToAny(request.Columns),
+		"filters": request.Filters,
+	}, status, nil
+}
+
+func (s *fakeOperatorStore) updateDeviceView(_ context.Context, viewID int64, request deviceViewMutation) (map[string]any, int, error) {
+	s.viewIDSeen = viewID
+	s.updatedView = request
+	if s.viewErr != nil {
+		return nil, 0, s.viewErr
+	}
+	name := "Updated View"
+	if request.Name != nil {
+		name = *request.Name
+	}
+	status := s.viewMutationStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return map[string]any{
+		"id":      viewID,
+		"name":    name,
+		"columns": stringSliceToAny(request.Columns),
+		"filters": request.Filters,
+	}, status, nil
+}
+
+func (s *fakeOperatorStore) deleteDeviceView(_ context.Context, viewID int64) (map[string]any, int, error) {
+	s.deletedViewID = viewID
+	if s.viewErr != nil {
+		return nil, 0, s.viewErr
+	}
+	status := s.viewMutationStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return map[string]any{"status": "ok"}, status, nil
+}
+
+func stringSliceToAny(values []string) []any {
+	items := make([]any, 0, len(values))
+	for _, value := range values {
+		items = append(items, value)
+	}
+	return items
 }
 
 func (s *fakeOperatorStore) listMetadataDefinitions(_ context.Context) ([]map[string]any, error) {
@@ -719,6 +782,99 @@ func TestDeviceViewGetHandlerReturnsViewOrNotFound(t *testing.T) {
 	}
 }
 
+func TestDeviceViewListHandlerCreatesView(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device_list_views", strings.NewReader(`{"name":"Lab Ops","columns":["status","hostname"],"filters":{"site":"Bunny Lab"}}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.createdView.Name == nil || *store.createdView.Name != "Lab Ops" {
+		t.Fatalf("expected created view name, got %+v", store.createdView)
+	}
+	if len(store.createdView.Columns) != 2 || store.createdView.Columns[0] != "status" || store.createdView.Columns[1] != "hostname" {
+		t.Fatalf("unexpected columns %+v", store.createdView.Columns)
+	}
+	if got := store.createdView.Filters["site"]; got != "Bunny Lab" {
+		t.Fatalf("expected site filter, got %#v", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["name"] != "Lab Ops" || payload["id"] != float64(99) {
+		t.Fatalf("unexpected create payload %+v", payload)
+	}
+}
+
+func TestDeviceViewListHandlerRejectsInvalidCreatePayload(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device_list_views", strings.NewReader(`{"name":"   ","columns":["status"],"filters":{}}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "name is required") {
+		t.Fatalf("unexpected validation body %s", recorder.Body.String())
+	}
+}
+
+func TestDeviceViewGetHandlerUpdatesView(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/device_list_views/7", strings.NewReader(`{"name":"Renamed","columns":["hostname"],"filters":{"status":"Online"}}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.viewIDSeen != 7 {
+		t.Fatalf("expected view id 7, got %d", store.viewIDSeen)
+	}
+	if store.updatedView.Name == nil || *store.updatedView.Name != "Renamed" {
+		t.Fatalf("expected updated name, got %+v", store.updatedView)
+	}
+	if len(store.updatedView.Columns) != 1 || store.updatedView.Columns[0] != "hostname" {
+		t.Fatalf("unexpected updated columns %+v", store.updatedView.Columns)
+	}
+	if got := store.updatedView.Filters["status"]; got != "Online" {
+		t.Fatalf("expected status filter, got %#v", got)
+	}
+}
+
+func TestDeviceViewGetHandlerDeletesView(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/device_list_views/7", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deletedViewID != 7 {
+		t.Fatalf("expected deleted view id 7, got %d", store.deletedViewID)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected delete payload %+v", payload)
+	}
+}
+
 func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 	fallbackHits := 0
@@ -734,8 +890,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		path    string
 	}{
 		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
-		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
-		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
 		{name: "device metadata update", handler: deviceMetadataFieldsHandler(auth, fallback), method: http.MethodPut, path: "/api/devices/device-1/metadata_fields/7"},
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
@@ -748,8 +902,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 7 {
-		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 5 {
+		t.Fatalf("expected 5 fallback hits, got %d", fallbackHits)
 	}
 }
 
