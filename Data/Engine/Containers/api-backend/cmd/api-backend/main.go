@@ -114,6 +114,7 @@ func main() {
 	registerWorkflowRoutes(mux, auth, proxy)
 	registerWatchdogRoutes(mux, auth, proxy)
 	registerScheduledJobRoutes(mux, auth, proxy)
+	registerActivityRoutes(mux, auth)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
