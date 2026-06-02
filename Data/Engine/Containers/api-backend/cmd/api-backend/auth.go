@@ -39,6 +39,7 @@ var (
 	errInvalidToken      = errors.New("invalid auth token")
 	errExpiredToken      = errors.New("expired auth token")
 	errOperatorNotFound  = errors.New("operator not found")
+	errOperatorAuthBlock = errors.New("operator auth blocked")
 	errOperatorStoreDown = errors.New("operator store unavailable")
 )
 
@@ -68,9 +69,14 @@ type postgresOperatorStore struct {
 }
 
 type authService struct {
-	verifier *tokenVerifier
-	store    operatorStore
-	timeout  time.Duration
+	verifier      *tokenVerifier
+	store         operatorStore
+	bootstrapGate operatorAuthGate
+	timeout       time.Duration
+}
+
+type operatorAuthGate interface {
+	operatorAuthAllowed(ctx context.Context) (bool, error)
 }
 
 type tokenVerifier struct {
@@ -105,7 +111,12 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 			maxAge: cfg.AuthTokenTTL,
 			now:    time.Now,
 		},
-		store:   store,
+		store: store,
+		bootstrapGate: &legacyBootstrapGate{
+			baseURL: cfg.LegacyURL,
+			secret:  []byte(secret),
+			client:  &http.Client{Timeout: cfg.AuthTimeout},
+		},
 		timeout: cfg.AuthTimeout,
 	}, closeStore, nil
 }
@@ -315,6 +326,15 @@ func (a *authService) currentProfile(ctx context.Context, r *http.Request) (oper
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if a.bootstrapGate != nil {
+		allowed, err := a.bootstrapGate.operatorAuthAllowed(requestCtx)
+		if err != nil {
+			return operatorProfile{}, errors.Join(errOperatorStoreDown, err)
+		}
+		if !allowed {
+			return operatorProfile{}, errOperatorAuthBlock
+		}
+	}
 	return a.store.lookupOperator(requestCtx, identity.Username, identity.Role)
 }
 
@@ -366,6 +386,7 @@ func isUnauthorizedAuthError(err error) bool {
 	return errors.Is(err, errMissingToken) ||
 		errors.Is(err, errInvalidToken) ||
 		errors.Is(err, errExpiredToken) ||
+		errors.Is(err, errOperatorAuthBlock) ||
 		errors.Is(err, errOperatorNotFound)
 }
 

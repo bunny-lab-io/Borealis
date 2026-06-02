@@ -93,6 +93,7 @@ from ...auth.bootstrap_state import (
 )
 from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
 from .directory_services import (
@@ -1527,6 +1528,19 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     service = _AuthService(app, adapters)
     blueprint = Blueprint("auth", __name__)
+
+    def _require_internal() -> bool:
+        try:
+            secret = require_app_secret(app)
+        except Exception:
+            return False
+        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
+
+    @blueprint.route("/api/internal/bootstrap/state", methods=["GET"])
+    def _internal_bootstrap_state():
+        if not _require_internal():
+            return jsonify({"error": "unauthorized"}), 401
+        return service.bootstrap_state()
 
     @blueprint.route("/api/bootstrap/state", methods=["GET"])
     def _bootstrap_state():
