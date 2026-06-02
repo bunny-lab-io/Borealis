@@ -85,6 +85,7 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	mux.HandleFunc("POST "+agentTokenRefreshRoutePath, agentTokenRefreshHandler(auth, signer, verifier))
 	registerAgentEnrollmentRoutes(mux, auth, signer, scriptSigner)
 	registerAgentReadRoutes(mux, auth, signer, verifier)
+	registerAgentScriptRoutes(mux, auth, signer, verifier, scriptSigner)
 	registerAgentHashRoutes(mux, auth, signer, verifier)
 	return nil
 }
