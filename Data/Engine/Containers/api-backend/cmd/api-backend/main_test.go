@@ -15,19 +15,22 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles      map[string]operatorProfile
-	err           error
-	search        []deviceSearchMatch
-	searchErr     error
-	searchProfile operatorProfile
-	searchQuery   string
-	devices       []map[string]any
-	deviceErr     error
-	deviceProfile operatorProfile
-	deviceFilter  deviceListFilter
-	sites         []map[string]any
-	siteErr       error
-	siteProfile   operatorProfile
+	profiles         map[string]operatorProfile
+	err              error
+	search           []deviceSearchMatch
+	searchErr        error
+	searchProfile    operatorProfile
+	searchQuery      string
+	devices          []map[string]any
+	deviceErr        error
+	deviceProfile    operatorProfile
+	deviceFilter     deviceListFilter
+	sites            []map[string]any
+	siteErr          error
+	siteProfile      operatorProfile
+	siteMap          map[string]map[string]any
+	siteMapErr       error
+	siteMapHostnames []string
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -86,6 +89,23 @@ func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile
 		sites = append(sites, copySite)
 	}
 	return sites, nil
+}
+
+func (s *fakeOperatorStore) siteDeviceMap(_ context.Context, profile operatorProfile, hostnames []string) (map[string]map[string]any, error) {
+	s.siteProfile = profile
+	s.siteMapHostnames = append([]string(nil), hostnames...)
+	if s.siteMapErr != nil {
+		return nil, s.siteMapErr
+	}
+	mapping := make(map[string]map[string]any, len(s.siteMap))
+	for hostname, site := range s.siteMap {
+		copySite := make(map[string]any, len(site))
+		for key, value := range site {
+			copySite[key] = value
+		}
+		mapping[hostname] = copySite
+	}
+	return mapping, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -416,6 +436,37 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 	}
 	if store.siteProfile.Username != "operator" {
 		t.Fatalf("expected operator profile, got %+v", store.siteProfile)
+	}
+}
+
+func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.siteMap = map[string]map[string]any{
+		"LAB-OPERATOR-01": {
+			"site_id":   1,
+			"site_name": "Bunny Lab",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/sites/device_map?hostnames=LAB-OPERATOR-01,,LAB-OPERATOR-01", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteDeviceMapHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Mapping map[string]map[string]any `json:"mapping"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Mapping["LAB-OPERATOR-01"]["site_name"] != "Bunny Lab" {
+		t.Fatalf("unexpected mapping %+v", payload.Mapping)
+	}
+	if len(store.siteMapHostnames) != 1 || store.siteMapHostnames[0] != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected host filter %+v", store.siteMapHostnames)
 	}
 }
 

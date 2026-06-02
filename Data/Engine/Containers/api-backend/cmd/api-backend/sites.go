@@ -14,6 +14,7 @@ import (
 
 type siteListStore interface {
 	listSites(ctx context.Context, profile operatorProfile) ([]map[string]any, error)
+	siteDeviceMap(ctx context.Context, profile operatorProfile, hostnames []string) (map[string]map[string]any, error)
 }
 
 type siteRow struct {
@@ -28,6 +29,7 @@ type siteRow struct {
 
 func registerSiteRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/sites", siteListHandler(auth))
+	mux.HandleFunc("GET /api/sites/device_map", siteDeviceMapHandler(auth))
 }
 
 func siteListHandler(auth *authService) http.HandlerFunc {
@@ -157,6 +159,126 @@ func (s *postgresOperatorStore) listSites(ctx context.Context, profile operatorP
 	return sites, nil
 }
 
+func siteDeviceMapHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":  "auth_unavailable",
+				"detail": err.Error(),
+			})
+			return
+		}
+		store, ok := auth.store.(siteListStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "site_device_map_unavailable"})
+			return
+		}
+
+		timeout := auth.timeout
+		if timeout <= 0 {
+			timeout = defaultAuthTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		mapping, err := store.siteDeviceMap(ctx, profile, parseHostnameCSV(r.URL.Query().Get("hostnames")))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"mapping": mapping})
+	}
+}
+
+func (s *postgresOperatorStore) siteDeviceMap(ctx context.Context, profile operatorProfile, hostnames []string) (map[string]map[string]any, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	if allowedSiteIDs != nil && len(allowedSiteIDs) == 0 {
+		return map[string]map[string]any{}, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	sqlText := `
+		SELECT ds.device_hostname, s.id, s.name
+		  FROM engine.device_sites AS ds
+		  JOIN engine.sites AS s ON s.id = ds.site_id
+		 WHERE 1 = 1
+	`
+	params := make([]any, 0, len(hostnames)+len(allowedSiteIDs))
+	if len(hostnames) > 0 {
+		placeholders := make([]string, 0, len(hostnames))
+		for _, hostname := range hostnames {
+			params = append(params, hostname)
+			placeholders = append(placeholders, "$"+strconv.Itoa(len(params)))
+		}
+		sqlText += " AND ds.device_hostname IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if allowedSiteIDs != nil {
+		placeholders := make([]string, 0, len(allowedSiteIDs))
+		for _, siteID := range allowedSiteIDs {
+			params = append(params, siteID)
+			placeholders = append(placeholders, "$"+strconv.Itoa(len(params)))
+		}
+		sqlText += " AND ds.site_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+
+	rows, err := conn.QueryContext(ctx, sqlText, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type rowData struct {
+		hostname string
+		siteID   int64
+		siteName string
+	}
+	rawRows := make([]rowData, 0)
+	for rows.Next() {
+		var hostname, siteName sql.NullString
+		var siteID sql.NullInt64
+		if err := rows.Scan(&hostname, &siteID, &siteName); err != nil {
+			return nil, err
+		}
+		if !hostname.Valid || !siteID.Valid {
+			continue
+		}
+		rawRows = append(rawRows, rowData{
+			hostname: hostname.String,
+			siteID:   siteID.Int64,
+			siteName: nullString(siteName),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	mapping := make(map[string]map[string]any, len(rawRows))
+	for _, row := range rawRows {
+		mapping[row.hostname] = map[string]any{
+			"site_id":   row.siteID,
+			"site_name": row.siteName,
+		}
+	}
+	return mapping, nil
+}
+
 func siteInstallMetadata(r *http.Request) map[string]any {
 	baseURL := strings.TrimRight(firstText(
 		os.Getenv("BOREALIS_PUBLIC_BASE_URL"),
@@ -197,4 +319,21 @@ func siteInstallMetadata(r *http.Request) map[string]any {
 		"public_base_url": strings.TrimRight(baseURL, "/"),
 		"public_hostname": hostname,
 	}
+}
+
+func parseHostnameCSV(value string) []string {
+	seen := map[string]struct{}{}
+	hostnames := make([]string, 0)
+	for _, part := range strings.Split(value, ",") {
+		hostname := strings.TrimSpace(part)
+		if hostname == "" {
+			continue
+		}
+		if _, ok := seen[hostname]; ok {
+			continue
+		}
+		seen[hostname] = struct{}{}
+		hostnames = append(hostnames, hostname)
+	}
+	return hostnames
 }
