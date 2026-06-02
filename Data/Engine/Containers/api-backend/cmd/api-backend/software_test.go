@@ -23,6 +23,10 @@ type fakeSoftwareIconStore struct {
 	serviceStatus   int
 	serviceErr      error
 	serviceHostname string
+
+	auditRows    []map[string]any
+	auditErr     error
+	auditProfile operatorProfile
 }
 
 func (s *fakeSoftwareIconStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -51,6 +55,11 @@ func (s *fakeSoftwareIconStore) loadDeviceServices(_ context.Context, _ operator
 		return deviceServicesSnapshot{}, status, s.serviceErr
 	}
 	return s.serviceSnapshot, status, nil
+}
+
+func (s *fakeSoftwareIconStore) listSoftwareAudit(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
+	s.auditProfile = profile
+	return s.auditRows, s.auditErr
 }
 
 func softwareIconTestAuth(store *fakeSoftwareIconStore) *authService {
@@ -221,6 +230,48 @@ func TestDeviceServicesHandlerPropagatesStoreNotFound(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSoftwareAuditHandlerReturnsRows(t *testing.T) {
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		auditRows: []map[string]any{
+			{
+				"id":       int64(10),
+				"name":     "7-Zip",
+				"hostname": "LAB-01",
+				"uninstall": map[string]any{
+					"supported": true,
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/software/audit", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.auditProfile.Username != "operator" {
+		t.Fatalf("expected profile propagation, got %#v", store.auditProfile)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["count"].(float64) != 1 {
+		t.Fatalf("unexpected count payload %#v", payload)
+	}
+	rows := payload["software"].([]any)
+	row := rows[0].(map[string]any)
+	if row["name"] != "7-Zip" || row["hostname"] != "LAB-01" {
+		t.Fatalf("unexpected row %#v", row)
 	}
 }
 

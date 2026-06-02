@@ -21,6 +21,7 @@ type softwareIconStore interface {
 func registerSoftwareRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/device/software/icon/{icon_hash}", softwareIconHandler(auth))
 	mux.HandleFunc("GET /api/device/services/{hostname}", deviceServicesHandler(auth))
+	mux.HandleFunc("GET /api/software/audit", softwareAuditHandler(auth))
 	mux.HandleFunc("/api/software/", softwareSubtreeHandler(fallback))
 }
 
