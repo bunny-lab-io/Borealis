@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from Data.Engine.services.WebSocket.__init__ import AgentSocketRegistry, OperatorPresenceRegistry
+from Data.Engine.services.remote_ops.agent_socket_registry import AgentSocketRegistry
+from Data.Engine.services.WebSocket.__init__ import OperatorPresenceRegistry
 
 
 class _FakeSocketIO:

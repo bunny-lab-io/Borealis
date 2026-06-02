@@ -462,37 +462,6 @@ def _ready_wait_profile(
     }
 
 
-def _context_emit_agent_event(context: Any, agent_id: str, event: str, payload: Dict[str, Any]) -> bool:
-    emitter = getattr(context, "emit_agent_event", None)
-    if not callable(emitter):
-        return False
-    try:
-        return bool(emitter(agent_id, event, payload))
-    except Exception:
-        if hasattr(context, "logger"):
-            context.logger.debug("Failed to emit agent event %s for %s", event, agent_id, exc_info=True)
-        return False
-
-
-def _context_call_agent_event(
-    context: Any,
-    agent_id: str,
-    event: str,
-    payload: Dict[str, Any],
-    *,
-    timeout_seconds: float,
-) -> Optional[Any]:
-    caller = getattr(context, "call_agent_event", None)
-    if not callable(caller):
-        return None
-    try:
-        return caller(agent_id, event, payload, timeout=max(0.5, float(timeout_seconds)))
-    except Exception:
-        if hasattr(context, "logger"):
-            context.logger.debug("Failed to call agent event %s for %s", event, agent_id, exc_info=True)
-        return None
-
-
 def _agent_service_mode(agent_id: str) -> str:
     suffix = str(agent_id or "").rsplit("_", 1)[-1]
     return normalize_service_mode(suffix) or "system"
@@ -558,29 +527,6 @@ def _emit_worker_host_service_event(
     except Exception:
         return False
     return bool(result.get("emitted"))
-
-
-def _emit_agent_or_worker_event(
-    context: Any,
-    app: Any,
-    worker_route: Optional[Mapping[str, Any]],
-    *,
-    agent_id: str,
-    hostname: str,
-    service_mode: str,
-    event: str,
-    payload: Mapping[str, Any],
-) -> bool:
-    if _context_emit_agent_event(context, agent_id, event, dict(payload or {})):
-        return True
-    return _emit_worker_host_service_event(
-        app,
-        worker_route,
-        hostname=hostname,
-        service_mode=service_mode,
-        event=event,
-        payload=payload,
-    )
 
 
 def _worker_host_service_registered(
@@ -658,18 +604,6 @@ def _request_live_agent_vnc_credential(
             listener_state=_normalize_text(response.get("listener_state")),
         )
 
-    credential = _credential_from_response(
-        _context_call_agent_event(
-            context,
-            agent_id,
-            "vnc_credential_request",
-            event_payload,
-            timeout_seconds=timeout_seconds,
-        )
-    )
-    if credential is not None:
-        return credential
-
     return _credential_from_response(
         _call_worker_host_service_event(
             app,
@@ -681,18 +615,6 @@ def _request_live_agent_vnc_credential(
             timeout_seconds=timeout_seconds,
         )
     )
-
-
-def _agent_socket_registered(context: Any, agent_id: str) -> Optional[bool]:
-    registry = getattr(context, "agent_socket_registry", None)
-    if registry is None or not hasattr(registry, "is_registered"):
-        return None
-    try:
-        return bool(registry.is_registered(agent_id))
-    except Exception:
-        if hasattr(context, "logger"):
-            context.logger.debug("Failed to inspect agent socket registration for %s", agent_id, exc_info=True)
-        return None
 
 
 def _lookup_vnc_device_and_route(adapters: "EngineServiceAdapters", agent_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
@@ -1016,11 +938,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
             tunnel_service.confirm_transport_success(agent_id, reason=reason)
 
         def _emit_vnc_start(reason: str) -> bool:
-            return _emit_agent_or_worker_event(
-                adapters.context,
+            return _emit_worker_host_service_event(
                 app,
                 worker_route,
-                agent_id=agent_id,
                 hostname=device_hostname,
                 service_mode=device_service_mode,
                 event="vnc_start",
@@ -1037,16 +957,12 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 },
             )
 
-        socket_registered = _agent_socket_registered(adapters.context, agent_id)
-        if socket_registered is not True:
-            worker_registered = _worker_host_service_registered(
-                app,
-                worker_route,
-                hostname=device_hostname,
-                service_mode=device_service_mode,
-            )
-            if worker_registered is not None:
-                socket_registered = worker_registered
+        socket_registered = _worker_host_service_registered(
+            app,
+            worker_route,
+            hostname=device_hostname,
+            service_mode=device_service_mode,
+        )
         wait_profile = _ready_wait_profile(
             collaboration_session=collaboration_session,
             created=_created,
@@ -1455,6 +1371,10 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                 agent_id,
                 reason="vnc_auth_retry",
                 timeout_seconds=refresh_wait_seconds,
+                app=app,
+                worker_route=worker_route,
+                hostname=device_hostname,
+                service_mode=device_service_mode,
             )
             _trace(
                 "E16Q",
@@ -1991,11 +1911,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                     )
                 except Exception:
                     logger.debug("Failed to disconnect worker VNC session %s", collaboration_session.session_id, exc_info=True)
-            _emit_agent_or_worker_event(
-                adapters.context,
+            _emit_worker_host_service_event(
                 app,
                 worker_route,
-                agent_id=resolved_agent_id,
                 hostname=device_hostname,
                 service_mode=device_service_mode,
                 event="vnc_stop",
@@ -2023,11 +1941,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                         exc_info=True,
                     )
             if bool(result.get("reconnect_pending")):
-                _emit_agent_or_worker_event(
-                    adapters.context,
+                _emit_worker_host_service_event(
                     app,
                     worker_route,
-                    agent_id=resolved_agent_id,
                     hostname=device_hostname,
                     service_mode=device_service_mode,
                     event="vnc_stop",
@@ -2043,11 +1959,9 @@ def register_vnc(app, adapters: "EngineServiceAdapters") -> None:
                             resolved_agent_id,
                             include_token=False,
                         )
-                    _emit_agent_or_worker_event(
-                        adapters.context,
+                    _emit_worker_host_service_event(
                         app,
                         worker_route,
-                        agent_id=resolved_agent_id,
                         hostname=device_hostname,
                         service_mode=device_service_mode,
                         event="vnc_start",

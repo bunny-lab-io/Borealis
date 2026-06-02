@@ -15,6 +15,7 @@ PENDING_HOST_SERVICE_EVENTS = {
     "agent_update_request",
     "quick_job_run",
     "software_inventory_refresh_request",
+    "vpn_tunnel_start",
 }
 
 

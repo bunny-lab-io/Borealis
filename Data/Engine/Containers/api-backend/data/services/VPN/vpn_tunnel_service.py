@@ -48,6 +48,13 @@ def _format_ports(ports: Iterable[int]) -> str:
     return ",".join(items)
 
 
+def _infer_hostname_from_agent_id(agent_id: Any) -> str:
+    parts = str(agent_id or "").strip().rsplit("_", 2)
+    if len(parts) == 3:
+        return str(parts[0] or "").strip()
+    return ""
+
+
 WATCHDOG_INTERVAL_SECONDS = 15
 LISTENER_RECOVERY_MIN_INTERVAL_SECONDS = 30
 FORCED_LISTENER_RECOVERY_MIN_INTERVAL_SECONDS = _env_int(
@@ -676,6 +683,109 @@ class VpnTunnelService:
             self.service_log("VPN_Tunnel/tunnel", message, level=level)
         except Exception:
             self.logger.debug("Failed to write vpn_tunnel service log entry", exc_info=True)
+
+    def _resolve_hostname_for_agent(self, agent_id: str) -> str:
+        normalized_agent_id = str(agent_id or "").strip()
+        if not normalized_agent_id:
+            return ""
+        with self._lock:
+            session = self._sessions_by_agent.get(normalized_agent_id)
+            if session and session.hostname:
+                return str(session.hostname or "").strip()
+
+        hostname = ""
+        conn = None
+        try:
+            if self.db_conn_factory is not None:
+                conn = self.db_conn_factory()
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT hostname FROM devices WHERE agent_id = ? ORDER BY last_seen DESC LIMIT 1",
+                    (normalized_agent_id,),
+                )
+                row = cur.fetchone()
+                if row and row[0]:
+                    hostname = str(row[0]).strip()
+        except Exception:
+            self.logger.debug("Failed to resolve hostname for agent_id=%s", normalized_agent_id, exc_info=True)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+        if not hostname:
+            hostname = _infer_hostname_from_agent_id(normalized_agent_id)
+        if not hostname:
+            hostname = normalized_agent_id
+        if hostname:
+            with self._lock:
+                session = self._sessions_by_agent.get(normalized_agent_id)
+                if session and not session.hostname:
+                    session.hostname = hostname
+        return hostname
+
+    def _emit_host_service_event(
+        self,
+        *,
+        agent_id: str,
+        event_name: str,
+        payload: Mapping[str, Any],
+        allow_pending: bool = False,
+    ) -> bool:
+        hostname = self._resolve_hostname_for_agent(agent_id)
+        if not hostname:
+            self._service_log_event(
+                "vpn_tunnel_emit_failed agent_id={0} event={1} reason=hostname_unresolved".format(
+                    agent_id or "-",
+                    event_name or "-",
+                ),
+                level="WARNING",
+            )
+            return False
+        emitter = getattr(self.context, "emit_host_service_event", None)
+        if not callable(emitter):
+            self._service_log_event(
+                "vpn_tunnel_emit_failed agent_id={0} hostname={1} event={2} reason=site_worker_bridge_unavailable".format(
+                    agent_id or "-",
+                    hostname or "-",
+                    event_name or "-",
+                ),
+                level="WARNING",
+            )
+            return False
+        try:
+            try:
+                emitted = bool(
+                    emitter(
+                        hostname,
+                        "system",
+                        event_name,
+                        dict(payload or {}),
+                        allow_pending=allow_pending,
+                    )
+                )
+            except TypeError:
+                emitted = bool(emitter(hostname, "system", event_name, dict(payload or {})))
+        except Exception:
+            self.logger.debug(
+                "site-worker host-service emit failed for agent_id=%s event=%s",
+                agent_id,
+                event_name,
+                exc_info=True,
+            )
+            emitted = False
+        self._service_log_event(
+            "vpn_tunnel_emit agent_id={0} hostname={1} event={2} transport=site_worker emitted={3}".format(
+                agent_id or "-",
+                hostname or "-",
+                event_name or "-",
+                str(bool(emitted)).lower(),
+            ),
+            level="INFO" if emitted else "WARNING",
+        )
+        return emitted
 
     def _cleanup_listener(self) -> None:
         try:
@@ -1899,85 +2009,23 @@ class VpnTunnelService:
         return self.disconnect(session.agent_id, reason=reason, operator_id=operator_id, force=force)
 
     def _emit_start(self, payload: Mapping[str, Any]) -> None:
-        if not self.socketio:
-            return
         agent_id = None
         if isinstance(payload, Mapping):
             agent_id = payload.get("agent_id")
-        emit_agent = getattr(self.context, "emit_agent_event", None)
-        if agent_id and callable(emit_agent):
-            try:
-                if emit_agent(agent_id, "vpn_tunnel_start", payload):
-                    self._service_log_event(
-                        "vpn_tunnel_start_emit agent_id={0} transport=direct".format(agent_id or "-")
-                    )
-                    return
-            except Exception:
-                self.logger.debug("emit_agent_event failed for vpn_tunnel_start", exc_info=True)
-                self._service_log_event(
-                    "vpn_tunnel_start_emit_failed agent_id={0} transport=direct".format(agent_id or "-"),
-                    level="WARNING",
-                )
-        try:
-            self._service_log_event(
-                "vpn_tunnel_start_emit agent_id={0} transport=broadcast".format(agent_id or "-")
-            )
-            self.socketio.emit("vpn_tunnel_start", payload, namespace="/")
-        except Exception:
-            self.logger.debug("vpn_tunnel_start emit failed", exc_info=True)
-            self._service_log_event(
-                "vpn_tunnel_start_emit_failed agent_id={0} transport=broadcast".format(agent_id or "-"),
-                level="WARNING",
+        if agent_id:
+            self._emit_host_service_event(
+                agent_id=str(agent_id),
+                event_name="vpn_tunnel_start",
+                payload=payload,
+                allow_pending=True,
             )
 
     def _emit_stop(self, session: VpnSession, reason: str) -> None:
-        if not self.socketio:
-            return
-        emit_agent = getattr(self.context, "emit_agent_event", None)
-        if callable(emit_agent):
-            try:
-                if emit_agent(
-                    session.agent_id,
-                    "vpn_tunnel_stop",
-                    {"agent_id": session.agent_id, "tunnel_id": session.tunnel_id, "reason": reason},
-                ):
-                    self._service_log_event(
-                        "vpn_tunnel_stop_emit agent_id={0} tunnel_id={1} transport=direct".format(
-                            session.agent_id,
-                            session.tunnel_id,
-                        )
-                    )
-                    return
-            except Exception:
-                self.logger.debug("emit_agent_event failed for vpn_tunnel_stop", exc_info=True)
-                self._service_log_event(
-                    "vpn_tunnel_stop_emit_failed agent_id={0} tunnel_id={1} transport=direct".format(
-                        session.agent_id,
-                        session.tunnel_id,
-                    ),
-                    level="WARNING",
-                )
-        try:
-            self._service_log_event(
-                "vpn_tunnel_stop_emit agent_id={0} tunnel_id={1} transport=broadcast".format(
-                    session.agent_id,
-                    session.tunnel_id,
-                )
-            )
-            self.socketio.emit(
-                "vpn_tunnel_stop",
-                {"agent_id": session.agent_id, "tunnel_id": session.tunnel_id, "reason": reason},
-                namespace="/",
-            )
-        except Exception:
-            self.logger.debug("vpn_tunnel_stop emit failed", exc_info=True)
-            self._service_log_event(
-                "vpn_tunnel_stop_emit_failed agent_id={0} tunnel_id={1} transport=broadcast".format(
-                    session.agent_id,
-                    session.tunnel_id,
-                ),
-                level="WARNING",
-            )
+        self._emit_host_service_event(
+            agent_id=session.agent_id,
+            event_name="vpn_tunnel_stop",
+            payload={"agent_id": session.agent_id, "tunnel_id": session.tunnel_id, "reason": reason},
+        )
 
     def _log_device_activity(self, session: VpnSession, *, event: str, reason: Optional[str] = None) -> None:
         hostname = session.hostname

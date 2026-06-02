@@ -242,29 +242,10 @@ def _load_device_agent_binding(
                 pass
 
 
-def _resolve_live_host_agent_id(
-    adapters: "EngineServiceAdapters",
-    hostname: str,
-    *,
-    preferred_service_mode: str,
-) -> str:
-    registry = getattr(getattr(adapters, "context", None), "agent_socket_registry", None)
-    if registry is None:
-        return ""
-    getter = getattr(registry, "get_agent_id_for_host_mode", None)
-    if not callable(getter):
-        return ""
-    try:
-        return _normalize_text(getter(hostname, preferred_service_mode))
-    except Exception:
-        return ""
-
-
 def _resolve_requested_agent_id(
     adapters: "EngineServiceAdapters",
     requested_agent_id: Any,
     *,
-    preferred_service_mode: str = "system",
     expected_guid: Any = None,
 ) -> str:
     agent_id = _normalize_text(requested_agent_id)
@@ -275,27 +256,29 @@ def _resolve_requested_agent_id(
     if expected_guid_value and _guid_from_agent_id(agent_id) == expected_guid_value:
         return agent_id
 
-    registry = getattr(getattr(adapters, "context", None), "agent_socket_registry", None)
-    if registry is not None and hasattr(registry, "is_registered"):
-        try:
-            if bool(registry.is_registered(agent_id)):
-                return agent_id
-        except Exception:
-            pass
-
     guid = _guid_candidate(agent_id)
     binding = _load_device_agent_binding(adapters, guid=guid) if guid else _load_device_agent_binding(adapters, agent_id=agent_id)
-    hostname = _normalize_text(binding.get("hostname")) or _infer_hostname_from_agent_id(agent_id)
-    live_agent_id = _resolve_live_host_agent_id(
-        adapters,
-        hostname,
-        preferred_service_mode=preferred_service_mode,
-    )
-    if live_agent_id:
-        return live_agent_id
-
     resolved = _normalize_text(binding.get("agent_id"))
     return resolved or agent_id
+
+
+def _host_service_socket_available(
+    adapters: "EngineServiceAdapters",
+    agent_id: str,
+    *,
+    service_mode: str = "system",
+) -> bool:
+    binding = _load_device_agent_binding(adapters, agent_id=agent_id)
+    hostname = _normalize_text(binding.get("hostname")) or _infer_hostname_from_agent_id(agent_id)
+    if not hostname:
+        return False
+    checker = getattr(getattr(adapters, "context", None), "has_host_service_socket", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker(hostname, service_mode or "system"))
+    except Exception:
+        return False
 
 
 def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
@@ -390,13 +373,7 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         tunnel_service = _get_tunnel_service(adapters)
         payload = tunnel_service.status(agent_id)
-        agent_socket = False
-        registry = getattr(adapters.context, "agent_socket_registry", None)
-        if registry and hasattr(registry, "is_registered"):
-            try:
-                agent_socket = bool(registry.is_registered(agent_id))
-            except Exception:
-                agent_socket = False
+        agent_socket = _host_service_socket_available(adapters, agent_id)
         bump = _normalize_text(request.args.get("bump") or "")
         _service_log_event(
             "vpn_api_status_request requested_agent_id={0} resolved_agent_id={1} bump={2} remote={3}".format(
@@ -437,20 +414,13 @@ def register_tunnel(app, adapters: "EngineServiceAdapters") -> None:
 
         tunnel_service = _get_tunnel_service(adapters)
         sessions = list(tunnel_service.list_sessions())
-        registry = getattr(adapters.context, "agent_socket_registry", None)
         enriched_sessions = []
         for session_payload in sessions:
             payload = dict(session_payload or {})
             agent_id = _normalize_text(payload.get("agent_id"))
             if agent_id and not site_access.user_can_access_agent_id(_current_user(app) or {}, agent_id):
                 continue
-            agent_socket = False
-            if agent_id and registry and hasattr(registry, "is_registered"):
-                try:
-                    agent_socket = bool(registry.is_registered(agent_id))
-                except Exception:
-                    agent_socket = False
-            payload["agent_socket"] = agent_socket
+            payload["agent_socket"] = _host_service_socket_available(adapters, agent_id) if agent_id else False
             payload["status"] = _normalize_tunnel_status(payload)
             enriched_sessions.append(payload)
         sessions = enriched_sessions

@@ -411,12 +411,26 @@ def _build_vpn_service(
     socketio = _DummySocketIO()
     wg = wireguard_manager or _FakeWireGuardManager()
     service_events: list[tuple[str, str, str]] = []
+    host_service_events: list[tuple[str, str, str, dict[str, Any], dict[str, Any]]] = []
+
+    def _emit_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> bool:
+        host_service_events.append((hostname, service_mode, event, dict(payload or {}), dict(kwargs or {})))
+        return True
+
     context = SimpleNamespace(
         logger=logging.getLogger("borealis.test.vpn"),
         wireguard_port=30000,
         wireguard_engine_virtual_ip="10.255.0.1/24",
         wireguard_peer_network="10.255.0.0/24",
         wireguard_port_allowlist=(47002, 5900, 22),
+        emit_host_service_event=_emit_host_service_event,
+        host_service_events=host_service_events,
     )
     service = VpnTunnelService(
         context=context,
@@ -3928,8 +3942,8 @@ def test_vpn_service_request_agent_start_can_force_restart() -> None:
     assert payload is not None
     assert payload["force_restart"] is True
     assert payload["restart_reason"] == "shell_connect_retry"
-    assert socketio.emits[-1][0] == "vpn_tunnel_start"
-    assert socketio.emits[-1][1]["force_restart"] is True
+    assert service.context.host_service_events[-1][2] == "vpn_tunnel_start"
+    assert service.context.host_service_events[-1][3]["force_restart"] is True
 
 
 def test_vpn_service_request_agent_start_expands_allowed_ports_for_nondefault_ansible_transport() -> None:
@@ -3947,8 +3961,8 @@ def test_vpn_service_request_agent_start_expands_allowed_ports_for_nondefault_an
     assert payload["allowed_ports"] == [47002, 5900, 22, 2222]
     assert wg.apply_calls == 2
     assert wg.removed_rules == [["rule-agent-1"]]
-    assert socketio.emits[-1][0] == "vpn_tunnel_start"
-    assert socketio.emits[-1][1]["allowed_ports"] == [47002, 5900, 22, 2222]
+    assert service.context.host_service_events[-1][2] == "vpn_tunnel_start"
+    assert service.context.host_service_events[-1][3]["allowed_ports"] == [47002, 5900, 22, 2222]
 
 
 def test_vpn_service_live_upserts_additional_peers_without_full_reconcile() -> None:
@@ -4160,26 +4174,20 @@ def test_tunnel_status_endpoint_resolves_guid_to_agent_id(
     assert payload["agent_id"] == "test-device-agent"
 
 
-def test_resolve_requested_agent_id_prefers_live_system_socket_for_stale_binding(
+def test_resolve_requested_agent_id_uses_persisted_binding_without_backend_socket_registry(
     engine_harness: EngineTestHarness,
 ) -> None:
     valid_guid = "3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9"
     stale_agent_id = "test-device_08FB4B0D-FE6B-4D41-B09B-7947851BFD7A_SYSTEM"
-    live_agent_id = "test-device_3BA36DB5-7C82-4B3C-863A-5A7873A4EBF9_SYSTEM"
     set_seed_device_guid(engine_harness, valid_guid)
     set_seed_device_agent_id(engine_harness, stale_agent_id)
     adapters = SimpleNamespace(
         db_conn_factory=lambda: sqlite3.connect(str(engine_harness.db_path)),
-        context=SimpleNamespace(
-            agent_socket_registry=_FakeAgentSocketRegistry(
-                registered_agent_ids={live_agent_id},
-                host_mode_routes={("test-device", "system"): live_agent_id},
-            )
-        ),
+        context=SimpleNamespace(),
     )
 
-    assert tunnel_api._resolve_requested_agent_id(adapters, valid_guid) == live_agent_id
-    assert tunnel_api._resolve_requested_agent_id(adapters, stale_agent_id) == live_agent_id
+    assert tunnel_api._resolve_requested_agent_id(adapters, valid_guid) == stale_agent_id
+    assert tunnel_api._resolve_requested_agent_id(adapters, stale_agent_id) == stale_agent_id
 
 
 def test_tunnel_connect_endpoint_resolves_guid_to_agent_id(

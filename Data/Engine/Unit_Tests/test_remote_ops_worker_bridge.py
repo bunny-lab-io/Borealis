@@ -184,8 +184,8 @@ def test_context_host_service_bridge_targets_active_site_worker(
 def test_realtime_bootstrap_preserves_site_worker_host_service_bridge(
     engine_harness: EngineTestHarness,
 ) -> None:
-    assert callable(getattr(engine_harness.context, "legacy_emit_host_service_event", None))
-    assert engine_harness.context.emit_host_service_event is not engine_harness.context.legacy_emit_host_service_event
+    assert not hasattr(engine_harness.context, "legacy_emit_host_service_event")
+    assert callable(getattr(engine_harness.context, "emit_host_service_event", None))
     assert getattr(engine_harness.context, "site_worker_host_service_bridge_enabled", False) is True
 
 

@@ -61,6 +61,69 @@ def _guacd_ready(monkeypatch, tmp_path):
 
     monkeypatch.setattr(vnc_api, "_register_worker_guacamole_session", _fake_worker_guacamole_session)
     monkeypatch.setattr(vnc_api, "_disconnect_worker_guacamole_session", _fake_worker_guacamole_disconnect)
+
+    def _fake_worker_call(_app, worker_route, *, hostname, service_mode, event, payload, timeout_seconds):
+        calls = getattr(_app, "worker_host_service_calls", None)
+        if calls is None:
+            calls = []
+            setattr(_app, "worker_host_service_calls", calls)
+        calls.append(
+            {
+                "worker_route": dict(worker_route or {}),
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event": event,
+                "payload": dict(payload or {}),
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        if event != "vnc_credential_request":
+            return None
+        credentials = getattr(_app, "worker_vnc_credentials", {})
+        agent_id = str((payload or {}).get("agent_id") or "").strip()
+        credential = credentials.get(agent_id)
+        if callable(credential):
+            credential = credential(agent_id, event, payload, timeout_seconds=timeout_seconds)
+        if not isinstance(credential, dict):
+            return None
+        response = dict(credential)
+        if response.get("request_id") is None and isinstance(payload, dict):
+            response["request_id"] = payload.get("request_id")
+        return response
+
+    def _fake_worker_emit(_app, worker_route, *, hostname, service_mode, event, payload):
+        events = getattr(_app, "worker_host_service_events", None)
+        if events is None:
+            events = []
+            setattr(_app, "worker_host_service_events", events)
+        events.append(
+            {
+                "worker_route": dict(worker_route or {}),
+                "hostname": hostname,
+                "service_mode": service_mode,
+                "event": event,
+                "payload": dict(payload or {}),
+            }
+        )
+        return bool(getattr(_app, "worker_host_service_emit_result", True))
+
+    def _fake_worker_registered(_app, worker_route, *, hostname, service_mode):
+        checks = getattr(_app, "worker_host_service_status_checks", None)
+        if checks is None:
+            checks = []
+            setattr(_app, "worker_host_service_status_checks", checks)
+        checks.append(
+            {
+                "worker_route": dict(worker_route or {}),
+                "hostname": hostname,
+                "service_mode": service_mode,
+            }
+        )
+        return bool(getattr(_app, "worker_host_service_registered", True))
+
+    monkeypatch.setattr(vnc_api, "_call_worker_host_service_event", _fake_worker_call)
+    monkeypatch.setattr(vnc_api, "_emit_worker_host_service_event", _fake_worker_emit)
+    monkeypatch.setattr(vnc_api, "_worker_host_service_registered", _fake_worker_registered)
     yield
     vnc_api._clear_vnc_auth_rate_limits()
 
@@ -132,14 +195,13 @@ def _register_agent_credential(
     else:
         virtual_bounds = {}
 
-    def _call_agent_event(target_agent_id, event, payload, *, timeout=30.0):
-        _ = timeout
-        if target_agent_id != agent_id or event != "vnc_credential_request":
-            return None
-        return {
+    credentials = getattr(harness.app, "worker_vnc_credentials", None)
+    if credentials is None:
+        credentials = {}
+        setattr(harness.app, "worker_vnc_credentials", credentials)
+    credentials[agent_id] = {
             "status": "ok",
             "agent_id": agent_id,
-            "request_id": payload.get("request_id") if isinstance(payload, dict) else "",
             "controller_password": password,
             "credential_revision": revision,
             "display_topology": display,
@@ -147,9 +209,7 @@ def _register_agent_credential(
             "ready": True,
             "service_state": "RUNNING",
             "listener_state": "listening",
-        }
-
-    harness.context.call_agent_event = _call_agent_event
+    }
 
 
 class _FakeTunnelService:
@@ -653,17 +713,20 @@ def test_vnc_establish_fails_when_auth_retry_credential_does_not_rotate(
     fake_tunnel = _FakeTunnelService()
     emitted_events: list[tuple[str, str, dict[str, Any]]] = []
     _register_agent_credential(engine_harness)
-    original_call = engine_harness.context.call_agent_event
+    original_credential = dict(engine_harness.app.worker_vnc_credentials["test-device-agent"])
     call_count = 0
 
-    def _call_agent_event(agent_id, event, payload, *, timeout=30.0):
+    def _worker_credential(_agent_id, _event, payload, *, timeout_seconds=30.0):
         nonlocal call_count
+        _ = timeout_seconds
         call_count += 1
         if call_count == 1:
-            return original_call(agent_id, event, payload, timeout=timeout)
+            response = dict(original_credential)
+            response["request_id"] = payload.get("request_id") if isinstance(payload, dict) else ""
+            return response
         return None
 
-    engine_harness.context.call_agent_event = _call_agent_event
+    engine_harness.app.worker_vnc_credentials["test-device-agent"] = _worker_credential
 
     def _emit(agent_id, event, payload):
         emitted_events.append((agent_id, event, dict(payload)))
@@ -949,15 +1012,10 @@ def test_vnc_establish_uses_longer_initial_wait_and_shorter_retry_wait(
     response = client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
 
     assert response.status_code == 200
-    assert wait_calls == [0.75, 12.0, 8.0]
-    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap"), ("test-device-agent", "vnc_connect_retry")]
-    assert fake_tunnel.start_calls == [
-        ("test-device-agent", False, "vnc_bootstrap"),
-        ("test-device-agent", True, "vnc_connect_retry"),
-    ]
-    assert fake_tunnel.transport_recovers == [
-        ("test-device-agent", "vnc_connect", "vnc_connect_retry")
-    ]
+    assert wait_calls == [0.75, 3.0, 1.5]
+    assert fake_tunnel.transport_marks == [("test-device-agent", "vnc_bootstrap")]
+    assert fake_tunnel.start_calls == [("test-device-agent", False, "vnc_bootstrap")]
+    assert fake_tunnel.transport_recovers == []
 
 
 def test_vnc_establish_uses_shorter_waits_for_cached_online_agents(
@@ -1373,8 +1431,8 @@ def test_vnc_disconnect_retains_last_controller_session_for_warm_reconnect(
         "reason": "operator_disconnect",
         "close_session": False,
     }
-    assert emitted_events[-1][1] == "vnc_stop"
-    assert emitted_events[-1][2]["reason"] == "operator_disconnect"
+    assert engine_harness.app.worker_host_service_events[-1]["event"] == "vnc_stop"
+    assert engine_harness.app.worker_host_service_events[-1]["payload"]["reason"] == "operator_disconnect"
 
     reconnect_response = admin_client.post("/api/vnc/establish", json={"agent_id": "test-device-agent"})
     assert reconnect_response.status_code == 200
@@ -1544,7 +1602,7 @@ def test_vnc_establish_uses_shorter_waits_after_fresh_credential_refresh(
     assert wait_calls == [0.75, 2.5, 2.0]
 
 
-def test_agent_socket_connect_prewarms_vnc_credential_when_cache_is_empty(
+def test_agent_socket_connect_is_rejected_on_api_backend_namespace(
     engine_harness: EngineTestHarness,
 ) -> None:
     engine_harness.context.vpn_tunnel_service = SimpleNamespace(
@@ -1554,14 +1612,13 @@ def test_agent_socket_connect_prewarms_vnc_credential_when_cache_is_empty(
 
     assert socket_client.is_connected()
 
-    socket_client.emit(
+    ack = socket_client.emit(
         "connect_agent",
         {"agent_id": "test-device-agent", "hostname": "TEST-DEVICE", "service_mode": "system"},
+        callback=True,
     )
 
-    received = socket_client.get_received()
-    refresh_events = [item for item in received if item["name"] == "vnc_refresh"]
-    assert refresh_events == []
+    assert ack == {"error": "site_worker_route_required"}
 
     socket_client.disconnect()
 
@@ -1573,9 +1630,7 @@ def test_vnc_establish_returns_agent_socket_missing_when_backend_needs_bootstrap
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
     _register_agent_credential(engine_harness)
-    engine_harness.context.agent_socket_registry = SimpleNamespace(
-        is_registered=lambda agent_id: False
-    )
+    engine_harness.app.worker_host_service_registered = False
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
     monkeypatch.setattr(vnc_api, "_wait_for_backend_ready", lambda *args, **kwargs: False)
@@ -1595,10 +1650,7 @@ def test_vnc_establish_returns_agent_socket_missing_when_vnc_start_emit_fails(
     client = _client_with_admin_session(engine_harness)
     fake_tunnel = _FakeTunnelService()
     _register_agent_credential(engine_harness)
-    engine_harness.context.agent_socket_registry = SimpleNamespace(
-        is_registered=lambda agent_id: True
-    )
-    engine_harness.context.emit_agent_event = lambda agent_id, event, payload: False
+    engine_harness.app.worker_host_service_emit_result = False
 
     monkeypatch.setattr(vnc_api, "_get_tunnel_service", lambda _adapters: fake_tunnel)
 
