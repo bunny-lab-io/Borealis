@@ -1030,6 +1030,58 @@ def _fetch_worker_route(conn: sqlite3.Connection, *, worker_guid: str) -> Option
     return _route_row_to_dict(row) if row else None
 
 
+def _retire_other_active_worker_routes_for_site(
+    conn: sqlite3.Connection,
+    *,
+    site_id: int,
+    keep_worker_guid: str,
+) -> int:
+    normalized_guid = str(keep_worker_guid or "").strip()
+    try:
+        normalized_site_id = int(site_id)
+    except Exception:
+        normalized_site_id = 0
+    if normalized_site_id <= 0 or not normalized_guid:
+        return 0
+    now = _now_ts()
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE site_id=?
+           AND status=?
+           AND worker_guid<>?
+        """,
+        (normalized_site_id, WORKER_ROUTE_STATUS_ACTIVE, normalized_guid),
+    )
+    stale_routes = [_route_row_to_dict(row) for row in cur.fetchall() or []]
+    if not stale_routes:
+        return 0
+    cur.execute(
+        """
+        UPDATE job_scheduler_worker_routes
+           SET status=?,
+               generation=generation + 1,
+               updated_at=?,
+               retired_at=COALESCE(retired_at, ?)
+         WHERE site_id=?
+           AND status=?
+           AND worker_guid<>?
+        """,
+        (
+            WORKER_ROUTE_STATUS_RETIRED,
+            now,
+            now,
+            normalized_site_id,
+            WORKER_ROUTE_STATUS_ACTIVE,
+            normalized_guid,
+        ),
+    )
+    _remove_worker_route_files(stale_routes)
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
 def upsert_worker_route(
     conn: sqlite3.Connection,
     *,
@@ -1069,6 +1121,12 @@ def upsert_worker_route(
     now = _now_ts()
     normalized_container = str(container_name or f"site-worker-{normalized_guid}").strip() or f"site-worker-{normalized_guid}"
     retired_at = now if route_status in WORKER_ROUTE_TERMINAL_STATUSES else None
+    if route_status == WORKER_ROUTE_STATUS_ACTIVE:
+        _retire_other_active_worker_routes_for_site(
+            conn,
+            site_id=normalized_site_id,
+            keep_worker_guid=normalized_guid,
+        )
     cur = conn.cursor()
     cur.execute(
         f"""
@@ -1484,6 +1542,11 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
     lost_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
     if not lost_guids:
         return 0
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=lost_guids,
+        reason="requeued after site worker heartbeat expired",
+    )
     placeholders = ",".join("?" for _ in lost_guids)
     cur.execute(
         f"""
@@ -1496,11 +1559,6 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
         (WORKER_STATUS_LOST, now, now, *lost_guids),
     )
     updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
-    _release_worker_running_work_items(
-        conn,
-        worker_guids=lost_guids,
-        reason="requeued after site worker heartbeat expired",
-    )
     retire_worker_routes(conn, worker_guids=lost_guids, status=WORKER_ROUTE_STATUS_LOST)
     return updated
 
@@ -1525,6 +1583,11 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     missing_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
     if not missing_guids:
         return 0
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=missing_guids,
+        reason="requeued after site worker container disappeared",
+    )
     missing_placeholders = ",".join("?" for _ in missing_guids)
     base_sql = """
         UPDATE job_scheduler_workers
@@ -1539,11 +1602,6 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
         (WORKER_STATUS_LOST, "missing", now, now, *missing_guids),
     )
     updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
-    _release_worker_running_work_items(
-        conn,
-        worker_guids=missing_guids,
-        reason="requeued after site worker container disappeared",
-    )
     retire_worker_routes(conn, worker_guids=missing_guids, status=WORKER_ROUTE_STATUS_LOST)
     return updated
 

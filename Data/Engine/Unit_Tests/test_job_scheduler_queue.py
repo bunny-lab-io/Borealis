@@ -294,6 +294,44 @@ def test_worker_route_upsert_updates_generation_only_when_metadata_changes(tmp_p
         conn.close()
 
 
+def test_new_active_worker_route_retires_older_same_site_route(tmp_path: Path, monkeypatch) -> None:
+    dynamic_dir = tmp_path / "dynamic"
+    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
+    conn = _connect_queue_db(tmp_path)
+    try:
+        old_route = upsert_worker_route(
+            conn,
+            worker_guid="worker-old-route",
+            container_name="site-worker-worker-old-route",
+            site_id=12,
+            upstream_port=58111,
+        )
+        assert old_route is not None
+        old_route_file = Path(str(old_route["route_file_path"]))
+        assert old_route_file.exists()
+
+        new_route = upsert_worker_route(
+            conn,
+            worker_guid="worker-new-route",
+            container_name="site-worker-worker-new-route",
+            site_id=12,
+            upstream_port=58112,
+        )
+        conn.commit()
+
+        assert new_route is not None
+        active_routes = list_worker_routes(conn, site_id=12, statuses=[WORKER_ROUTE_STATUS_ACTIVE])
+        assert [route["worker_guid"] for route in active_routes] == ["worker-new-route"]
+        retired_route = worker_route_for_worker(conn, worker_guid="worker-old-route")
+        assert retired_route is not None
+        assert retired_route["status"] == WORKER_ROUTE_STATUS_RETIRED
+        assert retired_route["retired_at"] is not None
+        assert not old_route_file.exists()
+        assert Path(str(new_route["route_file_path"])).exists()
+    finally:
+        conn.close()
+
+
 def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Path, monkeypatch) -> None:
     dynamic_dir = tmp_path / "dynamic"
     monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))

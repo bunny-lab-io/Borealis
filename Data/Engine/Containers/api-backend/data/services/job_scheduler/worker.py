@@ -652,6 +652,23 @@ def _run_agent_maintenance_item(
     event_name = str(payload.get("event_name") or "agent_maintenance_request")
     agent_response: Any = None
     if socket_runtime is not None:
+        wait_stdout = (
+            f"Site worker waiting for Agent {service_mode or 'system'} socket "
+            f"operation_id={operation_id} action={payload.get('action') or '-'} "
+            f"release_channel={payload.get('release_channel') or '-'} branch={payload.get('branch') or '-'}\n"
+        )
+        _update_agent_maintenance_run(db_factory, run_id=run_id, status="Running", stdout=wait_stdout)
+        if logger is not None:
+            try:
+                logger.info(
+                    "agent maintenance waiting for socket | run=%s host=%s operation_id=%s service_mode=%s",
+                    run_id,
+                    hostname,
+                    operation_id,
+                    service_mode,
+                )
+            except Exception:
+                pass
         emitted = False
         delivery_state = "missing_socket"
         wait_deadline = time.monotonic() + float(_agent_maintenance_socket_wait_seconds())

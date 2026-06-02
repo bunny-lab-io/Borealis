@@ -72,7 +72,7 @@ def _now_ts() -> int:
 
 
 def _resolve_socketio_async_mode() -> str:
-    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "eventlet").strip().lower() or "eventlet"
+    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "threading").strip().lower() or "threading"
     if requested != "eventlet":
         return requested
     try:
