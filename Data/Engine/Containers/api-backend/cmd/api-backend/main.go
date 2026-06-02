@@ -108,6 +108,7 @@ func main() {
 	registerSiteRoutes(mux, auth, proxy)
 	registerUserRoutes(mux, auth, proxy)
 	registerDirectoryRoutes(mux, auth, proxy)
+	registerCredentialRoutes(mux, auth, proxy)
 	registerAdminDeviceRoutes(mux, auth, proxy)
 	mux.Handle("/", proxy)
 

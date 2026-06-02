@@ -70,6 +70,10 @@ type fakeOperatorStore struct {
 	directoryProviders  []map[string]any
 	directorySites      []map[string]any
 	directoryErr        error
+	credentials         []map[string]any
+	credentialByID      map[int64]map[string]any
+	credentialIDSeen    int64
+	credentialErr       error
 	enrollmentCodes     []map[string]any
 	approvals           []map[string]any
 	approvalErr         error
@@ -377,6 +381,29 @@ func (s *fakeOperatorStore) listDirectorySites(_ context.Context) ([]map[string]
 		sites = append(sites, copyMap(site))
 	}
 	return sites, nil
+}
+
+func (s *fakeOperatorStore) listCredentials(_ context.Context) ([]map[string]any, error) {
+	if s.credentialErr != nil {
+		return nil, s.credentialErr
+	}
+	credentials := make([]map[string]any, 0, len(s.credentials))
+	for _, credential := range s.credentials {
+		credentials = append(credentials, copyMap(credential))
+	}
+	return credentials, nil
+}
+
+func (s *fakeOperatorStore) getCredential(_ context.Context, credentialID int64) (map[string]any, bool, error) {
+	s.credentialIDSeen = credentialID
+	if s.credentialErr != nil {
+		return nil, false, s.credentialErr
+	}
+	credential, ok := s.credentialByID[credentialID]
+	if !ok {
+		return nil, false, nil
+	}
+	return copyMap(credential), true, nil
 }
 
 func (s *fakeOperatorStore) listEnrollmentCodes(_ context.Context) ([]map[string]any, error) {
@@ -1749,6 +1776,95 @@ func TestDirectoryProvidersHandlerReturnsProviders(t *testing.T) {
 	}
 }
 
+func TestCredentialsHandlerReturnsCredentials(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "User"})
+	store.credentials = []map[string]any{
+		{
+			"id":                         int64(7),
+			"name":                       "Lab SSH",
+			"description":                "Bunny Lab SSH",
+			"site_id":                    int64(1),
+			"site_name":                  "Bunny Lab",
+			"credential_type":            "machine",
+			"connection_type":            "ssh",
+			"username":                   "ops",
+			"has_password":               true,
+			"has_private_key":            true,
+			"has_private_key_passphrase": false,
+			"has_become_password":        false,
+			"metadata": map[string]any{
+				"winrm_transport": "ntlm",
+			},
+			"secret_reset_required": false,
+			"lost_secret_fields":    []string{},
+			"reset_at":              int64(0),
+			"created_at":            int64(1700000000),
+			"updated_at":            int64(1700000100),
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/credentials", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Credentials []map[string]any `json:"credentials"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Credentials) != 1 || payload.Credentials[0]["name"] != "Lab SSH" {
+		t.Fatalf("unexpected credentials payload %+v", payload)
+	}
+}
+
+func TestCredentialByIDHandlerReturnsCredential(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "User"})
+	store.credentialByID = map[int64]map[string]any{
+		7: {
+			"id":              int64(7),
+			"name":            "Lab SSH",
+			"connection_type": "ssh",
+			"username":        "ops",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/credentials/7", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Credential map[string]any `json:"credential"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if store.credentialIDSeen != 7 || payload.Credential["username"] != "ops" {
+		t.Fatalf("unexpected credential id=%d payload=%+v", store.credentialIDSeen, payload)
+	}
+}
+
+func TestCredentialByIDHandlerMissingCredential(t *testing.T) {
+	auth, _ := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/credentials/8", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestDirectorySitesHandlerReturnsSites(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.directorySites = []map[string]any{
@@ -2026,6 +2142,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
 		{name: "passkeys unsupported method", handler: authPasskeysHandler(auth, fallback), method: http.MethodPost, path: "/api/auth/passkeys"},
 		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
+		{name: "credential create", handler: credentialsHandler(auth, fallback), method: http.MethodPost, path: "/api/credentials"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -2034,8 +2151,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 8 {
-		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 9 {
+		t.Fatalf("expected 9 fallback hits, got %d", fallbackHits)
 	}
 }
 
