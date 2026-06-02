@@ -92,6 +92,7 @@ func main() {
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
 	registerAuthRoutes(mux, auth)
 	registerServerTimeRoutes(mux, auth)
+	registerAgentReleaseChannelRoutes(mux, auth, proxy)
 	registerServerSettingsRoutes(mux, auth, proxy)
 	registerServerWorkerRoutes(mux, auth, proxy)
 	registerMetadataRoutes(mux, auth)

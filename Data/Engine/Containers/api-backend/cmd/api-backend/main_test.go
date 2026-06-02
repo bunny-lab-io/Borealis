@@ -44,6 +44,7 @@ type fakeOperatorStore struct {
 	serverWorkerErr  error
 	workerHistory    int
 	workerContainers bool
+	githubToken      map[string]any
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -178,6 +179,17 @@ func (s *fakeOperatorStore) serverWorkerPayload(_ context.Context, historySecond
 		payload[key] = value
 	}
 	return payload, nil
+}
+
+func (s *fakeOperatorStore) githubTokenState(_ context.Context) map[string]any {
+	if s.githubToken == nil {
+		return defaultGithubTokenState()
+	}
+	payload := make(map[string]any, len(s.githubToken))
+	for key, value := range s.githubToken {
+		payload[key] = value
+	}
+	return payload
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -702,6 +714,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
 		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
 		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
+		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 	} {
@@ -712,8 +725,100 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 5 {
-		t.Fatalf("expected 5 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 6 {
+		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
+	}
+}
+
+func TestAgentReleaseChannelsHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/agent-release-channels", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	agentReleaseChannelsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAgentReleaseChannelsHandlerReturnsSettings(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
+	content := `{
+		"version": 1,
+		"default_channel": "unstable",
+		"github": {"repo": "bunny-lab-io/Borealis", "default_branch": "feature/rewrite-api-backend-in-golang"},
+		"channels": {
+			"stable": {"channel": "stable", "build_id": "stable-build", "published_at": "2026-06-01T00:00:00Z"},
+			"unstable": {"channel": "unstable", "build_id": "unstable-build", "branch": "feature/rewrite-api-backend-in-golang"}
+		},
+		"last_refresh_completed_at": 1780000000
+	}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.githubToken = map[string]any{"has_token": true, "reset_required": false, "reset_at": int64(0)}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/agent-release-channels", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	agentReleaseChannelsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["default_channel"]; got != "unstable" {
+		t.Fatalf("expected unstable default, got %#v", got)
+	}
+	if got := payload["settings_path"]; got != settingsPath {
+		t.Fatalf("expected settings path, got %#v", got)
+	}
+	githubToken := payload["github_token"].(map[string]any)
+	if got := githubToken["has_token"]; got != true {
+		t.Fatalf("expected github token true, got %#v", got)
+	}
+	channels := payload["channels"].(map[string]any)
+	stable := channels["stable"].(map[string]any)
+	if got := stable["build_id"]; got != "stable-build" {
+		t.Fatalf("expected stable build, got %#v", got)
+	}
+	unstable := channels["unstable"].(map[string]any)
+	if got := unstable["branch"]; got != "feature/rewrite-api-backend-in-golang" {
+		t.Fatalf("expected unstable branch, got %#v", got)
+	}
+}
+
+func TestAgentReleaseChannelsDefaultsWhenConfigMissing(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "missing", "agent_release_channels.json")
+	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+	t.Setenv("BOREALIS_UPDATE_REPO", "owner/repo")
+	t.Setenv("BOREALIS_UPDATE_BRANCH", "develop")
+
+	payload := collectAgentReleaseChannelSettings()
+	if got := payload["default_channel"]; got != "stable" {
+		t.Fatalf("expected stable default, got %#v", got)
+	}
+	github := payload["github"].(map[string]any)
+	if got := github["repo"]; got != "owner/repo" {
+		t.Fatalf("expected env repo, got %#v", got)
+	}
+	if got := github["default_branch"]; got != "develop" {
+		t.Fatalf("expected env branch, got %#v", got)
+	}
+	channels := payload["channels"].(map[string]any)
+	unstable := channels["unstable"].(map[string]any)
+	if got := unstable["version_label"]; got != "develop" {
+		t.Fatalf("expected unstable version label from env, got %#v", got)
+	}
+	if got := unstable["branch"]; got != "develop" {
+		t.Fatalf("expected unstable branch from env, got %#v", got)
 	}
 }
 
