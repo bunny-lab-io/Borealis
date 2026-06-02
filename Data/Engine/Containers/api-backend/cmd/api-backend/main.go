@@ -112,6 +112,7 @@ func main() {
 	registerCredentialRoutes(mux, auth, proxy)
 	registerAdminDeviceRoutes(mux, auth, proxy)
 	registerWorkflowRoutes(mux, auth, proxy)
+	registerWatchdogRoutes(mux, auth, proxy)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
