@@ -64,6 +64,45 @@ def register_aegis_cipher_management(app: Flask, adapters: "EngineServiceAdapter
             return jsonify({"error": "unauthorized"}), 401
         return jsonify(service.status())
 
+    @blueprint.route("/api/internal/aegis/setup", methods=["POST"])
+    def _aegis_internal_setup():
+        if not _require_internal():
+            return jsonify({"error": "unauthorized"}), 401
+        data = request.get_json(silent=True) or {}
+        cipher = str(data.get("cipher") or "")
+        try:
+            payload = service.setup(cipher)
+        except AegisNotConfiguredError as exc:
+            return _error_payload("not_configured", str(exc), 409)
+        except AegisLockedError as exc:
+            return _error_payload("locked", str(exc), 423)
+        except AegisDataCorruptionError as exc:
+            return _error_payload("corrupt_secret_store", str(exc), 500)
+        except AegisCipherServiceError as exc:
+            message = str(exc)
+            error_key = "already_configured" if "already configured" in message.lower() else "invalid_request"
+            status_code = 409 if error_key == "already_configured" else 400
+            return _error_payload(error_key, message, status_code)
+        return jsonify({"status": "ok", **payload})
+
+    @blueprint.route("/api/internal/aegis/unlock", methods=["POST"])
+    def _aegis_internal_unlock():
+        if not _require_internal():
+            return jsonify({"error": "unauthorized"}), 401
+        data = request.get_json(silent=True) or {}
+        cipher = str(data.get("cipher") or "")
+        try:
+            payload = service.unlock(cipher)
+        except AegisInvalidCipherError as exc:
+            return _error_payload("invalid_cipher", str(exc), 401)
+        except AegisNotConfiguredError as exc:
+            return _error_payload("not_configured", str(exc), 409)
+        except AegisDataCorruptionError as exc:
+            return _error_payload("corrupt_secret_store", str(exc), 500)
+        except AegisCipherServiceError as exc:
+            return _error_payload("invalid_request", str(exc), 400)
+        return jsonify({"status": "ok", **payload})
+
     @blueprint.route("/api/aegis/status", methods=["GET"])
     def _aegis_status():
         user, error = auth.require_user()

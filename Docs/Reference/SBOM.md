@@ -29,6 +29,7 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - Go standard library/runtime (compiled into the Go api-backend gateway) - BSD-3-Clause - https://go.dev/LICENSE
 - Go toolchain (native Linux api-backend build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 - github.com/lib/pq v1.10.9 (Go PostgreSQL driver for native api-backend auth/database reads) - MIT - https://github.com/lib/pq/blob/master/LICENSE.md
+- golang.org/x/crypto v0.33.0 (Go scrypt KDF support for native api-backend Aegis Cipher unlock/decrypt flow) - BSD-3-Clause - https://cs.opensource.google/go/x/crypto/+/master:LICENSE
 - Python (system Python on Linux) - PSF License - https://docs.python.org/3/license.html
 - Flask - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 - flask-cors - MIT - https://spdx.org/licenses/MIT.html

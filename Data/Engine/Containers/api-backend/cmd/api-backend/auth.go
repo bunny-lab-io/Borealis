@@ -72,11 +72,19 @@ type authService struct {
 	verifier      *tokenVerifier
 	store         operatorStore
 	bootstrapGate operatorAuthGate
+	aegis         authSecretService
 	timeout       time.Duration
 }
 
 type operatorAuthGate interface {
 	operatorAuthAllowed(ctx context.Context) (bool, error)
+}
+
+type authSecretService interface {
+	status(ctx context.Context) (map[string]any, error)
+	unlockWithCipher(ctx context.Context, cipherText string) (map[string]any, error)
+	decryptSecretText(ctx context.Context, value any) (string, error)
+	encryptSecretText(ctx context.Context, value string) (string, error)
 }
 
 type tokenVerifier struct {
@@ -105,6 +113,11 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 		return nil, nil, err
 	}
 
+	var aegis *goAegisService
+	if pgStore, ok := store.(*postgresOperatorStore); ok {
+		aegis = newGoAegisService(pgStore.db)
+	}
+
 	return &authService{
 		verifier: &tokenVerifier{
 			secret: []byte(secret),
@@ -117,6 +130,7 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 			secret:  []byte(secret),
 			client:  &http.Client{Timeout: cfg.AuthTimeout},
 		},
+		aegis:   aegis,
 		timeout: cfg.AuthTimeout,
 	}, closeStore, nil
 }
@@ -250,7 +264,12 @@ func countUserPasskeys(ctx context.Context, conn *sql.Conn, username string) (in
 }
 
 func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+	mux.HandleFunc("GET /api/bootstrap/state", bootstrapStateHandler(auth))
+	mux.HandleFunc("POST /api/bootstrap/aegis/setup", bootstrapAegisSetupHandler(auth))
+	mux.HandleFunc("POST /api/bootstrap/aegis/unlock", bootstrapAegisUnlockHandler(auth))
+	mux.HandleFunc("POST /api/auth/login", authLoginHandler(auth, fallback))
 	mux.HandleFunc("POST /api/auth/logout", authLogoutHandler())
+	mux.HandleFunc("POST /api/auth/mfa/verify", authMFAVerifyHandler(auth, fallback))
 	mux.HandleFunc("/api/auth/me", authMeHandler(auth))
 	mux.HandleFunc("/api/auth/mfa/reset", ownMFAResetHandler(auth))
 	mux.HandleFunc("/api/auth/passkeys", authPasskeysHandler(auth, fallback))
@@ -259,19 +278,23 @@ func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Han
 
 func authLogoutHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		expired := time.Unix(0, 0)
-		for _, name := range []string{authCookieName, "session"} {
-			http.SetCookie(w, &http.Cookie{
-				Name:     name,
-				Value:    "",
-				Path:     "/",
-				Expires:  expired,
-				MaxAge:   -1,
-				HttpOnly: name == "session",
-				SameSite: http.SameSiteLaxMode,
-			})
-		}
+		clearAuthCookies(w)
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	}
+}
+
+func clearAuthCookies(w http.ResponseWriter) {
+	expired := time.Unix(0, 0)
+	for _, name := range []string{authCookieName, "session"} {
+		http.SetCookie(w, &http.Cookie{
+			Name:     name,
+			Value:    "",
+			Path:     "/",
+			Expires:  expired,
+			MaxAge:   -1,
+			HttpOnly: name == "session",
+			SameSite: http.SameSiteLaxMode,
+		})
 	}
 }
 
@@ -441,6 +464,44 @@ func (v *tokenVerifier) verify(token string) (operatorIdentity, error) {
 	return operatorIdentity{Username: username, Role: role}, nil
 }
 
+func (v *tokenVerifier) signPayload(payload map[string]any) (string, error) {
+	if v == nil || len(v.secret) == 0 {
+		return "", errInvalidToken
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	if v.now != nil {
+		now = v.now()
+	}
+	payloadSegment := base64.RawURLEncoding.EncodeToString(raw)
+	timestampSegment := encodeTimestamp(uint64(now.Unix()))
+	value := payloadSegment + "." + timestampSegment
+	return value + "." + v.signatureSegment([]byte(value)), nil
+}
+
+func (v *tokenVerifier) signedPayload(token string, maxAge time.Duration) (map[string]any, error) {
+	payload, issuedAt, err := v.unsign(token)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if v.now != nil {
+		now = v.now()
+	}
+	age := now.Unix() - int64(issuedAt)
+	if age < 0 || (maxAge > 0 && age > int64(maxAge/time.Second)) {
+		return nil, errExpiredToken
+	}
+	var data map[string]any
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return nil, errInvalidToken
+	}
+	return data, nil
+}
+
 func (v *tokenVerifier) unsign(token string) ([]byte, uint64, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -481,11 +542,19 @@ func (v *tokenVerifier) verifySignature(value []byte, signatureSegment string) b
 	if err != nil {
 		return false
 	}
+	expected := v.signingMAC(value)
+	return subtle.ConstantTimeCompare(signature, expected) == 1
+}
+
+func (v *tokenVerifier) signatureSegment(value []byte) string {
+	return base64.RawURLEncoding.EncodeToString(v.signingMAC(value))
+}
+
+func (v *tokenVerifier) signingMAC(value []byte) []byte {
 	derived := sha1.Sum(bytes.Join([][]byte{[]byte(authTokenSalt), []byte("signer"), v.secret}, nil))
 	mac := hmac.New(sha1.New, derived[:])
 	_, _ = mac.Write(value)
-	expected := mac.Sum(nil)
-	return subtle.ConstantTimeCompare(signature, expected) == 1
+	return mac.Sum(nil)
 }
 
 func decodeTimestamp(segment string) (uint64, error) {
@@ -496,6 +565,15 @@ func decodeTimestamp(segment string) (uint64, error) {
 	padded := make([]byte, 8)
 	copy(padded[8-len(raw):], raw)
 	return binary.BigEndian.Uint64(padded), nil
+}
+
+func encodeTimestamp(value uint64) string {
+	raw := make([]byte, 8)
+	binary.BigEndian.PutUint64(raw, value)
+	for len(raw) > 1 && raw[0] == 0 {
+		raw = raw[1:]
+	}
+	return base64.RawURLEncoding.EncodeToString(raw)
 }
 
 func decodePayload(segment string) ([]byte, error) {
