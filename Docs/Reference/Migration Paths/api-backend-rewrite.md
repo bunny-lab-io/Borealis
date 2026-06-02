@@ -8,11 +8,11 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | --- | --- |
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
-| Active milestone | `M13: api-backend Cleanup` |
+| Active milestone | `M14: Go Rewrite Prep` |
 | Last updated | 2026-06-02 |
-| Latest implementation commit | `f5d556d2` (`Split site-worker heartbeat transactions`). Previous M11 stabilization commit is `fc1e7b5f` (`Stabilize M11 site-worker maintenance dispatch`). |
-| Current state | `M11` and `M12` are complete. Agent maintenance job `121` / run `975` succeeded on `LAB-OPERATOR-01` after the site-worker waited for the SYSTEM socket, delivered `agent_maintenance_request` with Socket.IO ack, and recorded `agent_update_state=success`. Fresh post-redeploy site-worker `733a77ca-d475-471d-a441-b66e9ba96905` registered `LAB-OPERATOR-01` on the newest route and the site-worker registry now keeps one active route for site `1`. `M12` remains complete from earlier operator smoke: manual Ansible Quick Job `112` and Scheduled Job `113` succeeded on `LAB-DOCS-01`. |
-| Next safe step | Start `M13`: remove obsolete api-backend remote-operation proxy code and stale dependencies now that live Agent channels, quick jobs, Agent maintenance, remote access, file/process/service/software operations, and Ansible execution are site-worker owned. |
+| Latest implementation commit | `978c8393` (`Remove api-backend remote-op fallbacks`). |
+| Current state | `M13` is complete. api-backend no longer owns the live Agent Socket.IO registry, remote shell Socket.IO handlers, direct Agent VNC/tunnel dispatch fallbacks, or stale Agent socket fallback paths. VNC, Remote Shell, tunnel start/stop, quick jobs, maintenance, file/process/service/software operations, and Ansible execution remain site-worker owned. The Go rewrite has not started. |
+| Next safe step | Start `M14`: document the reduced Python api-backend surface and freeze rewrite boundaries. Do not write the Go replacement yet. |
 
 ## Tracker Rules
 
@@ -48,8 +48,8 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | `M10: Process, Service, Software Ops` | `Done` | Move remaining live Agent task handlers to site-worker. |
 | `M11: Agent Maintenance + Quick Jobs` | `Done` | Move live quick-job and maintenance dispatch to site-worker. |
 | `M12: Ansible Execution Finalization` | `Done` | Ensure Ansible execution belongs to worker lane only. |
-| `M13: api-backend Cleanup` | `In Progress` | Remove obsolete remote-op proxy code and stale dependencies. |
-| `M14: Go Rewrite Prep` | `Not Started` | Freeze reduced Python API surface for Go rewrite design. |
+| `M13: api-backend Cleanup` | `Done` | Remove obsolete remote-op proxy code and stale dependencies. |
+| `M14: Go Rewrite Prep` | `In Progress` | Freeze reduced Python API surface for Go rewrite design. |
 
 ## Milestone Definitions
 
@@ -225,30 +225,31 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 
 | Field | Definition |
 | --- | --- |
-| Status | `In Progress` |
+| Status | `Done` |
 | Goal | Remove obsolete remote-operation proxy code and stale dependencies from `api-backend`. |
 | Migrates | Nothing new. This milestone deletes old middle-man code after feature paths move. |
 | Out Of Scope | New worker features, Agent protocol changes, Go implementation. |
 | Done When | `api-backend` responsibility map contains API/auth/database/business logic only; remote-operation broker paths are removed or rejected. |
 | Validation | Full affected Engine lane when practical, import/dependency scan, manual WebUI smoke for migrated paths. |
-| Handoff Note | Start by inventorying obsolete api-backend remote-operation proxy code, Agent socket registry paths, and stale dependencies left behind by M4-M12. Keep api-backend API/auth/database/business logic, but remove or reject old live-proxy paths now owned by site-workers. Record remaining Python API surface before starting `M14`. |
+| Handoff Note | Done in `978c8393`. api-backend rejects legacy Agent Socket.IO registration with `site_worker_route_required`, no longer initializes the live Agent socket registry, no longer provides api-backend remote shell Socket.IO handlers, and routes VNC/tunnel live Agent events through the active site-worker host-service bridge only. `M14` may document the frozen reduced surface; do not start Go implementation yet. |
 
 ### M14: Go Rewrite Prep
 
 | Field | Definition |
 | --- | --- |
-| Status | `Not Started` |
+| Status | `In Progress` |
 | Goal | Freeze the reduced Python `api-backend` surface so Go rewrite design can start cleanly. |
 | Migrates | Planning boundary only. No runtime ownership moves in this milestone. |
 | Out Of Scope | Writing Go production replacement, schema migrations unrelated to rewrite prep, UI changes. |
 | Done When | Reduced API surface is documented, remaining Python responsibilities are categorized, and next Go design milestone has clear boundaries. |
 | Validation | Source map review, endpoint inventory review, issue/PR notes updated. |
-| Handoff Note | Start Go design work from frozen surface map instead of pre-migration assumptions. |
+| Handoff Note | Active. Start with source-map and endpoint inventory from the post-M13 Python api-backend surface. Keep this milestone documentation/design-only unless operator explicitly approves Go implementation. |
 
 ## Work Log
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-02 | `M13` | Completed api-backend cleanup after worker-first ownership reached remote access, Agent maintenance, quick jobs, file/process/service/software operations, and Ansible execution. Removed api-backend live Agent socket registry bootstrap, remote shell Socket.IO handlers, direct Agent VNC/tunnel dispatch fallbacks, and stale socket-binding correction logic. Legacy Agent Socket.IO registration against api-backend now rejects with `site_worker_route_required`. VNC credential/start/stop and VPN tunnel start/stop dispatch through the site-worker host-service bridge only. | Local validation passed: `python3 -m py_compile` for touched M13 source/test files, focused remote-op pytest (`37 passed`), full `test_vnc_api.py` (`34 passed`), full `test_vpn_tunnel_service.py` (`3 passed`), `bash -n Engine_Unit_Tests.sh`, `./Engine_Unit_Tests.sh --domain remote-access`, `./Engine_Unit_Tests.sh --domain devices`, and `git diff --check`. Both Engine domain runs used cached test Python plus isolated auth-token roots. | Implementation commit `978c8393`; passing lanes wrote to `Unit_Test_Results/engine-20260602T034304Z` and `Unit_Test_Results/engine-20260602T034548Z`. `M14` is now active for reduced-surface documentation only; Go rewrite implementation is not started. |
 | 2026-06-02 | `M11` | Finished M11 Agent maintenance dispatch stabilization. Runtime failure showed site-worker eventlet cross-thread crashes (`greenlet.error: Cannot switch to a different thread`) when worker threads called Agent Socket.IO, plus stale active same-site routes and worker/work-item deadlock noise. Site-worker Socket.IO now defaults to threading mode, replacement worker routes retire older active same-site routes, Agent maintenance marks the run `Running` while waiting for the SYSTEM socket, and site-worker heartbeats split work-item and worker updates into separate transactions. | Local validation passed: `python3 -m py_compile` for touched Engine files, focused pytest for `test_job_scheduler_queue.py`, `test_site_worker_socket.py`, and `test_remote_ops_worker_bridge.py` (`45 passed`), `bash -n Engine_Unit_Tests.sh`, and `git diff --check`. The documented `remote-access` domain was attempted but blocked in `test_vnc_api.py` and stopped; focused tests covered the changed M11 paths. Runtime smoke passed after Engine redeploy: job `121` / run `975` reached `Success`, work item `825` reached `succeeded`, `LAB-OPERATOR-01` recorded `agent_update_state=success`, and fresh worker `733a77ca-d475-471d-a441-b66e9ba96905` registered the Agent SYSTEM socket. | Implementation commits `fc1e7b5f` and `f5d556d2`; Engine deploy selected `MSP / Production` with `12` site-worker tasks; latest live site-worker image was `borealis-engine/site-worker:sha-556b4731d870`; route registry for site `1` had one active route after stale route cleanup. |
 | 2026-06-01 | `M11` | Fixed the post-`394fb9dc` Agent maintenance regression where local site-worker pending queues could mark maintenance work items succeeded without Agent receipt. Runtime DB showed jobs `119`/`120` work items succeeded while runs stayed `Running` and Agent update fields stayed blank. Logs showed job `120` queued maintenance on worker `66516445-5e7f-4385-8a15-da50f55f1d5d`, then LAB-OPERATOR-01 registered on replacement worker `2980dcfd-e082-4a8a-b3ac-f9d66b6d33f8`. Site-worker maintenance dispatch now disables pending queue, waits briefly for registered SYSTEM socket, calls Agent with ack, and only records delivery after Agent ack. | Local validation passed: `python3 -m py_compile` for touched Engine files, focused `test_remote_ops_worker_bridge.py` (`13 passed`), `bash -n Engine_Unit_Tests.sh`, and `git diff --check`. | Engine redeploy is required before retrying M11 Agent maintenance smoke. Existing jobs `119`/`120` may remain historical stuck `Running` rows from the old queued-only behavior; use a new maintenance job for validation. |
 | 2026-06-01 | `M11` | Fixed stale registered Agent socket handling after operator rebuilt/redeployed/reapproved LAB-OPERATOR-01 and operation id `e7bddea1-9351-40eb-bc21-1bc4ea4ed855` still timed out. Runtime DB confirmed LAB-OPERATOR-01 was on Agent build `860d4319f45f8d8d0c0d23c8e0299be64f68f407`, while site-worker log `98fba812-e925-49fb-a8f0-032193655499.log` showed the registered SYSTEM SID disconnected during the maintenance call and re-registered after failure. Site-worker local maintenance dispatch now queues allowlisted maintenance events after registered-socket no-response, letting reconnect drain deliver the operation instead of failing immediately. | Local validation passed: `python3 -m py_compile` for touched Engine files, focused `test_remote_ops_worker_bridge.py` (`10 passed`), `bash -n Engine_Unit_Tests.sh`, and `git diff --check`. | Runtime DB evidence: `engine.devices.agent_hash` for LAB-OPERATOR-01 is `860d4319f45f8d8d0c0d23c8e0299be64f68f407`; run `960`/job `118` failed with no-response before this fix. Engine redeploy is required before retrying M11 Agent maintenance smoke. |
@@ -486,12 +487,19 @@ Completed M12 state:
 - Local validation passed: py_compile for touched backend/test files, focused worker bridge/site-worker/queue tests, focused scheduled-job queue/Ansible tests, `bash -n Engine_Unit_Tests.sh`, Engine `ansible`, and `git diff --check`.
 - Operator smoke passed: Quick Job `112` and Scheduled Job `113` succeeded on LAB-DOCS-01.
 
+Completed M13 state:
+- Implementation commit `978c8393` removes obsolete api-backend live remote-operation fallback code after site-worker ownership is complete.
+- api-backend Socket.IO no longer initializes the live Agent socket registry, no longer exposes api-backend remote shell handlers, and rejects stale Agent Socket.IO registration with `site_worker_route_required`.
+- VNC credential requests, VNC start/stop events, and VPN tunnel start/stop events now use the site-worker host-service bridge only.
+- Tunnel status now reports Agent socket availability through site-worker host-service registration instead of api-backend Agent socket state.
+- Local validation passed: py_compile for touched M13 source/test files, focused remote-op pytest, `test_vnc_api.py`, `test_vpn_tunnel_service.py`, `bash -n Engine_Unit_Tests.sh`, Engine `remote-access`, Engine `devices`, and `git diff --check`.
+
 Next work:
-1. Continue `M13` only.
-2. Inventory obsolete api-backend live remote-operation proxy paths and stale dependencies left behind by `M4`-`M12`.
-3. Remove or reject old api-backend middle-man routes while preserving login, RBAC, database persistence, inventory reads, and business APIs.
-4. Validate focused Engine tests and redeploy Engine if code changes.
-5. Update this tracker before handoff.
+1. Continue `M14` only.
+2. Inventory the reduced post-M13 Python api-backend endpoint/source surface.
+3. Categorize remaining Python responsibilities: login/RBAC, database persistence, inventory reads, business APIs, session brokering, scheduler/database coordination, and internal worker bridge calls.
+4. Document Go rewrite boundaries and explicit non-goals.
+5. Do not implement the Go api-backend replacement until M14 is reviewed and marked Done.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.
