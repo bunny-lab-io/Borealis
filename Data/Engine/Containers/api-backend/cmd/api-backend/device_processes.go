@@ -25,52 +25,13 @@ type deviceProcessContext struct {
 
 func registerProcessRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
 	mux.HandleFunc("GET /api/device/processes/{hostname}", deviceProcessListHandler(auth))
+	mux.HandleFunc("POST /api/device/processes/{hostname}/terminate", deviceProcessTerminateHandler(auth))
 }
 
 func deviceProcessListHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		profile, err := auth.currentProfile(r.Context(), r)
-		if err != nil {
-			if isUnauthorizedAuthError(err) {
-				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
-				return
-			}
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
-			return
-		}
-		store, ok := auth.store.(deviceProcessStore)
+		snapshot, ok := loadDeviceProcessSnapshotForRequest(w, r, auth)
 		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_processes_unavailable"})
-			return
-		}
-		timeout := auth.timeout
-		if timeout <= 0 {
-			timeout = defaultAuthTimeout
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-
-		snapshot, status, err := store.loadDeviceProcessContext(ctx, profile, r.PathValue("hostname"))
-		if err != nil {
-			writeJSON(w, status, map[string]any{"error": err.Error()})
-			return
-		}
-		if snapshot.Route == nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"error":   "agent_unavailable",
-				"message": "The agent SYSTEM socket is not available.",
-			})
-			return
-		}
-
-		workerCtx, workerCancel := context.WithTimeout(r.Context(), 5*time.Second)
-		registered := workerHostServiceRegistered(workerCtx, auth, snapshot.Route, snapshot.Hostname, "system")
-		workerCancel()
-		if !registered {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"error":   "agent_unavailable",
-				"message": "The agent SYSTEM socket is not available.",
-			})
 			return
 		}
 
@@ -112,6 +73,113 @@ func deviceProcessListHandler(auth *authService) http.HandlerFunc {
 			"processes":           processes,
 		})
 	}
+}
+
+func deviceProcessTerminateHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := readJSONMap(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			return
+		}
+		pid := coerceInt64(body["pid"])
+		if pid <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "pid_required"})
+			return
+		}
+		snapshot, ok := loadDeviceProcessSnapshotForRequest(w, r, auth)
+		if !ok {
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		response, workerStatus, workerErr := callWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
+			"hostname":        snapshot.Hostname,
+			"service_mode":    "system",
+			"event_name":      "process_management_request",
+			"timeout_seconds": 15.0,
+			"payload": map[string]any{
+				"action":           "terminate",
+				"pid":              pid,
+				"include_children": boolFromAny(body["include_children"]),
+				"requested_at":     time.Now().Unix(),
+				"requested_by":     firstText(cleanText(profile.Username), "unknown"),
+			},
+		}, 16*time.Second)
+		if workerErr != nil {
+			writeJSON(w, workerStatus, workerErr)
+			return
+		}
+		processes, _ := response["processes"].([]any)
+		if processes == nil {
+			processes = []any{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":              "ok",
+			"hostname":            firstText(snapshot.Hostname, r.PathValue("hostname")),
+			"agent_id":            snapshot.AgentID,
+			"terminated_pid":      pid,
+			"reported_at":         coerceInt64(response["reported_at"]),
+			"refresh_interval_ms": maxInt64(5000, coerceInt64(firstNonEmpty(response["refresh_interval_ms"], 5000))),
+			"count":               len(processes),
+			"processes":           processes,
+		})
+	}
+}
+
+func loadDeviceProcessSnapshotForRequest(w http.ResponseWriter, r *http.Request, auth *authService) (deviceProcessContext, bool) {
+	profile, err := auth.currentProfile(r.Context(), r)
+	if err != nil {
+		if isUnauthorizedAuthError(err) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return deviceProcessContext{}, false
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+		return deviceProcessContext{}, false
+	}
+	store, ok := auth.store.(deviceProcessStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_processes_unavailable"})
+		return deviceProcessContext{}, false
+	}
+	timeout := auth.timeout
+	if timeout <= 0 {
+		timeout = defaultAuthTimeout
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	snapshot, status, err := store.loadDeviceProcessContext(ctx, profile, r.PathValue("hostname"))
+	if err != nil {
+		writeJSON(w, status, map[string]any{"error": err.Error()})
+		return deviceProcessContext{}, false
+	}
+	if snapshot.Route == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":   "agent_unavailable",
+			"message": "The agent SYSTEM socket is not available.",
+		})
+		return deviceProcessContext{}, false
+	}
+
+	workerCtx, workerCancel := context.WithTimeout(r.Context(), 5*time.Second)
+	registered := workerHostServiceRegistered(workerCtx, auth, snapshot.Route, snapshot.Hostname, "system")
+	workerCancel()
+	if !registered {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error":   "agent_unavailable",
+			"message": "The agent SYSTEM socket is not available.",
+		})
+		return deviceProcessContext{}, false
+	}
+	return snapshot, true
 }
 
 func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, profile operatorProfile, hostname string) (deviceProcessContext, int, error) {

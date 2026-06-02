@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -163,25 +164,101 @@ func TestDeviceProcessListHandlerReturnsUnavailableWhenSocketMissing(t *testing.
 	}
 }
 
-func TestDeviceProcessTerminateFallsBack(t *testing.T) {
-	store := &fakeProcessStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
-	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/device/processes/LAB-OPERATOR-01/terminate" {
-			t.Fatalf("unexpected fallback request %s %s", r.Method, r.URL.Path)
+func TestDeviceProcessTerminateCallsWorkerAndReturnsSnapshot(t *testing.T) {
+	var sawStatus bool
+	var sawCall bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
 		}
-		w.WriteHeader(http.StatusAccepted)
-	})
+		switch r.URL.Path {
+		case "/remote-ops/host-service/status":
+			sawStatus = true
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+		case "/remote-ops/host-service/call":
+			sawCall = true
+			if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "process_management_request" {
+				t.Fatalf("unexpected call body %#v", body)
+			}
+			payload, _ := body["payload"].(map[string]any)
+			if payload["action"] != "terminate" || payload["pid"].(float64) != 1234 || payload["include_children"] != true || payload["requested_by"] != "operator" {
+				t.Fatalf("unexpected terminate payload %#v", payload)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"called": true,
+				"response": map[string]any{
+					"ok":                  true,
+					"reported_at":         1700000002,
+					"refresh_interval_ms": 2500,
+					"processes": []map[string]any{
+						{"pid": 10, "name": "remaining"},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
 	mux := http.NewServeMux()
-	registerProcessRoutes(mux, processTestAuth(store), fallback)
-	mux.Handle("/", fallback)
+	registerProcessRoutes(mux, processTestAuth(store), http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/device/processes/LAB-OPERATOR-01/terminate", nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/device/processes/LAB-OPERATOR-01/terminate", strings.NewReader(`{"pid":1234,"include_children":true}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 	mux.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusAccepted {
-		t.Fatalf("expected fallback 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawStatus || !sawCall {
+		t.Fatalf("expected status and call requests, sawStatus=%v sawCall=%v", sawStatus, sawCall)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["terminated_pid"].(float64) != 1234 || payload["count"].(float64) != 1 || payload["refresh_interval_ms"].(float64) != 5000 {
+		t.Fatalf("unexpected terminate response %#v", payload)
+	}
+}
+
+func TestDeviceProcessTerminateRequiresPID(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/remote-ops/host-service/status" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+			return
+		}
+		t.Fatalf("unexpected worker path %s", r.URL.Path)
+	}))
+	defer worker.Close()
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerProcessRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/processes/LAB-OPERATOR-01/terminate", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
