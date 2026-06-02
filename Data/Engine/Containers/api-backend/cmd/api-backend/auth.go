@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	authCookieName  = "borealis_auth"
-	authTokenSalt   = "borealis-auth"
-	defaultUserRole = "User"
-	directoryAuth   = "directory"
+	authCookieName     = "borealis_auth"
+	authTokenSalt      = "borealis-auth"
+	defaultUserRole    = "User"
+	directoryAuth      = "directory"
+	defaultAuthTimeout = 3 * time.Second
 )
 
 var (
@@ -288,7 +289,7 @@ func (a *authService) currentProfile(ctx context.Context, r *http.Request) (oper
 
 	timeout := a.timeout
 	if timeout <= 0 {
-		timeout = 3 * time.Second
+		timeout = defaultAuthTimeout
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

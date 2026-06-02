@@ -15,11 +15,15 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles map[string]operatorProfile
-	err      error
+	profiles      map[string]operatorProfile
+	err           error
+	search        []deviceSearchMatch
+	searchErr     error
+	searchProfile operatorProfile
+	searchQuery   string
 }
 
-func (s fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
+func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
 	if s.err != nil {
 		return operatorProfile{}, s.err
 	}
@@ -33,7 +37,23 @@ func (s fakeOperatorStore) lookupOperator(_ context.Context, username string, fa
 	return profile, nil
 }
 
+func (s *fakeOperatorStore) searchDevicesByHostname(_ context.Context, profile operatorProfile, query string) ([]deviceSearchMatch, error) {
+	s.searchProfile = profile
+	s.searchQuery = query
+	if s.searchErr != nil {
+		return nil, s.searchErr
+	}
+	matches := append([]deviceSearchMatch(nil), s.search...)
+	sortDeviceSearchMatches(matches, query)
+	return matches, nil
+}
+
 func testAuthService(profile operatorProfile) *authService {
+	auth, _ := testAuthServiceWithStore(profile)
+	return auth
+}
+
+func testAuthServiceWithStore(profile operatorProfile) (*authService, *fakeOperatorStore) {
 	if profile.Username == "" {
 		profile.Username = "operator"
 	}
@@ -46,19 +66,20 @@ func testAuthService(profile operatorProfile) *authService {
 	if profile.AuthSource == "" {
 		profile.AuthSource = "local"
 	}
+	store := &fakeOperatorStore{
+		profiles: map[string]operatorProfile{
+			strings.ToLower(profile.Username): profile,
+		},
+	}
 	return &authService{
 		verifier: &tokenVerifier{
 			secret: []byte("test-secret"),
 			maxAge: time.Hour,
 			now:    func() time.Time { return time.Unix(1700000010, 0) },
 		},
-		store: fakeOperatorStore{
-			profiles: map[string]operatorProfile{
-				strings.ToLower(profile.Username): profile,
-			},
-		},
+		store:   store,
 		timeout: time.Second,
-	}
+	}, store
 }
 
 func TestSetEnvReplacesExistingValue(t *testing.T) {
@@ -185,6 +206,76 @@ func TestAuthMeHandlerReturnsOperatorProfile(t *testing.T) {
 	}
 	if payload["username"] != "operator" || payload["role"] != "Admin" || payload["passkey_count"].(float64) != 2 {
 		t.Fatalf("unexpected /api/auth/me payload %+v", payload)
+	}
+}
+
+func TestDeviceSearchHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/search?hostname=lab", nil)
+	deviceSearchHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDeviceSearchHandlerReturnsEmptyForShortQueryAfterAuth(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/search?hostname=la", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceSearchHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.searchQuery != "" {
+		t.Fatalf("expected short query to skip DB search, got query %q", store.searchQuery)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["query"] != "la" || payload["count"].(float64) != 0 {
+		t.Fatalf("unexpected short search payload %+v", payload)
+	}
+}
+
+func TestDeviceSearchHandlerReturnsSortedMatches(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.search = []deviceSearchMatch{
+		{AgentGUID: "CCCC", AgentID: "agent-c", Hostname: "z-lab", SiteName: "Zeta"},
+		{AgentGUID: "BBBB", AgentID: "agent-b", Hostname: "lab-02", SiteName: "Beta"},
+		{AgentGUID: "AAAA", AgentID: "agent-a", Hostname: "lab", SiteName: "Alpha"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/search?hostname=lab", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceSearchHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Devices []deviceSearchMatch `json:"devices"`
+		Query   string              `json:"query"`
+		Count   int                 `json:"count"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Query != "lab" || payload.Count != 3 {
+		t.Fatalf("unexpected search payload %+v", payload)
+	}
+	if got := payload.Devices[0].Hostname; got != "lab" {
+		t.Fatalf("expected exact hostname first, got %q", got)
+	}
+	if store.searchProfile.Username != "operator" || store.searchQuery != "lab" {
+		t.Fatalf("expected search called with operator profile/query, got %+v %q", store.searchProfile, store.searchQuery)
 	}
 }
 
