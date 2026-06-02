@@ -18,33 +18,38 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles         map[string]operatorProfile
-	err              error
-	search           []deviceSearchMatch
-	searchErr        error
-	searchProfile    operatorProfile
-	searchQuery      string
-	devices          []map[string]any
-	deviceErr        error
-	deviceProfile    operatorProfile
-	deviceFilter     deviceListFilter
-	sites            []map[string]any
-	siteErr          error
-	siteProfile      operatorProfile
-	siteMap          map[string]map[string]any
-	siteMapErr       error
-	siteMapHostnames []string
-	views            []map[string]any
-	viewErr          error
-	viewByID         map[int64]map[string]any
-	viewIDSeen       int64
-	metadataFields   []map[string]any
-	metadataErr      error
-	serverWorkers    map[string]any
-	serverWorkerErr  error
-	workerHistory    int
-	workerContainers bool
-	githubToken      map[string]any
+	profiles          map[string]operatorProfile
+	err               error
+	search            []deviceSearchMatch
+	searchErr         error
+	searchProfile     operatorProfile
+	searchQuery       string
+	devices           []map[string]any
+	deviceErr         error
+	deviceProfile     operatorProfile
+	deviceFilter      deviceListFilter
+	sites             []map[string]any
+	siteErr           error
+	siteProfile       operatorProfile
+	siteMap           map[string]map[string]any
+	siteMapErr        error
+	siteMapHostnames  []string
+	views             []map[string]any
+	viewErr           error
+	viewByID          map[int64]map[string]any
+	viewIDSeen        int64
+	metadataFields    []map[string]any
+	metadataErr       error
+	deviceMetadata    map[string]any
+	deviceMetaStatus  int
+	deviceMetaErr     error
+	deviceMetaID      string
+	deviceMetaProfile operatorProfile
+	serverWorkers     map[string]any
+	serverWorkerErr   error
+	workerHistory     int
+	workerContainers  bool
+	githubToken       map[string]any
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -166,6 +171,23 @@ func (s *fakeOperatorStore) listMetadataDefinitions(_ context.Context) ([]map[st
 		fields = append(fields, copyField)
 	}
 	return fields, nil
+}
+
+func (s *fakeOperatorStore) deviceMetadataFields(_ context.Context, profile operatorProfile, deviceID string) (map[string]any, int, error) {
+	s.deviceMetaProfile = profile
+	s.deviceMetaID = deviceID
+	if s.deviceMetaErr != nil {
+		return nil, 0, s.deviceMetaErr
+	}
+	payload := make(map[string]any, len(s.deviceMetadata))
+	for key, value := range s.deviceMetadata {
+		payload[key] = value
+	}
+	status := s.deviceMetaStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return payload, status, nil
 }
 
 func (s *fakeOperatorStore) serverWorkerPayload(_ context.Context, historySeconds int, includeContainerMetadata bool) (map[string]any, error) {
@@ -714,6 +736,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
 		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
 		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
+		{name: "device metadata update", handler: deviceMetadataFieldsHandler(auth, fallback), method: http.MethodPut, path: "/api/devices/device-1/metadata_fields/7"},
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
@@ -725,8 +748,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 6 {
-		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 7 {
+		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -1058,6 +1081,82 @@ func TestMetadataFieldsHandlerReturnsDefinitions(t *testing.T) {
 	}
 	if got := payload.Fields[0]["label"]; got != "Rack" {
 		t.Fatalf("expected custom label, got %#v", got)
+	}
+}
+
+func TestDeviceMetadataFieldsHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/LAB-OPERATOR-01/metadata_fields", nil)
+	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDeviceMetadataFieldsHandlerReturnsPayload(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.deviceMetadata = map[string]any{
+		"device": map[string]any{
+			"guid":      "DEVICE-GUID",
+			"hostname":  "LAB-OPERATOR-01",
+			"site_id":   int64(1),
+			"site_name": "Bunny Lab",
+		},
+		"fields": []any{
+			map[string]any{
+				"field_number": int64(1),
+				"field_key":    "field_001",
+				"label":        "Rack",
+				"value":        "Rack 7",
+				"has_value":    true,
+			},
+		},
+		"count":       int64(1),
+		"value_limit": int64(1024),
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/LAB-OPERATOR-01/metadata_fields", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceMetaID != "LAB-OPERATOR-01" {
+		t.Fatalf("expected device id capture, got %q", store.deviceMetaID)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["count"]; got != float64(1) {
+		t.Fatalf("expected count 1, got %#v", got)
+	}
+	fields := payload["fields"].([]any)
+	first := fields[0].(map[string]any)
+	if got := first["value"]; got != "Rack 7" {
+		t.Fatalf("expected decoded metadata value, got %#v", got)
+	}
+}
+
+func TestDeviceMetadataFieldsHandlerProxiesUnownedDeviceSubpaths(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+	fallbackHits := 0
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits++
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/device-guid", nil)
+	deviceMetadataFieldsHandler(auth, fallback).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted || fallbackHits != 1 {
+		t.Fatalf("expected fallback, got status=%d hits=%d", recorder.Code, fallbackHits)
 	}
 }
 

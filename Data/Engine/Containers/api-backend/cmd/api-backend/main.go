@@ -95,7 +95,7 @@ func main() {
 	registerAgentReleaseChannelRoutes(mux, auth, proxy)
 	registerServerSettingsRoutes(mux, auth, proxy)
 	registerServerWorkerRoutes(mux, auth, proxy)
-	registerMetadataRoutes(mux, auth)
+	registerMetadataRoutes(mux, auth, proxy)
 	registerDeviceRoutes(mux, auth)
 	registerDeviceViewRoutes(mux, auth, proxy)
 	registerDeviceSearchRoutes(mux, auth)
