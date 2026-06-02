@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -29,6 +31,10 @@ const (
 
 type serverWorkerStore interface {
 	serverWorkerPayload(ctx context.Context, historySeconds int, includeContainerMetadata bool) (map[string]any, error)
+}
+
+type serverWorkerRecreateStore interface {
+	queueSiteWorkerRecreate(ctx context.Context, workerGUID string) (map[string]any, int, error)
 }
 
 type workerSnapshotRow struct {
@@ -70,6 +76,7 @@ type workItemRow struct {
 
 func registerServerWorkerRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/server/workers", serverWorkersHandler(auth, fallback))
+	mux.HandleFunc("/api/server/workers/", serverWorkerSubtreeHandler(auth, fallback))
 }
 
 func serverWorkersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -101,6 +108,41 @@ func serverWorkersHandler(auth *authService, fallback http.Handler) http.Handler
 			return
 		}
 		writeJSON(w, http.StatusOK, payload)
+	}
+}
+
+func serverWorkerSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/server/workers/"), "/"), "/")
+		if len(parts) == 2 && parts[1] == "recreate" && r.Method == http.MethodPost {
+			if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+				failure.write(w)
+				return
+			}
+			store, ok := auth.store.(serverWorkerRecreateStore)
+			if !ok {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "server_workers_unavailable"})
+				return
+			}
+			timeout := auth.timeout
+			if timeout <= 0 {
+				timeout = defaultAuthTimeout
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), timeout)
+			defer cancel()
+			payload, status, err := store.queueSiteWorkerRecreate(ctx, parts[0])
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, status, payload)
+			return
+		}
+		if fallback != nil {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 	}
 }
 
@@ -162,6 +204,156 @@ func (s *postgresOperatorStore) serverWorkerPayload(ctx context.Context, history
 		"sites":                     siteRows,
 		"worker_idle_ttl_seconds":   workerIdleTTLSeconds,
 	}, nil
+}
+
+func (s *postgresOperatorStore) queueSiteWorkerRecreate(ctx context.Context, workerGUID string) (map[string]any, int, error) {
+	workerGUID = cleanText(workerGUID)
+	if workerGUID == "" {
+		return map[string]any{
+			"error":   "site_worker_recreate_unavailable",
+			"message": "A site-worker id is required.",
+		}, http.StatusBadRequest, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	cutoff := time.Now().Unix() - 86400
+	var row workerSnapshotRow
+	var siteName sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT
+			worker_guid, container_name, site_id, status, started_at, last_seen_at,
+			idle_since, stopped_at, current_lanes_json, claimed_count, task_links_json,
+			docker_state, exit_code, s.name
+		  FROM engine.job_scheduler_workers
+	 LEFT JOIN engine.sites AS s ON s.id = job_scheduler_workers.site_id
+		 WHERE worker_guid = $1
+		   AND COALESCE(job_scheduler_workers.site_id, 0) > 0
+		   AND (
+		         status NOT IN ($2, $3)
+		      OR COALESCE(stopped_at, last_seen_at, updated_at, started_at, 0) >= $4
+		   )
+	  ORDER BY COALESCE(stopped_at, last_seen_at, started_at) DESC
+		 LIMIT 1
+	`, workerGUID, workerStatusStopped, workerStatusLost, cutoff).Scan(
+		&row.WorkerGUID,
+		&row.ContainerName,
+		&row.SiteID,
+		&row.Status,
+		&row.StartedAt,
+		&row.LastSeenAt,
+		&row.IdleSince,
+		&row.StoppedAt,
+		&row.CurrentLanesJSON,
+		&row.ClaimedCount,
+		&row.TaskLinksJSON,
+		&row.DockerState,
+		&row.ExitCode,
+		&siteName,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, 0, commitErr
+		}
+		committed = true
+		return map[string]any{
+			"error":   "site_worker_recreate_unavailable",
+			"message": "Site worker not found.",
+		}, http.StatusNotFound, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	containerName := nullString(row.ContainerName)
+	if containerName == "" {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, 0, commitErr
+		}
+		committed = true
+		return map[string]any{
+			"error":   "site_worker_recreate_unavailable",
+			"message": "Site worker has no tracked container.",
+		}, http.StatusConflict, nil
+	}
+
+	action := map[string]any{
+		"id":             "recreate",
+		"label":          "Re-Create Site Worker",
+		"action":         "recreate",
+		"worker_guid":    workerGUID,
+		"container_name": containerName,
+		"site_id":        nullInt(row.SiteID),
+	}
+	workItemID, err := enqueueGoServiceAction(ctx, tx, "site-worker", action)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	committed = true
+
+	return map[string]any{
+		"queued":         true,
+		"worker_guid":    nullString(row.WorkerGUID),
+		"site_id":        nullInt(row.SiteID),
+		"site_name":      nullString(siteName),
+		"container_name": containerName,
+		"work_item_id":   workItemID,
+	}, http.StatusAccepted, nil
+}
+
+func enqueueGoServiceAction(ctx context.Context, tx *sql.Tx, serviceKey string, action map[string]any) (int64, error) {
+	now := time.Now().Unix()
+	normalizedService := strings.ToLower(cleanText(serviceKey))
+	actionName := strings.ToLower(cleanText(action["action"]))
+	actionMode := strings.ToLower(cleanText(action["mode"]))
+	actionScope := strings.ToLower(cleanText(firstNonEmpty(action["scope"], action["worker_guid"], action["container_name"])))
+	scopeKey := "global"
+	if actionScope != "" {
+		sum := sha256.Sum256([]byte(actionScope))
+		scopeKey = fmt.Sprintf("%x", sum[:])[:16]
+	}
+	dedupe := fmt.Sprintf("service-action:%s:%s:%s:%s:%d", normalizedService, actionName, actionMode, scopeKey, now/60)
+	payloadJSON, err := json.Marshal(map[string]any{"service_key": normalizedService, "action": action})
+	if err != nil {
+		return 0, err
+	}
+	var existingID sql.NullInt64
+	err = tx.QueryRowContext(ctx, "SELECT id FROM engine.job_scheduler_work_items WHERE dedupe_key = $1 LIMIT 1", dedupe).Scan(&existingID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if existingID.Valid {
+		if _, err := tx.ExecContext(ctx, "UPDATE engine.job_scheduler_work_items SET updated_at = $1 WHERE id = $2", now, existingID.Int64); err != nil {
+			return 0, err
+		}
+		return existingID.Int64, nil
+	}
+	var workItemID int64
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO engine.job_scheduler_work_items(
+			dedupe_key, kind, site_id, lane, payload_json,
+			status, attempt_count, priority, available_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id
+	`, dedupe, "service_action", 0, "service_action", string(payloadJSON), workStatusQueued, 0, 100, now, now, now).Scan(&workItemID)
+	return workItemID, err
 }
 
 func listWorkerSnapshots(ctx context.Context, conn *sql.Conn, historySeconds int) ([]map[string]any, error) {
