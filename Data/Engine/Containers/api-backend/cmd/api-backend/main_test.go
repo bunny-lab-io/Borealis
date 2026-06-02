@@ -1934,6 +1934,73 @@ func TestServerWorkersHandlerReturnsPayload(t *testing.T) {
 	}
 }
 
+func TestServerLogsHandlerReturnsDomains(t *testing.T) {
+	logRoot := t.TempDir()
+	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
+	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte("[2026-06-02T00:00:00Z] [INFO] engine ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logRoot, "engine.log.2026-06-01"), []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/logs", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverLogsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Logs []map[string]any `json:"logs"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Logs) != 1 || payload.Logs[0]["file"] != "engine.log" {
+		t.Fatalf("unexpected logs payload %+v", payload)
+	}
+	if int(payload.Logs[0]["rotation_count"].(float64)) != 1 {
+		t.Fatalf("expected one rotation, got %+v", payload.Logs[0])
+	}
+}
+
+func TestServerLogEntriesHandlerReturnsParsedEntries(t *testing.T) {
+	logRoot := t.TempDir()
+	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
+	content := strings.Join([]string{
+		"[2026-06-02T00:00:00Z] [INFO][CONTEXT-ADMIN] first message",
+		"2026-06-02 00:01:00,000-engine-ERROR: second message",
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/logs/engine.log/entries?limit=50", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Entries) != 2 {
+		t.Fatalf("expected two entries, got %+v", payload)
+	}
+	if payload.Entries[0]["scope"] != "ADMIN" || payload.Entries[1]["level"] != "ERROR" {
+		t.Fatalf("unexpected parsed entries %+v", payload.Entries)
+	}
+}
+
 func TestSiteWorkerSettingsHandlerRequiresAdmin(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
 
