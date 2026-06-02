@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -19,10 +21,12 @@ const (
 
 type metadataDefinitionStore interface {
 	listMetadataDefinitions(ctx context.Context) ([]map[string]any, error)
+	updateMetadataDefinition(ctx context.Context, fieldNumber int, description string, actor string) (map[string]any, int, error)
 }
 
 type deviceMetadataStore interface {
 	deviceMetadataFields(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, int, error)
+	updateDeviceMetadataField(ctx context.Context, profile operatorProfile, deviceID string, fieldNumber int, value string) (map[string]any, int, error)
 }
 
 type metadataDeviceRecord struct {
@@ -45,6 +49,7 @@ type deviceMetadataValueRow struct {
 
 func registerMetadataRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/metadata_fields", metadataFieldsHandler(auth))
+	mux.HandleFunc("/api/metadata_fields/", metadataFieldDefinitionHandler(auth, fallback))
 	mux.HandleFunc("/api/devices/", deviceMetadataFieldsHandler(auth, fallback))
 }
 
@@ -82,6 +87,87 @@ func metadataFieldsHandler(auth *authService) http.HandlerFunc {
 			"value_limit": metadataValueMaxLength,
 		})
 	}
+}
+
+func metadataFieldDefinitionHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fieldNumber, ok := parseMetadataFieldDefinitionPath(r.URL.Path)
+		if !ok {
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodPut)
+			return
+		}
+		if r.Method != http.MethodPut {
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodPut)
+			return
+		}
+		identity, failure := requireAdmin(r.Context(), auth, r)
+		if failure != nil {
+			failure.write(w)
+			return
+		}
+		store, ok := auth.store.(metadataDefinitionStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "metadata_fields_unavailable"})
+			return
+		}
+
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			body = map[string]any{}
+		}
+		description := cleanText(body["description"])
+
+		timeout := auth.timeout
+		if timeout <= 0 {
+			timeout = defaultAuthTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		payload, status, err := store.updateMetadataDefinition(ctx, fieldNumber, description, firstText(identity.Username, "Unknown"))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
+}
+
+func parseMetadataFieldDefinitionPath(path string) (int, bool) {
+	rest := strings.Trim(strings.TrimPrefix(path, "/api/metadata_fields/"), "/")
+	if rest == "" || strings.Contains(rest, "/") {
+		return 0, false
+	}
+	fieldNumber, err := strconv.Atoi(rest)
+	if err != nil || fieldNumber < 1 || fieldNumber > metadataFieldCount {
+		return 0, false
+	}
+	return fieldNumber, true
+}
+
+func (s *postgresOperatorStore) updateMetadataDefinition(ctx context.Context, fieldNumber int, description string, actor string) (map[string]any, int, error) {
+	if fieldNumber < 1 || fieldNumber > metadataFieldCount {
+		return map[string]any{"error": "invalid_field", "message": "Field number must be between 1 and 500."}, http.StatusBadRequest, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	now := time.Now().Unix()
+	cleanDescription := normalizeMetadataDescription(description)
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO engine.metadata_field_definitions(field_number, description, updated_at, updated_by)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT(field_number) DO UPDATE SET
+		    description = EXCLUDED.description,
+		    updated_at = EXCLUDED.updated_at,
+		    updated_by = EXCLUDED.updated_by
+	`, fieldNumber, cleanDescription, now, truncateMetadataText(actor, 255)); err != nil {
+		return nil, 0, err
+	}
+	return map[string]any{"field": metadataDefinitionPayload(fieldNumber, cleanDescription, now, truncateMetadataText(actor, 255))}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) listMetadataDefinitions(ctx context.Context) ([]map[string]any, error) {
@@ -129,12 +215,12 @@ func listMetadataDefinitionsFromConn(ctx context.Context, conn *sql.Conn) ([]map
 
 func deviceMetadataFieldsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		deviceID, ok := parseDeviceMetadataFieldsPath(r.URL.Path)
+		parsed, ok := parseDeviceMetadataFieldsPath(r.URL.Path)
 		if !ok {
 			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
 			return
 		}
-		if r.Method != http.MethodGet {
+		if r.Method == http.MethodGet && parsed.hasField {
 			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
 			return
 		}
@@ -163,7 +249,20 @@ func deviceMetadataFieldsHandler(auth *authService, fallback http.Handler) http.
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		payload, status, err := store.deviceMetadataFields(ctx, profile, deviceID)
+		var payload map[string]any
+		var status int
+		if r.Method == http.MethodGet && !parsed.hasField {
+			payload, status, err = store.deviceMetadataFields(ctx, profile, parsed.deviceID)
+		} else if r.Method == http.MethodPut && parsed.hasField {
+			var body map[string]any
+			if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+				body = map[string]any{}
+			}
+			payload, status, err = store.updateDeviceMetadataField(ctx, profile, parsed.deviceID, parsed.fieldNumber, normalizeMetadataValue(cleanText(body["value"])))
+		} else {
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, "GET, PUT")
+			return
+		}
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -172,21 +271,39 @@ func deviceMetadataFieldsHandler(auth *authService, fallback http.Handler) http.
 	}
 }
 
-func parseDeviceMetadataFieldsPath(path string) (string, bool) {
+type parsedDeviceMetadataPath struct {
+	deviceID    string
+	fieldNumber int
+	hasField    bool
+}
+
+func parseDeviceMetadataFieldsPath(path string) (parsedDeviceMetadataPath, bool) {
 	rest := strings.TrimPrefix(path, "/api/devices/")
 	if rest == path {
-		return "", false
+		return parsedDeviceMetadataPath{}, false
 	}
 	parts := strings.Split(rest, "/")
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || parts[1] != "metadata_fields" {
-		return "", false
+	if (len(parts) != 2 && len(parts) != 3) || strings.TrimSpace(parts[0]) == "" || parts[1] != "metadata_fields" {
+		return parsedDeviceMetadataPath{}, false
 	}
 	deviceID, err := url.PathUnescape(parts[0])
 	if err != nil {
 		deviceID = parts[0]
 	}
 	deviceID = strings.TrimSpace(deviceID)
-	return deviceID, deviceID != ""
+	if deviceID == "" {
+		return parsedDeviceMetadataPath{}, false
+	}
+	parsed := parsedDeviceMetadataPath{deviceID: deviceID}
+	if len(parts) == 3 {
+		fieldNumber, err := strconv.Atoi(strings.TrimSpace(parts[2]))
+		if err != nil || fieldNumber < 1 || fieldNumber > metadataFieldCount {
+			return parsedDeviceMetadataPath{}, false
+		}
+		parsed.fieldNumber = fieldNumber
+		parsed.hasField = true
+	}
+	return parsed, true
 }
 
 func (s *postgresOperatorStore) deviceMetadataFields(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, int, error) {
@@ -248,6 +365,149 @@ func (s *postgresOperatorStore) deviceMetadataFields(ctx context.Context, profil
 		"count":       len(rows),
 		"value_limit": metadataValueMaxLength,
 	}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) updateDeviceMetadataField(ctx context.Context, profile operatorProfile, deviceID string, fieldNumber int, value string) (map[string]any, int, error) {
+	if fieldNumber < 1 || fieldNumber > metadataFieldCount {
+		return map[string]any{"error": "invalid_field", "message": "Field number must be between 1 and 500."}, http.StatusBadRequest, nil
+	}
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, 0, err
+	}
+	if allowedSiteIDs != nil && len(allowedSiteIDs) == 0 {
+		return deviceMetadataNotFoundPayload(), http.StatusNotFound, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	device, ok, err := resolveMetadataDeviceTx(ctx, tx, deviceID)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !ok || !metadataDeviceVisible(device.SiteID, allowedSiteIDs) {
+		return deviceMetadataNotFoundPayload(), http.StatusNotFound, nil
+	}
+
+	now := time.Now().Unix()
+	actor := firstText(profile.Username, "Unknown")
+	encodedValue := encodeMetadataValue(value)
+	fieldKey := metadataFieldKey(fieldNumber)
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO engine.device_metadata_fields(
+		    device_guid, field_number, field_key, value, modified_at, source, actor, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, 'engine', $6, $7, $7)
+		ON CONFLICT(device_guid, field_number) DO UPDATE SET
+		    field_key = EXCLUDED.field_key,
+		    value = EXCLUDED.value,
+		    modified_at = EXCLUDED.modified_at,
+		    source = EXCLUDED.source,
+		    actor = EXCLUDED.actor,
+		    updated_at = EXCLUDED.updated_at
+	`, nullString(device.GUID), fieldNumber, fieldKey, encodedValue, now, truncateMetadataText(actor, 255), now); err != nil {
+		return nil, 0, err
+	}
+
+	metadata, _ := json.Marshal(map[string]any{
+		"device_guid":  nullString(device.GUID),
+		"field_number": fieldNumber,
+		"field_key":    fieldKey,
+		"source":       "engine",
+		"actor":        actor,
+		"cleared":      value == "",
+	})
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO engine.activity_history(
+		    hostname, script_path, script_name, script_type, ran_at, status, stdout, stderr,
+		    queue_lane, activity_kind, metadata_json, started_at, updated_at, finished_at
+		)
+		VALUES ($1, 'Internal/Metadata_Fields', $2, 'metadata_fields', $3, 'Success', $4, '',
+		        'metadata_fields', 'metadata_field_update', $5, $3, $3, $3)
+	`, nullString(device.Hostname), metadataFieldLabel(fieldNumber)+" Metadata Update", now, metadataFieldLabel(fieldNumber)+" "+map[bool]string{true: "cleared", false: "updated"}[value == ""]+".", string(metadata)); err != nil {
+		return nil, 0, err
+	}
+
+	definition, err := metadataDefinitionFromTx(ctx, tx, fieldNumber)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	committed = true
+
+	row := map[string]any{}
+	for key, item := range definition {
+		row[key] = item
+	}
+	row["field_number"] = fieldNumber
+	row["field_key"] = fieldKey
+	row["value"] = value
+	row["modified_at"] = now
+	row["source"] = "engine"
+	row["actor"] = actor
+	row["created_at"] = now
+	row["updated_at"] = now
+	row["label"] = firstText(cleanText(row["description"]), cleanText(row["default_label"]), metadataFieldLabel(fieldNumber))
+	row["has_value"] = value != ""
+	return map[string]any{"field": row}, http.StatusOK, nil
+}
+
+func resolveMetadataDeviceTx(ctx context.Context, tx *sql.Tx, deviceID string) (metadataDeviceRecord, bool, error) {
+	var device metadataDeviceRecord
+	err := tx.QueryRowContext(
+		ctx,
+		`
+		SELECT d.guid, d.hostname, ds.site_id, s.name
+		  FROM engine.devices AS d
+	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname = d.hostname
+	 LEFT JOIN engine.sites AS s ON s.id = ds.site_id
+		 WHERE LOWER(d.guid) = LOWER($1)
+		    OR d.hostname = $1
+		    OR d.agent_id = $1
+		 LIMIT 1
+		`,
+		deviceID,
+	).Scan(&device.GUID, &device.Hostname, &device.SiteID, &device.SiteName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return metadataDeviceRecord{}, false, nil
+	}
+	if err != nil {
+		return metadataDeviceRecord{}, false, err
+	}
+	return device, true, nil
+}
+
+func metadataDefinitionFromTx(ctx context.Context, tx *sql.Tx, fieldNumber int) (map[string]any, error) {
+	var row metadataDefinitionRow
+	err := tx.QueryRowContext(ctx, `
+		SELECT field_number, description, updated_at, updated_by
+		  FROM engine.metadata_field_definitions
+		 WHERE field_number = $1
+	`, fieldNumber).Scan(&row.FieldNumber, &row.Description, &row.UpdatedAt, &row.UpdatedBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return metadataDefinitionPayload(fieldNumber, "", 0, ""), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return metadataDefinitionPayload(fieldNumber, nullString(row.Description), nullInt(row.UpdatedAt), nullString(row.UpdatedBy)), nil
 }
 
 func resolveMetadataDevice(ctx context.Context, conn *sql.Conn, deviceID string) (metadataDeviceRecord, bool, error) {
@@ -362,6 +622,37 @@ func normalizeMetadataValue(value string) string {
 	return value
 }
 
+func normalizeMetadataDescription(value string) string {
+	text := strings.TrimSpace(normalizeMetadataValue(value))
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	parts := make([]string, 0, len(lines))
+	for _, line := range lines {
+		cleaned := strings.TrimSpace(line)
+		if cleaned != "" {
+			parts = append(parts, cleaned)
+		}
+	}
+	return truncateMetadataText(strings.Join(parts, " "), metadataValueMaxLength)
+}
+
+func encodeMetadataValue(value string) string {
+	text := normalizeMetadataValue(value)
+	if text == "" {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString([]byte(text))
+}
+
+func truncateMetadataText(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
+}
+
 type metadataDefinitionRow struct {
 	FieldNumber sql.NullInt64
 	Description sql.NullString
@@ -372,25 +663,29 @@ type metadataDefinitionRow struct {
 func buildMetadataDefinitions(descriptions map[int]metadataDefinitionRow) []map[string]any {
 	fields := make([]map[string]any, 0, metadataFieldCount)
 	for fieldNumber := 1; fieldNumber <= metadataFieldCount; fieldNumber++ {
-		defaultLabel := metadataFieldLabel(fieldNumber)
 		definition := descriptions[fieldNumber]
-		description := nullString(definition.Description)
-		label := description
-		if label == "" {
-			label = defaultLabel
-		}
-		fields = append(fields, map[string]any{
-			"field_number":  fieldNumber,
-			"field_key":     metadataFieldKey(fieldNumber),
-			"default_label": defaultLabel,
-			"label":         label,
-			"description":   description,
-			"updated_at":    nullInt(definition.UpdatedAt),
-			"updated_by":    nullString(definition.UpdatedBy),
-			"value_limit":   metadataValueMaxLength,
-		})
+		fields = append(fields, metadataDefinitionPayload(fieldNumber, nullString(definition.Description), nullInt(definition.UpdatedAt), nullString(definition.UpdatedBy)))
 	}
 	return fields
+}
+
+func metadataDefinitionPayload(fieldNumber int, description string, updatedAt int64, updatedBy string) map[string]any {
+	defaultLabel := metadataFieldLabel(fieldNumber)
+	cleanDescription := strings.TrimSpace(description)
+	label := cleanDescription
+	if label == "" {
+		label = defaultLabel
+	}
+	return map[string]any{
+		"field_number":  fieldNumber,
+		"field_key":     metadataFieldKey(fieldNumber),
+		"default_label": defaultLabel,
+		"label":         label,
+		"description":   cleanDescription,
+		"updated_at":    updatedAt,
+		"updated_by":    updatedBy,
+		"value_limit":   metadataValueMaxLength,
+	}
 }
 
 func metadataFieldKey(fieldNumber int) string {

@@ -22,108 +22,119 @@ const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwM
 const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
 
 type fakeOperatorStore struct {
-	profiles            map[string]operatorProfile
-	err                 error
-	search              []deviceSearchMatch
-	searchErr           error
-	searchProfile       operatorProfile
-	searchQuery         string
-	devices             []map[string]any
-	deviceErr           error
-	deviceProfile       operatorProfile
-	deviceFilter        deviceListFilter
-	deviceDetail        map[string]any
-	deviceDetailStatus  int
-	deviceDetailErr     error
-	deviceDetailGUID    string
-	deviceDetailHost    string
-	deviceDescHost      string
-	deviceDescText      string
-	deviceMutation      map[string]any
-	deviceMutationCode  int
-	deviceMutationErr   error
-	releaseGUID         string
-	releaseChannel      any
-	releaseBranch       any
-	sites               []map[string]any
-	siteErr             error
-	siteProfile         operatorProfile
-	siteMutationPayload map[string]any
-	siteMutationStatus  int
-	siteCreatedName     string
-	siteCreatedDesc     string
-	siteDeletedIDs      []int64
-	siteAssignedID      int64
-	siteAssignedHosts   []string
-	siteRenamedID       int64
-	siteRenamedName     string
-	siteAutoID          int64
-	siteAutoUntil       *int64
-	siteMap             map[string]map[string]any
-	siteMapErr          error
-	siteMapHostnames    []string
-	users               []map[string]any
-	userErr             error
-	passkeys            []map[string]any
-	passkeyErr          error
-	passkeyUsername     string
-	directoryProviders  []map[string]any
-	directorySites      []map[string]any
-	directoryErr        error
-	credentials         []map[string]any
-	credentialByID      map[int64]map[string]any
-	credentialIDSeen    int64
-	credentialErr       error
-	enrollmentCodes     []map[string]any
-	approvals           []map[string]any
-	approvalErr         error
-	approvalProfile     operatorProfile
-	approvalStatusID    string
-	approvalStatus      string
-	approvalGUID        string
-	approvalResolution  string
-	approvalPayload     map[string]any
-	approvalHTTPStatus  int
-	views               []map[string]any
-	viewErr             error
-	viewByID            map[int64]map[string]any
-	viewIDSeen          int64
-	createdView         deviceViewMutation
-	updatedView         deviceViewMutation
-	deletedViewID       int64
-	viewMutationStatus  int
-	metadataFields      []map[string]any
-	metadataErr         error
-	deviceMetadata      map[string]any
-	deviceMetaStatus    int
-	deviceMetaErr       error
-	deviceMetaID        string
-	deviceMetaProfile   operatorProfile
-	serverWorkers       map[string]any
-	serverWorkerErr     error
-	workerHistory       int
-	workerContainers    bool
-	githubToken         map[string]any
-	tokenRefreshReq     agentTokenRefreshRequest
-	tokenRefreshResult  agentTokenRefreshResult
-	tokenRefreshStatus  int
-	tokenRefreshErr     error
-	deviceAuthRecord    deviceBearerAuthRecord
-	deviceAuthFound     bool
-	requiredVersion     *int
-	agentHashLookupGUID string
-	agentHashLookupID   string
-	agentHashLookup     map[string]any
-	agentHashUpdateReq  agentHashUpdateRequest
-	agentHashUpdate     map[string]any
-	agentHashStatus     int
-	agentHashErr        error
-	agentHashList       []map[string]any
-	remoteOpsReq        remoteOpsSessionRequest
-	remoteOpsProfile    operatorProfile
-	remoteOpsResult     remoteOpsSessionResult
-	remoteOpsStatus     int
-	remoteOpsErr        error
+	profiles             map[string]operatorProfile
+	err                  error
+	search               []deviceSearchMatch
+	searchErr            error
+	searchProfile        operatorProfile
+	searchQuery          string
+	devices              []map[string]any
+	deviceErr            error
+	deviceProfile        operatorProfile
+	deviceFilter         deviceListFilter
+	deviceDetail         map[string]any
+	deviceDetailStatus   int
+	deviceDetailErr      error
+	deviceDetailGUID     string
+	deviceDetailHost     string
+	deviceDescHost       string
+	deviceDescText       string
+	deviceMutation       map[string]any
+	deviceMutationCode   int
+	deviceMutationErr    error
+	releaseGUID          string
+	releaseChannel       any
+	releaseBranch        any
+	sites                []map[string]any
+	siteErr              error
+	siteProfile          operatorProfile
+	siteMutationPayload  map[string]any
+	siteMutationStatus   int
+	siteCreatedName      string
+	siteCreatedDesc      string
+	siteDeletedIDs       []int64
+	siteAssignedID       int64
+	siteAssignedHosts    []string
+	siteRenamedID        int64
+	siteRenamedName      string
+	siteAutoID           int64
+	siteAutoUntil        *int64
+	siteMap              map[string]map[string]any
+	siteMapErr           error
+	siteMapHostnames     []string
+	users                []map[string]any
+	userErr              error
+	passkeys             []map[string]any
+	passkeyErr           error
+	passkeyUsername      string
+	directoryProviders   []map[string]any
+	directorySites       []map[string]any
+	directoryErr         error
+	credentials          []map[string]any
+	credentialByID       map[int64]map[string]any
+	credentialIDSeen     int64
+	credentialErr        error
+	enrollmentCodes      []map[string]any
+	approvals            []map[string]any
+	approvalErr          error
+	approvalProfile      operatorProfile
+	approvalStatusID     string
+	approvalStatus       string
+	approvalGUID         string
+	approvalResolution   string
+	approvalPayload      map[string]any
+	approvalHTTPStatus   int
+	views                []map[string]any
+	viewErr              error
+	viewByID             map[int64]map[string]any
+	viewIDSeen           int64
+	createdView          deviceViewMutation
+	updatedView          deviceViewMutation
+	deletedViewID        int64
+	viewMutationStatus   int
+	metadataFields       []map[string]any
+	metadataErr          error
+	metadataUpdateField  int
+	metadataUpdateDesc   string
+	metadataUpdateActor  string
+	metadataUpdate       map[string]any
+	metadataUpdateCode   int
+	metadataUpdateErr    error
+	deviceMetadata       map[string]any
+	deviceMetaStatus     int
+	deviceMetaErr        error
+	deviceMetaID         string
+	deviceMetaProfile    operatorProfile
+	deviceMetaField      int
+	deviceMetaValue      string
+	deviceMetaUpdate     map[string]any
+	deviceMetaUpdateCode int
+	deviceMetaUpdateErr  error
+	serverWorkers        map[string]any
+	serverWorkerErr      error
+	workerHistory        int
+	workerContainers     bool
+	githubToken          map[string]any
+	tokenRefreshReq      agentTokenRefreshRequest
+	tokenRefreshResult   agentTokenRefreshResult
+	tokenRefreshStatus   int
+	tokenRefreshErr      error
+	deviceAuthRecord     deviceBearerAuthRecord
+	deviceAuthFound      bool
+	requiredVersion      *int
+	agentHashLookupGUID  string
+	agentHashLookupID    string
+	agentHashLookup      map[string]any
+	agentHashUpdateReq   agentHashUpdateRequest
+	agentHashUpdate      map[string]any
+	agentHashStatus      int
+	agentHashErr         error
+	agentHashList        []map[string]any
+	remoteOpsReq         remoteOpsSessionRequest
+	remoteOpsProfile     operatorProfile
+	remoteOpsResult      remoteOpsSessionResult
+	remoteOpsStatus      int
+	remoteOpsErr         error
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -553,6 +564,29 @@ func (s *fakeOperatorStore) listMetadataDefinitions(_ context.Context) ([]map[st
 	return fields, nil
 }
 
+func (s *fakeOperatorStore) updateMetadataDefinition(_ context.Context, fieldNumber int, description string, actor string) (map[string]any, int, error) {
+	s.metadataUpdateField = fieldNumber
+	s.metadataUpdateDesc = description
+	s.metadataUpdateActor = actor
+	if s.metadataUpdateErr != nil {
+		return nil, 0, s.metadataUpdateErr
+	}
+	status := s.metadataUpdateCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.metadataUpdate != nil {
+		return s.metadataUpdate, status, nil
+	}
+	return map[string]any{
+		"field": map[string]any{
+			"field_number": fieldNumber,
+			"description":  description,
+			"updated_by":   actor,
+		},
+	}, status, nil
+}
+
 func (s *fakeOperatorStore) deviceMetadataFields(_ context.Context, profile operatorProfile, deviceID string) (map[string]any, int, error) {
 	s.deviceMetaProfile = profile
 	s.deviceMetaID = deviceID
@@ -568,6 +602,30 @@ func (s *fakeOperatorStore) deviceMetadataFields(_ context.Context, profile oper
 		status = http.StatusOK
 	}
 	return payload, status, nil
+}
+
+func (s *fakeOperatorStore) updateDeviceMetadataField(_ context.Context, profile operatorProfile, deviceID string, fieldNumber int, value string) (map[string]any, int, error) {
+	s.deviceMetaProfile = profile
+	s.deviceMetaID = deviceID
+	s.deviceMetaField = fieldNumber
+	s.deviceMetaValue = value
+	if s.deviceMetaUpdateErr != nil {
+		return nil, 0, s.deviceMetaUpdateErr
+	}
+	status := s.deviceMetaUpdateCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.deviceMetaUpdate != nil {
+		return s.deviceMetaUpdate, status, nil
+	}
+	return map[string]any{
+		"field": map[string]any{
+			"field_number": fieldNumber,
+			"value":        value,
+			"has_value":    value != "",
+		},
+	}, status, nil
 }
 
 func (s *fakeOperatorStore) serverWorkerPayload(_ context.Context, historySeconds int, includeContainerMetadata bool) (map[string]any, error) {
@@ -2134,7 +2192,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		method  string
 		path    string
 	}{
-		{name: "device metadata update", handler: deviceMetadataFieldsHandler(auth, fallback), method: http.MethodPut, path: "/api/devices/device-1/metadata_fields/7"},
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "server overview update", handler: serverOverviewHandler(auth, fallback), method: http.MethodPost, path: "/api/server/overview"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
@@ -2151,8 +2208,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 9 {
-		t.Fatalf("expected 9 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 8 {
+		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -2683,6 +2740,29 @@ func TestMetadataFieldsHandlerReturnsDefinitions(t *testing.T) {
 	}
 }
 
+func TestMetadataFieldDefinitionHandlerUpdatesField(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/metadata_fields/7", strings.NewReader(`{"description":"Location Code"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	metadataFieldDefinitionHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.metadataUpdateField != 7 || store.metadataUpdateDesc != "Location Code" || store.metadataUpdateActor != "operator" {
+		t.Fatalf("unexpected update capture field=%d desc=%q actor=%q", store.metadataUpdateField, store.metadataUpdateDesc, store.metadataUpdateActor)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["field"] == nil {
+		t.Fatalf("expected field payload, got %+v", payload)
+	}
+}
+
 func TestDeviceMetadataFieldsHandlerRequiresAuthentication(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
@@ -2739,6 +2819,30 @@ func TestDeviceMetadataFieldsHandlerReturnsPayload(t *testing.T) {
 	first := fields[0].(map[string]any)
 	if got := first["value"]; got != "Rack 7" {
 		t.Fatalf("expected decoded metadata value, got %#v", got)
+	}
+}
+
+func TestDeviceMetadataFieldsHandlerUpdatesPayload(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/devices/LAB-OPERATOR-01/metadata_fields/9", strings.NewReader(`{"value":"Rack 9"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceMetaID != "LAB-OPERATOR-01" || store.deviceMetaField != 9 || store.deviceMetaValue != "Rack 9" {
+		t.Fatalf("unexpected device metadata capture id=%q field=%d value=%q", store.deviceMetaID, store.deviceMetaField, store.deviceMetaValue)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	field := payload["field"].(map[string]any)
+	if field["has_value"] != true {
+		t.Fatalf("expected has_value true, got %+v", field)
 	}
 }
 
