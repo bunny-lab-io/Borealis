@@ -40,6 +40,10 @@ type fakeOperatorStore struct {
 	viewIDSeen       int64
 	metadataFields   []map[string]any
 	metadataErr      error
+	serverWorkers    map[string]any
+	serverWorkerErr  error
+	workerHistory    int
+	workerContainers bool
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -161,6 +165,19 @@ func (s *fakeOperatorStore) listMetadataDefinitions(_ context.Context) ([]map[st
 		fields = append(fields, copyField)
 	}
 	return fields, nil
+}
+
+func (s *fakeOperatorStore) serverWorkerPayload(_ context.Context, historySeconds int, includeContainerMetadata bool) (map[string]any, error) {
+	s.workerHistory = historySeconds
+	s.workerContainers = includeContainerMetadata
+	if s.serverWorkerErr != nil {
+		return nil, s.serverWorkerErr
+	}
+	payload := make(map[string]any, len(s.serverWorkers))
+	for key, value := range s.serverWorkers {
+		payload[key] = value
+	}
+	return payload, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -686,6 +703,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
 		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
+		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -694,8 +712,57 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 4 {
-		t.Fatalf("expected 4 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 5 {
+		t.Fatalf("expected 5 fallback hits, got %d", fallbackHits)
+	}
+}
+
+func TestServerWorkersHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/workers", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverWorkersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServerWorkersHandlerReturnsPayload(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.serverWorkers = map[string]any{
+		"active_count": int64(1),
+		"workers": []any{
+			map[string]any{"worker_guid": "worker-1", "status": "running"},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/workers?history_seconds=999999", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverWorkersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.workerHistory != 86400 {
+		t.Fatalf("expected clamped history 86400, got %d", store.workerHistory)
+	}
+	if !store.workerContainers {
+		t.Fatalf("expected container metadata request")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["active_count"]; got != float64(1) {
+		t.Fatalf("expected active_count 1, got %#v", got)
+	}
+	workers, ok := payload["workers"].([]any)
+	if !ok || len(workers) != 1 {
+		t.Fatalf("expected one worker, got %#v", payload["workers"])
 	}
 }
 

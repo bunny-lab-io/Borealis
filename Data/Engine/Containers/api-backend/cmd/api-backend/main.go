@@ -93,6 +93,7 @@ func main() {
 	registerAuthRoutes(mux, auth)
 	registerServerTimeRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, proxy)
+	registerServerWorkerRoutes(mux, auth, proxy)
 	registerMetadataRoutes(mux, auth)
 	registerDeviceRoutes(mux, auth)
 	registerDeviceViewRoutes(mux, auth, proxy)
