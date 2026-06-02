@@ -42,6 +42,8 @@ type fakeOperatorStore struct {
 	siteMap             map[string]map[string]any
 	siteMapErr          error
 	siteMapHostnames    []string
+	users               []map[string]any
+	userErr             error
 	views               []map[string]any
 	viewErr             error
 	viewByID            map[int64]map[string]any
@@ -178,6 +180,21 @@ func (s *fakeOperatorStore) siteDeviceMap(_ context.Context, profile operatorPro
 		mapping[hostname] = copySite
 	}
 	return mapping, nil
+}
+
+func (s *fakeOperatorStore) listUsers(_ context.Context) ([]map[string]any, error) {
+	if s.userErr != nil {
+		return nil, s.userErr
+	}
+	users := make([]map[string]any, 0, len(s.users))
+	for _, user := range s.users {
+		copyUser := make(map[string]any, len(user))
+		for key, value := range user {
+			copyUser[key] = value
+		}
+		users = append(users, copyUser)
+	}
+	return users, nil
 }
 
 func (s *fakeOperatorStore) listDeviceViews(_ context.Context) ([]map[string]any, error) {
@@ -1117,6 +1134,60 @@ func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	}
 }
 
+func TestUsersHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	usersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestUsersHandlerReturnsUsers(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.users = []map[string]any{
+		{
+			"id":                      int64(1),
+			"username":                "administrator",
+			"display_name":            "Administrator",
+			"role":                    "Admin",
+			"last_login":              int64(1700000000),
+			"created_at":              int64(1699990000),
+			"updated_at":              int64(1700001000),
+			"mfa_enabled":             1,
+			"auth_reset_required":     0,
+			"auth_reset_at":           int64(0),
+			"auth_source":             "local",
+			"directory_provider_id":   nil,
+			"directory_provider_name": "",
+			"directory_domain":        "",
+			"directory_disabled":      0,
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/users", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	usersHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Users []map[string]any `json:"users"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Users) != 1 || payload.Users[0]["username"] != "administrator" {
+		t.Fatalf("unexpected users payload %+v", payload)
+	}
+}
+
 func TestDeviceViewListHandlerReturnsViews(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.views = []map[string]any{
@@ -1293,6 +1364,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
+		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -1301,8 +1373,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 5 {
-		t.Fatalf("expected 5 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 6 {
+		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
 	}
 }
 

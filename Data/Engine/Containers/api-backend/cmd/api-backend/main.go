@@ -104,6 +104,7 @@ func main() {
 	registerDeviceViewRoutes(mux, auth, proxy)
 	registerDeviceSearchRoutes(mux, auth)
 	registerSiteRoutes(mux, auth, proxy)
+	registerUserRoutes(mux, auth, proxy)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
