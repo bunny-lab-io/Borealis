@@ -239,8 +239,27 @@ func countUserPasskeys(ctx context.Context, conn *sql.Conn, username string) (in
 }
 
 func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+	mux.HandleFunc("POST /api/auth/logout", authLogoutHandler())
 	mux.HandleFunc("/api/auth/me", authMeHandler(auth))
 	mux.HandleFunc("/api/auth/passkeys", authPasskeysHandler(auth, fallback))
+}
+
+func authLogoutHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expired := time.Unix(0, 0)
+		for _, name := range []string{authCookieName, "session"} {
+			http.SetCookie(w, &http.Cookie{
+				Name:     name,
+				Value:    "",
+				Path:     "/",
+				Expires:  expired,
+				MaxAge:   -1,
+				HttpOnly: name == "session",
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	}
 }
 
 func authMeHandler(auth *authService) http.HandlerFunc {
