@@ -3,13 +3,21 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
 
 type userListStore interface {
 	listUsers(ctx context.Context) ([]map[string]any, error)
+}
+
+type userMutationStore interface {
+	deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error)
+	updateUserRole(ctx context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error)
 }
 
 type userRow struct {
@@ -32,6 +40,7 @@ type userRow struct {
 
 func registerUserRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/users", usersHandler(auth, fallback))
+	mux.HandleFunc("/api/users/", userSubtreeHandler(auth, fallback))
 }
 
 func usersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -64,6 +73,145 @@ func usersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"users": users})
+	}
+}
+
+func userSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username, action, ok := parseUserSubtreePath(r.URL.Path)
+		if !ok {
+			if fallback != nil {
+				fallback.ServeHTTP(w, r)
+				return
+			}
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+			return
+		}
+
+		if action == "" && r.Method == http.MethodDelete {
+			userDelete(w, r, auth, username)
+			return
+		}
+		if action == "role" && r.Method == http.MethodPost {
+			userRoleUpdate(w, r, auth, username)
+			return
+		}
+
+		if fallback != nil {
+			fallback.ServeHTTP(w, r)
+			return
+		}
+		writeMethodNotAllowed(w, http.MethodDelete+", "+http.MethodPost)
+	}
+}
+
+func parseUserSubtreePath(path string) (string, string, bool) {
+	rest := strings.Trim(strings.TrimPrefix(path, "/api/users/"), "/")
+	if rest == "" {
+		return "", "", false
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) > 2 {
+		return "", "", false
+	}
+	username, err := url.PathUnescape(parts[0])
+	if err != nil {
+		username = parts[0]
+	}
+	action := ""
+	if len(parts) == 2 {
+		action = strings.TrimSpace(parts[1])
+	}
+	return strings.TrimSpace(username), action, strings.TrimSpace(username) != ""
+}
+
+func userDelete(w http.ResponseWriter, r *http.Request, auth *authService, username string) {
+	profile, store, ok := userMutationRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	ctx, cancel := userTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.deleteUser(ctx, profile, username)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func userRoleUpdate(w http.ResponseWriter, r *http.Request, auth *authService, username string) {
+	profile, store, ok := userMutationRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	role := normalizeUserRole(body["role"])
+	if role != "User" && role != "Admin" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid role"})
+		return
+	}
+
+	ctx, cancel := userTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.updateUserRole(ctx, profile, username, role)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func userMutationRequestContext(w http.ResponseWriter, r *http.Request, auth *authService) (operatorProfile, userMutationStore, bool) {
+	profile, err := auth.currentProfile(r.Context(), r)
+	if err != nil {
+		if isUnauthorizedAuthError(err) {
+			unauthorizedAuthFailure().write(w)
+			return operatorProfile{}, nil, false
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+		return operatorProfile{}, nil, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(profile.Role), "admin") {
+		(&authFailure{
+			status: http.StatusForbidden,
+			body: map[string]any{
+				"error":   "forbidden",
+				"message": "Administrator permissions are required for this action.",
+			},
+		}).write(w)
+		return operatorProfile{}, nil, false
+	}
+	store, ok := auth.store.(userMutationStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "users_unavailable"})
+		return operatorProfile{}, nil, false
+	}
+	return profile, store, true
+}
+
+func userTimeoutContext(ctx context.Context, auth *authService) (context.Context, context.CancelFunc) {
+	timeout := auth.timeout
+	if timeout <= 0 {
+		timeout = defaultAuthTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func normalizeUserRole(value any) string {
+	text := strings.ToLower(strings.TrimSpace(cleanText(value)))
+	switch text {
+	case "admin":
+		return "Admin"
+	case "user":
+		return "User"
+	default:
+		return ""
 	}
 }
 
@@ -141,6 +289,146 @@ func (s *postgresOperatorStore) listUsers(ctx context.Context) ([]map[string]any
 		users = append(users, userPayload(row))
 	}
 	return users, nil
+}
+
+func (s *postgresOperatorStore) deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "invalid username"}, http.StatusBadRequest, nil
+	}
+	source, found, err := s.userAuthSource(ctx, usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if found && source == "directory" {
+		return map[string]any{"error": "directory_user_local_action_disabled"}, http.StatusForbidden, nil
+	}
+	if strings.EqualFold(profile.Username, usernameNorm) {
+		return map[string]any{"error": "You cannot delete the user you are currently logged in as."}, http.StatusBadRequest, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	var totalUsers int64
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM engine.users").Scan(&totalUsers); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if totalUsers <= 1 {
+		return map[string]any{"error": "There is only one user currently configured, you cannot delete this user until you have created another."}, http.StatusBadRequest, nil
+	}
+
+	var userID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, "SELECT id FROM engine.users WHERE LOWER(username)=LOWER($1)", usernameNorm).Scan(&userID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, http.StatusInternalServerError, err
+	}
+	if userID.Valid {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM engine.user_site_assignments WHERE user_id=$1", userID.Int64); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM engine.users WHERE LOWER(username)=LOWER($1)", usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if deleted == 0 {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) updateUserRole(ctx context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "invalid username"}, http.StatusBadRequest, nil
+	}
+	source, found, err := s.userAuthSource(ctx, usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if found && source == "directory" {
+		return map[string]any{"error": "directory_user_local_action_disabled"}, http.StatusForbidden, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	if role == "User" {
+		var adminCount int64
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM engine.users WHERE LOWER(role)='admin'").Scan(&adminCount); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		var currentRole sql.NullString
+		if err := tx.QueryRowContext(ctx, "SELECT LOWER(role) FROM engine.users WHERE LOWER(username)=LOWER($1)", usernameNorm).Scan(&currentRole); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, http.StatusInternalServerError, err
+		}
+		if strings.EqualFold(nullString(currentRole), "admin") && adminCount <= 1 {
+			return map[string]any{"error": "cannot demote the last admin"}, http.StatusBadRequest, nil
+		}
+	}
+
+	result, err := tx.ExecContext(ctx, "UPDATE engine.users SET role=$1, updated_at=$2 WHERE LOWER(username)=LOWER($3)", role, time.Now().Unix(), usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if updated == 0 {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) userAuthSource(ctx context.Context, username string) (string, bool, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return "", false, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	var source sql.NullString
+	err = conn.QueryRowContext(ctx, "SELECT COALESCE(auth_source, 'local') FROM engine.users WHERE LOWER(username)=LOWER($1)", username).Scan(&source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	normalized := strings.ToLower(strings.TrimSpace(nullString(source)))
+	if normalized == "" {
+		normalized = "local"
+	}
+	return normalized, true, nil
 }
 
 func userPayload(row userRow) map[string]any {
