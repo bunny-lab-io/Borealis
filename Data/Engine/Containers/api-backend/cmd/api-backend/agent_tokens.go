@@ -60,6 +60,9 @@ type agentWorkerRoute struct {
 	WorkerGUID      string
 	SiteID          int64
 	RoutePathPrefix string
+	UpstreamScheme  string
+	UpstreamHost    string
+	UpstreamPort    int64
 	Generation      int64
 }
 
@@ -317,7 +320,7 @@ func fetchAgentWorkerRoute(ctx context.Context, conn *sql.Conn, siteID int64) (*
 	err := conn.QueryRowContext(
 		ctx,
 		`
-		SELECT worker_guid, site_id, route_path_prefix, generation
+		SELECT worker_guid, site_id, route_path_prefix, upstream_scheme, upstream_host, upstream_port, generation
 		  FROM engine.job_scheduler_worker_routes
 		 WHERE site_id=$1
 		   AND status='active'
@@ -325,7 +328,7 @@ func fetchAgentWorkerRoute(ctx context.Context, conn *sql.Conn, siteID int64) (*
 		 LIMIT 1
 		`,
 		siteID,
-	).Scan(&route.WorkerGUID, &route.SiteID, &route.RoutePathPrefix, &route.Generation)
+	).Scan(&route.WorkerGUID, &route.SiteID, &route.RoutePathPrefix, &route.UpstreamScheme, &route.UpstreamHost, &route.UpstreamPort, &route.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

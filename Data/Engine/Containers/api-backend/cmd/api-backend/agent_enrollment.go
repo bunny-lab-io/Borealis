@@ -1106,7 +1106,7 @@ func fetchAgentWorkerRouteTx(ctx context.Context, tx *sql.Tx, siteID int64) (*ag
 	err := tx.QueryRowContext(
 		ctx,
 		`
-		SELECT worker_guid, site_id, route_path_prefix, generation
+		SELECT worker_guid, site_id, route_path_prefix, upstream_scheme, upstream_host, upstream_port, generation
 		  FROM engine.job_scheduler_worker_routes
 		 WHERE site_id=$1
 		   AND status='active'
@@ -1114,7 +1114,7 @@ func fetchAgentWorkerRouteTx(ctx context.Context, tx *sql.Tx, siteID int64) (*ag
 		 LIMIT 1
 		`,
 		siteID,
-	).Scan(&route.WorkerGUID, &route.SiteID, &route.RoutePathPrefix, &route.Generation)
+	).Scan(&route.WorkerGUID, &route.SiteID, &route.RoutePathPrefix, &route.UpstreamScheme, &route.UpstreamHost, &route.UpstreamPort, &route.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
