@@ -10,9 +10,9 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-02 |
-| Latest implementation commit | Current branch head (`Go server time native routes`). |
-| Current state | Worker-first migration is feature-complete through `M14`, `M15` selected api-backend as the rewrite target, `M16` bootstrapped a Go api-backend gateway, and `M17` has started native domain porting. The Go binary owns public loopback port `5000`, supervises the Python compatibility backend on `127.0.0.1:5001`, serves Go-native health/status plus read-only server time endpoints, propagates host `TZ` into Engine containers, and reverse-proxies unported routes. |
-| Next safe step | Continue `M17`: port auth/session/token primitives into Go, then continue reduced API domains one slice at a time while keeping live Agent-channel paths worker-owned and keeping Python fallback until route parity is proven. |
+| Latest implementation commit | Current branch head (`Go native auth/me slice`). |
+| Current state | Worker-first migration is feature-complete through `M14`, `M15` selected api-backend as the rewrite target, `M16` bootstrapped a Go api-backend gateway, and `M17` has started native domain porting. The Go binary owns public loopback port `5000`, supervises the Python compatibility backend on `127.0.0.1:5001`, serves Go-native health/status, read-only server time endpoints, and `/api/auth/me`, verifies Borealis session tokens in Go, propagates host `TZ` into Engine containers, and reverse-proxies unported routes. |
+| Next safe step | Continue `M17`: port the next reduced control-plane slice, preferably enrollment/token refresh or device inventory reads, while keeping login/passkey/auth mutations on Python fallback until native parity is implemented and keeping live Agent-channel paths worker-owned. |
 
 ## Tracker Rules
 
@@ -282,7 +282,7 @@ Track the worker-first migration that moves remote-operation ownership out of `a
 | Out Of Scope | Moving live Agent-channel paths back into api-backend, rewriting site-worker runtime, changing Agent protocol without a domain-specific need, or deleting Python fallback before route parity. |
 | Done When | Each ported domain has Go handlers, matching API behavior, focused tests, smoke validation, and Python fallback is bypassed only for that domain. Final completion requires all reduced api-backend routes to be Go-native or intentionally retained with documented reason. |
 | Validation | Go tests per domain, focused Engine domain tests where practical, auth/RBAC denial checks, runtime smoke after redeploy, `git diff --check`. |
-| Handoff Note | Active. First low-risk read-only server time slice is Go-native: `/api/server/time` and `/api/server/timezones` are served by Go, while operator session validation delegates to legacy `/api/auth/me` until Go owns auth/session token verification. Continue with auth/session primitives before mutation-heavy device/admin/scheduler routes. Keep Python compatibility backend running until domain parity is proven. |
+| Handoff Note | Active. First server/admin slice is Go-native: `/api/server/time` and `/api/server/timezones` are served by Go. Operator session-token verification and `/api/auth/me` are now Go-native using the existing Borealis `borealis_auth` itsdangerous token format plus PostgreSQL operator revalidation. Login, logout, MFA, passkeys, user/admin mutations, and unported domains still proxy to Python fallback. Keep Python compatibility backend running until domain parity is proven. |
 
 ### M14 Current Surface Inventory
 
@@ -340,6 +340,7 @@ Readiness verdict:
 
 | Date | Milestone | Work performed | Validation | Evidence |
 | --- | --- | --- | --- | --- |
+| 2026-06-02 | `M17` | Ported Borealis session-token verification and `/api/auth/me` into Go. Go api-backend now validates existing `borealis_auth` itsdangerous tokens, revalidates operators against PostgreSQL, returns the legacy `/api/auth/me` profile shape, and uses native auth/RBAC for Go-owned server time routes. Removed Server Info's WebUI timezone mutation control so timezone remains host-managed through Linux CLI plus Engine redeploy. | `/opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./...` under `Data/Engine/Containers/api-backend` passed. Runtime deploy/smoke pending for this row until commit and Engine redeploy. | Go tests include fixed Python-generated itsdangerous token fixtures, compressed token compatibility, `/api/auth/me` profile response, unauthenticated time route denial, admin-only timezone route denial, and native server time payload. |
 | 2026-06-02 | `M17` | Fixed container timezone drift after Server Info showed `Etc/UTC` on a host configured for `America/Denver`. Engine deploy now detects the Linux host timezone with `timedatectl`/`/etc/localtime`, writes `BOREALIS_ENGINE_HOST_TIMEZONE` and `TZ` into runtime env, and Go/Python server-time helpers prefer that host timezone. Documentation now states that containerized Engine deployments do not mutate host timezone from WebUI; operators change host timezone from the Linux shell and redeploy. | `bash -n Engine.sh`; `python3 -m py_compile Data/Engine/Containers/api-backend/data/services/API/server/info.py`; `/opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./...` under `Data/Engine/Containers/api-backend`; `sudo bash Engine.sh deploy prod`; internal `curl http://127.0.0.1:5000/health`; Docker health inspection. | Runtime env contains `BOREALIS_ENGINE_HOST_TIMEZONE=America/Denver` and `TZ=America/Denver`; api-backend and job-scheduler containers report `MDT -0600`; api-backend, job-scheduler, WebUI, Traefik, PostgreSQL, WireGuard, and Guacamole containers reached healthy/running state. |
 | 2026-06-02 | `M17` | Ported the first read-only server/admin slice into Go. Added native `/api/server/time` and `/api/server/timezones` handlers, Python-compatible time serialization, timezone discovery, method/RBAC denial handling, and legacy `/api/auth/me` delegated operator validation as a transitional compatibility layer. Added api-backend version-hash input so Engine rebuilds the image when the Go binary embedded version changes. `POST /api/server/timezone` and unported routes still proxy to Python. | `/opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./...` under `Data/Engine/Containers/api-backend`; `bash -n Engine.sh`; `bash Data/Engine/Containers/api-backend/build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; `sudo bash Engine.sh --service api-backend rebuild prod`; internal `curl http://127.0.0.1:5000/health`; public `curl -k https://borealis.bunny-lab.io/api/system/go-backend/status`; public unauthenticated `/api/server/time` and `/api/server/timezones` returned normalized `401` through Go; api-backend Docker health reached healthy. | Go gateway running in `borealis-engine-api-backend`; `/health` reports `backend=go`, current branch version, and `legacy.healthy=true`; native time routes include `X-Borealis-Api-Backend: go` and no longer proxy to Python after auth validation. |
 | 2026-06-02 | `M15`/`M16` | Operator selected api-backend Go rewrite. Added Go api-backend module, binary build script, container entrypoint handoff, Python fallback bind override, Dockerfile binary copy, Engine deploy prebuild hook, Go-native health/status routes, reverse proxy to Python compatibility backend, and focused Go unit tests. | `bash -n` for `Engine.sh`, api-backend build script, and entrypoint; `go test ./...` under `Data/Engine/Containers/api-backend`; `sudo bash Engine.sh deploy prod`; internal `curl http://127.0.0.1:5000/health`; public `curl -k https://borealis.bunny-lab.io/api/system/go-backend/status`; proxied public authenticated route returned `401` with `X-Borealis-Api-Backend: go`; Docker health for api-backend and job-scheduler healthy. | Go gateway running in `borealis-engine-api-backend` as image `borealis-engine/api-backend:sha-f0ad256598f5`; Python compatibility backend supervised on `127.0.0.1:5001`; `/health` reports `backend=go` and `legacy.healthy=true`. |
@@ -449,12 +450,12 @@ Readiness verdict:
 - M14 complete: reduced api-backend surface and worker-owned exclusions are documented.
 - M15 complete: operator selected api-backend Go rewrite; site-worker modernization remains a separate future track after source/package split.
 - M16 complete: Go api-backend gateway owns port `5000`, supervises Python compatibility backend on `127.0.0.1:5001`, serves Go-native health/status, and proxies unported routes.
-- M17 active: Go-native server time endpoints are live; continue porting reduced api-backend domains behind the gateway while keeping live Agent-channel paths worker-owned.
+- M17 active: Go-native server time endpoints and `/api/auth/me` are live; Go validates Borealis session tokens for Go-owned routes while unported auth mutations and other domains stay behind Python fallback.
 
 ## Remaining Work
 
 - If operator wants device-level concurrency instead of work-item concurrency, create a new follow-up design item outside this migration path: shared Ansible would need an explicit forks/host-fan-out policy because current site-worker slots intentionally gate work items, not hosts inside a shared Ansible process.
-- Continue `M17` by porting reduced api-backend domains into Go in small slices. Recommended order: auth/session/token primitives, enrollment/token refresh, device inventory reads, admin/server mutation endpoints, automation/scheduler/workflow/watchdog domains.
+- Continue `M17` by porting reduced api-backend domains into Go in small slices. Recommended next order: enrollment/token refresh, device inventory reads, remaining auth/account mutations, admin/server mutation endpoints, automation/scheduler/workflow/watchdog domains.
 - Keep Python compatibility backend until all reduced api-backend routes have native Go parity or an explicit retained-Python exception.
 - Keep site-worker modernization separate; if selected later, split shared `Data.Engine.services` modules and worker-only packaging before rewriting worker runtime.
 
@@ -611,7 +612,8 @@ Completed M15/M16 state:
 - Python compatibility backend is supervised by Go and listens on `127.0.0.1:5001` via `BOREALIS_ENGINE_HOST` / `BOREALIS_ENGINE_PORT`.
 - Go-native `/health` returns backend `go` and requires the Python fallback to be healthy.
 - Go-native `/api/system/go-backend/status` returns gateway and fallback status.
-- Go-native `/api/server/time` and `/api/server/timezones` return read-only server time data after delegated operator auth/RBAC validation through legacy `/api/auth/me`.
+- Go-native `/api/server/time` and `/api/server/timezones` return read-only server time data after native Go token verification and operator RBAC checks.
+- Go-native `/api/auth/me` validates the existing `borealis_auth` token format and revalidates operators against PostgreSQL; login/logout/MFA/passkey/user mutations still proxy to Python fallback.
 - Engine deploy writes host timezone into `BOREALIS_ENGINE_HOST_TIMEZONE` and `TZ`; containerized deployments leave host timezone changes to Linux CLI plus redeploy.
 - Unported routes reverse-proxy to Python fallback and include response header `X-Borealis-Api-Backend: go`.
 - M16 validation passed: Go tests, shell syntax checks, Engine deploy, internal/public smoke, proxied route smoke, and container health checks.
@@ -621,7 +623,7 @@ Next work:
 2. Port reduced api-backend domains into Go behind the gateway, one domain slice at a time.
 3. Keep live Agent paths worker-owned; do not reintroduce api-backend Agent Socket.IO dispatch.
 4. Keep Python fallback until route parity is proven for each ported domain.
-5. Continue with auth/session/token primitives before mutation-heavy device/admin/scheduler routes.
+5. Continue with enrollment/token refresh or device inventory reads before mutation-heavy admin/scheduler routes.
 
 Validation constraints from prior session:
 - Static checks passed before handoff: bash -n Engine.sh, py_compile for server/info.py, docker compose config using Data/Engine/Containers/compose.env.example, git diff --check.

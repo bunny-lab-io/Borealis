@@ -28,9 +28,16 @@ type gatewayConfig struct {
 	LegacyHost         string
 	LegacyPort         string
 	LegacyURL          *url.URL
+	DatabaseURL        string
+	DBSSLMode          string
+	DBConnectTimeout   time.Duration
+	DBMaxOpenConns     int
+	DBMaxIdleConns     int
+	EngineSecretPath   string
 	LegacyReadyTimeout time.Duration
 	HealthTimeout      time.Duration
 	AuthTimeout        time.Duration
+	AuthTokenTTL       time.Duration
 	ShutdownTimeout    time.Duration
 }
 
@@ -72,11 +79,19 @@ func main() {
 		log.Fatalf("Python compatibility backend did not become healthy: %v", err)
 	}
 
+	auth, closeAuth, err := newAuthService(cfg)
+	if err != nil {
+		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
+		log.Fatalf("failed to initialise Go auth service: %v", err)
+	}
+	defer closeAuth()
+
 	proxy := newLegacyProxy(cfg)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg, state))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
-	registerServerTimeRoutes(mux, cfg)
+	registerAuthRoutes(mux, auth)
+	registerServerTimeRoutes(mux, auth)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
@@ -157,9 +172,16 @@ func loadConfig() (gatewayConfig, error) {
 		LegacyHost:         legacyHost,
 		LegacyPort:         legacyPort,
 		LegacyURL:          legacyURL,
+		DatabaseURL:        envDefault("BOREALIS_DATABASE_URL", ""),
+		DBSSLMode:          envDefault("BOREALIS_DB_SSLMODE", "prefer"),
+		DBConnectTimeout:   envDurationSeconds("BOREALIS_DB_CONNECT_TIMEOUT", 15*time.Second),
+		DBMaxOpenConns:     envInt("BOREALIS_GO_API_DB_MAX_OPEN_CONNS", 8, 1, 100),
+		DBMaxIdleConns:     envInt("BOREALIS_GO_API_DB_MAX_IDLE_CONNS", 4, 0, 100),
+		EngineSecretPath:   envDefault("BOREALIS_ENGINE_SECRET_PATH", "/opt/Borealis/Engine/Services/api-backend/secrets/engine_secret.txt"),
 		LegacyReadyTimeout: envDurationSeconds("BOREALIS_GO_API_LEGACY_READY_TIMEOUT_SECONDS", 120*time.Second),
 		HealthTimeout:      envDurationSeconds("BOREALIS_GO_API_HEALTH_TIMEOUT_SECONDS", 2*time.Second),
 		AuthTimeout:        envDurationSeconds("BOREALIS_GO_API_AUTH_TIMEOUT_SECONDS", 3*time.Second),
+		AuthTokenTTL:       envDurationSeconds("BOREALIS_TOKEN_TTL_SECONDS", 30*24*time.Hour),
 		ShutdownTimeout:    envDurationSeconds("BOREALIS_GO_API_SHUTDOWN_TIMEOUT_SECONDS", 20*time.Second),
 	}, nil
 }
@@ -182,6 +204,24 @@ func envDurationSeconds(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+func envInt(name string, fallback, minimum, maximum int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	if parsed < minimum {
+		return minimum
+	}
+	if maximum > 0 && parsed > maximum {
+		return maximum
+	}
+	return parsed
 }
 
 func startLegacyBackend(cfg gatewayConfig, state *legacyState) (*exec.Cmd, error) {

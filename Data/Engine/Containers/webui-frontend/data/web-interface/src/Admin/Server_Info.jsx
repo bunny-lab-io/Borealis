@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData, useNavigate } from "react-router-dom";
 import {
-  Autocomplete,
   Box,
   Button,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -783,13 +781,6 @@ export default function ServerInfo() {
   const [actionBusyKey, setActionBusyKey] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
   const [boostPollingUntil, setBoostPollingUntil] = useState(0);
-  const [timezoneDialogOpen, setTimezoneDialogOpen] = useState(false);
-  const [timezoneOptions, setTimezoneOptions] = useState([]);
-  const [timezoneOptionsLoaded, setTimezoneOptionsLoaded] = useState(false);
-  const [timezoneLoading, setTimezoneLoading] = useState(false);
-  const [timezoneSaving, setTimezoneSaving] = useState(false);
-  const [timezoneError, setTimezoneError] = useState("");
-  const [selectedTimezone, setSelectedTimezone] = useState("");
   const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
   const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
   const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
@@ -837,8 +828,6 @@ export default function ServerInfo() {
   }, []);
 
   const fetchTimezoneOptions = useCallback(async () => {
-    setTimezoneLoading(true);
-    setTimezoneError("");
     try {
       const response = await fetch("/api/server/timezones", {
         credentials: "include",
@@ -848,8 +837,6 @@ export default function ServerInfo() {
       if (!response.ok) {
         throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       }
-      setTimezoneOptions(Array.isArray(payload?.timezones) ? payload.timezones : []);
-      setTimezoneOptionsLoaded(true);
       const currentTimezone = String(payload?.current_timezone || "").trim();
       const changeSupported =
         typeof payload?.change_supported === "boolean" ? payload.change_supported : null;
@@ -857,17 +844,8 @@ export default function ServerInfo() {
         currentTimezone,
         changeSupported,
       });
-      if (currentTimezone) {
-        setSelectedTimezone(currentTimezone);
-      }
-    } catch (requestError) {
-      setTimezoneError(
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not load server timezones."
-      );
-    } finally {
-      setTimezoneLoading(false);
+    } catch {
+      /* timezone metadata fallback is best-effort */
     }
   }, []);
 
@@ -952,13 +930,6 @@ export default function ServerInfo() {
     fetchTimezoneOptions();
     fetchServerTimeSnapshot();
   }, [fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin]);
-
-  useEffect(() => {
-    if (!timezoneDialogOpen) return;
-    if (!timezoneOptionsLoaded) {
-      fetchTimezoneOptions();
-    }
-  }, [fetchTimezoneOptions, timezoneDialogOpen, timezoneOptionsLoaded]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -1048,12 +1019,6 @@ export default function ServerInfo() {
         "Recover the Borealis WireGuard listener now? This is intended for live tunnel transport issues while operator sessions are active.",
     });
   }, []);
-
-  const closeTimezoneDialog = useCallback(() => {
-    if (timezoneSaving) return;
-    setTimezoneDialogOpen(false);
-    setTimezoneError("");
-  }, [timezoneSaving]);
 
   const openReleaseChannelsDialog = useCallback(() => {
     const currentSettings = overview?.agent_release_channels || {};
@@ -1153,51 +1118,6 @@ export default function ServerInfo() {
       setReleaseChannelsRefreshing(false);
     }
   }, [fetchOverview, sendScopedNotification]);
-
-  const applyTimezoneChange = useCallback(async () => {
-    const timezoneId = String(selectedTimezone || "").trim();
-    if (!timezoneId) {
-      setTimezoneError("Choose a timezone before applying the change.");
-      return;
-    }
-    setTimezoneSaving(true);
-    setTimezoneError("");
-    try {
-      const response = await fetch("/api/server/timezone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ timezone: timezoneId }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setTimezoneDialogOpen(false);
-      await sendScopedNotification({
-        title: "Timezone Updated",
-        message: `Server timezone changed to ${timezoneId}.`,
-        icon: "schedule",
-        variant: "info",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not change the server timezone.";
-      setTimezoneError(message);
-      await sendScopedNotification({
-        title: "Timezone Update Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setTimezoneSaving(false);
-    }
-  }, [fetchOverview, selectedTimezone, sendScopedNotification]);
 
   const executeAction = useCallback(async () => {
     if (!confirmAction) return;
@@ -1315,12 +1235,6 @@ export default function ServerInfo() {
     effectiveTimezoneId || host?.timezone || serverTimeSnapshot?.timezone || ""
   ).trim();
   const effectiveServerTime = host?.server_time || serverTimeSnapshot || {};
-  const timezoneChangeSupported =
-    typeof host?.timezone_change_supported === "boolean"
-      ? host.timezone_change_supported
-      : typeof timezoneMeta.changeSupported === "boolean"
-      ? timezoneMeta.changeSupported
-      : true;
   const rawClockValue = formatServerClockDisplay(effectiveServerTime, effectiveTimezoneId);
   const clockValue =
     rawClockValue === "Unavailable" && (loading || serverTimeLoading) ? "Loading..." : rawClockValue;
@@ -1328,12 +1242,6 @@ export default function ServerInfo() {
     effectiveTimezoneLabel || (loading || serverTimeLoading ? "Loading..." : "Unavailable");
   const loadAverageValue = formatLoadAverageValue(resources?.load_average);
   const loadAverageCaption = `1, 5, and 15 minute averages · CPU Count ${resources?.cpu_count || 0}`;
-
-  const openTimezoneDialog = useCallback(() => {
-    setTimezoneError("");
-    setSelectedTimezone(effectiveTimezoneId);
-    setTimezoneDialogOpen(true);
-  }, [effectiveTimezoneId]);
 
   const gridDefaultColDef = useMemo(
     () => ({
@@ -1467,14 +1375,7 @@ export default function ServerInfo() {
         name: "System Time",
         value: clockValue,
         details: timezoneDisplayValue,
-        actions: [
-          {
-            id: "change_timezone",
-            label: timezoneSaving ? "Applying..." : "Change Timezone",
-            disabled: !timezoneChangeSupported || timezoneSaving,
-            onClick: openTimezoneDialog,
-          },
-        ],
+        actions: [],
       },
       {
         id: "cpu_load_average",
@@ -1499,14 +1400,11 @@ export default function ServerInfo() {
       loadAverageCaption,
       loadAverageValue,
       openReleaseChannelsDialog,
-      openTimezoneDialog,
       releaseChannelsRefreshing,
       releaseChannelsSaving,
       siteWorkerSettings,
       stableChannel,
-      timezoneChangeSupported,
       timezoneDisplayValue,
-      timezoneSaving,
       unstableChannel,
       workerPayload?.active_count,
       workerPayload?.manager_active_count,
@@ -1820,133 +1718,6 @@ export default function ServerInfo() {
           />
         </Box>
       </PageBodyFrame>
-
-      <Dialog open={timezoneDialogOpen} onClose={closeTimezoneDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock
-            title="Change Server Timezone"
-            subtitle="Update the timezone used by the entire Borealis engine host without signing into SSH."
-          />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis will apply the selected timezone to the server itself. This affects the clock shown in the WebUI and any server-local time displays.
-          </Typography>
-          <Box sx={{ mt: 2 }}>
-            <Autocomplete
-              options={timezoneOptions}
-              loading={timezoneLoading}
-              value={selectedTimezone || null}
-              onChange={(_event, value) => {
-                setSelectedTimezone(String(value || ""));
-                setTimezoneError("");
-              }}
-              onInputChange={() => {
-                if (timezoneError) {
-                  setTimezoneError("");
-                }
-              }}
-              slotProps={{
-                popper: {
-                  sx: {
-                    zIndex: 1600,
-                    "& .MuiAutocomplete-paper": {
-                      mt: 0.75,
-                      borderRadius: 2.5,
-                      background: DIALOG_MAGIC_UI.panelBg,
-                      backdropFilter: "blur(18px)",
-                      border: `1px solid ${DIALOG_MAGIC_UI.panelBorderStrong}`,
-                      boxShadow: DIALOG_MAGIC_UI.glow,
-                      color: DIALOG_MAGIC_UI.textBright,
-                      overflow: "hidden",
-                    },
-                    "& .MuiAutocomplete-listbox": {
-                      py: 0.6,
-                      maxHeight: 360,
-                    },
-                    "& .MuiAutocomplete-option": {
-                      minHeight: 40,
-                      px: 1.6,
-                      py: 0.75,
-                      fontSize: "0.92rem",
-                      lineHeight: 1.35,
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "transparent",
-                      transition: "background 160ms ease, color 160ms ease",
-                    },
-                    "& .MuiAutocomplete-option.Mui-focused": {
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                    "& .MuiAutocomplete-option[aria-selected='true']": {
-                      background: "rgba(192,132,252,0.14)",
-                      color: "#f2e8ff",
-                    },
-                    "& .MuiAutocomplete-option[aria-selected='true'].Mui-focused": {
-                      background: "rgba(192,132,252,0.2)",
-                    },
-                    "& .MuiAutocomplete-loading, & .MuiAutocomplete-noOptions": {
-                      color: DIALOG_MAGIC_UI.textMuted,
-                      fontSize: "0.88rem",
-                      px: 1.6,
-                      py: 1.25,
-                    },
-                  },
-                },
-                clearIndicator: {
-                  sx: {
-                    color: DIALOG_MAGIC_UI.textMuted,
-                    borderRadius: 999,
-                    "&:hover": {
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                  },
-                },
-                popupIndicator: {
-                  sx: {
-                    color: DIALOG_MAGIC_UI.textMuted,
-                    borderRadius: 999,
-                    "&:hover": {
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                  },
-                },
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Timezone"
-                  placeholder="Select a timezone"
-                  sx={DIALOG_INPUT_SX}
-                  InputProps={{
-                    ...params.InputProps,
-                    endAdornment: (
-                      <>
-                        {timezoneLoading ? <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA, mr: 1 }} /> : null}
-                        {params.InputProps.endAdornment}
-                      </>
-                    ),
-                  }}
-                />
-              )}
-            />
-          </Box>
-          {timezoneError ? (
-            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {timezoneError}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeTimezoneDialog} sx={DIALOG_BUTTON_SX} disabled={timezoneSaving}>
-            Cancel
-          </Button>
-          <Button onClick={applyTimezoneChange} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={timezoneSaving || timezoneLoading}>
-            {timezoneSaving ? "Applying..." : "Apply Timezone"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <Dialog open={releaseChannelsDialogOpen} onClose={closeReleaseChannelsDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>

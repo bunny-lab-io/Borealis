@@ -12,18 +12,18 @@ import (
 	"time"
 )
 
-func registerServerTimeRoutes(mux *http.ServeMux, cfg gatewayConfig) {
-	mux.HandleFunc("/api/server/time", serverTimeHandler(cfg))
-	mux.HandleFunc("/api/server/timezones", serverTimezonesHandler(cfg))
+func registerServerTimeRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("/api/server/time", serverTimeHandler(auth))
+	mux.HandleFunc("/api/server/timezones", serverTimezonesHandler(auth))
 }
 
-func serverTimeHandler(cfg gatewayConfig) http.HandlerFunc {
+func serverTimeHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
-		if _, failure := requireLegacyUser(r.Context(), cfg, r); failure != nil {
+		if _, failure := requireUser(r.Context(), auth, r); failure != nil {
 			failure.write(w)
 			return
 		}
@@ -34,13 +34,13 @@ func serverTimeHandler(cfg gatewayConfig) http.HandlerFunc {
 	}
 }
 
-func serverTimezonesHandler(cfg gatewayConfig) http.HandlerFunc {
+func serverTimezonesHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
-		if _, failure := requireLegacyAdmin(r.Context(), cfg, r); failure != nil {
+		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
 			failure.write(w)
 			return
 		}

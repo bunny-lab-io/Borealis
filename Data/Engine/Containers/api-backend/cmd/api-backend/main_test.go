@@ -11,6 +11,56 @@ import (
 	"time"
 )
 
+const testAuthToken = "eyJ1Ijoib3BlcmF0b3IiLCJyIjoiQWRtaW4iLCJ0cyI6MTcwMDAwMDAwMH0.ZVPxAA.T_nkD4f7np9iU74bxSttSuR_MoY"
+const testCompressedAuthToken = ".eJyrVipVslJKySxKTS7JL6rUKy1OLVLSUSoCCoZCmCXFSlaG5gZQUAsAhqAOag.ZVPxAA.-Zu3AisDtRhgTd33co1kzyxIQqw"
+
+type fakeOperatorStore struct {
+	profiles map[string]operatorProfile
+	err      error
+}
+
+func (s fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
+	if s.err != nil {
+		return operatorProfile{}, s.err
+	}
+	profile, ok := s.profiles[strings.ToLower(username)]
+	if !ok {
+		return operatorProfile{}, errOperatorNotFound
+	}
+	if profile.Role == "" {
+		profile.Role = fallbackRole
+	}
+	return profile, nil
+}
+
+func testAuthService(profile operatorProfile) *authService {
+	if profile.Username == "" {
+		profile.Username = "operator"
+	}
+	if profile.DisplayName == "" {
+		profile.DisplayName = profile.Username
+	}
+	if profile.Role == "" {
+		profile.Role = "Admin"
+	}
+	if profile.AuthSource == "" {
+		profile.AuthSource = "local"
+	}
+	return &authService{
+		verifier: &tokenVerifier{
+			secret: []byte("test-secret"),
+			maxAge: time.Hour,
+			now:    func() time.Time { return time.Unix(1700000010, 0) },
+		},
+		store: fakeOperatorStore{
+			profiles: map[string]operatorProfile{
+				strings.ToLower(profile.Username): profile,
+			},
+		},
+		timeout: time.Second,
+	}
+}
+
 func TestSetEnvReplacesExistingValue(t *testing.T) {
 	env := setEnv([]string{"PATH=/bin", "BOREALIS_ENGINE_PORT=5000"}, "BOREALIS_ENGINE_PORT", "5001")
 	got := strings.Join(env, "\n")
@@ -86,57 +136,64 @@ func TestHealthHandlerReportsUnhealthyLegacyBackend(t *testing.T) {
 	}
 }
 
-func TestRequireLegacyUserForwardsOperatorCredentials(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/auth/me" {
-			t.Fatalf("unexpected legacy path %s", r.URL.Path)
-		}
-		if got := r.Header.Get("Cookie"); got != "borealis_auth=cookie-token" {
-			t.Fatalf("expected auth cookie forwarded, got %q", got)
-		}
-		if got := r.Header.Get("Authorization"); got != "Bearer header-token" {
-			t.Fatalf("expected authorization header forwarded, got %q", got)
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"username": "operator",
-			"role":     "Admin",
-		})
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
+func TestTokenVerifierAcceptsItsDangerousFixture(t *testing.T) {
+	verifier := &tokenVerifier{
+		secret: []byte("test-secret"),
+		maxAge: time.Hour,
+		now:    func() time.Time { return time.Unix(1700000010, 0) },
 	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, AuthTimeout: time.Second}
-	request := httptest.NewRequest(http.MethodGet, "/api/server/time", nil)
-	request.Header.Set("Cookie", "borealis_auth=cookie-token")
-	request.Header.Set("Authorization", "Bearer header-token")
 
-	identity, failure := requireLegacyUser(context.Background(), cfg, request)
-	if failure != nil {
-		t.Fatalf("expected auth success, got failure %+v", failure)
+	identity, err := verifier.verify(testAuthToken)
+	if err != nil {
+		t.Fatalf("expected valid token, got %v", err)
 	}
 	if identity.Username != "operator" || identity.Role != "Admin" {
 		t.Fatalf("unexpected identity %+v", identity)
 	}
+
+	identity, err = verifier.verify(testCompressedAuthToken)
+	if err != nil {
+		t.Fatalf("expected compressed token valid, got %v", err)
+	}
+	if identity.Username != "directory.user" || identity.Role != "User" {
+		t.Fatalf("unexpected compressed identity %+v", identity)
+	}
+}
+
+func TestAuthMeHandlerReturnsOperatorProfile(t *testing.T) {
+	auth := testAuthService(operatorProfile{
+		Username:            "operator",
+		DisplayName:         "Operator",
+		Role:                "Admin",
+		MFAEnabled:          true,
+		PasskeyCount:        2,
+		AuthSource:          "local",
+		DirectoryProviderID: 0,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	authMeHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["username"] != "operator" || payload["role"] != "Admin" || payload["passkey_count"].(float64) != 2 {
+		t.Fatalf("unexpected /api/auth/me payload %+v", payload)
+	}
 }
 
 func TestServerTimeHandlerRequiresAuthentication(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, AuthTimeout: time.Second}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/time", nil)
-	serverTimeHandler(cfg).ServeHTTP(recorder, request)
+	serverTimeHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -147,23 +204,12 @@ func TestServerTimeHandlerRequiresAuthentication(t *testing.T) {
 }
 
 func TestServerTimezonesHandlerRequiresAdmin(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"username": "operator",
-			"role":     "User",
-		})
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, AuthTimeout: time.Second}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
-	serverTimezonesHandler(cfg).ServeHTTP(recorder, request)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -174,23 +220,12 @@ func TestServerTimezonesHandlerRequiresAdmin(t *testing.T) {
 }
 
 func TestServerTimeHandlerReturnsNativePayload(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"username": "operator",
-			"role":     "Admin",
-		})
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, AuthTimeout: time.Second}
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/time", nil)
-	serverTimeHandler(cfg).ServeHTTP(recorder, request)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverTimeHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
