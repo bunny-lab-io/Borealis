@@ -80,8 +80,10 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialise agent JWT signer: %w", err)
 	}
+	scriptSigner, _ := loadOrCreateScriptSigner()
 	verifier := &dpopVerifier{seenJTI: map[string]time.Time{}}
 	mux.HandleFunc("POST "+agentTokenRefreshRoutePath, agentTokenRefreshHandler(auth, signer, verifier))
+	registerAgentEnrollmentRoutes(mux, auth, signer, scriptSigner)
 	registerAgentHashRoutes(mux, auth, signer, verifier)
 	return nil
 }
