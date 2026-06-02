@@ -23,11 +23,27 @@ type fakeScheduledJobStore struct {
 	detailPayload map[string]any
 	detailStatus  int
 
+	toggleProfile operatorProfile
+	toggleJobID   int64
+	toggleEnabled bool
+	togglePayload map[string]any
+	toggleStatus  int
+
+	deleteProfile operatorProfile
+	deleteJobID   int64
+	deletePayload map[string]any
+	deleteStatus  int
+
 	runsProfile operatorProfile
 	runsJobID   int64
 	runsDays    int
 	runsPayload map[string]any
 	runsStatus  int
+
+	clearRunsProfile operatorProfile
+	clearRunsJobID   int64
+	clearRunsPayload map[string]any
+	clearRunsStatus  int
 
 	devicesProfile    operatorProfile
 	devicesJobID      int64
@@ -69,6 +85,27 @@ func (s *fakeScheduledJobStore) getScheduledJob(_ context.Context, profile opera
 	return s.detailPayload, status, nil
 }
 
+func (s *fakeScheduledJobStore) toggleScheduledJob(_ context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error) {
+	s.toggleProfile = profile
+	s.toggleJobID = jobID
+	s.toggleEnabled = enabled
+	status := s.toggleStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.togglePayload, status, nil
+}
+
+func (s *fakeScheduledJobStore) deleteScheduledJob(_ context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	s.deleteProfile = profile
+	s.deleteJobID = jobID
+	status := s.deleteStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.deletePayload, status, nil
+}
+
 func (s *fakeScheduledJobStore) listScheduledJobRuns(_ context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error) {
 	s.runsProfile = profile
 	s.runsJobID = jobID
@@ -78,6 +115,16 @@ func (s *fakeScheduledJobStore) listScheduledJobRuns(_ context.Context, profile 
 		status = http.StatusOK
 	}
 	return s.runsPayload, status, nil
+}
+
+func (s *fakeScheduledJobStore) clearScheduledJobRuns(_ context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	s.clearRunsProfile = profile
+	s.clearRunsJobID = jobID
+	status := s.clearRunsStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.clearRunsPayload, status, nil
 }
 
 func (s *fakeScheduledJobStore) listScheduledJobDevices(_ context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error) {
@@ -132,6 +179,13 @@ func scheduledJobRequest(method string, path string) *http.Request {
 	return request
 }
 
+func scheduledJobJSONRequest(method string, path string, body string) *http.Request {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.Header.Set("Content-Type", "application/json")
+	return request
+}
+
 func TestScheduledJobListHandlerPassesSiteFilter(t *testing.T) {
 	store := &fakeScheduledJobStore{
 		jobs: []map[string]any{{"id": int64(1), "name": "Job"}},
@@ -177,6 +231,45 @@ func TestScheduledJobRunsHandlerUsesDaysQuery(t *testing.T) {
 	}
 	if store.runsJobID != 7 || store.runsDays != 9 {
 		t.Fatalf("unexpected runs args job=%d days=%d", store.runsJobID, store.runsDays)
+	}
+}
+
+func TestScheduledJobToggleHandlerPassesEnabled(t *testing.T) {
+	store := &fakeScheduledJobStore{togglePayload: map[string]any{"job": map[string]any{"id": int64(7), "enabled": false}}}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobJSONRequest(http.MethodPost, "/api/scheduled_jobs/7/toggle", `{"enabled":false}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.toggleJobID != 7 || store.toggleEnabled {
+		t.Fatalf("unexpected toggle args job=%d enabled=%v", store.toggleJobID, store.toggleEnabled)
+	}
+}
+
+func TestScheduledJobDeleteHandlerRoutesToStore(t *testing.T) {
+	store := &fakeScheduledJobStore{deletePayload: map[string]any{"status": "ok"}}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobRequest(http.MethodDelete, "/api/scheduled_jobs/9"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deleteJobID != 9 {
+		t.Fatalf("unexpected delete job id %d", store.deleteJobID)
+	}
+}
+
+func TestScheduledJobRunsClearHandlerRoutesToStore(t *testing.T) {
+	store := &fakeScheduledJobStore{clearRunsPayload: map[string]any{"status": "ok", "cleared": int64(2), "kept_occurrence": int64(100)}}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobRequest(http.MethodDelete, "/api/scheduled_jobs/7/runs"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.clearRunsJobID != 7 {
+		t.Fatalf("unexpected clear job id %d", store.clearRunsJobID)
 	}
 }
 

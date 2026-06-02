@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const (
@@ -33,7 +35,10 @@ const (
 type scheduledJobStore interface {
 	listScheduledJobs(ctx context.Context, profile operatorProfile, filter scheduledJobListFilter) ([]map[string]any, error)
 	getScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
+	toggleScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error)
+	deleteScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	listScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error)
+	clearScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	listScheduledJobDevices(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error)
 	listOnboardingJobTargets(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error)
 }
@@ -140,8 +145,20 @@ func scheduledJobsSubtreeHandler(auth *authService, fallback http.Handler) http.
 			scheduledJobDetail(w, r, auth, parts[0])
 			return
 		}
+		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
+			scheduledJobDelete(w, r, auth, parts[0])
+			return
+		}
+		if len(parts) == 2 && parts[1] == "toggle" && r.Method == http.MethodPost {
+			scheduledJobToggle(w, r, auth, parts[0])
+			return
+		}
 		if len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet {
 			scheduledJobRuns(w, r, auth, parts[0])
+			return
+		}
+		if len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodDelete {
+			scheduledJobRunsClear(w, r, auth, parts[0])
 			return
 		}
 		if len(parts) == 2 && parts[1] == "devices" && r.Method == http.MethodGet {
@@ -201,6 +218,55 @@ func scheduledJobDetail(w http.ResponseWriter, r *http.Request, auth *authServic
 	writeJSON(w, status, payload)
 }
 
+func scheduledJobToggle(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	enabled := true
+	if raw, exists := body["enabled"]; exists {
+		enabled = boolFromAny(raw)
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.toggleScheduledJob(ctx, profile, jobID, enabled)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func scheduledJobDelete(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.deleteScheduledJob(ctx, profile, jobID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
 func scheduledJobRuns(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
 	profile, store, ok := scheduledJobRequestContext(w, r, auth)
 	if !ok {
@@ -221,6 +287,26 @@ func scheduledJobRuns(w http.ResponseWriter, r *http.Request, auth *authService,
 	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
 	defer cancel()
 	payload, status, err := store.listScheduledJobRuns(ctx, profile, jobID, int(days))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func scheduledJobRunsClear(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.clearScheduledJobRuns(ctx, profile, jobID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -375,6 +461,107 @@ func (s *postgresOperatorStore) getScheduledJob(ctx context.Context, profile ope
 	return map[string]any{"job": payload}, http.StatusOK, nil
 }
 
+func (s *postgresOperatorStore) toggleScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	job, found, err := loadScheduledJobVisibility(ctx, conn, jobID, allowedSiteIDs)
+	if err != nil || !found {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, err
+	}
+	if enabled {
+		warning, err := scheduledCredentialResetWarning(ctx, conn, job.CredentialID)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if warning != nil {
+			return map[string]any{
+				"error":   warning["warning_code"],
+				"message": warning["warning_message"],
+			}, http.StatusConflict, nil
+		}
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer rollbackQuietly(tx)
+
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE engine.scheduled_jobs SET enabled=$1, updated_at=$2 WHERE id=$3", enabledInt, time.Now().Unix(), jobID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if updated == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	rows, err := queryScheduledJobRows(ctx, conn, &jobID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if len(rows) == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	payload, err := scheduledJobPayload(ctx, conn, rows[0])
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"job": payload}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) deleteScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	if _, found, err := loadScheduledJobVisibility(ctx, conn, jobID, allowedSiteIDs); err != nil || !found {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer rollbackQuietly(tx)
+	result, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_jobs WHERE id=$1", jobID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if deleted == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
 func (s *postgresOperatorStore) listScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -419,6 +606,82 @@ func (s *postgresOperatorStore) listScheduledJobRuns(ctx context.Context, profil
 		return nil, http.StatusInternalServerError, err
 	}
 	return map[string]any{"runs": runs}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) clearScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	if _, found, err := loadScheduledJobVisibility(ctx, conn, jobID, allowedSiteIDs); err != nil || !found {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, err
+	}
+	var latest sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT MAX(scheduled_ts) FROM engine.scheduled_job_runs WHERE job_id=$1", jobID).Scan(&latest); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !latest.Valid {
+		return map[string]any{"status": "ok", "cleared": int64(0)}, http.StatusOK, nil
+	}
+	rows, err := conn.QueryContext(ctx, "SELECT id FROM engine.scheduled_job_runs WHERE job_id=$1 AND COALESCE(scheduled_ts, 0) < $2", jobID, latest.Int64)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	oldRunIDs := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return nil, http.StatusInternalServerError, err
+		}
+		oldRunIDs = append(oldRunIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if len(oldRunIDs) == 0 {
+		return map[string]any{"status": "ok", "cleared": int64(0), "kept_occurrence": latest.Int64}, http.StatusOK, nil
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer rollbackQuietly(tx)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)", pq.Array(oldRunIDs)); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_run_targets WHERE run_id = ANY($1)", pq.Array(oldRunIDs)); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_onboarding_target_events WHERE run_id = ANY($1)", pq.Array(oldRunIDs)); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_onboarding_targets WHERE run_id = ANY($1)", pq.Array(oldRunIDs)); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_runs WHERE id = ANY($1)", pq.Array(oldRunIDs))
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	cleared, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok", "cleared": cleared, "kept_occurrence": latest.Int64}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) listScheduledJobDevices(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error) {
@@ -652,6 +915,50 @@ func scheduledJobPayload(ctx context.Context, conn *sql.Conn, row scheduledJobRo
 		"warning_message":       "",
 	}
 	return payload, nil
+}
+
+func scheduledCredentialResetWarning(ctx context.Context, conn *sql.Conn, credentialID sql.NullInt64) (map[string]string, error) {
+	if !credentialID.Valid || credentialID.Int64 <= 0 {
+		return nil, nil
+	}
+	var metadata sql.NullString
+	err := conn.QueryRowContext(ctx, "SELECT metadata_json FROM engine.credentials WHERE id=$1", credentialID.Int64).Scan(&metadata)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !credentialSecretResetRequired(parseJSONObject(metadata)) {
+		return nil, nil
+	}
+	return map[string]string{
+		"warning_code":    "credential_reset_required",
+		"warning_message": "Stored credential secret material was reset. Edit and save the credential before enabling jobs that use it.",
+	}, nil
+}
+
+func credentialSecretResetRequired(metadata map[string]any) bool {
+	state := strings.ToLower(cleanText(metadata["aegis_secret_state"]))
+	if state != "reset_required" {
+		return false
+	}
+	lostFields, ok := metadata["aegis_lost_secret_fields"].([]any)
+	if !ok || len(lostFields) == 0 {
+		return false
+	}
+	allowed := map[string]bool{
+		"password":               true,
+		"private_key":            true,
+		"private_key_passphrase": true,
+		"become_password":        true,
+	}
+	for _, field := range lostFields {
+		if allowed[strings.ToLower(cleanText(field))] {
+			return true
+		}
+	}
+	return false
 }
 
 func loadScheduledJobSummary(ctx context.Context, conn *sql.Conn, jobID int64, targets []any, jobKind string) (*int64, string, map[string]int64, error) {
