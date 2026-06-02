@@ -37,6 +37,14 @@ type fakeOperatorStore struct {
 	deviceDetailErr     error
 	deviceDetailGUID    string
 	deviceDetailHost    string
+	deviceDescHost      string
+	deviceDescText      string
+	deviceMutation      map[string]any
+	deviceMutationCode  int
+	deviceMutationErr   error
+	releaseGUID         string
+	releaseChannel      any
+	releaseBranch       any
 	sites               []map[string]any
 	siteErr             error
 	siteProfile         operatorProfile
@@ -175,6 +183,51 @@ func (s *fakeOperatorStore) getDeviceDetails(_ context.Context, profile operator
 		status = http.StatusOK
 	}
 	return copyMap(s.deviceDetail), status, nil
+}
+
+func (s *fakeOperatorStore) setDeviceDescription(_ context.Context, profile operatorProfile, hostname string, description string) (map[string]any, int, error) {
+	s.deviceProfile = profile
+	s.deviceDescHost = hostname
+	s.deviceDescText = description
+	if s.deviceMutationErr != nil {
+		return nil, 0, s.deviceMutationErr
+	}
+	status := s.deviceMutationCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	payload := s.deviceMutation
+	if payload == nil {
+		payload = map[string]any{"status": "ok"}
+	}
+	return copyMap(payload), status, nil
+}
+
+func (s *fakeOperatorStore) setAgentReleaseChannelOverride(_ context.Context, guid string, channel any, branch any) (map[string]any, int, error) {
+	s.releaseGUID = guid
+	s.releaseChannel = channel
+	s.releaseBranch = branch
+	if s.deviceMutationErr != nil {
+		return nil, 0, s.deviceMutationErr
+	}
+	status := s.deviceMutationCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	payload := s.deviceMutation
+	if payload == nil {
+		payload = map[string]any{
+			"status":                          "ok",
+			"guid":                            guid,
+			"agent_release_channel":           cleanText(channel),
+			"agent_release_channel_effective": cleanText(channel),
+			"agent_release_channel_override":  cleanText(channel),
+			"agent_branch":                    cleanText(branch),
+			"agent_target_build_id":           "",
+			"agent_target_published_at":       "",
+		}
+	}
+	return copyMap(payload), status, nil
 }
 
 func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
@@ -1150,6 +1203,84 @@ func TestDeviceDetailsHandlerReturnsHostnameDetail(t *testing.T) {
 	}
 	if payload["hostname"] != "LAB-OPERATOR-01" {
 		t.Fatalf("unexpected detail payload %+v", payload)
+	}
+}
+
+func TestDeviceDescriptionHandlerUpdatesDescription(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/description/LAB-OPERATOR-01", strings.NewReader(`{"description":" Updated workstation "}`))
+	request.SetPathValue("hostname", "LAB-OPERATOR-01")
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceDescriptionHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceDescHost != "LAB-OPERATOR-01" || store.deviceDescText != "Updated workstation" {
+		t.Fatalf("unexpected description mutation host=%q description=%q", store.deviceDescHost, store.deviceDescText)
+	}
+	if store.deviceProfile.Username != "operator" {
+		t.Fatalf("expected operator profile, got %+v", store.deviceProfile)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected payload %+v", payload)
+	}
+}
+
+func TestDeviceAgentReleaseChannelHandlerUpdatesOverride(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/devices/"+guid+"/agent-release-channel", strings.NewReader(`{"channel":"source","branch":"feature/rewrite-api-backend-in-golang"}`))
+	request.SetPathValue("guid", guid)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceAgentReleaseChannelHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.releaseGUID != guid || store.releaseChannel != "source" || store.releaseBranch != "feature/rewrite-api-backend-in-golang" {
+		t.Fatalf("unexpected release mutation guid=%q channel=%#v branch=%#v", store.releaseGUID, store.releaseChannel, store.releaseBranch)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("unexpected payload %+v", payload)
+	}
+}
+
+func TestDeviceAgentReleaseChannelHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Technician"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/devices/2540DA38-E2B1-45B9-9113-BF7CF0E1778A/agent-release-channel", strings.NewReader(`{"channel":"stable"}`))
+	request.SetPathValue("guid", "2540DA38-E2B1-45B9-9113-BF7CF0E1778A")
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceAgentReleaseChannelHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestNormalizeAgentBranchMatchesPythonRules(t *testing.T) {
+	if got := normalizeAgentBranch("feature/rewrite-api-backend-in-golang"); got != "feature/rewrite-api-backend-in-golang" {
+		t.Fatalf("expected valid branch, got %q", got)
+	}
+	invalid := []any{"main branch", ".hidden", "main/", "main..next", "main//next", "main@{1", `main\next`, "https://repo"}
+	for _, value := range invalid {
+		if got := normalizeAgentBranch(value); got != "" {
+			t.Fatalf("expected %q to be rejected, got %q", value, got)
+		}
 	}
 }
 

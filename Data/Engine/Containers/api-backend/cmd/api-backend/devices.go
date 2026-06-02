@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type deviceListFilter struct {
@@ -24,6 +25,11 @@ type deviceListStore interface {
 type deviceDetailStore interface {
 	getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error)
 	getDeviceDetails(ctx context.Context, profile operatorProfile, hostname string) (map[string]any, int, error)
+}
+
+type deviceMutationStore interface {
+	setDeviceDescription(ctx context.Context, profile operatorProfile, hostname string, description string) (map[string]any, int, error)
+	setAgentReleaseChannelOverride(ctx context.Context, guid string, channel any, branch any) (map[string]any, int, error)
 }
 
 type deviceRow struct {
@@ -73,7 +79,9 @@ func registerDeviceRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
 	mux.HandleFunc("GET /api/devices/{guid}", deviceByGUIDHandler(auth))
+	mux.HandleFunc("PUT /api/devices/{guid}/agent-release-channel", deviceAgentReleaseChannelHandler(auth))
 	mux.HandleFunc("GET /api/device/details/{hostname}", deviceDetailsHandler(auth))
+	mux.HandleFunc("POST /api/device/description/{hostname}", deviceDescriptionHandler(auth))
 }
 
 func agentListHandler(auth *authService) http.HandlerFunc {
@@ -247,6 +255,65 @@ func deviceDetailsHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
+func deviceDescriptionHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			return
+		}
+		store, ok := auth.store.(deviceMutationStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_mutation_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		payload, status, err := store.setDeviceDescription(ctx, profile, cleanText(r.PathValue("hostname")), cleanText(body["description"]))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
+}
+
+func deviceAgentReleaseChannelHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			return
+		}
+		store, ok := auth.store.(deviceMutationStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_mutation_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		payload, status, err := store.setAgentReleaseChannelOverride(ctx, normalizeCanonicalGUID(r.PathValue("guid")), body["channel"], body["branch"])
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
+}
+
 func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operatorProfile, filter deviceListFilter) ([]map[string]any, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -398,6 +465,158 @@ func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operato
 		devices = append(devices, buildDevicePayload(row, now))
 	}
 	return devices, nil
+}
+
+func (s *postgresOperatorStore) setDeviceDescription(ctx context.Context, profile operatorProfile, hostname string, description string) (map[string]any, int, error) {
+	if hostname == "" {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, 0, err
+	}
+	if allowedSiteIDs != nil && len(allowedSiteIDs) == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rollbackQuietly(tx)
+
+	sqlText := "UPDATE engine.devices SET description = $1 WHERE hostname = $2"
+	params := []any{description, hostname}
+	if allowedSiteIDs != nil {
+		placeholders := make([]string, 0, len(allowedSiteIDs))
+		for _, siteID := range allowedSiteIDs {
+			params = append(params, siteID)
+			placeholders = append(placeholders, "$"+strconv.Itoa(len(params)))
+		}
+		sqlText += " AND EXISTS (SELECT 1 FROM engine.device_sites ds WHERE ds.device_hostname = engine.devices.hostname AND ds.site_id IN (" + strings.Join(placeholders, ",") + "))"
+	}
+	result, err := tx.ExecContext(ctx, sqlText, params...)
+	if err != nil {
+		return nil, 0, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) setAgentReleaseChannelOverride(ctx context.Context, guid string, channel any, branch any) (map[string]any, int, error) {
+	normalizedGUID := normalizeCanonicalGUID(guid)
+	if normalizedGUID == "" {
+		return map[string]any{"error": "invalid_guid"}, http.StatusBadRequest, nil
+	}
+	rawOverride := strings.ToLower(cleanText(channel))
+	cleanedOverride := rawOverride
+	switch rawOverride {
+	case "release", "releases":
+		cleanedOverride = "stable"
+	case "source", "branch", "repo", "repository":
+		cleanedOverride = "unstable"
+	}
+	if cleanedOverride != "" && cleanedOverride != "stable" && cleanedOverride != "unstable" {
+		return map[string]any{"error": "invalid_channel"}, http.StatusBadRequest, nil
+	}
+	branchSupplied := branch != nil
+	suppliedBranch := ""
+	if branchSupplied {
+		suppliedBranch = normalizeAgentBranch(branch)
+		if suppliedBranch == "" {
+			return map[string]any{"error": "invalid_branch"}, http.StatusBadRequest, nil
+		}
+	}
+
+	targetBranch := ""
+	targetBuildID := ""
+	targetPublishedAt := ""
+	effectiveChannel := ""
+	releaseChannel := ""
+	if suppliedBranch != "" {
+		cleanedOverride = "unstable"
+		effectiveChannel = "unstable"
+		releaseChannel = "unstable"
+		if rawOverride == "source" || rawOverride == "branch" || rawOverride == "repo" || rawOverride == "repository" {
+			releaseChannel = "source"
+		}
+		targetBranch = suppliedBranch
+	} else {
+		effectiveChannel, targetBuildID, targetPublishedAt = resolveAgentTarget(cleanedOverride)
+		settings := collectAgentReleaseChannelSettings()
+		if channels, ok := settings["channels"].(map[string]any); ok {
+			if target, ok := channels[effectiveChannel].(map[string]any); ok {
+				targetBranch = normalizeAgentBranch(target["branch"])
+			}
+		}
+		if strings.EqualFold(effectiveChannel, "unstable") {
+			releaseChannel = "unstable"
+		} else {
+			releaseChannel = "stable"
+		}
+	}
+	var storedOverride any
+	if cleanedOverride != "" {
+		storedOverride = cleanedOverride
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rollbackQuietly(tx)
+	result, err := tx.ExecContext(
+		ctx,
+		`
+		UPDATE engine.devices
+		   SET agent_release_channel_override = $1,
+		       agent_release_channel = $2,
+		       agent_branch = $3
+		 WHERE UPPER(guid) = $4
+		`,
+		storedOverride,
+		releaseChannel,
+		targetBranch,
+		normalizedGUID,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if affected, _ := result.RowsAffected(); affected == 0 {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	var hostname sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT hostname FROM engine.devices WHERE UPPER(guid) = $1 LIMIT 1", normalizedGUID).Scan(&hostname); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return map[string]any{
+		"status":                          "ok",
+		"guid":                            normalizedGUID,
+		"hostname":                        nullString(hostname),
+		"agent_release_channel_override":  storedOverride,
+		"agent_release_channel_effective": effectiveChannel,
+		"agent_release_channel":           releaseChannel,
+		"agent_branch":                    targetBranch,
+		"agent_target_build_id":           targetBuildID,
+		"agent_target_published_at":       targetPublishedAt,
+	}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error) {
@@ -831,6 +1050,33 @@ func normalizeServiceMode(value any, agentID string) string {
 	default:
 		return "currentuser"
 	}
+}
+
+func normalizeAgentBranch(value any) string {
+	text := cleanText(value)
+	if text == "" || len(text) > 160 {
+		return ""
+	}
+	for _, ch := range text {
+		if ch < 32 || unicode.IsSpace(ch) {
+			return ""
+		}
+		switch {
+		case ch >= 'A' && ch <= 'Z':
+		case ch >= 'a' && ch <= 'z':
+		case ch >= '0' && ch <= '9':
+		case ch == '.', ch == '_', ch == '/', ch == '-':
+		default:
+			return ""
+		}
+	}
+	if strings.HasPrefix(text, "/") || strings.HasPrefix(text, ".") || strings.HasSuffix(text, "/") || strings.HasSuffix(text, ".") {
+		return ""
+	}
+	if strings.Contains(text, "..") || strings.Contains(text, "//") || strings.Contains(text, "@{") || strings.Contains(text, "\\") || strings.Contains(text, ":") {
+		return ""
+	}
+	return text
 }
 
 func normalizeCanonicalGUID(value any) string {
