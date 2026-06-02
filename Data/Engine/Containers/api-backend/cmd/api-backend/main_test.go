@@ -25,6 +25,9 @@ type fakeOperatorStore struct {
 	deviceErr     error
 	deviceProfile operatorProfile
 	deviceFilter  deviceListFilter
+	sites         []map[string]any
+	siteErr       error
+	siteProfile   operatorProfile
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -67,6 +70,22 @@ func (s *fakeOperatorStore) listDevices(_ context.Context, profile operatorProfi
 		devices = append(devices, copyDevice)
 	}
 	return devices, nil
+}
+
+func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
+	s.siteProfile = profile
+	if s.siteErr != nil {
+		return nil, s.siteErr
+	}
+	sites := make([]map[string]any, 0, len(s.sites))
+	for _, site := range s.sites {
+		copySite := make(map[string]any, len(site))
+		for key, value := range site {
+			copySite[key] = value
+		}
+		sites = append(sites, copySite)
+	}
+	return sites, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -344,6 +363,59 @@ func TestDeviceListHandlerReturnsDevicesAndFilters(t *testing.T) {
 	}
 	if store.deviceProfile.Username != "operator" {
 		t.Fatalf("expected operator profile, got %+v", store.deviceProfile)
+	}
+}
+
+func TestSiteListHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
+	siteListHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
+	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.example.test/")
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.example.test")
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.sites = []map[string]any{
+		{
+			"id":                   1,
+			"name":                 "Bunny Lab",
+			"description":          "Lab site",
+			"device_count":         21,
+			"auto_approval_active": false,
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteListHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Sites          []map[string]any `json:"sites"`
+		PublicBaseURL  string           `json:"public_base_url"`
+		PublicHostname string           `json:"public_hostname"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Sites) != 1 || payload.Sites[0]["name"] != "Bunny Lab" {
+		t.Fatalf("unexpected sites payload %+v", payload)
+	}
+	if payload.PublicBaseURL != "https://borealis.example.test" || payload.PublicHostname != "borealis.example.test" {
+		t.Fatalf("unexpected public metadata %+v", payload)
+	}
+	if store.siteProfile.Username != "operator" {
+		t.Fatalf("expected operator profile, got %+v", store.siteProfile)
 	}
 }
 
