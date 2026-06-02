@@ -67,6 +67,12 @@ type fakeOperatorStore struct {
 	passkeys             []map[string]any
 	passkeyErr           error
 	passkeyUsername      string
+	passkeyUpdatedID     int64
+	passkeyUpdatedLabel  string
+	passkeyDeletedID     int64
+	passkeyMutation      map[string]any
+	passkeyMutationCode  int
+	passkeyMutationErr   error
 	directoryProviders   []map[string]any
 	directorySites       []map[string]any
 	directoryErr         error
@@ -370,6 +376,50 @@ func (s *fakeOperatorStore) listUserPasskeys(_ context.Context, username string)
 		passkeys = append(passkeys, copyPasskey)
 	}
 	return passkeys, nil
+}
+
+func (s *fakeOperatorStore) updateUserPasskeyLabel(_ context.Context, username string, passkeyID int64, label string) (map[string]any, int, error) {
+	s.passkeyUsername = username
+	s.passkeyUpdatedID = passkeyID
+	s.passkeyUpdatedLabel = label
+	if s.passkeyMutationErr != nil {
+		return nil, 0, s.passkeyMutationErr
+	}
+	status := s.passkeyMutationCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.passkeyMutation != nil {
+		return copyMap(s.passkeyMutation), status, nil
+	}
+	return map[string]any{
+		"status": "ok",
+		"passkey": map[string]any{
+			"id":    passkeyID,
+			"label": firstText(label, "Passkey"),
+		},
+		"passkey_count": int64(1),
+	}, status, nil
+}
+
+func (s *fakeOperatorStore) deleteUserPasskey(_ context.Context, username string, passkeyID int64) (map[string]any, int, error) {
+	s.passkeyUsername = username
+	s.passkeyDeletedID = passkeyID
+	if s.passkeyMutationErr != nil {
+		return nil, 0, s.passkeyMutationErr
+	}
+	status := s.passkeyMutationCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.passkeyMutation != nil {
+		return copyMap(s.passkeyMutation), status, nil
+	}
+	return map[string]any{
+		"status":        "ok",
+		"removed":       true,
+		"passkey_count": int64(0),
+	}, status, nil
 }
 
 func (s *fakeOperatorStore) listDirectoryProviders(_ context.Context) ([]map[string]any, error) {
@@ -950,6 +1000,66 @@ func TestAuthPasskeysHandlerReturnsCurrentUserPasskeys(t *testing.T) {
 	}
 	if store.passkeyUsername != "operator" {
 		t.Fatalf("expected operator passkey lookup, got %q", store.passkeyUsername)
+	}
+}
+
+func TestAuthPasskeyByIDHandlerUpdatesCurrentUserPasskey(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/auth/passkeys/42", strings.NewReader(`{"label":"Desk YubiKey"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	authPasskeyByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.passkeyUsername != "operator" || store.passkeyUpdatedID != 42 || store.passkeyUpdatedLabel != "Desk YubiKey" {
+		t.Fatalf("unexpected mutation username=%q id=%d label=%q", store.passkeyUsername, store.passkeyUpdatedID, store.passkeyUpdatedLabel)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	passkey, _ := payload["passkey"].(map[string]any)
+	if payload["status"] != "ok" || passkey["label"] != "Desk YubiKey" {
+		t.Fatalf("unexpected update payload %#v", payload)
+	}
+}
+
+func TestAuthPasskeyByIDHandlerRejectsLongLabel(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPatch, "/api/auth/passkeys/42", strings.NewReader(`{"label":"`+strings.Repeat("x", 81)+`"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	authPasskeyByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.passkeyUpdatedID != 0 {
+		t.Fatalf("long label should not hit store")
+	}
+}
+
+func TestAuthPasskeyByIDHandlerDeletesCurrentUserPasskey(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/auth/passkeys/43", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	authPasskeyByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.passkeyUsername != "operator" || store.passkeyDeletedID != 43 {
+		t.Fatalf("unexpected delete username=%q id=%d", store.passkeyUsername, store.passkeyDeletedID)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "ok" || payload["removed"] != true {
+		t.Fatalf("unexpected delete payload %#v", payload)
 	}
 }
 
