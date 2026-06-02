@@ -1117,6 +1117,7 @@ compute_service_hash() {
 import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -1169,6 +1170,16 @@ digest.update(
     f"context={entry.get('context')}\n"
     f"target={targets.get(mode) or ''}\n".encode("utf-8")
 )
+if service == "api-backend":
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        commit = ""
+    digest.update(f"api_backend_version={commit}\n".encode("utf-8"))
 for rel in sorted(files, key=lambda p: str(p)):
     path = root / rel
     digest.update(str(rel).encode("utf-8") + b"\0")
