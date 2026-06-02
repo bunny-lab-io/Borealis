@@ -84,6 +84,7 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	verifier := &dpopVerifier{seenJTI: map[string]time.Time{}}
 	mux.HandleFunc("POST "+agentTokenRefreshRoutePath, agentTokenRefreshHandler(auth, signer, verifier))
 	registerAgentEnrollmentRoutes(mux, auth, signer, scriptSigner)
+	registerAgentReadRoutes(mux, auth, signer, verifier)
 	registerAgentHashRoutes(mux, auth, signer, verifier)
 	return nil
 }
