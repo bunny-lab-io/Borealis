@@ -1906,6 +1906,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 	}{
 		{name: "device metadata update", handler: deviceMetadataFieldsHandler(auth, fallback), method: http.MethodPut, path: "/api/devices/device-1/metadata_fields/7"},
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
+		{name: "server overview update", handler: serverOverviewHandler(auth, fallback), method: http.MethodPost, path: "/api/server/overview"},
 		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
@@ -1919,8 +1920,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 7 {
-		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 8 {
+		t.Fatalf("expected 8 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -2062,6 +2063,66 @@ func TestServerWorkersHandlerReturnsPayload(t *testing.T) {
 	workers, ok := payload["workers"].([]any)
 	if !ok || len(workers) != 1 {
 		t.Fatalf("expected one worker, got %#v", payload["workers"])
+	}
+}
+
+func TestServerOverviewHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverOverviewHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"default_channel":"unstable","channels":{"unstable":{"channel":"unstable","build_id":"build-1"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.example.test")
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.example.test")
+	t.Setenv("BOREALIS_WEBUI_MODE", "prod")
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.serverWorkers = map[string]any{
+		"active_count": int64(1),
+		"workers":      []any{map[string]any{"worker_guid": "worker-1", "status": "running"}},
+	}
+	store.githubToken = map[string]any{"has_token": true, "reset_required": false, "reset_at": int64(0)}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverOverviewHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"host", "resources", "services", "wireguard", "public_edge", "security", "ansible_runner", "site_worker_settings", "agent_release_channels", "remote_desktop", "operator_session_count", "workers"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("expected overview key %q in %+v", key, payload)
+		}
+	}
+	host := payload["host"].(map[string]any)
+	if got := host["public_base_url"]; got != "https://borealis.example.test" {
+		t.Fatalf("expected public base url, got %#v", got)
+	}
+	channels := payload["agent_release_channels"].(map[string]any)
+	if got := channels["default_channel"]; got != "unstable" {
+		t.Fatalf("expected unstable default, got %#v", got)
+	}
+	workers := payload["workers"].(map[string]any)
+	if got := workers["active_count"]; got != float64(1) {
+		t.Fatalf("expected worker active count 1, got %#v", got)
 	}
 }
 
