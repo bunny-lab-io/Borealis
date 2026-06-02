@@ -93,8 +93,9 @@ func main() {
 	registerAuthRoutes(mux, auth)
 	registerServerTimeRoutes(mux, auth)
 	registerDeviceRoutes(mux, auth)
+	registerDeviceViewRoutes(mux, auth, proxy)
 	registerDeviceSearchRoutes(mux, auth)
-	registerSiteRoutes(mux, auth)
+	registerSiteRoutes(mux, auth, proxy)
 	mux.Handle("/", proxy)
 
 	server := &http.Server{
@@ -376,6 +377,14 @@ func writeMethodNotAllowed(w http.ResponseWriter, allowed string) {
 	writeJSON(w, http.StatusMethodNotAllowed, map[string]any{
 		"error": "method_not_allowed",
 	})
+}
+
+func proxyFallbackOrMethodNotAllowed(w http.ResponseWriter, r *http.Request, fallback http.Handler, allowed string) {
+	if fallback != nil {
+		fallback.ServeHTTP(w, r)
+		return
+	}
+	writeMethodNotAllowed(w, allowed)
 }
 
 func terminateLegacy(cmd *exec.Cmd, exited <-chan error, timeout time.Duration) error {

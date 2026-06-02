@@ -27,15 +27,15 @@ type siteRow struct {
 	AutoApproveUntil sql.NullInt64
 }
 
-func registerSiteRoutes(mux *http.ServeMux, auth *authService) {
-	mux.HandleFunc("GET /api/sites", siteListHandler(auth))
-	mux.HandleFunc("GET /api/sites/device_map", siteDeviceMapHandler(auth))
+func registerSiteRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+	mux.HandleFunc("/api/sites", siteListHandler(auth, fallback))
+	mux.HandleFunc("/api/sites/device_map", siteDeviceMapHandler(auth, fallback))
 }
 
-func siteListHandler(auth *authService) http.HandlerFunc {
+func siteListHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)
@@ -159,10 +159,10 @@ func (s *postgresOperatorStore) listSites(ctx context.Context, profile operatorP
 	return sites, nil
 }
 
-func siteDeviceMapHandler(auth *authService) http.HandlerFunc {
+func siteDeviceMapHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			writeMethodNotAllowed(w, http.MethodGet)
+			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)

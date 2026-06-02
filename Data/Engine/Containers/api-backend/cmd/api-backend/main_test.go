@@ -31,6 +31,10 @@ type fakeOperatorStore struct {
 	siteMap          map[string]map[string]any
 	siteMapErr       error
 	siteMapHostnames []string
+	views            []map[string]any
+	viewErr          error
+	viewByID         map[int64]map[string]any
+	viewIDSeen       int64
 }
 
 func (s *fakeOperatorStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -106,6 +110,37 @@ func (s *fakeOperatorStore) siteDeviceMap(_ context.Context, profile operatorPro
 		mapping[hostname] = copySite
 	}
 	return mapping, nil
+}
+
+func (s *fakeOperatorStore) listDeviceViews(_ context.Context) ([]map[string]any, error) {
+	if s.viewErr != nil {
+		return nil, s.viewErr
+	}
+	views := make([]map[string]any, 0, len(s.views))
+	for _, view := range s.views {
+		copyView := make(map[string]any, len(view))
+		for key, value := range view {
+			copyView[key] = value
+		}
+		views = append(views, copyView)
+	}
+	return views, nil
+}
+
+func (s *fakeOperatorStore) getDeviceView(_ context.Context, viewID int64) (map[string]any, bool, error) {
+	s.viewIDSeen = viewID
+	if s.viewErr != nil {
+		return nil, false, s.viewErr
+	}
+	view, ok := s.viewByID[viewID]
+	if !ok {
+		return nil, false, nil
+	}
+	copyView := make(map[string]any, len(view))
+	for key, value := range view {
+		copyView[key] = value
+	}
+	return copyView, true, nil
 }
 
 func testAuthService(profile operatorProfile) *authService {
@@ -391,7 +426,7 @@ func TestSiteListHandlerRequiresAuthentication(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
-	siteListHandler(auth).ServeHTTP(recorder, request)
+	siteListHandler(auth, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -415,7 +450,7 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	siteListHandler(auth).ServeHTTP(recorder, request)
+	siteListHandler(auth, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -451,7 +486,7 @@ func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites/device_map?hostnames=LAB-OPERATOR-01,,LAB-OPERATOR-01", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	siteDeviceMapHandler(auth).ServeHTTP(recorder, request)
+	siteDeviceMapHandler(auth, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -467,6 +502,100 @@ func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	}
 	if len(store.siteMapHostnames) != 1 || store.siteMapHostnames[0] != "LAB-OPERATOR-01" {
 		t.Fatalf("unexpected host filter %+v", store.siteMapHostnames)
+	}
+}
+
+func TestDeviceViewListHandlerReturnsViews(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.views = []map[string]any{
+		{
+			"id":         int64(7),
+			"name":       "Lab View",
+			"columns":    []any{"status", "hostname"},
+			"filters":    map[string]any{"site": "Bunny Lab"},
+			"created_at": int64(1700000000),
+			"updated_at": int64(1700000100),
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device_list_views", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Views []map[string]any `json:"views"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Views) != 1 || payload.Views[0]["name"] != "Lab View" {
+		t.Fatalf("unexpected views payload %+v", payload)
+	}
+}
+
+func TestDeviceViewGetHandlerReturnsViewOrNotFound(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.viewByID = map[int64]map[string]any{
+		7: {
+			"id":      int64(7),
+			"name":    "Lab View",
+			"columns": []any{"status"},
+			"filters": map[string]any{},
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device_list_views/7", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.viewIDSeen != 7 {
+		t.Fatalf("expected view id 7, got %d", store.viewIDSeen)
+	}
+
+	missing := httptest.NewRecorder()
+	missingRequest := httptest.NewRequest(http.MethodGet, "/api/device_list_views/8", nil)
+	missingRequest.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceViewGetHandler(auth, nil).ServeHTTP(missing, missingRequest)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+	fallbackHits := 0
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits++
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	for _, entry := range []struct {
+		name    string
+		handler http.HandlerFunc
+		method  string
+		path    string
+	}{
+		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
+		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
+		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(entry.method, entry.path, nil)
+		entry.handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusAccepted {
+			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
+		}
+	}
+	if fallbackHits != 3 {
+		t.Fatalf("expected 3 fallback hits, got %d", fallbackHits)
 	}
 }
 
