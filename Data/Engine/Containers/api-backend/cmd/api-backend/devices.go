@@ -65,7 +65,48 @@ type deviceRow struct {
 }
 
 func registerDeviceRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
+}
+
+func agentListHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":  "auth_unavailable",
+				"detail": err.Error(),
+			})
+			return
+		}
+		store, ok := auth.store.(deviceListStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent_list_unavailable"})
+			return
+		}
+
+		timeout := auth.timeout
+		if timeout <= 0 {
+			timeout = defaultAuthTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		devices, err := store.listDevices(ctx, profile, deviceListFilter{OnlyAgents: true})
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, buildAgentListPayload(devices, time.Now().Unix()))
+	}
 }
 
 func deviceListHandler(auth *authService) http.HandlerFunc {
@@ -382,6 +423,102 @@ func buildDevicePayload(row deviceRow, now int64) map[string]any {
 		"status":                         statusFromLastSeen(lastSeen, now),
 	}
 	return payload
+}
+
+func buildAgentListPayload(devices []map[string]any, now int64) map[string]any {
+	grouped := map[string]map[string]map[string]any{}
+	for _, record := range devices {
+		hostname := cleanText(record["hostname"])
+		if hostname == "" {
+			hostname = "unknown"
+		}
+		mode := normalizeServiceMode(record["service_mode"], cleanText(record["agent_id"]))
+		agentID := cleanText(record["agent_id"])
+		if mode != "currentuser" && strings.HasSuffix(strings.ToLower(agentID), "-script") {
+			continue
+		}
+		lastSeen := coerceInt64(record["last_seen"])
+		collectorActive := lastSeen > 0 && now-lastSeen < 130
+		status := cleanText(record["status"])
+		if status == "" {
+			if collectorActive {
+				status = "Online"
+			} else {
+				status = "Offline"
+			}
+		}
+		payload := map[string]any{
+			"hostname":            hostname,
+			"agent_hostname":      hostname,
+			"service_mode":        mode,
+			"collector_active":    collectorActive,
+			"collector_active_ts": lastSeen,
+			"last_seen":           lastSeen,
+			"status":              status,
+			"agent_id":            agentID,
+			"agent_guid":          normalizeGUID(record["agent_guid"]),
+			"agent_hash":          cleanText(record["agent_hash"]),
+			"connection_type":     cleanText(record["connection_type"]),
+			"connection_endpoint": cleanText(record["connection_endpoint"]),
+			"device_type":         cleanText(record["device_type"]),
+			"domain":              cleanText(record["domain"]),
+			"external_ip":         cleanText(record["external_ip"]),
+			"internal_ip":         cleanText(record["internal_ip"]),
+			"last_reboot":         cleanText(record["last_reboot"]),
+			"last_user":           cleanText(record["last_user"]),
+			"operating_system":    cleanText(record["operating_system"]),
+			"uptime":              coerceInt64(record["uptime"]),
+			"site_id":             record["site_id"],
+			"site_name":           cleanText(record["site_name"]),
+			"site_description":    cleanText(record["site_description"]),
+			"helper_contexts":     []any{},
+		}
+		bucket := grouped[hostname]
+		if bucket == nil {
+			bucket = map[string]map[string]any{}
+			grouped[hostname] = bucket
+		}
+		existing := bucket[mode]
+		if existing == nil || lastSeen >= coerceInt64(existing["last_seen"]) {
+			bucket[mode] = payload
+		}
+	}
+
+	agents := map[string]any{}
+	for _, bucket := range grouped {
+		for _, payload := range bucket {
+			agentKey := cleanText(payload["agent_id"])
+			if agentKey == "" {
+				agentKey = cleanText(payload["agent_guid"])
+			}
+			if agentKey == "" {
+				agentKey = cleanText(payload["hostname"]) + "|" + cleanText(payload["service_mode"])
+			}
+			if cleanText(payload["agent_id"]) == "" {
+				payload["agent_id"] = agentKey
+			}
+			agents[agentKey] = payload
+		}
+	}
+	return agents
+}
+
+func normalizeServiceMode(value any, agentID string) string {
+	text := strings.ToLower(strings.TrimSpace(cleanText(value)))
+	if text == "" && agentID != "" {
+		lowered := strings.ToLower(agentID)
+		if strings.Contains(lowered, "-svc-") || strings.HasSuffix(lowered, "-svc") {
+			return "system"
+		}
+	}
+	switch text {
+	case "system", "svc", "service", "system_service":
+		return "system"
+	case "interactive", "currentuser", "user", "current_user":
+		return "currentuser"
+	default:
+		return "currentuser"
+	}
 }
 
 func normalizeInventoryPayload(raw sql.NullString, listKey string) ([]any, int64) {

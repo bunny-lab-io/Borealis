@@ -423,6 +423,85 @@ func TestDeviceListHandlerReturnsDevicesAndFilters(t *testing.T) {
 	}
 }
 
+func TestAgentListHandlerReturnsLegacyMapping(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.devices = []map[string]any{
+		{
+			"hostname":            "LAB-OPERATOR-01",
+			"agent_guid":          "2540DA38E2B145B99113BF7CF0E1778A",
+			"agent_id":            "LAB-OPERATOR-01-svc",
+			"agent_hash":          "build-a",
+			"last_seen":           int64(1700000000),
+			"status":              "Online",
+			"connection_type":     "",
+			"connection_endpoint": "",
+			"device_type":         "Windows",
+			"domain":              "BUNNY",
+			"external_ip":         "203.0.113.10",
+			"internal_ip":         "10.0.0.5",
+			"last_reboot":         "2026-06-01T00:00:00Z",
+			"last_user":           "bunny",
+			"operating_system":    "Windows 11",
+			"uptime":              int64(42),
+			"site_id":             int64(1),
+			"site_name":           "Bunny Lab",
+			"site_description":    "Lab site",
+		},
+		{
+			"hostname":   "LAB-OPERATOR-01",
+			"agent_guid": "2540DA38E2B145B99113BF7CF0E1778A",
+			"agent_id":   "LAB-OPERATOR-01-svc",
+			"last_seen":  int64(1699999999),
+			"status":     "Offline",
+		},
+		{
+			"hostname":   "LAB-OPERATOR-01",
+			"agent_guid": "2540DA38E2B145B99113BF7CF0E1778A",
+			"agent_id":   "LAB-OPERATOR-01-user",
+			"last_seen":  int64(1699999900),
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	agentListHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !store.deviceFilter.OnlyAgents {
+		t.Fatalf("expected only_agents filter captured")
+	}
+	var payload map[string]map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	systemAgent := payload["LAB-OPERATOR-01-svc"]
+	if systemAgent == nil {
+		t.Fatalf("expected system agent key in %+v", payload)
+	}
+	if got := systemAgent["service_mode"]; got != "system" {
+		t.Fatalf("expected system mode, got %#v", got)
+	}
+	if got := systemAgent["agent_guid"]; got != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" {
+		t.Fatalf("expected normalized guid, got %#v", got)
+	}
+	if got := systemAgent["status"]; got != "Online" {
+		t.Fatalf("expected newest system row selected, got %#v", got)
+	}
+	if got := systemAgent["site_name"]; got != "Bunny Lab" {
+		t.Fatalf("expected site copied, got %#v", got)
+	}
+	userAgent := payload["LAB-OPERATOR-01-user"]
+	if userAgent == nil {
+		t.Fatalf("expected current-user agent key in %+v", payload)
+	}
+	if got := userAgent["service_mode"]; got != "currentuser" {
+		t.Fatalf("expected currentuser mode, got %#v", got)
+	}
+}
+
 func TestSiteListHandlerRequiresAuthentication(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
