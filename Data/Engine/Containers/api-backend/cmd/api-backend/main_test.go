@@ -685,6 +685,7 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "site create", handler: siteListHandler(auth, fallback), method: http.MethodPost, path: "/api/sites"},
 		{name: "view create", handler: deviceViewListHandler(auth, fallback), method: http.MethodPost, path: "/api/device_list_views"},
 		{name: "view update", handler: deviceViewGetHandler(auth, fallback), method: http.MethodPut, path: "/api/device_list_views/7"},
+		{name: "ansible runner update", handler: ansibleRunnerSettingsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/ansible-runner-settings"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -693,8 +694,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 3 {
-		t.Fatalf("expected 3 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 4 {
+		t.Fatalf("expected 4 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -779,6 +780,61 @@ func TestSiteWorkerSettingsLoadsConfigFileWhenEnvUnset(t *testing.T) {
 	profile := payload["deployment_profile"].(map[string]any)
 	if got := profile["name"]; got != "Unprofiled" {
 		t.Fatalf("expected unprofiled fallback, got %#v", got)
+	}
+}
+
+func TestAnsibleRunnerSettingsHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/ansible-runner-settings", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAnsibleRunnerSettingsHandlerReturnsConfigPayload(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "ansible_runner_settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"job_concurrency_limit": 0, "global_concurrency_limit": 18}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH", settingsPath)
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/ansible-runner-settings", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["job_concurrency_limit"]; got != float64(1) {
+		t.Fatalf("expected clamped job limit 1, got %#v", got)
+	}
+	if got := payload["global_concurrency_limit"]; got != float64(18) {
+		t.Fatalf("expected global limit 18, got %#v", got)
+	}
+}
+
+func TestAnsibleRunnerSettingsUsesEnvDefaultsWhenConfigMissing(t *testing.T) {
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT", "7")
+	t.Setenv("BOREALIS_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT", "0")
+
+	payload := collectAnsibleRunnerSettingsPayload()
+	if got := payload["job_concurrency_limit"]; got != 7 {
+		t.Fatalf("expected env-backed job limit 7, got %#v", got)
+	}
+	if got := payload["global_concurrency_limit"]; got != 1 {
+		t.Fatalf("expected clamped env-backed global limit 1, got %#v", got)
 	}
 }
 
