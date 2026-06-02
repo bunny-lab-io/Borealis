@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 from typing import Any
 
+import pytest
+
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.job_scheduler.queue import WORKER_STATUS_RUNNING, register_worker
 from Data.Engine.services.job_scheduler import worker as site_worker
@@ -19,10 +21,13 @@ class _FakeSocketRuntime:
         *,
         emit_result: bool = False,
         registered: bool = False,
+        registered_after_checks: int | None = None,
         call_response: Any = None,
     ) -> None:
         self.emit_result = emit_result
         self.registered = registered
+        self.registered_after_checks = registered_after_checks
+        self.has_socket_checks = 0
         self.call_response = call_response
         self.emitted: list[dict[str, Any]] = []
         self.queued: list[dict[str, Any]] = []
@@ -40,6 +45,9 @@ class _FakeSocketRuntime:
         return self.emit_result
 
     def has_host_service_socket(self, hostname: str, service_mode: str) -> bool:
+        self.has_socket_checks += 1
+        if self.registered_after_checks is not None:
+            return self.has_socket_checks >= self.registered_after_checks
         return self.registered
 
     def call_host_service_event(
@@ -409,6 +417,111 @@ def test_site_worker_agent_maintenance_queues_after_registered_socket_timeout(mo
     assert runtime.queued[0]["event_name"] == "agent_maintenance_request"
     assert runtime.queued[0]["payload"]["operation_id"] == "op-maintenance-stale"
     assert runtime.queued[0]["ttl_seconds"] == 180
+
+
+def test_site_worker_agent_maintenance_can_disable_pending_queue(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", raising=False)
+    runtime = _FakeSocketRuntime(emit_result=False, registered=False)
+
+    delivered, delivery_state, response = site_worker._call_or_queue_socket_runtime_event(
+        runtime,
+        "LAB-OPERATOR-01",
+        "system",
+        "agent_maintenance_request",
+        {"operation_id": "op-maintenance-no-queue"},
+        allow_pending=False,
+    )
+
+    assert delivered is False
+    assert delivery_state == "missing_socket"
+    assert response is None
+    assert runtime.called == []
+    assert runtime.emitted == []
+    assert runtime.queued == []
+
+
+def test_site_worker_agent_maintenance_waits_for_socket_then_calls_ack(monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS", "1")
+    monkeypatch.setenv("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS", "0.05")
+    updates: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        site_worker,
+        "_update_agent_maintenance_run",
+        lambda _db_factory, **kwargs: updates.append(dict(kwargs)),
+    )
+    runtime = _FakeSocketRuntime(
+        registered_after_checks=2,
+        call_response={"status": "ok", "operation_id": "op-maintenance-wait"},
+    )
+
+    status = site_worker._run_agent_maintenance_item(
+        object(),
+        lambda: None,
+        {
+            "id": 451,
+            "run_id": 974,
+            "payload": {
+                "run_id": 974,
+                "hostname": "LAB-OPERATOR-01",
+                "operation_id": "op-maintenance-wait",
+                "service_mode": "system",
+                "event_name": "agent_maintenance_request",
+                "event_payload": {
+                    "operation_id": "op-maintenance-wait",
+                    "release_channel": "unstable",
+                    "branch": "feature/rewrite-api-backend-in-golang",
+                },
+                "action": "update_now",
+                "release_channel": "unstable",
+                "branch": "feature/rewrite-api-backend-in-golang",
+            },
+        },
+        socket_runtime=runtime,
+    )
+
+    assert status == site_worker.WORK_STATUS_SUCCEEDED
+    assert runtime.called[0]["event_name"] == "agent_maintenance_request"
+    assert runtime.queued == []
+    assert updates[-1]["status"] == "Running"
+    assert "Site worker delivered agent maintenance" in updates[-1]["stdout"]
+    assert "Agent response status=ok" in updates[-1]["stdout"]
+
+
+def test_site_worker_agent_maintenance_fails_missing_socket_without_queue(monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS", "1")
+    monkeypatch.setenv("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS", "0.05")
+    updates: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        site_worker,
+        "_update_agent_maintenance_run",
+        lambda _db_factory, **kwargs: updates.append(dict(kwargs)),
+    )
+    runtime = _FakeSocketRuntime(emit_result=False, registered=False)
+
+    with pytest.raises(RuntimeError, match="No system agent socket is registered"):
+        site_worker._run_agent_maintenance_item(
+            object(),
+            lambda: None,
+            {
+                "id": 452,
+                "run_id": 975,
+                "payload": {
+                    "run_id": 975,
+                    "hostname": "LAB-OPERATOR-01",
+                    "operation_id": "op-maintenance-missing",
+                    "event_payload": {
+                        "operation_id": "op-maintenance-missing",
+                        "release_channel": "unstable",
+                    },
+                },
+            },
+            socket_runtime=runtime,
+        )
+
+    assert runtime.called == []
+    assert runtime.emitted == []
+    assert runtime.queued == []
+    assert updates[-1]["status"] == "Failed"
 
 
 def test_site_worker_local_dispatch_does_not_queue_unlisted_events() -> None:

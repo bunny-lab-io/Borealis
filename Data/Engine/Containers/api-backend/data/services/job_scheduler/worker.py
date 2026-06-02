@@ -47,6 +47,8 @@ from .worker_socket import SiteWorkerSocketRuntime
 DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
 DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
 DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 30
+DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS = 180
+DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS = 2.0
 TRANSIENT_RUN_RETRY_REASONS = {
     "wireguard_unavailable",
     "wireguard_session_not_ready",
@@ -143,6 +145,23 @@ def _pending_host_event_ttl_seconds() -> int:
     return _positive_int_env("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", 180)
 
 
+def _agent_maintenance_socket_wait_seconds() -> int:
+    return _positive_int_env(
+        "BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS",
+        DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS,
+    )
+
+
+def _agent_maintenance_socket_wait_poll_seconds() -> float:
+    return max(
+        0.05,
+        _non_negative_float_env(
+            "BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS",
+            DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS,
+        ),
+    )
+
+
 def _emit_or_queue_socket_runtime_event(
     socket_runtime: SiteWorkerSocketRuntime,
     hostname: str,
@@ -210,6 +229,7 @@ def _call_or_queue_socket_runtime_event(
     payload: Mapping[str, Any],
     *,
     timeout: float = 30.0,
+    allow_pending: bool = True,
 ) -> tuple[bool, str, Any]:
     """Call registered Agent sockets; queue allowlisted events only while socket is absent."""
 
@@ -228,21 +248,25 @@ def _call_or_queue_socket_runtime_event(
         except Exception:
             return False, "error", None
         if response is None:
-            queued, queue_state = _queue_socket_runtime_event(
-                socket_runtime,
-                hostname,
-                service_mode,
-                event_name,
-                payload,
-            )
-            if queued:
-                return True, "queued_after_no_response", None
-            if queue_state == "error":
-                return False, "error", None
+            if allow_pending:
+                queued, queue_state = _queue_socket_runtime_event(
+                    socket_runtime,
+                    hostname,
+                    service_mode,
+                    event_name,
+                    payload,
+                )
+                if queued:
+                    return True, "queued_after_no_response", None
+                if queue_state == "error":
+                    return False, "error", None
             return False, "no_response", None
         if _socket_response_status(response) == "error":
             return False, "agent_error", response
         return True, "called", response
+
+    if not allow_pending:
+        return False, "missing_socket", None
 
     delivered, delivery_state = _emit_or_queue_socket_runtime_event(
         socket_runtime,
@@ -628,14 +652,27 @@ def _run_agent_maintenance_item(
     event_name = str(payload.get("event_name") or "agent_maintenance_request")
     agent_response: Any = None
     if socket_runtime is not None:
-        emitted, delivery_state, agent_response = _call_or_queue_socket_runtime_event(
-            socket_runtime,
-            hostname,
-            service_mode,
-            event_name,
-            dict(event_payload),
-            timeout=30.0,
-        )
+        emitted = False
+        delivery_state = "missing_socket"
+        wait_deadline = time.monotonic() + float(_agent_maintenance_socket_wait_seconds())
+        poll_seconds = _agent_maintenance_socket_wait_poll_seconds()
+        while True:
+            remaining = max(0.0, wait_deadline - time.monotonic())
+            emitted, delivery_state, agent_response = _call_or_queue_socket_runtime_event(
+                socket_runtime,
+                hostname,
+                service_mode,
+                event_name,
+                dict(event_payload),
+                timeout=min(30.0, max(0.5, remaining or 0.5)),
+                allow_pending=False,
+            )
+            if emitted or delivery_state in {"agent_error", "error"}:
+                break
+            remaining = wait_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(poll_seconds, max(0.05, remaining)))
     else:
         response = _post_internal(
             str(settings.secret_key or ""),
