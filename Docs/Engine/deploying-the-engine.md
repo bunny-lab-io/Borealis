@@ -75,6 +75,18 @@ During deployment, Borealis will install missing dependencies, prepare runtime c
 ### Configure the Engine
 You will be asked as series of questions during initial setup for a new engine.  The questions will be generally straight-forward and not too complicated.
 
+### Engine Host Timezone
+Borealis reads the Linux host timezone during every `Engine.sh deploy` or redeploy and passes that value into the Engine containers as `TZ`. Server Info uses that propagated timezone for Engine-local clock displays.
+
+Change the host timezone from the Linux shell, then redeploy the Engine so containers receive the updated value:
+
+```sh
+sudo timedatectl set-timezone America/Denver
+sudo bash Engine.sh deploy prod
+```
+
+In containerized deployments, the WebUI timezone picker is read-only when host-level timezone changes are unavailable from inside the Engine container.
+
 ## First Run Checklist
 After deployment finishes:
 

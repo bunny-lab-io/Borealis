@@ -210,6 +210,14 @@ def _error_response(error: str, message: str, status: int):
 
 
 def _current_timezone_id() -> str:
+    host_timezone = str(os.environ.get("BOREALIS_ENGINE_HOST_TIMEZONE") or "").strip()
+    if host_timezone:
+        return host_timezone
+
+    env_timezone = str(os.environ.get("TZ") or "").strip()
+    if env_timezone:
+        return env_timezone
+
     timedatectl_bin = shutil.which("timedatectl") or ""
     if timedatectl_bin:
         code, out, _err = _run_command(
@@ -220,10 +228,6 @@ def _current_timezone_id() -> str:
             timezone_id = str(out or "").strip()
             if timezone_id:
                 return timezone_id
-
-    env_timezone = str(os.environ.get("TZ") or "").strip()
-    if env_timezone:
-        return env_timezone
 
     tzinfo = datetime.now().astimezone().tzinfo
     zone_key = getattr(tzinfo, "key", None)

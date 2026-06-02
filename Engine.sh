@@ -723,6 +723,43 @@ resolve_acme_email() {
   fi
 }
 
+resolve_host_timezone() {
+  local timezone=""
+  if [[ -n "${BOREALIS_ENGINE_HOST_TIMEZONE:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_HOST_TIMEZONE}"
+    return 0
+  fi
+  if command_exists timedatectl; then
+    timezone="$(timedatectl show --property=Timezone --value 2>/dev/null | head -n 1 || true)"
+    timezone="$(printf '%s' "${timezone}" | tr -d '\r' | xargs)"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  local localtime_path=""
+  localtime_path="$(readlink -f /etc/localtime 2>/dev/null || true)"
+  if [[ "${localtime_path}" == *"/zoneinfo/"* ]]; then
+    timezone="${localtime_path#*/zoneinfo/}"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  if [[ -n "${TZ:-}" ]]; then
+    printf '%s\n' "${TZ}"
+    return 0
+  fi
+  if [[ -r /etc/timezone ]]; then
+    timezone="$(head -n 1 /etc/timezone 2>/dev/null | tr -d '\r' | xargs || true)"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "Etc/UTC"
+}
+
 resolve_traefik_trusted_proxy_ips() {
   local existing
   existing="$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)"
@@ -977,6 +1014,7 @@ write_compose_env() {
   local traefik_proxy_protocol_trusted_ips
   local runtime_owner_uid
   local runtime_owner_gid
+  local host_timezone
   if (($# >= 4)); then
     traefik_trusted_proxy_ips="${trusted_proxy_ips_arg}"
   else
@@ -984,6 +1022,7 @@ write_compose_env() {
   fi
   traefik_forwarded_headers_trusted_ips="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)}"
   traefik_proxy_protocol_trusted_ips="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)}"
+  host_timezone="$(resolve_host_timezone)"
   runtime_owner_uid="$(resolve_runtime_owner_uid)"
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
@@ -1000,6 +1039,8 @@ BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
 BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
 BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
+BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
+TZ=${host_timezone}
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}

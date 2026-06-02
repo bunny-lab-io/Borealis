@@ -226,3 +226,12 @@ func TestSerializeServerTimeMatchesPythonShape(t *testing.T) {
 		t.Fatalf("unexpected timezone id %q", got)
 	}
 }
+
+func TestCurrentTimezoneIDPrefersEngineHostTimezone(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	t.Setenv("TZ", "Etc/UTC")
+
+	if got := currentTimezoneID(); got != "America/Denver" {
+		t.Fatalf("expected engine host timezone, got %q", got)
+	}
+}

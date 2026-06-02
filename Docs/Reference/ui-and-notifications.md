@@ -93,7 +93,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
     - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
     - `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
-    - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
+    - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone only when host-level timezone mutation is supported; containerized Engine deployments propagate `TZ` from the host during deploy, so operators change host timezone from the Linux shell and redeploy.
     - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
     - `GET /api/server/workers` (Operator Admin Session) - returns active and recent site-worker container state, all sites with total and online device counts, connected Agent counts, and worker-assigned work for Engine Status and Site Workers.
     - `POST /api/server/workers/<worker_guid>/recreate` (Operator Admin Session) - queues a scheduler-owned site-worker container stop so a replacement can be deployed.

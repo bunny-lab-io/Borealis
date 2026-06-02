@@ -74,6 +74,14 @@ func pythonISO(t time.Time) string {
 }
 
 func currentTimezoneID() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_HOST_TIMEZONE")); value != "" {
+		return value
+	}
+
+	if value := strings.TrimSpace(os.Getenv("TZ")); value != "" {
+		return value
+	}
+
 	if timedatectl, err := exec.LookPath("timedatectl"); err == nil {
 		ctx, cancel := contextWithTimeout(5 * time.Second)
 		defer cancel()
@@ -83,10 +91,6 @@ func currentTimezoneID() string {
 				return value
 			}
 		}
-	}
-
-	if value := strings.TrimSpace(os.Getenv("TZ")); value != "" {
-		return value
 	}
 
 	if value, err := os.ReadFile("/etc/timezone"); err == nil {
