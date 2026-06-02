@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -596,6 +598,90 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 	}
 	if fallbackHits != 3 {
 		t.Fatalf("expected 3 fallback hits, got %d", fallbackHits)
+	}
+}
+
+func TestSiteWorkerSettingsHandlerRequiresAdmin(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "User"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/site-worker-settings", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteWorkerSettingsHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "Administrator permissions") {
+		t.Fatalf("expected admin auth message, got %s", recorder.Body.String())
+	}
+}
+
+func TestSiteWorkerSettingsHandlerReturnsProfileManagedPayload(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY", "45")
+	t.Setenv("BOREALIS_DEPLOYMENT_PROFILE", "MSP / Production")
+	t.Setenv("BOREALIS_DEPLOYMENT_PROFILE_RANK", "4")
+	t.Setenv("BOREALIS_DEPLOYMENT_CPU_RANK", "3")
+	t.Setenv("BOREALIS_DEPLOYMENT_MEMORY_RANK", "2")
+	t.Setenv("BOREALIS_DEPLOYMENT_HOST_VCPU", "16")
+	t.Setenv("BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB", "33075")
+	t.Setenv("BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB", "32.3")
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/site-worker-settings", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	siteWorkerSettingsHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["scheduled_task_concurrency_limit"]; got != float64(32) {
+		t.Fatalf("expected clamped concurrency 32, got %#v", got)
+	}
+	if got := payload["max_scheduled_task_concurrency_limit"]; got != float64(32) {
+		t.Fatalf("expected max concurrency 32, got %#v", got)
+	}
+	if got := payload["editable"]; got != false {
+		t.Fatalf("expected editable false, got %#v", got)
+	}
+	if got := payload["managed_by"]; got != "deployment_profile" {
+		t.Fatalf("expected deployment_profile manager, got %#v", got)
+	}
+	profile, ok := payload["deployment_profile"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected deployment profile map, got %#v", payload["deployment_profile"])
+	}
+	if got := profile["name"]; got != "MSP / Production" {
+		t.Fatalf("expected profile name, got %#v", got)
+	}
+	if got := profile["host_vcpu"]; got != float64(16) {
+		t.Fatalf("expected host vcpu 16, got %#v", got)
+	}
+	if got := profile["host_memory_gib"]; got != "32.3" {
+		t.Fatalf("expected host memory gib string, got %#v", got)
+	}
+}
+
+func TestSiteWorkerSettingsLoadsConfigFileWhenEnvUnset(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "site_worker_settings.json")
+	if err := os.WriteFile(settingsPath, []byte(`{"scheduled_task_concurrency_limit": 12}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_SITE_WORKER_SETTINGS_PATH", settingsPath)
+	t.Setenv("BOREALIS_DEPLOYMENT_PROFILE", "")
+
+	payload := collectSiteWorkerSettingsPayload()
+	if got := payload["scheduled_task_concurrency_limit"]; got != 12 {
+		t.Fatalf("expected file-backed concurrency 12, got %#v", got)
+	}
+	profile := payload["deployment_profile"].(map[string]any)
+	if got := profile["name"]; got != "Unprofiled" {
+		t.Fatalf("expected unprofiled fallback, got %#v", got)
 	}
 }
 
