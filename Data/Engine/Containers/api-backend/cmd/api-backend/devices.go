@@ -21,6 +21,11 @@ type deviceListStore interface {
 	listDevices(ctx context.Context, profile operatorProfile, filter deviceListFilter) ([]map[string]any, error)
 }
 
+type deviceDetailStore interface {
+	getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error)
+	getDeviceDetails(ctx context.Context, profile operatorProfile, hostname string) (map[string]any, int, error)
+}
+
 type deviceRow struct {
 	GUID                        sql.NullString
 	Hostname                    sql.NullString
@@ -67,6 +72,8 @@ type deviceRow struct {
 func registerDeviceRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
+	mux.HandleFunc("GET /api/devices/{guid}", deviceByGUIDHandler(auth))
+	mux.HandleFunc("GET /api/device/details/{hostname}", deviceDetailsHandler(auth))
 }
 
 func agentListHandler(auth *authService) http.HandlerFunc {
@@ -151,6 +158,92 @@ func deviceListHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
+	}
+}
+
+func deviceByGUIDHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		guid := normalizeCanonicalGUID(r.PathValue("guid"))
+		if guid == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid guid"})
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":  "auth_unavailable",
+				"detail": err.Error(),
+			})
+			return
+		}
+		store, ok := auth.store.(deviceDetailStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_detail_unavailable"})
+			return
+		}
+
+		timeout := auth.timeout
+		if timeout <= 0 {
+			timeout = defaultAuthTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		payload, status, err := store.getDeviceByGUID(ctx, profile, guid)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
+}
+
+func deviceDetailsHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		hostname := cleanText(r.PathValue("hostname"))
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error":  "auth_unavailable",
+				"detail": err.Error(),
+			})
+			return
+		}
+		store, ok := auth.store.(deviceDetailStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "device_detail_unavailable"})
+			return
+		}
+
+		timeout := auth.timeout
+		if timeout <= 0 {
+			timeout = defaultAuthTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+
+		payload, status, err := store.getDeviceDetails(ctx, profile, hostname)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
 	}
 }
 
@@ -307,6 +400,152 @@ func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operato
 	return devices, nil
 }
 
+func (s *postgresOperatorStore) getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error) {
+	row, found, err := s.lookupDeviceDetail(ctx, profile, "LOWER(d.guid) = LOWER($1)", guid)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !found {
+		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
+	}
+	return attachAgentVersionStatus(buildDevicePayload(row, time.Now().Unix())), http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) getDeviceDetails(ctx context.Context, profile operatorProfile, hostname string) (map[string]any, int, error) {
+	row, found, err := s.lookupDeviceDetail(ctx, profile, "d.hostname = $1", hostname)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !found {
+		return map[string]any{}, http.StatusOK, nil
+	}
+	return attachAgentVersionStatus(buildDevicePayload(row, time.Now().Unix())), http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) lookupDeviceDetail(ctx context.Context, profile operatorProfile, predicate string, value string) (deviceRow, bool, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return deviceRow{}, false, err
+	}
+	if allowedSiteIDs != nil && len(allowedSiteIDs) == 0 {
+		return deviceRow{}, false, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return deviceRow{}, false, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	sqlText := `
+		SELECT
+			d.guid,
+			d.hostname,
+			d.description,
+			d.created_at,
+			d.last_enrollment_at,
+			d.agent_hash,
+			d.agent_role_health,
+			d.memory,
+			d.network,
+			d.software,
+			d.services,
+			d.storage,
+			d.cpu,
+			d.sessions,
+			d.processes,
+			d.device_type,
+			d.domain,
+			d.external_ip,
+			d.internal_ip,
+			d.last_reboot,
+			d.last_seen,
+			d.cpu_percent,
+			d.memory_percent,
+			d.last_user,
+			d.operating_system,
+			d.uptime,
+			d.agent_id,
+			d.connection_type,
+			d.connection_endpoint,
+			d.agent_release_channel_override,
+			d.agent_release_channel,
+			d.agent_branch,
+			d.agent_update_channel,
+			d.agent_update_target_build_id,
+			d.agent_update_state,
+			d.agent_update_error,
+			d.agent_update_source,
+			s.id,
+			s.name,
+			s.description
+		  FROM engine.devices AS d
+	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname = d.hostname
+	 LEFT JOIN engine.sites AS s ON s.id = ds.site_id
+		 WHERE ` + predicate
+	params := []any{value}
+	if allowedSiteIDs != nil {
+		placeholders := make([]string, 0, len(allowedSiteIDs))
+		for _, siteID := range allowedSiteIDs {
+			params = append(params, siteID)
+			placeholders = append(placeholders, "$"+strconv.Itoa(len(params)))
+		}
+		sqlText += " AND ds.site_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	sqlText += " LIMIT 1"
+
+	var row deviceRow
+	err = conn.QueryRowContext(ctx, sqlText, params...).Scan(
+		&row.GUID,
+		&row.Hostname,
+		&row.Description,
+		&row.CreatedAt,
+		&row.LastEnrollmentAt,
+		&row.AgentHash,
+		&row.AgentRoleHealth,
+		&row.Memory,
+		&row.Network,
+		&row.Software,
+		&row.Services,
+		&row.Storage,
+		&row.CPU,
+		&row.Sessions,
+		&row.Processes,
+		&row.DeviceType,
+		&row.Domain,
+		&row.ExternalIP,
+		&row.InternalIP,
+		&row.LastReboot,
+		&row.LastSeen,
+		&row.CPUPercent,
+		&row.MemoryPercent,
+		&row.LastUser,
+		&row.OperatingSystem,
+		&row.Uptime,
+		&row.AgentID,
+		&row.ConnectionType,
+		&row.ConnectionEndpoint,
+		&row.AgentReleaseChannelOverride,
+		&row.AgentReleaseChannel,
+		&row.AgentBranch,
+		&row.AgentUpdateChannel,
+		&row.AgentUpdateTargetBuildID,
+		&row.AgentUpdateState,
+		&row.AgentUpdateError,
+		&row.AgentUpdateSource,
+		&row.SiteID,
+		&row.SiteName,
+		&row.SiteDescription,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return deviceRow{}, false, nil
+	}
+	if err != nil {
+		return deviceRow{}, false, err
+	}
+	return row, true, nil
+}
+
 func buildDevicePayload(row deviceRow, now int64) map[string]any {
 	createdAt := nullInt(row.CreatedAt)
 	lastEnrollmentAt := nullInt(row.LastEnrollmentAt)
@@ -425,6 +664,79 @@ func buildDevicePayload(row deviceRow, now int64) map[string]any {
 	return payload
 }
 
+func attachAgentVersionStatus(payload map[string]any) map[string]any {
+	summary, _ := payload["summary"].(map[string]any)
+	channelOverride := cleanText(payload["agent_release_channel_override"])
+	if channelOverride == "" {
+		channelOverride = cleanText(summary["agent_release_channel_override"])
+	}
+	effectiveChannel, targetBuildID, targetPublishedAt := resolveAgentTarget(channelOverride)
+	installedBuildID := firstText(
+		cleanText(payload["agent_build_id"]),
+		cleanText(payload["agent_hash"]),
+		cleanText(summary["agent_build_id"]),
+		cleanText(summary["agent_hash"]),
+	)
+	status := "Needs Updated"
+	if installedBuildID != "" && targetBuildID != "" && strings.EqualFold(installedBuildID, targetBuildID) {
+		status = "Up-to-Date"
+	}
+	releaseChannel := firstText(cleanText(payload["agent_release_channel"]), cleanText(summary["agent_release_channel"]))
+	branch := firstText(cleanText(payload["agent_branch"]), cleanText(summary["agent_branch"]))
+
+	payload["agent_version_status"] = status
+	payload["agent_target_build_id"] = targetBuildID
+	payload["agent_target_published_at"] = targetPublishedAt
+	if channelOverride == "" {
+		payload["agent_release_channel_override"] = nil
+	} else {
+		payload["agent_release_channel_override"] = channelOverride
+	}
+	payload["agent_release_channel"] = releaseChannel
+	payload["agent_branch"] = branch
+	payload["agent_release_channel_effective"] = effectiveChannel
+	if installedBuildID != "" {
+		payload["agent_build_id"] = installedBuildID
+	}
+
+	applyAgentVersionSummary(summary, status, targetBuildID, targetPublishedAt, payload, installedBuildID)
+	if details, ok := payload["details"].(map[string]any); ok {
+		if detailSummary, ok := details["summary"].(map[string]any); ok {
+			applyAgentVersionSummary(detailSummary, status, targetBuildID, targetPublishedAt, payload, installedBuildID)
+		}
+	}
+	return payload
+}
+
+func applyAgentVersionSummary(summary map[string]any, status string, targetBuildID string, targetPublishedAt string, payload map[string]any, installedBuildID string) {
+	if summary == nil {
+		return
+	}
+	summary["agent_version_status"] = status
+	summary["agent_target_build_id"] = targetBuildID
+	summary["agent_target_published_at"] = targetPublishedAt
+	summary["agent_release_channel_override"] = payload["agent_release_channel_override"]
+	summary["agent_release_channel"] = payload["agent_release_channel"]
+	summary["agent_branch"] = payload["agent_branch"]
+	if cleanText(payload["agent_release_channel_effective"]) != "" {
+		summary["agent_release_channel_effective"] = payload["agent_release_channel_effective"]
+	}
+	if installedBuildID != "" && cleanText(summary["agent_build_id"]) == "" {
+		summary["agent_build_id"] = installedBuildID
+	}
+}
+
+func resolveAgentTarget(channelOverride string) (string, string, string) {
+	settings := collectAgentReleaseChannelSettings()
+	effectiveChannel := normalizeAgentReleaseChannel(channelOverride, "")
+	if effectiveChannel == "" {
+		effectiveChannel = normalizeAgentReleaseChannel(settings["default_channel"], defaultAgentReleaseChannel)
+	}
+	channels, _ := settings["channels"].(map[string]any)
+	target, _ := channels[effectiveChannel].(map[string]any)
+	return effectiveChannel, strings.ToLower(cleanText(target["build_id"])), cleanText(target["published_at"])
+}
+
 func buildAgentListPayload(devices []map[string]any, now int64) map[string]any {
 	grouped := map[string]map[string]map[string]any{}
 	for _, record := range devices {
@@ -519,6 +831,26 @@ func normalizeServiceMode(value any, agentID string) string {
 	default:
 		return "currentuser"
 	}
+}
+
+func normalizeCanonicalGUID(value any) string {
+	normalized := normalizeGUID(value)
+	if len(normalized) != 36 {
+		return ""
+	}
+	for index, ch := range normalized {
+		switch index {
+		case 8, 13, 18, 23:
+			if ch != '-' {
+				return ""
+			}
+		default:
+			if !isHexRune(ch) {
+				return ""
+			}
+		}
+	}
+	return normalized
 }
 
 func normalizeInventoryPayload(raw sql.NullString, listKey string) ([]any, int64) {

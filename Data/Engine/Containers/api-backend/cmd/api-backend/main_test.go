@@ -28,6 +28,11 @@ type fakeOperatorStore struct {
 	deviceErr          error
 	deviceProfile      operatorProfile
 	deviceFilter       deviceListFilter
+	deviceDetail       map[string]any
+	deviceDetailStatus int
+	deviceDetailErr    error
+	deviceDetailGUID   string
+	deviceDetailHost   string
 	sites              []map[string]any
 	siteErr            error
 	siteProfile        operatorProfile
@@ -96,6 +101,32 @@ func (s *fakeOperatorStore) listDevices(_ context.Context, profile operatorProfi
 		devices = append(devices, copyDevice)
 	}
 	return devices, nil
+}
+
+func (s *fakeOperatorStore) getDeviceByGUID(_ context.Context, profile operatorProfile, guid string) (map[string]any, int, error) {
+	s.deviceProfile = profile
+	s.deviceDetailGUID = guid
+	if s.deviceDetailErr != nil {
+		return nil, 0, s.deviceDetailErr
+	}
+	status := s.deviceDetailStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return copyMap(s.deviceDetail), status, nil
+}
+
+func (s *fakeOperatorStore) getDeviceDetails(_ context.Context, profile operatorProfile, hostname string) (map[string]any, int, error) {
+	s.deviceProfile = profile
+	s.deviceDetailHost = hostname
+	if s.deviceDetailErr != nil {
+		return nil, 0, s.deviceDetailErr
+	}
+	status := s.deviceDetailStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return copyMap(s.deviceDetail), status, nil
 }
 
 func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
@@ -552,6 +583,108 @@ func TestDeviceListHandlerReturnsDevicesAndFilters(t *testing.T) {
 	}
 	if store.deviceProfile.Username != "operator" {
 		t.Fatalf("expected operator profile, got %+v", store.deviceProfile)
+	}
+}
+
+func TestDeviceByGUIDHandlerReturnsDetail(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.deviceDetail = map[string]any{
+		"hostname":   "LAB-OPERATOR-01",
+		"agent_guid": "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/2540DA38-E2B1-45B9-9113-BF7CF0E1778A", nil)
+	request.SetPathValue("guid", "2540DA38-E2B1-45B9-9113-BF7CF0E1778A")
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceByGUIDHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceDetailGUID != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" {
+		t.Fatalf("unexpected guid %q", store.deviceDetailGUID)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["hostname"] != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected detail payload %+v", payload)
+	}
+}
+
+func TestDeviceByGUIDHandlerRejectsInvalidGUID(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/devices/not-a-guid", nil)
+	request.SetPathValue("guid", "not-a-guid")
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceByGUIDHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestDeviceDetailsHandlerReturnsHostnameDetail(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.deviceDetail = map[string]any{
+		"hostname": "LAB-OPERATOR-01",
+		"summary":  map[string]any{"hostname": "LAB-OPERATOR-01"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device/details/LAB-OPERATOR-01", nil)
+	request.SetPathValue("hostname", "LAB-OPERATOR-01")
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	deviceDetailsHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceDetailHost != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected hostname %q", store.deviceDetailHost)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["hostname"] != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected detail payload %+v", payload)
+	}
+}
+
+func TestAttachAgentVersionStatusUsesReleaseChannelTarget(t *testing.T) {
+	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
+	content := `{
+		"default_channel": "stable",
+		"channels": {
+			"stable": {"channel": "stable", "build_id": "stable-build", "published_at": "2026-06-02T00:00:00Z"},
+			"unstable": {"channel": "unstable", "build_id": "unstable-build"}
+		}
+	}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+	payload := map[string]any{
+		"agent_build_id": "stable-build",
+		"summary":        map[string]any{"agent_build_id": "stable-build"},
+		"details":        map[string]any{"summary": map[string]any{"agent_build_id": "stable-build"}},
+	}
+
+	updated := attachAgentVersionStatus(payload)
+	if got := updated["agent_version_status"]; got != "Up-to-Date" {
+		t.Fatalf("expected Up-to-Date, got %#v", got)
+	}
+	if got := updated["agent_target_build_id"]; got != "stable-build" {
+		t.Fatalf("expected stable target, got %#v", got)
+	}
+	summary := updated["summary"].(map[string]any)
+	if got := summary["agent_release_channel_effective"]; got != "stable" {
+		t.Fatalf("expected stable effective channel, got %#v", got)
 	}
 }
 
