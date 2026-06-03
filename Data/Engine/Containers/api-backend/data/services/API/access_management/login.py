@@ -4,16 +4,11 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
-# - POST /api/auth/logout (Token Authenticated) - Clears the active operator session and authentication cookie.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
 # - POST /api/auth/passkeys/register/options (Token Authenticated) - Starts a passkey registration ceremony for the current operator.
 # - POST /api/auth/passkeys/register/verify (Token Authenticated) - Verifies a passkey registration response and stores the credential.
 # - POST /api/auth/passkeys/authenticate/options (No Authentication) - Starts a passkey sign-in ceremony for passwordless operator login.
 # - POST /api/auth/passkeys/authenticate/verify (No Authentication) - Verifies a passkey sign-in response and completes operator login.
-# - GET /api/auth/passkeys (Token Authenticated) - Lists the current operator's enrolled passkeys.
-# - PATCH /api/auth/passkeys/<passkey_id> (Token Authenticated) - Updates the display label for one of the current operator's passkeys.
-# - DELETE /api/auth/passkeys/<passkey_id> (Token Authenticated) - Removes one of the current operator's passkeys.
-# - GET /api/auth/me (Token Authenticated) - Returns the currently authenticated operator profile, including MFA state.
 # ======================================================
 
 """Authentication endpoints for the Borealis Engine API."""
@@ -29,7 +24,7 @@ from Data.Engine.db import dbapi as sqlite3
 import time
 import uuid
 from urllib.parse import urlsplit
-from typing import Any, Dict, Mapping, Optional, Sequence, TYPE_CHECKING
+from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 
 from flask import Blueprint, Flask, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -103,25 +98,20 @@ from .directory_services import (
     register_directory_services,
 )
 from .github import register_github_token_management
-from .multi_factor_authentication import register_mfa_management
 from .passkeys import (
     build_passkey_lookup_hmac,
     build_webauthn_user_id,
     count_user_passkeys,
     credential_lookup_candidates,
     deserialize_passkey_secret_bundle,
-    delete_user_passkey,
     delete_user_passkeys,
     get_passkey_by_lookup_hmac,
     get_passkey_by_credential_id,
-    get_user_passkey_by_id,
     list_user_passkeys,
     normalize_webauthn_storage_value,
     serialize_passkey_secret_bundle,
     serialize_transports,
-    update_user_passkey_label,
 )
-from .site_assignments import register_user_site_assignment_management
 from .users import register_user_management
 
 _logger = logging.getLogger(__name__)
@@ -185,25 +175,6 @@ def _totp_qr_data_uri(payload: str) -> Optional[str]:
 def _bytes_to_base64url(value: bytes) -> str:
     encoded = base64.urlsafe_b64encode(value or b"").decode("ascii")
     return encoded.rstrip("=")
-
-
-def _user_row_to_dict(row: Sequence[Any]) -> Mapping[str, Any]:
-    mfa_enabled = 0
-    if len(row) > 7:
-        try:
-            mfa_enabled = 1 if (row[7] or 0) else 0
-        except Exception:
-            mfa_enabled = 0
-    return {
-        "id": row[0],
-        "username": row[1],
-        "display_name": row[2] or row[1],
-        "role": row[3] or "User",
-        "last_login": row[4] or 0,
-        "created_at": row[5] or 0,
-        "updated_at": row[6] or 0,
-        "mfa_enabled": mfa_enabled,
-    }
 
 
 def _passkey_to_dict(item: Any) -> Dict[str, Any]:
@@ -936,9 +907,6 @@ class _AuthService:
             mfa_disabled=mfa_disabled,
         )
 
-    def logout(self):
-        return self._clear_all_auth_sessions()
-
     def mfa_verify(self):
         if not self._operator_auth_allowed():
             return self._bootstrap_error_response()
@@ -1369,160 +1337,6 @@ class _AuthService:
 
         return self._finalize_login(identity["username"], identity["role"])
 
-    def list_passkeys(self):
-        user = self._current_user()
-        if not user:
-            return jsonify({"error": "unauthorized"}), 401
-
-        username = str(user.get("username") or "").strip()
-        if not username:
-            return jsonify({"error": "unauthorized"}), 401
-
-        conn = self._db_conn()
-        try:
-            stored_passkeys = list_user_passkeys(conn, username)
-        finally:
-            conn.close()
-
-        return jsonify(
-            {
-                "status": "ok",
-                "passkeys": [_passkey_to_dict(item) for item in stored_passkeys],
-                "passkey_count": len(stored_passkeys),
-            }
-        )
-
-    def update_passkey(self, passkey_id: int):
-        user = self._current_user()
-        if not user:
-            return jsonify({"error": "unauthorized"}), 401
-
-        username = str(user.get("username") or "").strip()
-        if not username:
-            return jsonify({"error": "unauthorized"}), 401
-
-        payload = request.get_json(silent=True) or {}
-        label = str(payload.get("label") or "").strip()
-        if len(label) > 80:
-            return jsonify({"error": "invalid_label"}), 400
-
-        conn = self._db_conn()
-        try:
-            updated = update_user_passkey_label(conn, username, int(passkey_id or 0), label)
-            if not updated:
-                conn.rollback()
-                return jsonify({"error": "passkey_not_found"}), 404
-            count = count_user_passkeys(conn, username)
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            self.logger.debug("Failed to update passkey label for %s", username, exc_info=True)
-            return jsonify({"error": str(exc) or "passkey_update_failed"}), 500
-        finally:
-            conn.close()
-
-        return jsonify(
-            {
-                "status": "ok",
-                "passkey": _passkey_to_dict(updated),
-                "passkey_count": count,
-            }
-        )
-
-    def delete_passkey(self, passkey_id: int):
-        user = self._current_user()
-        if not user:
-            return jsonify({"error": "unauthorized"}), 401
-
-        username = str(user.get("username") or "").strip()
-        if not username:
-            return jsonify({"error": "unauthorized"}), 401
-
-        conn = self._db_conn()
-        try:
-            existing = get_user_passkey_by_id(conn, username, int(passkey_id or 0))
-            if not existing:
-                conn.rollback()
-                return jsonify({"error": "passkey_not_found"}), 404
-            removed = delete_user_passkey(conn, username, int(passkey_id or 0))
-            count = count_user_passkeys(conn, username)
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            self.logger.debug("Failed to delete passkey for %s", username, exc_info=True)
-            return jsonify({"error": str(exc) or "passkey_delete_failed"}), 500
-        finally:
-            conn.close()
-
-        return jsonify(
-            {
-                "status": "ok",
-                "removed": bool(removed),
-                "passkey_count": count,
-            }
-        )
-
-    def me(self):
-        user = self._current_user()
-        if not user:
-            return jsonify({"error": "unauthorized"}), 401
-
-        username = (user.get("username") or "").strip()
-        try:
-            conn = self._db_conn()
-            try:
-                cur = conn.cursor()
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        username,
-                        display_name,
-                        role,
-                        last_login,
-                        created_at,
-                        updated_at,
-                        CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled,
-                        COALESCE(auth_source, 'local') AS auth_source,
-                        COALESCE(directory_provider_id, 0) AS directory_provider_id,
-                        COALESCE(directory_disabled, 0) AS directory_disabled
-                    FROM users
-                    WHERE LOWER(username)=LOWER(?)
-                    """,
-                    (username,),
-                )
-                row = cur.fetchone()
-                passkey_count = count_user_passkeys(conn, username)
-            finally:
-                conn.close()
-            if row:
-                info = _user_row_to_dict(row)
-                return jsonify(
-                    {
-                        "username": info["username"],
-                        "display_name": info["display_name"],
-                        "role": info["role"],
-                        "mfa_enabled": bool(info["mfa_enabled"]),
-                        "passkey_count": 0 if str(row[8] or "local").lower() == DIRECTORY_AUTH_SOURCE else passkey_count,
-                        "auth_source": str(row[8] or "local"),
-                        "directory_provider_id": int(row[9] or 0),
-                        "directory_disabled": bool(row[10] or 0),
-                    }
-                )
-        except Exception:
-            self.logger.debug("Failed to fetch user record for %s", username, exc_info=True)
-
-        return jsonify(
-            {
-                "username": username,
-                "display_name": username,
-                "role": user.get("role") or "User",
-                "mfa_enabled": False,
-                "passkey_count": self._passkey_count(username),
-            }
-        )
-
-
 def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register authentication endpoints for the Engine."""
 
@@ -1570,10 +1384,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     def _login():
         return service.login()
 
-    @blueprint.route("/api/auth/logout", methods=["POST"])
-    def _logout():
-        return service.logout()
-
     @blueprint.route("/api/auth/mfa/verify", methods=["POST"])
     def _mfa_verify():
         return service.mfa_verify()
@@ -1594,26 +1404,8 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     def _passkey_authenticate_verify():
         return service.passkey_authenticate_verify()
 
-    @blueprint.route("/api/auth/passkeys", methods=["GET"])
-    def _list_passkeys():
-        return service.list_passkeys()
-
-    @blueprint.route("/api/auth/passkeys/<int:passkey_id>", methods=["PATCH"])
-    def _update_passkey(passkey_id: int):
-        return service.update_passkey(passkey_id)
-
-    @blueprint.route("/api/auth/passkeys/<int:passkey_id>", methods=["DELETE"])
-    def _delete_passkey(passkey_id: int):
-        return service.delete_passkey(passkey_id)
-
-    @blueprint.route("/api/auth/me", methods=["GET"])
-    def _me():
-        return service.me()
-
     app.register_blueprint(blueprint)
     register_user_management(app, adapters)
-    register_user_site_assignment_management(app, adapters)
-    register_mfa_management(app, adapters)
     register_aegis_cipher_management(app, adapters)
     register_github_token_management(app, adapters)
     register_credential_management(app, adapters)

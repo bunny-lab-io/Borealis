@@ -2306,7 +2306,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		{name: "server overview update", handler: serverOverviewHandler(auth, fallback), method: http.MethodPost, path: "/api/server/overview"},
 		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
-		{name: "passkeys unsupported method", handler: authPasskeysHandler(auth, fallback), method: http.MethodPost, path: "/api/auth/passkeys"},
 		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
 		{name: "credential create", handler: credentialsHandler(auth, fallback), method: http.MethodPost, path: "/api/credentials"},
 	} {
@@ -2317,8 +2316,25 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 7 {
-		t.Fatalf("expected 7 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 6 {
+		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
+	}
+}
+
+func TestPasskeyListUnsupportedMethodDoesNotProxy(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+	fallbackHits := 0
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits++
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/passkeys", nil)
+	authPasskeysHandler(auth, fallback).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusMethodNotAllowed || fallbackHits != 0 {
+		t.Fatalf("expected 405/0 fallback hits, got status=%d hits=%d", recorder.Code, fallbackHits)
 	}
 }
 

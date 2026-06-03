@@ -3,12 +3,9 @@
 # Description: Operator user CRUD endpoints for the Engine auth group, mirroring the legacy server behaviour.
 #
 # API Endpoints (if applicable):
-# - GET /api/users (Token Authenticated (Admin)) - Lists operator accounts.
 # - POST /api/users (Token Authenticated (Admin)) - Creates a new operator account.
-# - DELETE /api/users/<username> (Token Authenticated (Admin)) - Deletes an operator account.
 # - POST /api/users/<username>/reset_password (Token Authenticated (Admin)) - Resets an operator password hash.
 # - POST /api/auth/password/reset (Token Authenticated) - Verifies the current operator password and replaces it with a new password hash.
-# - POST /api/users/<username>/role (Token Authenticated (Admin)) - Updates an operator role.
 # ======================================================
 
 """Operator user management endpoints for the Borealis Engine."""
@@ -18,7 +15,7 @@ import hashlib
 import os
 from Data.Engine.db import dbapi as sqlite3
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Tuple
 
 from flask import Blueprint, Flask, jsonify, request, session
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -39,27 +36,6 @@ def _now_ts() -> int:
 
 def _sha512_hex(value: str) -> str:
     return hashlib.sha512((value or "").encode("utf-8")).hexdigest()
-
-
-def _row_to_user(row: Sequence[Any]) -> Mapping[str, Any]:
-    """Convert a database row into a user payload."""
-    return {
-        "id": row[0],
-        "username": row[1],
-        "display_name": row[2] or row[1],
-        "role": row[3] or "User",
-        "last_login": row[4] or 0,
-        "created_at": row[5] or 0,
-        "updated_at": row[6] or 0,
-        "mfa_enabled": 1 if (row[7] or 0) else 0,
-        "auth_reset_required": 1 if (row[8] or 0) else 0,
-        "auth_reset_at": row[9] or 0,
-        "auth_source": row[10] or LOCAL_AUTH_SOURCE,
-        "directory_provider_id": row[11] or None,
-        "directory_provider_name": row[12] or "",
-        "directory_domain": row[13] or "",
-        "directory_disabled": 1 if (row[14] or 0) else 0,
-    }
 
 
 class UserManagementService:
@@ -190,51 +166,6 @@ class UserManagementService:
     # Endpoint implementations
     # ------------------------------------------------------------------ #
 
-    def list_users(self):
-        requirement = self._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        conn: Optional[sqlite3.Connection] = None
-        rows: List[Sequence[Any]] = []
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT
-                    users.id,
-                    users.username,
-                    users.display_name,
-                    users.role,
-                    users.last_login,
-                    users.created_at,
-                    users.updated_at,
-                    CASE WHEN COALESCE(mfa_disabled, 0) = 1 THEN 0 ELSE 1 END AS mfa_enabled,
-                    COALESCE(users.auth_reset_required, 0) AS auth_reset_required,
-                    COALESCE(users.auth_reset_at, 0) AS auth_reset_at,
-                    COALESCE(users.auth_source, 'local') AS auth_source,
-                    users.directory_provider_id,
-                    COALESCE(directory_providers.name, '') AS directory_provider_name,
-                    COALESCE(users.directory_domain, '') AS directory_domain,
-                    COALESCE(users.directory_disabled, 0) AS directory_disabled
-                FROM users
-                LEFT JOIN directory_providers
-                       ON directory_providers.id = users.directory_provider_id
-                ORDER BY LOWER(users.username) ASC
-                """
-            )
-            rows = cur.fetchall()
-        except Exception as exc:
-            self.logger.debug("Failed to list users", exc_info=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn:
-                conn.close()
-        users: List[Mapping[str, Any]] = [_row_to_user(row) for row in rows]
-        return jsonify({"users": users})
-
     def create_user(self):
         requirement = self._require_admin()
         if requirement:
@@ -269,60 +200,6 @@ class UserManagementService:
             return jsonify({"error": "username already exists"}), 409
         except Exception as exc:
             self.logger.debug("Failed to create user %s", username, exc_info=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn:
-                conn.close()
-
-    def delete_user(self, username: str):
-        requirement = self._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        username_norm = (username or "").strip()
-        if not username_norm:
-            return jsonify({"error": "invalid username"}), 400
-        if self._load_user_source(username_norm) == DIRECTORY_AUTH_SOURCE:
-            return jsonify({"error": "directory_user_local_action_disabled"}), 403
-
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-
-            me = self._current_user()
-            if me and (me.get("username", "").lower() == username_norm.lower()):
-                return (
-                    jsonify({"error": "You cannot delete the user you are currently logged in as."}),
-                    400,
-                )
-
-            cur.execute("SELECT COUNT(*) FROM users")
-            total_users = cur.fetchone()[0] or 0
-            if total_users <= 1:
-                return (
-                    jsonify(
-                        {
-                            "error": "There is only one user currently configured, you cannot delete this user until you have created another."
-                        }
-                    ),
-                    400,
-                )
-
-            cur.execute("SELECT id FROM users WHERE LOWER(username)=LOWER(?)", (username_norm,))
-            row = cur.fetchone()
-            user_id = row[0] if row else None
-            if user_id is not None:
-                cur.execute("DELETE FROM user_site_assignments WHERE user_id = ?", (user_id,))
-            cur.execute("DELETE FROM users WHERE LOWER(username)=LOWER(?)", (username_norm,))
-            deleted = cur.rowcount or 0
-            conn.commit()
-            if deleted == 0:
-                return jsonify({"error": "user not found"}), 404
-            return jsonify({"status": "ok"})
-        except Exception as exc:
-            self.logger.debug("Failed to delete user %s", username_norm, exc_info=True)
             return jsonify({"error": str(exc)}), 500
         finally:
             if conn:
@@ -447,57 +324,6 @@ class UserManagementService:
             self.logger.debug("Failed to reset own password for %s", username, exc_info=True)
             return jsonify({"error": str(exc)}), 500
 
-    def change_role(self, username: str):
-        requirement = self._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        data = request.get_json(silent=True) or {}
-        role = (data.get("role") or "").strip().title()
-        if role not in ("User", "Admin"):
-            return jsonify({"error": "invalid role"}), 400
-        if self._load_user_source(username) == DIRECTORY_AUTH_SOURCE:
-            return jsonify({"error": "directory_user_local_action_disabled"}), 403
-
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-
-            if role == "User":
-                cur.execute("SELECT COUNT(*) FROM users WHERE LOWER(role)='admin'")
-                admin_count = cur.fetchone()[0] or 0
-                cur.execute(
-                    "SELECT LOWER(role) FROM users WHERE LOWER(username)=LOWER(?)",
-                    (username,),
-                )
-                row = cur.fetchone()
-                current_role = (row[0] or "").lower() if row else ""
-                if current_role == "admin" and admin_count <= 1:
-                    return jsonify({"error": "cannot demote the last admin"}), 400
-
-            now_ts = _now_ts()
-            cur.execute(
-                "UPDATE users SET role=?, updated_at=? WHERE LOWER(username)=LOWER(?)",
-                (role, now_ts, username),
-            )
-            if cur.rowcount == 0:
-                return jsonify({"error": "user not found"}), 404
-            conn.commit()
-
-            me = self._current_user()
-            if me and me.get("username", "").lower() == (username or "").lower():
-                session["role"] = role
-
-            return jsonify({"status": "ok"})
-        except Exception as exc:
-            self.logger.debug("Failed to update role for %s", username, exc_info=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn:
-                conn.close()
-
 
 def register_user_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register user management endpoints."""
@@ -505,17 +331,9 @@ def register_user_management(app: Flask, adapters: "EngineServiceAdapters") -> N
     service = UserManagementService(app, adapters)
     blueprint = Blueprint("access_mgmt_users", __name__)
 
-    @blueprint.route("/api/users", methods=["GET"])
-    def _list_users():
-        return service.list_users()
-
     @blueprint.route("/api/users", methods=["POST"])
     def _create_user():
         return service.create_user()
-
-    @blueprint.route("/api/users/<username>", methods=["DELETE"])
-    def _delete_user(username: str):
-        return service.delete_user(username)
 
     @blueprint.route("/api/users/<username>/reset_password", methods=["POST"])
     def _reset_password(username: str):
@@ -524,9 +342,5 @@ def register_user_management(app: Flask, adapters: "EngineServiceAdapters") -> N
     @blueprint.route("/api/auth/password/reset", methods=["POST"])
     def _reset_own_password():
         return service.reset_own_password()
-
-    @blueprint.route("/api/users/<username>/role", methods=["POST"])
-    def _change_role(username: str):
-        return service.change_role(username)
 
     app.register_blueprint(blueprint)

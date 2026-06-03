@@ -25,10 +25,10 @@ type passkeyRow struct {
 	LastUsedAt sql.NullInt64
 }
 
-func authPasskeysHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func authPasskeysHandler(auth *authService, _ http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)

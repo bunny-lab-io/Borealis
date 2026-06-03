@@ -40,15 +40,19 @@ type userSiteAssignmentSite struct {
 	EnrollmentCode sql.NullString
 }
 
-func registerUserSiteAssignmentRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/user_site_assignments/", userSiteAssignmentHandler(auth, fallback))
+func registerUserSiteAssignmentRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
+	mux.HandleFunc("/api/user_site_assignments/", userSiteAssignmentHandler(auth))
 }
 
-func userSiteAssignmentHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func userSiteAssignmentHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		route := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/user_site_assignments/"), "/")
-		if r.Method != http.MethodPost || (route != "selection" && route != "assign") {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodPost)
+		if route != "selection" && route != "assign" {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+			return
+		}
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
