@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -121,7 +122,9 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFun
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."})
 			return
 		}
+		log.Printf("vnc_establish_request agent_id=%s hostname=%s worker_guid=%s route_prefix=%s", result.Device.AgentID, result.Device.Hostname, result.Route.WorkerGUID, result.Route.RoutePathPrefix)
 		payload, statusCode := runtime.issueSession(r.Context(), r, profile, result, body)
+		log.Printf("vnc_establish_response agent_id=%s hostname=%s status=%d error=%s session_id=%s", result.Device.AgentID, result.Device.Hostname, statusCode, cleanText(payload["error"]), cleanText(payload["session_id"]))
 		writeJSON(w, statusCode, payload)
 	}
 }
@@ -133,10 +136,13 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	agentID := result.Device.AgentID
 	hostname := result.Device.Hostname
 	serviceMode := serviceModeFromAgentID(agentID)
+	log.Printf("vnc_issue_start agent_id=%s hostname=%s service_mode=%s worker_guid=%s", agentID, hostname, serviceMode, result.Route.WorkerGUID)
 	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_establish", vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", 20))
 	if credErr != nil || credential.ControllerPassword == "" {
+		log.Printf("vnc_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, credErr)
 		return map[string]any{"error": "vnc_agent_live_credentials_unavailable"}, http.StatusServiceUnavailable
 	}
+	log.Printf("vnc_credential_received agent_id=%s hostname=%s revision=%d displays=%d", agentID, hostname, credential.CredentialRevision, len(credential.DisplayTopology))
 	removeWallpaper := true
 	if _, ok := body["remove_wallpaper"]; ok {
 		removeWallpaper = boolFromAny(body["remove_wallpaper"])
@@ -147,6 +153,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	tunnelPayload := v.vpn.sessionPayload(agentID, false)
 	if tunnelPayload == nil {
 		var err error
+		log.Printf("vnc_tunnel_connect agent_id=%s hostname=%s port=%d", agentID, hostname, vncPort)
 		tunnelPayload, err = v.vpn.connect(ctx, vpnConnectRequest{
 			AgentID:       agentID,
 			OperatorID:    profile.Username,
@@ -155,20 +162,24 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 			RequiredPorts: []int{vncPort},
 		})
 		if err != nil {
+			log.Printf("vnc_tunnel_connect_failed agent_id=%s hostname=%s error=%v", agentID, hostname, err)
 			return map[string]any{"error": "tunnel_down", "detail": err.Error()}, http.StatusConflict
 		}
 	} else {
+		log.Printf("vnc_tunnel_existing agent_id=%s hostname=%s tunnel_id=%s port=%d", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]), vncPort)
 		v.vpn.requestAgentStart(ctx, agentID, false, "vnc_establish", []int{vncPort})
 	}
 	virtualIP := cleanText(tunnelPayload["virtual_ip"])
 	host := strings.Split(virtualIP, "/")[0]
 	if host == "" {
+		log.Printf("vnc_tunnel_virtual_ip_missing agent_id=%s hostname=%s tunnel_id=%s", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]))
 		return map[string]any{"error": "virtual_ip_missing"}, http.StatusInternalServerError
 	}
 	allowedIPs := cleanText(firstNonEmpty(tunnelPayload["allowed_ips"], tunnelPayload["engine_virtual_ip"]))
 	if allowedIPs == "" {
 		allowedIPs = cleanText(tunnelPayload["engine_virtual_ip"])
 	}
+	log.Printf("vnc_tunnel_ready agent_id=%s hostname=%s tunnel_id=%s virtual_ip=%s allowed_ips=%s", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]), host, allowedIPs)
 	v.recordBackendReady(session.SessionID, cleanText(tunnelPayload["tunnel_id"]), allowedIPs, cleanText(tunnelPayload["engine_virtual_ip"]))
 	emitOK := emitVNCStart(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
 		"agent_id":            agentID,
@@ -181,13 +192,19 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"credential_revision": session.CredentialRevision,
 		"reason":              "vnc_establish",
 	})
+	log.Printf("vnc_start_emit agent_id=%s hostname=%s emitted=%t session_id=%s", agentID, hostname, emitOK, session.SessionID)
 	if !emitOK {
 		return map[string]any{"error": "agent_socket_missing"}, http.StatusConflict
 	}
-	if !waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15)) {
+	fastReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
+	if !fastReady {
+		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
 		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
 	}
-	if !waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5)) {
+	recoveryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
+	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
+	if !recoveryReady {
 		v.recordError(session.SessionID, "vnc_backend_unreachable")
 		return map[string]any{
 			"error": "vnc_backend_unreachable",
@@ -197,10 +214,12 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
+		log.Printf("vnc_guacd_unavailable agent_id=%s hostname=%s reason=%s", agentID, hostname, firstText(cleanText(health["reason"]), "unavailable"))
 		return map[string]any{"error": "guacamole_unavailable", "detail": firstText(cleanText(health["reason"]), "unavailable")}, http.StatusServiceUnavailable
 	}
 	issued, issueErr := v.issueRemoteDesktopToken(profile, result)
 	if issueErr != nil {
+		log.Printf("vnc_token_issue_failed agent_id=%s hostname=%s error=%v", agentID, hostname, issueErr)
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
 	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
@@ -219,6 +238,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"dpi":                    96,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
 	}, 10*time.Second)
+	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
 	if workerErr != nil {
 		v.recordError(session.SessionID, "worker_guacamole_unavailable")
 		if workerStatus == 0 {
@@ -229,9 +249,11 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	guacToken := cleanText(workerResponse["token"])
 	if guacToken == "" {
 		v.recordError(session.SessionID, "worker_guacamole_token_missing")
+		log.Printf("vnc_worker_token_missing agent_id=%s hostname=%s session_id=%s", agentID, hostname, session.SessionID)
 		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
 	}
 	_ = v.vpn.confirmTransportSuccess(agentID)
+	log.Printf("vnc_establish_success agent_id=%s hostname=%s session_id=%s participant_id=%s host=%s port=%d", agentID, hostname, session.SessionID, participant.ParticipantID, host, vncPort)
 	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
 	urls := remoteOpsWorkerURLs(r, result.Route)
 	snapshot := v.sessionSnapshot(session, profile.Username)

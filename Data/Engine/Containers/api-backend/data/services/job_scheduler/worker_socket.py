@@ -327,6 +327,15 @@ class SiteWorkerSocketRuntime:
                     payload,
                     ttl_seconds=data.get("pending_ttl_seconds"),
                 )
+            self._log(
+                "host_service_event_request hostname={0} service_mode={1} event={2} emitted={3} queued={4}".format(
+                    normalize_host_key(hostname) or hostname,
+                    normalize_service_mode(service_mode),
+                    event_name,
+                    bool(emitted),
+                    bool(queued),
+                )
+            )
             return jsonify({"emitted": bool(emitted), "queued": bool(queued)}), 200
 
         @self.app.route("/remote-ops/host-service/call", methods=["POST"])
@@ -354,6 +363,15 @@ class SiteWorkerSocketRuntime:
                 event_name,
                 payload,
                 timeout=max(0.5, timeout),
+            )
+            self._log(
+                "host_service_event_call hostname={0} service_mode={1} event={2} called={3} timeout={4:.1f}".format(
+                    normalize_host_key(hostname) or hostname,
+                    normalize_service_mode(service_mode),
+                    event_name,
+                    response is not None,
+                    max(0.5, timeout),
+                )
             )
             return jsonify({"called": response is not None, "response": response}), 200
 

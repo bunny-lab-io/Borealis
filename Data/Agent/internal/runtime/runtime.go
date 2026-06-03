@@ -303,15 +303,14 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Site-worker socket connecting."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
 	}
-	if a.authClient.RemoteOpsRouteNeedsRefresh(60 * time.Second) {
-		if err := a.authClient.RefreshRemoteOpsRoute(ctx); err != nil {
-			a.logger.Printf("remote ops route refresh failed: %v", err)
-		}
+	if err := a.authClient.RefreshRemoteOpsRoute(ctx); err != nil {
+		a.logger.Printf("remote ops route refresh failed: %v", err)
 	}
 	socketBaseURL := a.authClient.RemoteOpsBaseURL()
 	if socketBaseURL == "" {
 		return fmt.Errorf("site-worker remote ops route unavailable")
 	}
+	a.logger.Printf("socket connecting route=%s", socketBaseURL)
 	headers := a.authClient.AuthHeaders()
 	socket := transport.NewClient(socketBaseURL, headers)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)

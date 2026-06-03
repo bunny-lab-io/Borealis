@@ -404,6 +404,7 @@ func (m *Manager) runEnsureCycle(ctx context.Context, reason string) {
 		return
 	}
 	if m.sessionConfigMatchesLive(ctx, session) {
+		m.repairLiveSession(ctx, session)
 		m.notifyReady(ctx, session, cleanReason)
 		m.clearError()
 		return
@@ -477,7 +478,7 @@ func (m *Manager) startSession(ctx context.Context, session *SessionConfig) erro
 	m.mu.Unlock()
 	if current != nil && current.TunnelID == session.TunnelID && sessionEquivalent(current, session) && !session.ForceRestart {
 		if m.serviceState(ctx) == "RUNNING" {
-			_ = primeEnginePath(session)
+			m.repairLiveSession(ctx, session)
 			m.mu.Lock()
 			m.session = session
 			m.mu.Unlock()
@@ -506,6 +507,20 @@ func (m *Manager) startSession(ctx context.Context, session *SessionConfig) erro
 	m.mu.Unlock()
 	m.logf("WireGuard session started tunnel_id=%s virtual_ip=%s endpoint=%s", session.TunnelID, session.VirtualIP, session.Endpoint)
 	return nil
+}
+
+func (m *Manager) repairLiveSession(ctx context.Context, session *SessionConfig) {
+	if session == nil {
+		return
+	}
+	_ = primeEnginePath(session)
+	switch m.platform {
+	case "windows":
+		m.ensureWindowsServiceDisplayName(ctx)
+		m.ensureWindowsFirewall(ctx, session.AllowedIPs, session.AllowedPorts)
+	case "linux":
+		m.ensureLinuxMTU(ctx)
+	}
 }
 
 func (m *Manager) stopSession(ctx context.Context, reason string, ignoreMissing bool) error {

@@ -188,12 +188,14 @@ func (m *Manager) Stop(ctx context.Context) {
 func (m *Manager) HandleStart(ctx context.Context, payload any) (any, error) {
 	data := asMap(payload)
 	if !m.payloadForThisAgent(data) {
+		m.logf("VNC start request ignored target_agent_id=%s local_agent_id=%s", cleanText(data["agent_id"]), m.agentID())
 		return map[string]any{"status": "ignored", "agent_id": m.agentID()}, nil
 	}
 	reason := cleanText(data["reason"])
 	if reason == "" {
 		reason = "vnc_session_start"
 	}
+	m.logf("VNC start request received reason=%s session_id=%s port=%s", reason, cleanText(data["session_id"]), cleanText(data["port"]))
 	m.mu.Lock()
 	if value := data["port"]; value != nil {
 		m.port = resolveVNCPort(value)
@@ -251,21 +253,29 @@ func (m *Manager) HandleRefresh(ctx context.Context, payload any) (any, error) {
 func (m *Manager) HandleCredentialRequest(ctx context.Context, payload any) (any, error) {
 	data := asMap(payload)
 	if !m.payloadForThisAgent(data) {
+		m.logf("VNC credential request ignored target_agent_id=%s local_agent_id=%s request_id=%s", cleanText(data["agent_id"]), m.agentID(), cleanText(data["request_id"]))
 		return map[string]any{"status": "ignored", "agent_id": m.agentID()}, nil
 	}
 	reason := cleanText(data["reason"])
 	if reason == "" {
 		reason = "vnc_establish"
 	}
+	requestID := cleanText(data["request_id"])
+	rotated := false
+	fastPath := false
 	if shouldRotateCredential(reason) {
 		m.rotateCredential(reason)
+		rotated = true
 	} else {
-		if !m.ensureCredentialFresh(reason) && m.credentialFastPathReady() {
-			return m.credentialPayload(cleanText(data["request_id"]), reason), nil
-		}
+		rotated = m.ensureCredentialFresh(reason)
+		fastPath = !rotated && m.credentialFastPathReady()
+	}
+	m.logf("VNC credential request received reason=%s request_id=%s fast_path=%t rotated=%t", reason, requestID, fastPath, rotated)
+	if fastPath {
+		return m.credentialPayload(requestID, reason), nil
 	}
 	_ = m.ensureAlwaysOn(ctx, reason)
-	return m.credentialPayload(cleanText(data["request_id"]), reason), nil
+	return m.credentialPayload(requestID, reason), nil
 }
 
 func (m *Manager) Health() RoleHealth {
