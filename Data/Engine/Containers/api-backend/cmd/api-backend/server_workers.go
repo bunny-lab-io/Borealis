@@ -74,15 +74,15 @@ type workItemRow struct {
 	Error         sql.NullString
 }
 
-func registerServerWorkerRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/server/workers", serverWorkersHandler(auth, fallback))
-	mux.HandleFunc("/api/server/workers/", serverWorkerSubtreeHandler(auth, fallback))
+func registerServerWorkerRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
+	mux.HandleFunc("/api/server/workers", serverWorkersHandler(auth))
+	mux.HandleFunc("/api/server/workers/", serverWorkerSubtreeHandler(auth))
 }
 
-func serverWorkersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func serverWorkersHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
@@ -111,7 +111,7 @@ func serverWorkersHandler(auth *authService, fallback http.Handler) http.Handler
 	}
 }
 
-func serverWorkerSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func serverWorkerSubtreeHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/server/workers/"), "/"), "/")
 		if len(parts) == 2 && parts[1] == "recreate" && r.Method == http.MethodPost {
@@ -136,10 +136,6 @@ func serverWorkerSubtreeHandler(auth *authService, fallback http.Handler) http.H
 				return
 			}
 			writeJSON(w, status, payload)
-			return
-		}
-		if fallback != nil {
-			fallback.ServeHTTP(w, r)
 			return
 		}
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})

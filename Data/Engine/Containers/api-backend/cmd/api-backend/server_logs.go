@@ -24,15 +24,15 @@ var (
 	pythonLogLinePattern  = regexp.MustCompile(`^(?P<ts>\d{4}-\d{2}-\d{2}\s+[0-9:,]+)-(?P<logger>.+?)-(?P<level>[A-Z]+):\s*(?P<msg>.*)$`)
 )
 
-func registerServerLogRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/server/logs", serverLogsHandler(auth, fallback))
-	mux.HandleFunc("/api/server/logs/", serverLogEntriesHandler(auth, fallback))
+func registerServerLogRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
+	mux.HandleFunc("/api/server/logs", serverLogsHandler(auth))
+	mux.HandleFunc("/api/server/logs/", serverLogEntriesHandler(auth))
 }
 
-func serverLogsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func serverLogsHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
@@ -52,7 +52,7 @@ func serverLogsHandler(auth *authService, fallback http.Handler) http.HandlerFun
 	}
 }
 
-func serverLogEntriesHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func serverLogEntriesHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPut && r.URL.Path == "/api/server/logs/retention" {
 			serverLogRetentionUpdate(w, r, auth)
@@ -63,16 +63,12 @@ func serverLogEntriesHandler(auth *authService, fallback http.Handler) http.Hand
 			return
 		}
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		prefix := "/api/server/logs/"
 		suffix := "/entries"
 		if !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
-			if fallback != nil {
-				fallback.ServeHTTP(w, r)
-				return
-			}
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 			return
 		}

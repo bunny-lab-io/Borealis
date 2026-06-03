@@ -3,8 +3,6 @@
 # Description: Credential-management endpoints for reusable SSH, Windows, and WinRM authentication records.
 #
 # API Endpoints (if applicable):
-# - GET /api/credentials (Token Authenticated) - Lists stored credentials for scheduler and access-management UI use.
-# - GET /api/credentials/<int:credential_id> (Token Authenticated) - Retrieves one stored credential without secret material.
 # - POST /api/credentials (Token Authenticated (Admin)) - Creates a stored credential record.
 # - PUT /api/credentials/<int:credential_id> (Token Authenticated (Admin)) - Updates a stored credential record.
 # - DELETE /api/credentials/<int:credential_id> (Token Authenticated (Admin)) - Deletes a stored credential record.
@@ -321,47 +319,6 @@ class CredentialManagementService:
         if not cur.fetchone():
             raise LookupError("site not found")
 
-    def list_credentials(self):
-        requirement = self._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            cur.execute(self._credential_query() + " ORDER BY LOWER(c.name) ASC, c.id ASC")
-            rows = [_credential_row_to_dict(row) for row in cur.fetchall()]
-            return jsonify({"credentials": rows})
-        except Exception as exc:
-            self.logger.debug("Failed to list credentials", exc_info=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
-
-    def get_credential(self, credential_id: int):
-        requirement = self._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-
-        conn: Optional[sqlite3.Connection] = None
-        try:
-            conn = self._db_conn()
-            cur = conn.cursor()
-            row = self._load_credential_row(cur, int(credential_id))
-            if not row:
-                return jsonify({"error": "credential not found"}), 404
-            return jsonify({"credential": _credential_row_to_dict(row)})
-        except Exception as exc:
-            self.logger.debug("Failed to get credential %s", credential_id, exc_info=True)
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
-
     def create_credential(self):
         requirement = self._require_admin()
         if requirement:
@@ -674,14 +631,6 @@ def register_credential_management(app: Flask, adapters: "EngineServiceAdapters"
 
     service = CredentialManagementService(app, adapters)
     blueprint = Blueprint("credentials_access", __name__)
-
-    @blueprint.route("/api/credentials", methods=["GET"])
-    def _credential_list():
-        return service.list_credentials()
-
-    @blueprint.route("/api/credentials/<int:credential_id>", methods=["GET"])
-    def _credential_get(credential_id: int):
-        return service.get_credential(credential_id)
 
     @blueprint.route("/api/credentials", methods=["POST"])
     def _credential_create():

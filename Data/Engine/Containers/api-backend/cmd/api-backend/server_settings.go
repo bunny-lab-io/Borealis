@@ -16,9 +16,9 @@ const (
 	defaultAnsibleRunnerGlobalLimit       = 50
 )
 
-func registerServerSettingsRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+func registerServerSettingsRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
 	mux.HandleFunc("/api/server/site-worker-settings", siteWorkerSettingsHandler(auth))
-	mux.HandleFunc("/api/server/ansible-runner-settings", ansibleRunnerSettingsHandler(auth, fallback))
+	mux.HandleFunc("/api/server/ansible-runner-settings", ansibleRunnerSettingsHandler(auth))
 }
 
 func siteWorkerSettingsHandler(auth *authService) http.HandlerFunc {
@@ -36,7 +36,7 @@ func siteWorkerSettingsHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func ansibleRunnerSettingsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func ansibleRunnerSettingsHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -49,7 +49,7 @@ func ansibleRunnerSettingsHandler(auth *authService, fallback http.Handler) http
 		case http.MethodPut:
 			updateAnsibleRunnerSettings(w, r, auth)
 		default:
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet+", "+http.MethodPut)
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPut)
 		}
 	}
 }

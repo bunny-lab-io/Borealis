@@ -2049,7 +2049,7 @@ func TestDirectorySitesHandlerReturnsSites(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/directory/sites", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	directorySitesHandler(auth, nil).ServeHTTP(recorder, request)
+	directorySitesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2303,8 +2303,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		path    string
 	}{
 		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
-		{name: "server overview update", handler: serverOverviewHandler(auth, fallback), method: http.MethodPost, path: "/api/server/overview"},
-		{name: "server workers update", handler: serverWorkersHandler(auth, fallback), method: http.MethodPost, path: "/api/server/workers"},
 		{name: "user create", handler: usersHandler(auth, fallback), method: http.MethodPost, path: "/api/users"},
 		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
 		{name: "credential create", handler: credentialsHandler(auth, fallback), method: http.MethodPost, path: "/api/credentials"},
@@ -2316,8 +2314,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 6 {
-		t.Fatalf("expected 6 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 4 {
+		t.Fatalf("expected 4 fallback hits, got %d", fallbackHits)
 	}
 }
 
@@ -2436,7 +2434,7 @@ func TestServerWorkersHandlerRequiresAdmin(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/workers", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverWorkersHandler(auth, nil).ServeHTTP(recorder, request)
+	serverWorkersHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2455,7 +2453,7 @@ func TestServerWorkersHandlerReturnsPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/workers?history_seconds=999999", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverWorkersHandler(auth, nil).ServeHTTP(recorder, request)
+	serverWorkersHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2485,7 +2483,7 @@ func TestServerOverviewHandlerRequiresAdmin(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverOverviewHandler(auth, nil).ServeHTTP(recorder, request)
+	serverOverviewHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2511,7 +2509,7 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverOverviewHandler(auth, nil).ServeHTTP(recorder, request)
+	serverOverviewHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2553,7 +2551,7 @@ func TestServerLogsHandlerReturnsDomains(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/logs", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogsHandler(auth, nil).ServeHTTP(recorder, request)
+	serverLogsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2587,7 +2585,7 @@ func TestServerLogEntriesHandlerReturnsParsedEntries(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/logs/engine.log/entries?limit=50", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2620,7 +2618,7 @@ func TestServerLogRetentionHandlerUpdatesPolicy(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":5}}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2637,7 +2635,7 @@ func TestServerLogRetentionHandlerUpdatesPolicy(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":null}}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected clear 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -2659,7 +2657,7 @@ func TestServerLogDeleteHandlerDeletesFamily(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, "/api/server/logs/engine.log?scope=family", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth, nil).ServeHTTP(recorder, request)
+	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2765,7 +2763,7 @@ func TestAnsibleRunnerSettingsHandlerRequiresAdmin(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/ansible-runner-settings", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+	ansibleRunnerSettingsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2783,7 +2781,7 @@ func TestAnsibleRunnerSettingsHandlerReturnsConfigPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/ansible-runner-settings", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+	ansibleRunnerSettingsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2808,7 +2806,7 @@ func TestAnsibleRunnerSettingsHandlerPersistsConfigPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/server/ansible-runner-settings", strings.NewReader(`{"job_concurrency_limit":"8","global_concurrency_limit":18}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+	ansibleRunnerSettingsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2844,7 +2842,7 @@ func TestAnsibleRunnerSettingsHandlerRejectsInvalidPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/server/ansible-runner-settings", strings.NewReader(`{"job_concurrency_limit":0,"global_concurrency_limit":18}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	ansibleRunnerSettingsHandler(auth, nil).ServeHTTP(recorder, request)
+	ansibleRunnerSettingsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())

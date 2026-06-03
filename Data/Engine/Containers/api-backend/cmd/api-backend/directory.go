@@ -81,7 +81,7 @@ type directorySiteRow struct {
 
 func registerDirectoryRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/directory/providers", directoryProvidersHandler(auth, fallback))
-	mux.HandleFunc("/api/directory/sites", directorySitesHandler(auth, fallback))
+	mux.HandleFunc("/api/directory/sites", directorySitesHandler(auth))
 }
 
 func directoryProvidersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -110,10 +110,10 @@ func directoryProvidersHandler(auth *authService, fallback http.Handler) http.Ha
 	}
 }
 
-func directorySitesHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func directorySitesHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {

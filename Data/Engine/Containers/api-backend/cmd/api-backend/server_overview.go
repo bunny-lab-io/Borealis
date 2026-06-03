@@ -30,14 +30,14 @@ var composeServiceSpecs = []struct {
 	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
 
-func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/server/overview", serverOverviewHandler(auth, fallback))
+func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
+	mux.HandleFunc("/api/server/overview", serverOverviewHandler(auth))
 }
 
-func serverOverviewHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func serverOverviewHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {

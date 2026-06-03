@@ -3,7 +3,6 @@
 # Description: Directory service provider management and LDAP/Active Directory authentication helpers.
 #
 # API Endpoints (if applicable):
-# - GET /api/directory/providers (Token Authenticated (Admin)) - Lists configured directory providers.
 # - POST /api/directory/providers (Token Authenticated (Admin)) - Creates a directory provider.
 # - PATCH /api/directory/providers/<provider_id> (Token Authenticated (Admin)) - Updates a directory provider.
 # - DELETE /api/directory/providers/<provider_id> (Token Authenticated (Admin)) - Deletes a directory provider.
@@ -1507,57 +1506,6 @@ class DirectoryManagementService:
             return {"error": "forbidden"}, 403
         return None
 
-    def list_providers(self):
-        requirement = self._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        return jsonify({"providers": [self.manager.public_provider(item) for item in self.manager.load_providers()]})
-
-    def list_sites(self):
-        requirement = self._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT s.id,
-                       s.name,
-                       s.description,
-                       s.created_at,
-                       COALESCE(ds.cnt, 0) AS device_count,
-                       s.enrollment_code
-                  FROM sites AS s
-             LEFT JOIN (
-                       SELECT site_id, COUNT(*) AS cnt
-                         FROM device_sites
-                     GROUP BY site_id
-                   ) AS ds ON ds.site_id = s.id
-              ORDER BY LOWER(s.name) ASC
-                """
-            )
-            rows = _rows_to_dicts(cur, cur.fetchall())
-        finally:
-            conn.close()
-        return jsonify(
-            {
-                "sites": [
-                    {
-                        "id": int(row.get("id") or 0),
-                        "name": _clean_text(row.get("name")),
-                        "description": _clean_text(row.get("description")),
-                        "created_at": _as_int(row.get("created_at"), 0),
-                        "device_count": _as_int(row.get("device_count"), 0),
-                        "enrollment_code": _clean_text(row.get("enrollment_code")),
-                    }
-                    for row in rows
-                ]
-            }
-        )
-
     def save_provider(self, provider_id: Optional[int] = None):
         requirement = self._require_admin()
         if requirement:
@@ -2057,14 +2005,6 @@ def register_directory_services(app: Flask, adapters: "EngineServiceAdapters") -
 
     service = DirectoryManagementService(app, adapters)
     blueprint = Blueprint("access_mgmt_directory_services", __name__)
-
-    @blueprint.route("/api/directory/providers", methods=["GET"])
-    def _list_providers():
-        return service.list_providers()
-
-    @blueprint.route("/api/directory/sites", methods=["GET"])
-    def _list_sites():
-        return service.list_sites()
 
     @blueprint.route("/api/directory/providers", methods=["POST"])
     def _create_provider():

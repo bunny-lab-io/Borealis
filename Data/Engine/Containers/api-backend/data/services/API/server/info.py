@@ -3,13 +3,8 @@
 # Description: Server information endpoints surfaced for administrative UX.
 #
 # API Endpoints (if applicable):
-# - GET /api/server/time (Operator Session) - Returns the server clock in multiple formats.
-# - GET /api/server/overview (Operator Admin Session) - Returns a Borealis Engine server/admin dashboard snapshot, including Compose-backed service rows in container mode.
-# - POST /api/server/services/<service_key>/action (Operator Admin Session) - Queues a Compose-backed Engine.sh service action in container mode.
 # - POST /api/server/services/<service_key>/restart (Operator Admin Session) - Queues a safe detached service restart via systemd-run for non-container installs.
 # - POST /api/server/wireguard/recover (Operator Admin Session) - Forces a WireGuard listener recovery attempt when active tunnels exist.
-# - GET /api/server/site-worker-settings (Operator Admin Session) - Returns profile-managed site-worker scheduled-lane capacity.
-# - POST /api/server/workers/<worker_guid>/recreate (Operator Admin Session) - Queues a site-worker container stop so scheduler redeploys it.
 # ======================================================
 
 from __future__ import annotations
@@ -45,7 +40,6 @@ from ...RemoteDesktop.guacamole_proxy import guacd_health
 from ....public_endpoints import wireguard_endpoint
 from ....security import signing
 from ...job_scheduler.queue import (
-    enqueue_service_action,
     list_active_work_items,
     list_recent_work_items,
     list_service_snapshots,
@@ -60,7 +54,6 @@ from ...ansible.runtime_settings import (
     DEFAULT_ANSIBLE_RUNNER_GLOBAL_CONCURRENCY_LIMIT,
     DEFAULT_ANSIBLE_RUNNER_JOB_CONCURRENCY_LIMIT,
     load_ansible_runner_settings,
-    save_ansible_runner_settings,
 )
 from ...VPN import WireGuardServerConfig, WireGuardServerManager, VpnTunnelService
 from ...auth import RequestAuthContext
@@ -686,59 +679,6 @@ def _docker_inspect_container(container_name: str) -> Mapping[str, Any]:
     if isinstance(parsed, list) and parsed and isinstance(parsed[0], Mapping):
         return parsed[0]
     return {}
-
-
-def _docker_image_exists(docker_bin: str, image: str) -> bool:
-    normalized_image = str(image or "").strip()
-    if not docker_bin or not normalized_image:
-        return False
-    code, _out, _err = _run_command([docker_bin, "image", "inspect", normalized_image], timeout=8)
-    return code == 0
-
-
-def _read_api_backend_image_from_manifest(path: Path) -> str:
-    if not path.is_file():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return ""
-    candidates = [
-        ((data.get("service_images") or {}).get("api-backend") or {}).get("image"),
-        ((data.get("services") or {}).get("api-backend") or {}).get("image"),
-    ]
-    for candidate in candidates:
-        image = str(candidate or "").strip()
-        if image:
-            return image
-    return ""
-
-
-def _resolve_api_backend_helper_image(docker_bin: str, project_root: Path) -> str:
-    env_image = str(os.environ.get("BOREALIS_API_BACKEND_IMAGE") or "").strip()
-    if env_image and _docker_image_exists(docker_bin, env_image):
-        return env_image
-
-    inspected = _docker_inspect_container("borealis-engine-api-backend")
-    config_payload = inspected.get("Config") if isinstance(inspected.get("Config"), Mapping) else {}
-    config_image = str(config_payload.get("Image") or "").strip()
-    if config_image and _docker_image_exists(docker_bin, config_image):
-        return config_image
-
-    image_id = str(inspected.get("Image") or "").strip()
-    if image_id and _docker_image_exists(docker_bin, image_id):
-        return image_id
-
-    for manifest_name in ("deploy-manifest.json", "image-manifest.json"):
-        manifest_image = _read_api_backend_image_from_manifest(project_root / "Engine" / "Deploy" / manifest_name)
-        if manifest_image and _docker_image_exists(docker_bin, manifest_image):
-            return manifest_image
-
-    local_image = "borealis-engine/api-backend:local"
-    if _docker_image_exists(docker_bin, local_image):
-        return local_image
-
-    return ""
 
 
 def _compose_status(state: str, health: str) -> str:
@@ -1619,57 +1559,6 @@ def _collect_worker_payload(
     }
 
 
-def _queue_site_worker_recreate(
-    adapters: "EngineServiceAdapters",
-    *,
-    worker_guid: str,
-) -> Tuple[bool, Dict[str, Any], str, int]:
-    normalized_guid = str(worker_guid or "").strip()
-    if not normalized_guid:
-        return False, {}, "A site-worker id is required.", 400
-    conn = adapters.db_conn_factory()
-    try:
-        rows = list_worker_snapshots(conn, include_stopped_since=86400)
-        worker = next(
-            (
-                dict(row)
-                for row in rows
-                if str(row.get("worker_guid") or "").strip() == normalized_guid
-                and int(row.get("site_id") or 0) > 0
-            ),
-            None,
-        )
-        if not worker:
-            conn.commit()
-            return False, {}, "Site worker not found.", 404
-        container_name = str(worker.get("container_name") or "").strip()
-        if not container_name:
-            conn.commit()
-            return False, {}, "Site worker has no tracked container.", 409
-        work_id = enqueue_service_action(
-            conn,
-            service_key="site-worker",
-            action={
-                "id": "recreate",
-                "label": "Re-Create Site Worker",
-                "action": "recreate",
-                "worker_guid": normalized_guid,
-                "container_name": container_name,
-                "site_id": int(worker.get("site_id") or 0),
-            },
-        )
-        conn.commit()
-    except Exception as exc:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        return False, {}, str(exc), 500
-    finally:
-        conn.close()
-    return True, {"worker": worker, "container_name": container_name, "work_item_id": work_id}, "", 202
-
-
 def _collect_agent_release_channels_payload(adapters: "EngineServiceAdapters") -> Dict[str, Any]:
     manager = getattr(adapters, "agent_release_manager", None)
     if manager is None:
@@ -1749,100 +1638,6 @@ def _queue_detached_restart(
     return True, f"{job_unit}.service", ""
 
 
-def _resolve_compose_service_action(service_key: str, body: Mapping[str, Any]) -> Optional[Dict[str, str]]:
-    normalized_service = str(service_key or "").strip().lower()
-    requested_action = str(body.get("action") or "").strip().lower()
-    requested_mode = str(body.get("mode") or "").strip().lower()
-    requested_id = str(body.get("id") or body.get("action_id") or "").strip().lower()
-    for action in _compose_service_actions(normalized_service):
-        action_name = str(action.get("action") or "").strip().lower()
-        action_mode = str(action.get("mode") or "").strip().lower()
-        action_id = str(action.get("id") or "").strip().lower()
-        if requested_id and requested_id == action_id:
-            return action
-        if requested_action != action_name:
-            continue
-        if action_mode and requested_mode and requested_mode != action_mode:
-            continue
-        if action_mode and not requested_mode and requested_action == "rebuild":
-            continue
-        return action
-    return None
-
-
-def _queue_compose_service_action(
-    *,
-    service_key: str,
-    action: Mapping[str, str],
-) -> Tuple[bool, str, str]:
-    docker_bin = shutil.which("docker") or ""
-    if not docker_bin:
-        return False, "", "docker CLI is unavailable inside the API backend container."
-
-    project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or PROJECT_ROOT)
-    image = _resolve_api_backend_helper_image(docker_bin, project_root)
-    if not image:
-        return False, "", "Unable to resolve the running api-backend helper image."
-
-    action_name = str(action.get("action") or "").strip().lower()
-    action_mode = str(action.get("mode") or "").strip().lower()
-    if not action_name:
-        return False, "", "A service action is required."
-
-    command_parts = ["bash", "Engine.sh", "--service", service_key, action_name]
-    if action_mode:
-        command_parts.append(action_mode)
-    shell_command = f"sleep {_CONTAINER_ACTION_DELAY_SECONDS}; {shlex.join(command_parts)}"
-    helper_name = f"borealis-engine-action-{service_key}-{uuid.uuid4().hex[:8]}"
-    args = [
-        docker_bin,
-        "run",
-        "--rm",
-        "-d",
-        "--name",
-        helper_name,
-        "--network",
-        "host",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-        "-v",
-        f"{project_root}:{project_root}",
-        "-w",
-        str(project_root),
-        "--entrypoint",
-        "/bin/bash",
-        image,
-        "-lc",
-        shell_command,
-    ]
-    code, out, err = _run_command(args, timeout=15)
-    if code != 0:
-        return False, "", str(err or out or "docker helper launch failed").strip()
-    helper_id = str(out or "").strip().splitlines()[0] if str(out or "").strip() else helper_name
-    return True, helper_id, ""
-
-
-def _queue_job_scheduler_service_action(
-    adapters: "EngineServiceAdapters",
-    *,
-    service_key: str,
-    action: Mapping[str, str],
-) -> Tuple[bool, str, str]:
-    conn = adapters.db_conn_factory()
-    try:
-        work_id = enqueue_service_action(conn, service_key=service_key, action=action)
-        conn.commit()
-    except Exception as exc:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        return False, "", str(exc)
-    finally:
-        conn.close()
-    return True, str(work_id), ""
-
-
 def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Expose server telemetry endpoints used by the admin interface."""
 
@@ -1855,74 +1650,6 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
         db_conn_factory=adapters.db_conn_factory,
         aegis_cipher_service=adapters.aegis_cipher_service,
     )
-
-    @blueprint.route("/api/server/time", methods=["GET"])
-    def server_time() -> Any:
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        now_utc = datetime.now(timezone.utc)
-        now_local = now_utc.astimezone()
-        payload = _serialize_time(now_local, now_utc, timezone_id=_current_timezone_id())
-        return jsonify(payload)
-
-    @blueprint.route("/api/server/overview", methods=["GET"])
-    def server_overview() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        return jsonify(_build_overview_payload(adapters))
-
-    @blueprint.route("/api/server/workers", methods=["GET"])
-    def server_workers() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        try:
-            history_seconds = int(request.args.get("history_seconds") or 60)
-        except Exception:
-            history_seconds = 60
-        return jsonify(
-            _collect_worker_payload(
-                adapters,
-                history_seconds=max(0, min(history_seconds, 86400)),
-                include_container_metadata=True,
-            )
-        )
-
-    @blueprint.route("/api/server/workers/<worker_guid>/recreate", methods=["POST"])
-    def recreate_site_worker(worker_guid: str) -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        queued, payload, error_message, status_code = _queue_site_worker_recreate(adapters, worker_guid=worker_guid)
-        if not queued:
-            code = "site_worker_recreate_failed" if status_code >= 500 else "site_worker_recreate_unavailable"
-            return _error_response(code, error_message or "Unable to queue site-worker re-create.", status_code)
-        worker = payload.get("worker") or {}
-        return (
-            jsonify(
-                {
-                    "queued": True,
-                    "worker_guid": str(worker.get("worker_guid") or worker_guid),
-                    "site_id": int(worker.get("site_id") or 0),
-                    "site_name": str(worker.get("site_name") or ""),
-                    "container_name": str(payload.get("container_name") or ""),
-                    "work_item_id": int(payload.get("work_item_id") or 0),
-                }
-            ),
-            202,
-        )
-
-    @blueprint.route("/api/server/agent-release-channels", methods=["GET"])
-    def get_agent_release_channels() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        manager = getattr(adapters, "agent_release_manager", None)
-        if manager is None:
-            return _error_response("release_channels_unavailable", "Agent release channels are unavailable on this engine.", 503)
-        return jsonify(manager.get_settings())
 
     @blueprint.route("/api/server/agent-release-channels", methods=["PUT"])
     def update_agent_release_channels() -> Any:
@@ -1947,111 +1674,6 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
             return _error_response("release_channels_unavailable", "Agent release channels are unavailable on this engine.", 503)
         return jsonify(manager.refresh_channels(force=True))
 
-    @blueprint.route("/api/server/ansible-runner-settings", methods=["GET"])
-    def get_ansible_runner_settings() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        return jsonify(_collect_ansible_runner_payload())
-
-    @blueprint.route("/api/server/ansible-runner-settings", methods=["PUT"])
-    def update_ansible_runner_settings() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        body = request.get_json(silent=True) or {}
-        normalized: Dict[str, int] = {}
-        for field_name, label in (
-            ("job_concurrency_limit", "Per-job concurrency"),
-            ("global_concurrency_limit", "Global concurrency"),
-        ):
-            raw_value = body.get(field_name)
-            if raw_value in {None, ""}:
-                return _error_response(
-                    "invalid_ansible_runner_settings",
-                    f"{label} is required.",
-                    400,
-                )
-            try:
-                parsed_value = int(raw_value)
-            except Exception:
-                return _error_response(
-                    "invalid_ansible_runner_settings",
-                    f"{label} must be a whole number greater than 0.",
-                    400,
-                )
-            if parsed_value < 1:
-                return _error_response(
-                    "invalid_ansible_runner_settings",
-                    f"{label} must be a whole number greater than 0.",
-                    400,
-                )
-            normalized[field_name] = parsed_value
-        save_ansible_runner_settings(
-            normalized
-        )
-        return jsonify({"status": "ok", "ansible_runner": _collect_ansible_runner_payload()})
-
-    @blueprint.route("/api/server/site-worker-settings", methods=["GET"])
-    def get_site_worker_settings() -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-        return jsonify(_collect_site_worker_settings_payload())
-
-    @blueprint.route("/api/server/services/<service_key>/action", methods=["POST"])
-    def run_service_action(service_key: str) -> Any:
-        admin_error = auth.require_admin()
-        if admin_error:
-            return jsonify(admin_error[0]), admin_error[1]
-
-        if not _containerized_engine_enabled():
-            return _error_response(
-                "service_action_unsupported",
-                "Generic service actions are available for containerized Engine deployments only.",
-                409,
-            )
-
-        normalized_key = str(service_key or "").strip().lower()
-        if normalized_key not in dict(_COMPOSE_SERVICE_SPECS):
-            return _error_response("invalid_service_key", "Unsupported service key.", 404)
-
-        body = request.get_json(silent=True) or {}
-        action = _resolve_compose_service_action(normalized_key, body)
-        if action is None:
-            return _error_response("invalid_service_action", "Unsupported action for this service.", 400)
-
-        queued, helper_id, error_message = _queue_job_scheduler_service_action(
-            adapters,
-            service_key=normalized_key,
-            action=action,
-        )
-        if not queued:
-            return _error_response("service_action_failed", error_message or "Unable to queue service action.", 500)
-
-        tracker = _get_action_tracker(adapters.context)
-        action_name = str(action.get("action") or "").strip().lower()
-        mode = str(action.get("mode") or "").strip().lower()
-        tracker.mark_pending(
-            service_key=normalized_key,
-            unit_name=f"Engine.sh --service {normalized_key} {action_name}{f' {mode}' if mode else ''}",
-            action=action_name,
-        )
-        scheduled_for = (datetime.now(timezone.utc) + timedelta(seconds=_CONTAINER_ACTION_DELAY_SECONDS)).isoformat()
-        return (
-            jsonify(
-                {
-                    "queued": True,
-                    "service_key": normalized_key,
-                    "action": action_name,
-                    "mode": mode or None,
-                    "work_item_id": helper_id,
-                    "scheduled_for": scheduled_for,
-                }
-            ),
-            202,
-        )
-
     @blueprint.route("/api/server/services/<service_key>/restart", methods=["POST"])
     def restart_service(service_key: str) -> Any:
         admin_error = auth.require_admin()
@@ -2060,35 +1682,7 @@ def register_info(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
         normalized_key = str(service_key or "").strip().lower()
         if _containerized_engine_enabled():
-            action = _resolve_compose_service_action(normalized_key, {"action": "restart"})
-            if action is None:
-                return _error_response("invalid_service_key", "Unsupported service key.", 404)
-            queued, helper_id, error_message = _queue_job_scheduler_service_action(
-                adapters,
-                service_key=normalized_key,
-                action=action,
-            )
-            if not queued:
-                return _error_response("restart_failed", error_message or "Unable to queue restart.", 500)
-            tracker = _get_action_tracker(adapters.context)
-            tracker.mark_pending(
-                service_key=normalized_key,
-                unit_name=f"Engine.sh --service {normalized_key} restart",
-                action="restart",
-            )
-            scheduled_for = (datetime.now(timezone.utc) + timedelta(seconds=_CONTAINER_ACTION_DELAY_SECONDS)).isoformat()
-            return (
-                jsonify(
-                    {
-                        "queued": True,
-                        "service_key": normalized_key,
-                        "action": "restart",
-                        "work_item_id": helper_id,
-                        "scheduled_for": scheduled_for,
-                    }
-                ),
-                202,
-            )
+            return _error_response("restart_go_owned", "Container service restarts are handled by Go api-backend.", 409)
 
         if normalized_key not in {"borealis_engine", "borealis_traefik", "postgresql_cluster"}:
             return _error_response("invalid_service_key", "Unsupported service key.", 404)
