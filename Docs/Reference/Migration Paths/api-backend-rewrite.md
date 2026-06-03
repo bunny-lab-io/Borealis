@@ -11,7 +11,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-03 |
 | Current architecture | Go binary owns public loopback `127.0.0.1:5000`; Python compatibility backend remains supervised on `127.0.0.1:5001`; unported routes proxy to Python. |
-| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, and public bootstrap/Aegis duplicate route fallbacks. |
+| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, public bootstrap/Aegis duplicate route fallbacks, and local user create/password-reset fallbacks. |
 | Rewrite posture | Clean cutover by domain is preferred. After a domain is fully Go-owned and smoke-tested, delete matching Python route code instead of leaving stale fallback surface. |
 
 ## Status Legend
@@ -31,7 +31,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Auth session, profile, logout | `Cutover` | Borealis token verification, `/api/auth/me`, logout, session invalidation checks. | Passkey and directory flows still rely on Python session/challenge state. | Duplicate Python profile/logout route handlers removed in current cleanup slice. |
 | Bootstrap, Aegis unlock, local login, local MFA | `Hybrid` | Bootstrap state, Aegis bootstrap setup/unlock, local password login, signed pending-MFA token, local TOTP verification, public Aegis status. | Admin bootstrap setup/recovery, directory login, WebAuthn challenge state, Aegis rotate/force-reset, public setup/unlock/rotate/force-reset, and internal Aegis bridge still live in Python. | Python public bootstrap state/setup/unlock and public Aegis status duplicates removed in current cleanup slice. Port remaining Aegis lifecycle/admin bootstrap routes, then remove retained Python handlers and internal bridge. |
 | Passkeys | `Hybrid` | Current-user passkey list, label update, delete. | WebAuthn registration/authentication ceremonies and challenge storage remain Python-owned. | Duplicate Python passkey list/update/delete handlers removed in current cleanup slice. Move WebAuthn challenge/session storage to Go before deleting ceremony routes. |
-| Users, RBAC, MFA admin, site assignments | `Hybrid` | User list, delete, role update, MFA enable/disable/reset, current-user MFA reset, assignment selection/assign. | User create, password reset, and public password-reset request still run in Python. | Duplicate Python user list/delete/role, MFA admin/reset, and site-assignment route handlers removed in current cleanup slice. Port user create/reset flows next. |
+| Users, RBAC, MFA admin, site assignments | `Cutover` | User list/create/delete, role update, admin password reset, current-user password reset, MFA enable/disable/reset, current-user MFA reset, assignment selection/assign. | Directory cached-user enable/disable remains part of Directory Services. | Python `access_management/users.py` deleted in current cleanup slice. |
 | Directory services | `Hybrid` | Provider and directory-site reads. | Provider/site mutations plus directory login remain Python-owned. | Duplicate Python provider/site read handlers removed in current cleanup slice. Port directory manager mutations and directory login pending-state handling. |
 | Credentials and GitHub token | `Hybrid` | Credential reads and detail reads. | Credential create/update/delete and GitHub token read/write still need Python secret mutation path. | Duplicate Python credential list/detail handlers removed in current cleanup slice. Port Aegis-backed secret mutation in Go, then delete Python credential/token routes. |
 | Server admin, logs, settings | `Hybrid` | Server time read, overview, runtime settings reads/mutations, worker list/recreate, logs, log retention/deletion, and container service actions. | Agent release-channel mutation/refresh, WireGuard recovery, and non-container systemd restart fallback remain Python-owned. | Duplicate Python read/settings/container-action routes and isolated Python log-management module removed in current cleanup slice. Port remaining server mutations before deleting `server/info.py`. |
@@ -64,9 +64,9 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Done | Server admin duplicate reads and settings | Python server time, overview, worker read/recreate, ansible/site-worker settings, Agent release-channel GET, and container service-action route handlers removed; Go fallbacks tightened for fully cutover paths. |
 | Done | Directory and credential read duplicates | Python directory provider/site GET handlers and credential list/detail GET handlers removed; mutation fallbacks retained. |
 | Done | Low-risk duplicate/public cleanup | Python `authentication.py`, `server/log_management.py`, public notification dispatch route, public bootstrap state/setup/unlock duplicates, and public Aegis status duplicate removed; internal bridges and retained Python lifecycle routes left intact. |
-| 1 | User create and password reset | Port remaining Python user create/admin reset/self reset flows, then delete `access_management/users.py`. |
-| 2 | Agent release-channel mutation/refresh and WireGuard recovery | Port remaining server-admin Python mutations, then delete retained `server/info.py` route surface. |
-| 3 | Timezone API | Already removed. Keep removed. |
+| Done | User create and password reset | Go owns local user create, admin password reset, and current-user password reset; Python `access_management/users.py` deleted. |
+| 1 | Agent release-channel mutation/refresh and WireGuard recovery | Port remaining server-admin Python mutations, then delete retained `server/info.py` route surface. |
+| 2 | Timezone API | Already removed. Keep removed. |
 
 ## Hard Python Dependencies
 
@@ -95,13 +95,14 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Auth/profile/user/RBAC Python route cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, runtime Python source scan, internal Python route-removal smoke. |
 | Server-admin Python route cleanup | Python syntax compile for touched Flask module, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, retained Python mutation smoke. |
 | Directory/credential read cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, retained Python mutation smoke. |
-| Low-risk duplicate/public cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, internal Python route-removal smoke, `git diff --check`. |
+| Low-risk duplicate/public cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, internal Python route-removal smoke, operator WebUI smoke for login/logout, Server Info, Log Management, device inventory, filters/views, sites/approvals, Access Management, and credential reads, `git diff --check`. |
+| User create/password reset Go cutover | Go unit tests for create/admin reset/current-user reset dispatch, Python syntax compile for retained auth module, no Python user route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, safe route smoke, `git diff --check`. |
 | Tracker cleanup | Run `git diff --check` after doc edit. |
 
 ## Next Work
 
 1. Pick one `Cutover` row, audit duplicate Python routes, delete obsolete Python handlers, run focused route tests, then smoke WebUI path.
-2. Prefer user create/password reset or remaining server-admin mutations next. Metadata/filter/view, site/admin, remote-op broker, Agent duplicate cleanup, simple auth/user/RBAC cleanup, server-admin duplicate cleanup, directory/credential read cleanup, and low-risk duplicate/public cleanup already removed Python route surface.
+2. Prefer remaining server-admin mutations next. Metadata/filter/view, site/admin, remote-op broker, Agent duplicate cleanup, simple auth/user/RBAC cleanup, server-admin duplicate cleanup, directory/credential read cleanup, low-risk duplicate/public cleanup, and user create/password-reset cleanup already removed Python route surface.
 3. Continue Aegis/bootstrap/login/passkey work only as full domain cutover: port missing Go state first, then delete Python ceremony/lifecycle routes.
 4. Keep Python process until every `Hybrid` and `Python` row is either ported or explicitly accepted as retained Python.
 

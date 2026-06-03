@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type userListStore interface {
@@ -16,10 +19,19 @@ type userListStore interface {
 }
 
 type userMutationStore interface {
+	createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error)
 	deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error)
+	resetUserPassword(ctx context.Context, secret authSecretService, username string, passwordSHA512 string) (map[string]any, int, error)
+	resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error)
 	updateUserRole(ctx context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error)
 	updateUserMFA(ctx context.Context, username string, enabled bool, resetSecret bool) (map[string]any, int, error)
 	resetOwnMFA(ctx context.Context, username string) (map[string]any, int, error)
+}
+
+type userPasswordAuthState struct {
+	PasswordSecret    string
+	AuthResetRequired bool
+	AuthSource        string
 }
 
 type userRow struct {
@@ -45,36 +57,39 @@ func registerUserRoutes(mux *http.ServeMux, auth *authService, fallback http.Han
 	mux.HandleFunc("/api/users/", userSubtreeHandler(auth, fallback))
 }
 
-func usersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func usersHandler(auth *authService, _ http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
-			return
-		}
-		_, failure := requireAdmin(r.Context(), auth, r)
-		if failure != nil {
-			failure.write(w)
-			return
-		}
-		store, ok := auth.store.(userListStore)
-		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "users_unavailable"})
-			return
-		}
+		switch r.Method {
+		case http.MethodGet:
+			_, failure := requireAdmin(r.Context(), auth, r)
+			if failure != nil {
+				failure.write(w)
+				return
+			}
+			store, ok := auth.store.(userListStore)
+			if !ok {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "users_unavailable"})
+				return
+			}
 
-		timeout := auth.timeout
-		if timeout <= 0 {
-			timeout = defaultAuthTimeout
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
+			timeout := auth.timeout
+			if timeout <= 0 {
+				timeout = defaultAuthTimeout
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), timeout)
+			defer cancel()
 
-		users, err := store.listUsers(ctx)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
+			users, err := store.listUsers(ctx)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"users": users})
+		case http.MethodPost:
+			userCreate(w, r, auth)
+		default:
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"users": users})
 	}
 }
 
@@ -100,6 +115,10 @@ func userSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFu
 		}
 		if action == "mfa" && r.Method == http.MethodPost {
 			userMFAUpdate(w, r, auth, username)
+			return
+		}
+		if action == "reset_password" && r.Method == http.MethodPost {
+			userPasswordReset(w, r, auth, username)
 			return
 		}
 
@@ -129,6 +148,75 @@ func parseUserSubtreePath(path string) (string, string, bool) {
 		action = strings.TrimSpace(parts[1])
 	}
 	return strings.TrimSpace(username), action, strings.TrimSpace(username) != ""
+}
+
+func userCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
+	_, store, ok := userMutationRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	if auth.aegis == nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_unavailable"})
+		return
+	}
+	body, ok := readAuthJSON(w, r)
+	if !ok {
+		return
+	}
+	username := cleanText(body["username"])
+	displayName := cleanText(body["display_name"])
+	if displayName == "" {
+		displayName = username
+	}
+	role := defaultUserRole
+	if cleanText(body["role"]) != "" {
+		role = normalizeUserRole(body["role"])
+	}
+	passwordSHA512 := strings.ToLower(cleanText(body["password_sha512"]))
+	if username == "" || passwordSHA512 == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password_sha512 are required"})
+		return
+	}
+	if role != "User" && role != "Admin" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid role"})
+		return
+	}
+	ctx, cancel := userTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.createUser(ctx, auth.aegis, username, displayName, role, passwordSHA512)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func userPasswordReset(w http.ResponseWriter, r *http.Request, auth *authService, username string) {
+	_, store, ok := userMutationRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	if auth.aegis == nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_unavailable"})
+		return
+	}
+	body, ok := readAuthJSON(w, r)
+	if !ok {
+		return
+	}
+	passwordSHA512 := strings.ToLower(cleanText(body["password_sha512"]))
+	if passwordSHA512 == "" || len(passwordSHA512) != 128 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid password hash"})
+		return
+	}
+	ctx, cancel := userTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.resetUserPassword(ctx, auth.aegis, username, passwordSHA512)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, status, payload)
 }
 
 func userDelete(w http.ResponseWriter, r *http.Request, auth *authService, username string) {
@@ -226,6 +314,55 @@ func ownMFAResetHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
+func ownPasswordResetHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				unauthorizedAuthFailure().write(w)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		store, ok := auth.store.(userMutationStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "users_unavailable"})
+			return
+		}
+		if auth.aegis == nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_unavailable"})
+			return
+		}
+		body, ok := readAuthJSON(w, r)
+		if !ok {
+			return
+		}
+		currentPasswordSHA512 := extractPasswordHash(body, "current_password", "current_password_sha512")
+		newPasswordSHA512 := extractPasswordHash(body, "new_password", "new_password_sha512")
+		if len(currentPasswordSHA512) != 128 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid current password hash"})
+			return
+		}
+		if len(newPasswordSHA512) != 128 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid new password hash"})
+			return
+		}
+		ctx, cancel := userTimeoutContext(r.Context(), auth)
+		defer cancel()
+		payload, status, err := store.resetOwnPassword(ctx, auth.aegis, profile.Username, currentPasswordSHA512, newPasswordSHA512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, status, payload)
+	}
+}
+
 func userMutationRequestContext(w http.ResponseWriter, r *http.Request, auth *authService) (operatorProfile, userMutationStore, bool) {
 	profile, err := auth.currentProfile(r.Context(), r)
 	if err != nil {
@@ -272,6 +409,77 @@ func normalizeUserRole(value any) string {
 	default:
 		return ""
 	}
+}
+
+func extractPasswordHash(data map[string]any, plainKey string, hashKey string) string {
+	passwordSHA512 := strings.ToLower(cleanText(data[hashKey]))
+	if passwordSHA512 != "" {
+		return passwordSHA512
+	}
+	raw := passwordPlainText(data[plainKey])
+	if raw == "" {
+		return ""
+	}
+	return sha512Hex(raw)
+}
+
+func passwordPlainText(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
+}
+
+func encryptUserPassword(ctx context.Context, secret authSecretService, passwordSHA512 string) (string, map[string]any, int, error) {
+	if secret == nil {
+		return "", map[string]any{"error": "aegis_unavailable"}, http.StatusInternalServerError, nil
+	}
+	encrypted, err := secret.encryptSecretText(ctx, strings.ToLower(strings.TrimSpace(passwordSHA512)))
+	if err != nil {
+		return "", nil, http.StatusInternalServerError, err
+	}
+	return encrypted, nil, 0, nil
+}
+
+func decryptUserPassword(ctx context.Context, secret authSecretService, value any) (string, map[string]any, int, error) {
+	if secret == nil {
+		return "", map[string]any{"error": "aegis_unavailable"}, http.StatusInternalServerError, nil
+	}
+	plain, err := secret.decryptSecretText(ctx, value)
+	if err != nil {
+		return "", nil, http.StatusInternalServerError, err
+	}
+	return strings.ToLower(strings.TrimSpace(plain)), nil, 0, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pqErr *pq.Error
+	return errors.As(err, &pqErr) && string(pqErr.Code) == "23505"
+}
+
+func normalizeAuthSource(value string) string {
+	source := strings.ToLower(strings.TrimSpace(value))
+	if source == "" {
+		return "local"
+	}
+	return source
+}
+
+func directoryLocalActionDisabled(source string) bool {
+	return normalizeAuthSource(source) == directoryAuth
+}
+
+func deleteUserPasskeysTx(ctx context.Context, tx *sql.Tx, username string) error {
+	_, err := tx.ExecContext(ctx, `
+		DELETE FROM engine.user_passkeys
+		 WHERE user_id IN (
+		       SELECT id FROM engine.users WHERE LOWER(username)=LOWER($1)
+		 )
+	`, username)
+	return err
 }
 
 func (s *postgresOperatorStore) listUsers(ctx context.Context) ([]map[string]any, error) {
@@ -348,6 +556,207 @@ func (s *postgresOperatorStore) listUsers(ctx context.Context) ([]map[string]any
 		users = append(users, userPayload(row))
 	}
 	return users, nil
+}
+
+func (s *postgresOperatorStore) createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" || strings.TrimSpace(passwordSHA512) == "" {
+		return map[string]any{"error": "username and password_sha512 are required"}, http.StatusBadRequest, nil
+	}
+	if displayName = strings.TrimSpace(displayName); displayName == "" {
+		displayName = usernameNorm
+	}
+	role = normalizeUserRole(role)
+	if role != "User" && role != "Admin" {
+		return map[string]any{"error": "invalid role"}, http.StatusBadRequest, nil
+	}
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, passwordSHA512)
+	if payload != nil || err != nil {
+		return payload, status, err
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	now := time.Now().Unix()
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO engine.users(
+			username,
+			display_name,
+			password_sha512,
+			role,
+			created_at,
+			updated_at,
+			mfa_enabled,
+			mfa_disabled,
+			auth_reset_required,
+			auth_reset_at,
+			auth_source
+		)
+		VALUES($1,$2,$3,$4,$5,$6,0,0,0,NULL,'local')
+	`, usernameNorm, displayName, encryptedPassword, role, now, now)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return map[string]any{"error": "username already exists"}, http.StatusConflict, nil
+		}
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) resetUserPassword(ctx context.Context, secret authSecretService, username string, passwordSHA512 string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "invalid username"}, http.StatusBadRequest, nil
+	}
+	if passwordSHA512 == "" || len(passwordSHA512) != 128 {
+		return map[string]any{"error": "invalid password hash"}, http.StatusBadRequest, nil
+	}
+	source, found, err := s.userAuthSource(ctx, usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if found && directoryLocalActionDisabled(source) {
+		return map[string]any{"error": "directory_user_local_action_disabled"}, http.StatusForbidden, nil
+	}
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, passwordSHA512)
+	if payload != nil || err != nil {
+		return payload, status, err
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `
+		UPDATE engine.users
+		   SET password_sha512=$1,
+		       mfa_secret=NULL,
+		       mfa_enabled=0,
+		       mfa_disabled=0,
+		       auth_reset_required=0,
+		       auth_reset_at=NULL,
+		       updated_at=$2
+		 WHERE LOWER(username)=LOWER($3)
+	`, encryptedPassword, now, usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if updated == 0 {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	if err := deleteUserPasskeysTx(ctx, tx, usernameNorm); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return map[string]any{"error": "unauthorized"}, http.StatusUnauthorized, nil
+	}
+	if len(currentPasswordSHA512) != 128 {
+		return map[string]any{"error": "invalid current password hash"}, http.StatusBadRequest, nil
+	}
+	if len(newPasswordSHA512) != 128 {
+		return map[string]any{"error": "invalid new password hash"}, http.StatusBadRequest, nil
+	}
+	state, found, err := s.loadUserPasswordAuthState(ctx, usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !found {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	if directoryLocalActionDisabled(state.AuthSource) {
+		return map[string]any{"error": "directory_user_local_action_disabled"}, http.StatusForbidden, nil
+	}
+	if state.AuthResetRequired {
+		return map[string]any{"error": "auth_reset_required"}, http.StatusLocked, nil
+	}
+	storedHash, payload, status, err := decryptUserPassword(ctx, secret, state.PasswordSecret)
+	if payload != nil || err != nil {
+		return payload, status, err
+	}
+	currentHash := strings.ToLower(strings.TrimSpace(currentPasswordSHA512))
+	newHash := strings.ToLower(strings.TrimSpace(newPasswordSHA512))
+	if storedHash != currentHash {
+		return map[string]any{"error": "invalid current password"}, http.StatusUnauthorized, nil
+	}
+	if storedHash == newHash {
+		return map[string]any{"error": "new password must differ from the current password"}, http.StatusBadRequest, nil
+	}
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, newHash)
+	if payload != nil || err != nil {
+		return payload, status, err
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	result, err := conn.ExecContext(ctx, "UPDATE engine.users SET password_sha512=$1, updated_at=$2 WHERE LOWER(username)=LOWER($3)", encryptedPassword, time.Now().Unix(), usernameNorm)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if updated == 0 {
+		return map[string]any{"error": "user not found"}, http.StatusNotFound, nil
+	}
+	return map[string]any{"status": "ok"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) loadUserPasswordAuthState(ctx context.Context, username string) (userPasswordAuthState, bool, error) {
+	usernameNorm := strings.TrimSpace(username)
+	if usernameNorm == "" {
+		return userPasswordAuthState{}, false, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return userPasswordAuthState{}, false, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	var state userPasswordAuthState
+	var authResetRequired int
+	err = conn.QueryRowContext(ctx, `
+		SELECT COALESCE(password_sha512, ''),
+		       COALESCE(auth_reset_required, 0),
+		       COALESCE(auth_source, 'local')
+		  FROM engine.users
+		 WHERE LOWER(username)=LOWER($1)
+		 LIMIT 1
+	`, usernameNorm).Scan(&state.PasswordSecret, &authResetRequired, &state.AuthSource)
+	if errors.Is(err, sql.ErrNoRows) {
+		return userPasswordAuthState{}, false, nil
+	}
+	if err != nil {
+		return userPasswordAuthState{}, false, err
+	}
+	state.AuthResetRequired = authResetRequired != 0
+	state.AuthSource = normalizeAuthSource(state.AuthSource)
+	return state, true, nil
 }
 
 func (s *postgresOperatorStore) deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error) {

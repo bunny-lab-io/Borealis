@@ -109,7 +109,6 @@ from .passkeys import (
     serialize_passkey_secret_bundle,
     serialize_transports,
 )
-from .users import register_user_management
 
 _logger = logging.getLogger(__name__)
 _qr_logger_warning_emitted = False
@@ -1362,7 +1361,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
         return service.passkey_authenticate_verify()
 
     app.register_blueprint(blueprint)
-    register_user_management(app, adapters)
     register_aegis_cipher_management(app, adapters)
     register_github_token_management(app, adapters)
     register_credential_management(app, adapters)

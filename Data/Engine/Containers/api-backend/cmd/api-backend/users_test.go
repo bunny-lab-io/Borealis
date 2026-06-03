@@ -14,11 +14,32 @@ type fakeUserMutationStore struct {
 	profile operatorProfile
 	authErr error
 
+	createUsername    string
+	createDisplayName string
+	createRole        string
+	createPassword    string
+	createPayload     map[string]any
+	createStatus      int
+	createErr         error
+
 	deleteProfile  operatorProfile
 	deleteUsername string
 	deletePayload  map[string]any
 	deleteStatus   int
 	deleteErr      error
+
+	passwordResetUsername string
+	passwordResetHash     string
+	passwordResetPayload  map[string]any
+	passwordResetStatus   int
+	passwordResetErr      error
+
+	ownPasswordUsername string
+	ownPasswordCurrent  string
+	ownPasswordNew      string
+	ownPasswordPayload  map[string]any
+	ownPasswordStatus   int
+	ownPasswordErr      error
 
 	roleProfile  operatorProfile
 	roleUsername string
@@ -54,6 +75,21 @@ func (s *fakeUserMutationStore) lookupOperator(_ context.Context, username strin
 	return profile, nil
 }
 
+func (s *fakeUserMutationStore) createUser(_ context.Context, _ authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error) {
+	s.createUsername = username
+	s.createDisplayName = displayName
+	s.createRole = role
+	s.createPassword = passwordSHA512
+	if s.createPayload == nil {
+		s.createPayload = map[string]any{"status": "ok"}
+	}
+	status := s.createStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.createPayload, status, s.createErr
+}
+
 func (s *fakeUserMutationStore) deleteUser(_ context.Context, profile operatorProfile, username string) (map[string]any, int, error) {
 	s.deleteProfile = profile
 	s.deleteUsername = username
@@ -65,6 +101,33 @@ func (s *fakeUserMutationStore) deleteUser(_ context.Context, profile operatorPr
 		status = http.StatusOK
 	}
 	return s.deletePayload, status, s.deleteErr
+}
+
+func (s *fakeUserMutationStore) resetUserPassword(_ context.Context, _ authSecretService, username string, passwordSHA512 string) (map[string]any, int, error) {
+	s.passwordResetUsername = username
+	s.passwordResetHash = passwordSHA512
+	if s.passwordResetPayload == nil {
+		s.passwordResetPayload = map[string]any{"status": "ok"}
+	}
+	status := s.passwordResetStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.passwordResetPayload, status, s.passwordResetErr
+}
+
+func (s *fakeUserMutationStore) resetOwnPassword(_ context.Context, _ authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error) {
+	s.ownPasswordUsername = username
+	s.ownPasswordCurrent = currentPasswordSHA512
+	s.ownPasswordNew = newPasswordSHA512
+	if s.ownPasswordPayload == nil {
+		s.ownPasswordPayload = map[string]any{"status": "ok"}
+	}
+	status := s.ownPasswordStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	return s.ownPasswordPayload, status, s.ownPasswordErr
 }
 
 func (s *fakeUserMutationStore) updateUserRole(_ context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error) {
@@ -127,7 +190,25 @@ func userMutationAuthService(store *fakeUserMutationStore) *authService {
 			now:    func() time.Time { return time.Unix(1700000010, 0) },
 		},
 		store:   store,
+		aegis:   &authLoginTestAegis{},
 		timeout: time.Second,
+	}
+}
+
+func TestUsersPostCreateDispatchesToGoStore(t *testing.T) {
+	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := userMutationAuthService(store)
+	mux := http.NewServeMux()
+	registerUserRoutes(mux, auth, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users", `{"username":"created_user","display_name":"Created User","role":"admin","password_sha512":"abc123"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.createUsername != "created_user" || store.createDisplayName != "Created User" || store.createRole != "Admin" || store.createPassword != "abc123" {
+		t.Fatalf("unexpected create dispatch username=%q display=%q role=%q password=%q", store.createUsername, store.createDisplayName, store.createRole, store.createPassword)
 	}
 }
 
@@ -227,19 +308,36 @@ func TestOwnMFAResetDispatchesCurrentUser(t *testing.T) {
 	}
 }
 
-func TestUserSubtreeKeepsPasswordResetOnFallback(t *testing.T) {
+func TestUserSubtreeResetPasswordDispatchesToGoStore(t *testing.T) {
 	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth := userMutationAuthService(store)
-	fallbackHits := 0
-	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fallbackHits++
-		w.WriteHeader(http.StatusAccepted)
-	})
+	passwordHash := strings.Repeat("a", 128)
 
 	recorder := httptest.NewRecorder()
-	userSubtreeHandler(auth, fallback).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users/example_user/reset_password", `{}`))
+	userSubtreeHandler(auth, http.NotFoundHandler()).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users/example_user/reset_password", `{"password_sha512":"`+passwordHash+`"}`))
 
-	if recorder.Code != http.StatusAccepted || fallbackHits != 1 {
-		t.Fatalf("expected fallback 202/1, got status=%d hits=%d", recorder.Code, fallbackHits)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.passwordResetUsername != "example_user" || store.passwordResetHash != passwordHash {
+		t.Fatalf("expected reset dispatch example_user/hash, got %q/%q", store.passwordResetUsername, store.passwordResetHash)
+	}
+}
+
+func TestOwnPasswordResetHashesPlainPasswordPayloads(t *testing.T) {
+	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "User"}}
+	auth := userMutationAuthService(store)
+
+	recorder := httptest.NewRecorder()
+	ownPasswordResetHandler(auth).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/auth/password/reset", `{"current_password":"old-password","new_password":"new-password"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.ownPasswordUsername != "operator" {
+		t.Fatalf("expected own reset username operator, got %q", store.ownPasswordUsername)
+	}
+	if store.ownPasswordCurrent != sha512Hex("old-password") || store.ownPasswordNew != sha512Hex("new-password") {
+		t.Fatalf("expected hashed own password payload, got current=%q new=%q", store.ownPasswordCurrent, store.ownPasswordNew)
 	}
 }
