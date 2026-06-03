@@ -106,6 +106,7 @@ func main() {
 	registerServerSettingsRoutes(mux, auth, proxy)
 	registerServerWorkerRoutes(mux, auth, proxy)
 	registerServerActionRoutes(mux, auth, proxy)
+	registerServerWireGuardRoutes(mux, auth)
 	registerServerLogRoutes(mux, auth, proxy)
 	registerMetadataRoutes(mux, auth)
 	registerDeviceRoutes(mux, auth)

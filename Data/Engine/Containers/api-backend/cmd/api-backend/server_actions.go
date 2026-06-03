@@ -35,9 +35,14 @@ func serverServiceActionHandler(auth *authService, fallback http.Handler) http.H
 			failure.write(w)
 			return
 		}
+		serviceKey := strings.ToLower(cleanText(parts[0]))
 		if !containerizedEngineEnabled() {
-			if parts[1] == "restart" && fallback != nil {
-				fallback.ServeHTTP(w, r)
+			if parts[1] == "restart" {
+				if !knownSystemdRestartService(serviceKey) {
+					writeJSON(w, http.StatusNotFound, map[string]any{"error": "invalid_service_key", "message": "Unsupported service key."})
+					return
+				}
+				handleSystemdServiceRestart(w, r, serviceKey)
 				return
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
@@ -51,7 +56,6 @@ func serverServiceActionHandler(auth *authService, fallback http.Handler) http.H
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "server_actions_unavailable"})
 			return
 		}
-		serviceKey := strings.ToLower(cleanText(parts[0]))
 		if !knownComposeService(serviceKey) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "invalid_service_key", "message": "Unsupported service key."})
 			return

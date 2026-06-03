@@ -2302,7 +2302,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		method  string
 		path    string
 	}{
-		{name: "release channel update", handler: agentReleaseChannelsHandler(auth, fallback), method: http.MethodPut, path: "/api/server/agent-release-channels"},
 		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
 		{name: "credential create", handler: credentialsHandler(auth, fallback), method: http.MethodPost, path: "/api/credentials"},
 	} {
@@ -2313,8 +2312,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 3 {
-		t.Fatalf("expected 3 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 2 {
+		t.Fatalf("expected 2 fallback hits, got %d", fallbackHits)
 	}
 }
 

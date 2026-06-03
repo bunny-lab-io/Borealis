@@ -44,9 +44,12 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/workers` - active/recent worker state.
     - `POST /api/server/workers/<worker_guid>/recreate` - queue a site-worker container re-create.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
+    - `GET /api/server/agent-release-channels` - read Agent update channel targets.
+    - `PUT /api/server/agent-release-channels` - update default channel or repo and refresh cached artifacts.
+    - `POST /api/server/agent-release-channels/refresh` - refresh cached Agent update artifacts.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
-    - `POST /api/server/wireguard/recover` - recover WireGuard listener.
+    - `POST /api/server/wireguard/recover` - queue WireGuard tunnel reconcile.
 
     ### Related documentation
 
@@ -57,7 +60,10 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     ### Source map
 
-    - Server API: `Data/Engine/Containers/api-backend/data/services/API/server/info.py`
+    - Server API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go`
+    - Server actions: `Data/Engine/Containers/api-backend/cmd/api-backend/server_actions.go`
+    - Agent release channels: `Data/Engine/Containers/api-backend/cmd/api-backend/server_agent_release_channels.go`
+    - WireGuard recovery: `Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard.go`
     - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
     - Server Info UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Server_Info.jsx`
     - Service actions: `Data/Engine/Containers/api-backend/data/services/job_scheduler/`

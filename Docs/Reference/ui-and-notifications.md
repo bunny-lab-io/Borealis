@@ -96,9 +96,12 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `GET /api/server/workers` (Operator Admin Session) - returns active and recent site-worker container state, all sites with total and online device counts, connected Agent counts, and worker-assigned work for Engine Status and Site Workers.
     - `POST /api/server/workers/<worker_guid>/recreate` (Operator Admin Session) - queues a scheduler-owned site-worker container stop so a replacement can be deployed.
     - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns profile-managed site-worker scheduled-lane work-item capacity shown in Server Info.
+    - `GET /api/server/agent-release-channels` (Operator Admin Session) - returns Agent update channel targets shown in Server Info.
+    - `PUT /api/server/agent-release-channels` (Operator Admin Session) - updates default Agent update channel or repo and refreshes cached artifacts.
+    - `POST /api/server/agent-release-channels/refresh` (Operator Admin Session) - refreshes Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
     - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
-    - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
+    - `POST /api/server/wireguard/recover` (Operator Admin Session) - queues WireGuard tunnel reconcile when active tunnels exist.
     - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
     - `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
     - `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.

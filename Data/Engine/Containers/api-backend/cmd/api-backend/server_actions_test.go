@@ -130,3 +130,60 @@ func TestServerServiceActionRequiresAdmin(t *testing.T) {
 		t.Fatalf("unexpected status=%d service=%q", recorder.Code, store.serviceKey)
 	}
 }
+
+func TestServerServiceRestartQueuesSystemdRestartAction(t *testing.T) {
+	t.Setenv("BOREALIS_PROJECT_ROOT", t.TempDir())
+	oldLookPath := systemdLookPath
+	oldRunCommand := systemdRunCommand
+	defer func() {
+		systemdLookPath = oldLookPath
+		systemdRunCommand = oldRunCommand
+	}()
+	systemdLookPath = func(name string) (string, error) {
+		return "/usr/bin/" + name, nil
+	}
+	var commands [][]string
+	systemdRunCommand = func(_ context.Context, args []string) systemCommandResult {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) > 1 && args[1] == "show" {
+			return systemCommandResult{Stdout: "LoadState=loaded\nActiveState=active\nSubState=running\nUnitFileState=enabled\nMainPID=123\n"}
+		}
+		if len(args) > 0 && strings.HasSuffix(args[0], "/systemd-run") {
+			return systemCommandResult{Stdout: "queued\n"}
+		}
+		return systemCommandResult{}
+	}
+
+	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	mux := http.NewServeMux()
+	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/borealis_engine/restart", `{}`))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["unit_name"] != "borealis-engine.service" || payload["queued"] != true {
+		t.Fatalf("unexpected payload %+v", payload)
+	}
+	if len(commands) < 2 || !strings.HasSuffix(commands[len(commands)-1][0], "/systemd-run") {
+		t.Fatalf("expected systemd-run command, got %+v", commands)
+	}
+}
+
+func TestServerServiceRestartRequiresPostgresqlInstance(t *testing.T) {
+	t.Setenv("BOREALIS_PROJECT_ROOT", t.TempDir())
+	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	mux := http.NewServeMux()
+	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/postgresql_cluster/restart", `{}`))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}

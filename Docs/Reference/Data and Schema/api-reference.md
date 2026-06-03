@@ -220,9 +220,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state, all site names plus total/online device counts, recent assigned work, and short Docker container IDs when Docker metadata is available.
     - `POST /api/server/workers/<worker_guid>/recreate` (Admin) - queue a scheduler-owned stop for one site-worker container so Job Scheduler can deploy a replacement when same-site Agent or task demand remains.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
+    - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
+    - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.
+    - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
-    - `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
+    - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
     - `GET /api/server/logs` (Admin) - list logs and retention.
     - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log lines.
     - `PUT /api/server/logs/retention` (Admin) - update retention policies.

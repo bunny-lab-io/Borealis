@@ -151,6 +151,9 @@ func collectOverviewResourcePayload() map[string]any {
 }
 
 func collectOverviewServiceRows() []map[string]any {
+	if !containerizedEngineEnabled() {
+		return collectSystemdServiceRows()
+	}
 	rows := make([]map[string]any, 0, len(composeServiceSpecs))
 	for _, spec := range composeServiceSpecs {
 		containerName := "borealis-engine-" + spec.key
@@ -272,12 +275,20 @@ func collectOverviewRemoteDesktopPayload() map[string]any {
 	}
 }
 
+type wireGuardLeaseCountStore interface {
+	activeWireGuardLeaseCount(ctx context.Context) int64
+}
+
 func activeWireGuardLeaseCount(ctx context.Context, store operatorStore) int64 {
-	postgresStore, ok := store.(*postgresOperatorStore)
+	counter, ok := store.(wireGuardLeaseCountStore)
 	if !ok {
 		return 0
 	}
-	conn, err := postgresStore.db.Conn(ctx)
+	return counter.activeWireGuardLeaseCount(ctx)
+}
+
+func (s *postgresOperatorStore) activeWireGuardLeaseCount(ctx context.Context) int64 {
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return 0
 	}

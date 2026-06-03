@@ -23,12 +23,13 @@ type githubTokenStateStore interface {
 
 func registerAgentReleaseChannelRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/server/agent-release-channels", agentReleaseChannelsHandler(auth, fallback))
+	mux.HandleFunc("/api/server/agent-release-channels/refresh", agentReleaseChannelsRefreshHandler(auth))
 }
 
 func agentReleaseChannelsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+		if r.Method != http.MethodGet && r.Method != http.MethodPut {
+			writeMethodNotAllowed(w, "GET, PUT")
 			return
 		}
 		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
@@ -40,20 +41,98 @@ func agentReleaseChannelsHandler(auth *authService, fallback http.Handler) http.
 		if timeout <= 0 {
 			timeout = defaultAuthTimeout
 		}
+		if r.Method == http.MethodPut && timeout < agentReleaseRefreshTimeout {
+			timeout = agentReleaseRefreshTimeout
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 
-		payload := collectAgentReleaseChannelSettings()
+		if r.Method == http.MethodPut {
+			body, err := readJSONMap(r)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+				return
+			}
+			settings := collectAgentReleaseChannelSettings()
+			if value, ok := body["default_channel"]; ok {
+				settings["default_channel"] = normalizeAgentReleaseChannel(value, defaultAgentReleaseChannel)
+			}
+			if value, ok := body["repo"]; ok {
+				github, _ := settings["github"].(map[string]any)
+				if github == nil {
+					github = map[string]any{}
+				}
+				github["repo"] = normalizeAgentReleaseRepo(value, defaultAgentReleaseRepo)
+				settings["github"] = github
+			}
+			if rawGithub, ok := body["github"].(map[string]any); ok {
+				github, _ := settings["github"].(map[string]any)
+				if github == nil {
+					github = map[string]any{}
+				}
+				if value, exists := rawGithub["repo"]; exists {
+					github["repo"] = normalizeAgentReleaseRepo(value, defaultAgentReleaseRepo)
+				}
+				settings["github"] = github
+			}
+			if err := saveAgentReleaseChannelSettings(settings); err != nil {
+				payload := agentReleaseChannelsResponsePayload(ctx, auth)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{
+					"error":    "release_channels_save_failed",
+					"message":  err.Error(),
+					"settings": payload,
+				})
+				return
+			}
+			payload := refreshAgentReleaseChannels(ctx, true)
+			addAgentReleaseRuntimeFields(ctx, auth, payload)
+			writeJSON(w, http.StatusOK, payload)
+			return
+		}
+		writeJSON(w, http.StatusOK, agentReleaseChannelsResponsePayload(ctx, auth))
+	}
+}
+
+func agentReleaseChannelsRefreshHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), agentReleaseRefreshTimeout)
+		defer cancel()
+		payload := refreshAgentReleaseChannels(ctx, true)
+		addAgentReleaseRuntimeFields(ctx, auth, payload)
+		writeJSON(w, http.StatusOK, payload)
+	}
+}
+
+func agentReleaseChannelsResponsePayload(ctx context.Context, auth *authService) map[string]any {
+	payload := collectAgentReleaseChannelSettings()
+	addAgentReleaseRuntimeFields(ctx, auth, payload)
+	return payload
+}
+
+func addAgentReleaseRuntimeFields(ctx context.Context, auth *authService, payload map[string]any) {
+	if payload == nil {
+		return
+	}
+	if auth != nil {
 		if store, ok := auth.store.(githubTokenStateStore); ok {
 			payload["github_token"] = store.githubTokenState(ctx)
 		} else {
 			payload["github_token"] = defaultGithubTokenState()
 		}
-		payload["settings_path"] = agentReleaseChannelsPath()
-		if _, ok := payload["last_persist_error"]; !ok {
-			payload["last_persist_error"] = ""
-		}
-		writeJSON(w, http.StatusOK, payload)
+	} else {
+		payload["github_token"] = defaultGithubTokenState()
+	}
+	payload["settings_path"] = agentReleaseChannelsPath()
+	if _, ok := payload["last_persist_error"]; !ok {
+		payload["last_persist_error"] = agentReleaseLastPersistError()
 	}
 }
 
