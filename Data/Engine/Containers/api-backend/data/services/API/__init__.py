@@ -28,7 +28,6 @@ from ...db import dbapi as sqlite3
 from ...db import get_database_manager
 from ...database import initialise_engine_database
 from ...security import signing
-from ...enrollment import NonceCache
 from ..agent_release_channels import AgentReleaseChannelManager
 from ..auth import DevModeManager
 from ...server import EngineContext
@@ -36,8 +35,6 @@ from ...server import EngineContext
 DEFAULT_API_GROUPS: Sequence[str] = (
     "core",
     "auth",
-    "tokens",
-    "enrollment",
     "devices",
     "server",
     "assemblies",
@@ -177,10 +174,7 @@ class EngineServiceAdapters:
     db_manager: Any = field(init=False)
     jwt_service: Any = field(init=False)
     dpop_validator: DPoPValidator = field(init=False)
-    ip_rate_limiter: SlidingWindowRateLimiter = field(init=False)
-    fp_rate_limiter: SlidingWindowRateLimiter = field(init=False)
     device_rate_limiter: SlidingWindowRateLimiter = field(init=False)
-    nonce_cache: NonceCache = field(init=False)
     script_signer: Any = field(init=False)
     service_log: Callable[[str, str, Optional[str]], None] = field(init=False)
     device_auth_manager: DeviceAuthManager = field(init=False)
@@ -212,9 +206,6 @@ class EngineServiceAdapters:
         self.config = dict(self.context.config or {})
         self.jwt_service = jwt_service_module.load_service()
         self.dpop_validator = DPoPValidator()
-        self.ip_rate_limiter = SlidingWindowRateLimiter()
-        self.fp_rate_limiter = SlidingWindowRateLimiter()
-        self.nonce_cache = NonceCache()
         try:
             self.script_signer = signing.load_signer()
         except Exception:
@@ -307,32 +298,6 @@ class EngineServiceAdapters:
         )
 
 
-def _register_tokens(app: Flask, adapters: EngineServiceAdapters) -> None:
-    from .tokens import routes as token_routes
-
-    token_routes.register(
-        app,
-        db_conn_factory=adapters.db_conn_factory,
-        jwt_service=adapters.jwt_service,
-        dpop_validator=adapters.dpop_validator,
-    )
-
-
-def _register_enrollment(app: Flask, adapters: EngineServiceAdapters) -> None:
-    from .enrollment import routes as enrollment_routes
-
-    enrollment_routes.register(
-        app,
-        db_conn_factory=adapters.db_conn_factory,
-        log=adapters.service_log,
-        jwt_service=adapters.jwt_service,
-        ip_rate_limiter=adapters.ip_rate_limiter,
-        fp_rate_limiter=adapters.fp_rate_limiter,
-        nonce_cache=adapters.nonce_cache,
-        script_signer=adapters.script_signer,
-    )
-
-
 def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .devices import routes as device_routes
     from .devices.file_management import register_file_management
@@ -400,8 +365,6 @@ def _register_auth(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 _GROUP_REGISTRARS: Mapping[str, Callable[[Flask, EngineServiceAdapters], None]] = {
     "auth": _register_auth,
-    "tokens": _register_tokens,
-    "enrollment": _register_enrollment,
     "devices": _register_devices,
     "server": _register_server,
     "assemblies": _register_assemblies,

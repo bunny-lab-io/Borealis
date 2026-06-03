@@ -11,7 +11,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-03 |
 | Current architecture | Go binary owns public loopback `127.0.0.1:5000`; Python compatibility backend remains supervised on `127.0.0.1:5001`; unported routes proxy to Python. |
-| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, and remote-op session broker route fallbacks. |
+| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, and Agent enrollment/token/update/script/hash/repo route fallbacks. |
 | Rewrite posture | Clean cutover by domain is preferred. After a domain is fully Go-owned and smoke-tested, delete matching Python route code instead of leaving stale fallback surface. |
 
 ## Status Legend
@@ -36,7 +36,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Credentials and GitHub token | `Hybrid` | Credential reads and detail reads. | Credential create/update/delete and GitHub token read/write still need Python secret mutation path. | Port Aegis-backed secret mutation in Go, then delete Python credential/token routes. |
 | Server admin, logs, settings | `Hybrid` | Server time read, overview, runtime settings reads/mutations already ported, worker list, logs, log retention, log deletion. | Agent release-channel mutation/refresh and WireGuard recovery remain Python-owned. | Port remaining server mutations, then remove Python server-admin duplicates. |
 | Timezone management | `Removed` | No WebUI timezone changer and no Go route for timezone POST/PUT. | None. Operators manage host timezone from host CLI. | Keep API absent. Do not reintroduce WebUI timezone mutation. |
-| Agent enrollment, token, update, script, metadata, hash, repo manifest | `Cutover` | Enrollment request/poll, token refresh, script request, Agent metadata read, software-management override read, update manifest/download, hash update/list, repo hash read. | Agent heartbeat/status and live callback domains remain separate Python rows. | Audit old Agent compatibility routes, then delete duplicates that no supported Agent uses. |
+| Agent enrollment, token, update, script, metadata, hash, repo manifest | `Cutover` | Enrollment request/poll, token refresh, script request, Agent metadata read, software-management override read, update manifest/download, hash update/list, repo hash read. | Agent heartbeat/status and live callback domains remain separate Python rows. | Python token/enrollment packages, duplicate Agent read/update/script handlers, and hash/repo handlers removed in current cleanup slice. |
 | Agent heartbeat, status, VPN/VNC callbacks | `Python` | None for heartbeat/status callback domain. | Heartbeat, status, VPN ensure/ready, and VNC ensure callbacks remain Python-owned. | Port carefully. Preserve status fanout, role health normalization, update reconciliation, and short DB connection lifecycle. |
 | Device inventory, search, details, description, release channel | `Hybrid` | Device list/search/detail, per-device detail, description update, Agent release-channel assignment, agents list. | High-risk device purge remains Python-owned. | Port purge separately with explicit destructive-path tests. |
 | Metadata fields, device metadata, list views, filters | `Cutover` | Metadata field reads/updates, per-device metadata, saved device-list views, filter CRUD/search/preview/usage/archive/clone. | No required Python runtime dependency known. | Python API route registration and duplicate route modules removed in current cleanup slice; keep shared metadata/filter helpers used by other Python domains. |
@@ -59,10 +59,10 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Done | Metadata fields, device metadata, list views, filters | Python route registration removed, isolated Python route files deleted, mixed device-list-view handlers removed, Go handlers no longer fallback for this domain. |
 | Done | Sites, enrollment codes, device approvals | Python route registration removed, isolated Python admin approval module deleted, mixed site handlers removed, Go handlers no longer fallback for this domain. |
 | Done | Remote-operation session broker | Python route registration removed and isolated Python broker module deleted. |
-| 1 | Agent enrollment/token/update/script/hash/repo routes | Looks fully Go-owned; verify old Agent compatibility before deleting Python duplicates. |
-| 2 | Auth profile/logout and simple user/RBAC duplicates | Go owns common paths; keep ceremony/password-reset flows until ported. |
-| 3 | Server admin duplicate reads and settings | Keep release-channel mutation/refresh and WireGuard recovery until ported. |
-| 4 | Timezone API | Already removed. Keep removed. |
+| Done | Agent enrollment/token/update/script/hash/repo routes | Python token/enrollment packages deleted, duplicate Agent read/update/script handlers removed, mixed hash/repo handlers removed. |
+| 1 | Auth profile/logout and simple user/RBAC duplicates | Go owns common paths; keep ceremony/password-reset flows until ported. |
+| 2 | Server admin duplicate reads and settings | Keep release-channel mutation/refresh and WireGuard recovery until ported. |
+| 3 | Timezone API | Already removed. Keep removed. |
 
 ## Hard Python Dependencies
 
@@ -87,12 +87,13 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Bootstrap/Aegis/local login/MFA Go port | Go tests, build, deploy, live `/health`, `/api/bootstrap/state`, `/api/aegis/status`, local login/MFA-safe checks. |
 | Metadata/filter/view Python route cleanup | `go test ./...`, `build-api-backend.sh`, Python syntax compile for touched Flask modules, `sudo bash Engine.sh deploy prod`, public Go 401 smoke, internal Python 404 route-removal smoke. |
 | Site/admin/remote-op broker Python route cleanup | `go test ./...`, `build-api-backend.sh`, Python syntax compile for touched Flask modules, `sudo bash Engine.sh deploy prod`, public Go 401 smoke, internal Python route-file absence and route-removal smoke. |
+| Agent enrollment/token/update/script/hash/repo Python route cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go route smoke, exact POST validation smoke, internal Python 404 route-removal smoke. |
 | Tracker cleanup | Run `git diff --check` after doc edit. |
 
 ## Next Work
 
 1. Pick one `Cutover` row, audit duplicate Python routes, delete obsolete Python handlers, run focused route tests, then smoke WebUI path.
-2. Prefer Agent enrollment/token/update/script/hash/repo cleanup next. Metadata/filter/view, site/admin, and remote-op broker cleanup already removed Python route surface.
+2. Prefer auth profile/logout and simple user/RBAC cleanup next. Metadata/filter/view, site/admin, remote-op broker, and Agent duplicate cleanup already removed Python route surface.
 3. Continue Aegis/bootstrap/login/passkey work only as full domain cutover: port missing Go state first, then delete Python ceremony/lifecycle routes.
 4. Keep Python process until every `Hybrid` and `Python` row is either ported or explicitly accepted as retained Python.
 

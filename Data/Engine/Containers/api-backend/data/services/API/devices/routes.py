@@ -4,10 +4,7 @@
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/heartbeat (Device Authenticated) - Updates device last-seen metadata and inventory snapshots.
-# - GET /api/agent/metadata/<field_number> (Device Authenticated) - Reads one decoded metadata field for local Agent CLI.
 # - POST /api/agent/status (Device Authenticated) - Updates startup status timeline telemetry.
-# - POST /api/agent/script/request (Device Authenticated) - Provides script execution payloads or idle signals to agents.
-# - GET /api/agent/software-management/overrides (Device Authenticated) - Returns file-backed software-management override hints for agent-side inventory/icon collection.
 # - POST /api/agent/vpn/ensure (Device Authenticated) - Ensures persistent WireGuard tunnel material.
 # - POST /api/agent/vpn/ready (Device Authenticated) - Records agent-side WireGuard readiness for the active tunnel.
 # - POST /api/agent/vnc/ensure (Device Authenticated) - Ensures VNC readiness and reports listener/session metadata.
@@ -22,22 +19,14 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from flask import Blueprint, jsonify, request, g, send_file
+from flask import Blueprint, jsonify, request, g
 
 from ....auth.device_auth import AGENT_CONTEXT_HEADER, require_device_auth
 from ....auth.guid_utils import normalize_guid
 from ....public_endpoints import wireguard_endpoint
 from ...RemoteDesktop.vnc_sessions import ensure_vnc_collaboration_manager
 from ...activity_history import update_activity_history_row
-from ...metadata_fields import (
-    decode_metadata_value,
-    fetch_device_metadata_values,
-    metadata_field_key,
-    metadata_field_label,
-    normalize_field_number,
-    process_agent_metadata_sync,
-)
-from .software_icons import load_software_icon_overrides
+from ...metadata_fields import process_agent_metadata_sync
 from .agent_role_health import merge_agent_role_health, normalize_agent_role_health, serialize_agent_role_health
 from .tunnel import _get_tunnel_service, _guid_from_agent_id, _load_device_agent_binding, _resolve_requested_agent_id
 
@@ -180,11 +169,8 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
     auth_manager = adapters.device_auth_manager
     log = adapters.service_log
     db_conn_factory = adapters.db_conn_factory
-    script_signer = adapters.script_signer
-    release_manager = getattr(adapters, "agent_release_manager", None)
     status_cache_lock = threading.Lock()
     status_cache: Dict[str, Dict[str, Any]] = {}
-    script_signing_key_cache: Dict[str, Any] = {"value": "", "expires_at": 0.0}
 
     STATUS_DUPLICATE_SUPPRESS_SECONDS = 30.0
     STATUS_EMIT_MIN_INTERVAL_SECONDS = 10.0
@@ -247,25 +233,6 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 for stale_key in stale_keys[: max(1, len(status_cache) - STATUS_CACHE_MAX_ENTRIES)]:
                     status_cache.pop(stale_key, None)
         return emit_allowed
-
-    def _script_signing_key() -> str:
-        if script_signer is None:
-            return ""
-        now_mono = time.monotonic()
-        cached_value = str(script_signing_key_cache.get("value") or "")
-        try:
-            expires_at = float(script_signing_key_cache.get("expires_at") or 0.0)
-        except Exception:
-            expires_at = 0.0
-        if cached_value and now_mono < expires_at:
-            return cached_value
-        try:
-            signing_key = script_signer.public_base64_spki()
-        except Exception:
-            signing_key = ""
-        script_signing_key_cache["value"] = signing_key
-        script_signing_key_cache["expires_at"] = now_mono + 300.0
-        return signing_key
 
     def _reconcile_agent_maintenance_operation(
         *,
@@ -760,48 +727,6 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
             }
         )
 
-    @blueprint.route("/api/agent/metadata/<int:field_number>", methods=["GET"])
-    @require_device_auth(auth_manager)
-    def agent_metadata_get(field_number: int):
-        ctx = _auth_context()
-        if ctx is None:
-            return jsonify({"error": "auth_context_missing"}), 500
-        parsed = normalize_field_number(field_number)
-        if parsed is None:
-            return jsonify({"error": "invalid_field", "message": "Field number must be between 1 and 500."}), 400
-        normalized_guid = normalize_guid(ctx.guid)
-        if not normalized_guid:
-            return jsonify({"error": "device_not_registered"}), 404
-        conn = db_conn_factory()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT guid FROM devices WHERE UPPER(guid) = ? LIMIT 1",
-                (normalized_guid,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return jsonify({"error": "device_not_registered"}), 404
-            device_guid = str(row[0] or ctx.guid)
-            record = fetch_device_metadata_values(conn, device_guid).get(parsed) or {}
-        finally:
-            conn.close()
-        encoded_value = record.get("value", "")
-        return jsonify(
-            {
-                "field": {
-                    "field_number": parsed,
-                    "field_key": metadata_field_key(parsed),
-                    "label": metadata_field_label(parsed),
-                    "value": decode_metadata_value(encoded_value),
-                    "modified_at": int(record.get("modified_at") or 0),
-                    "source": str(record.get("source") or ""),
-                    "actor": str(record.get("actor") or ""),
-                    "has_value": bool(decode_metadata_value(encoded_value)),
-                }
-            }
-        )
-
     @blueprint.route("/api/agent/status", methods=["POST"])
     @require_device_auth(auth_manager)
     def agent_status():
@@ -948,90 +873,6 @@ def register_agents(app, adapters: "EngineServiceAdapters") -> None:
                 "site_id": site_id,
                 "site_name": site_name,
             }
-        )
-
-    @blueprint.route("/api/agent/script/request", methods=["POST"])
-    @require_device_auth(auth_manager)
-    def script_request():
-        ctx = _auth_context()
-        if ctx is None:
-            return jsonify({"error": "auth_context_missing"}), 500
-
-        signing_key = _script_signing_key()
-
-        if ctx.status != "active":
-            return jsonify(
-                {
-                    "status": "quarantined",
-                    "poll_after_ms": 60000,
-                    "sig_alg": "ed25519",
-                    "signing_key": signing_key,
-                }
-            )
-
-        return jsonify(
-            {
-                "status": "idle",
-                "poll_after_ms": 30000,
-                "sig_alg": "ed25519",
-                "signing_key": signing_key,
-            }
-        )
-
-    @blueprint.route("/api/agent/software-management/overrides", methods=["GET"])
-    @require_device_auth(auth_manager)
-    def software_management_overrides():
-        ctx = _auth_context()
-        if ctx is None:
-            return jsonify({"error": "auth_context_missing"}), 500
-        return jsonify(
-            {
-                "windows_icon_overrides": load_software_icon_overrides(),
-            }
-        )
-
-    @blueprint.route("/api/agent/update/manifest", methods=["GET"])
-    @require_device_auth(auth_manager)
-    def agent_update_manifest():
-        ctx = _auth_context()
-        if ctx is None:
-            return jsonify({"error": "auth_context_missing"}), 500
-        if release_manager is None:
-            return jsonify({"error": "release_channels_unavailable"}), 503
-        installed_build_id = (
-            request.args.get("installed_build_id")
-            or request.args.get("current_build_id")
-            or request.args.get("agent_build_id")
-            or ""
-        )
-        try:
-            payload = release_manager.manifest_for_device(
-                guid=getattr(ctx, "guid", "") or "",
-                hostname=request.args.get("hostname") or "",
-                installed_build_id=installed_build_id,
-            )
-        except Exception as exc:
-            log("agents", f"agent update manifest failed guid={getattr(ctx, 'guid', '')} err={exc}", _context_hint(ctx), level="ERROR")
-            return jsonify({"error": "manifest_unavailable", "message": str(exc)}), 503
-        return jsonify(payload), 200
-
-    @blueprint.route("/api/agent/update/download/<artifact_id>", methods=["GET"])
-    @require_device_auth(auth_manager)
-    def agent_update_download(artifact_id: str):
-        ctx = _auth_context()
-        if ctx is None:
-            return jsonify({"error": "auth_context_missing"}), 500
-        if release_manager is None:
-            return jsonify({"error": "release_channels_unavailable"}), 503
-        artifact_path = release_manager.artifact_path_for_id(artifact_id)
-        if artifact_path is None:
-            return jsonify({"error": "artifact_not_found"}), 404
-        return send_file(
-            artifact_path,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=artifact_path.name,
-            conditional=True,
         )
 
     @blueprint.route("/api/agent/vpn/ensure", methods=["POST"])

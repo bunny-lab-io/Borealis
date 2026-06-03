@@ -12,9 +12,6 @@
 # - PUT /api/devices/<guid>/agent-release-channel (Token Authenticated (Admin)) - Updates an agent release channel override and optional source branch.
 # - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
 # - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
-# - GET /api/repo/current_hash (Device or Token Authenticated) - Fetches the current agent repository hash (with caching).
-# - GET/POST /api/agent/hash (Device Authenticated) - Retrieves or updates an agent hash record bound to the authenticated device.
-# - GET /api/agent/hash_list (Token Authenticated (Admin + Loopback)) - Returns stored agent hash metadata for localhost diagnostics.
 # ======================================================
 
 """Device management endpoints for the Borealis Engine API."""
@@ -37,7 +34,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ....auth import device_purge_state
 from ....auth.guid_utils import normalize_guid
-from ....auth.device_auth import DeviceAuthError, require_device_auth
+from ....auth.device_auth import require_device_auth
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...activity_history import update_activity_history_row
@@ -132,21 +129,6 @@ def _normalize_service_mode(value: Any, agent_id: Optional[str] = None) -> str:
     if text in {"interactive", "currentuser", "user", "current_user"}:
         return "currentuser"
     return "currentuser"
-
-
-def _is_internal_request(remote_addr: Optional[str]) -> bool:
-    addr = (remote_addr or "").strip()
-    if not addr:
-        return False
-    if addr in {"127.0.0.1", "::1"}:
-        return True
-    if addr.startswith("127."):
-        return True
-    if addr.startswith("::ffff:"):
-        mapped = addr.split("::ffff:", 1)[-1]
-        if mapped in {"127.0.0.1"} or mapped.startswith("127."):
-            return True
-    return False
 
 
 DEVICE_TABLE = "devices"
@@ -925,29 +907,6 @@ class DeviceManagementService:
         if not self._current_user():
             return {"error": "unauthorized"}, 401
         return None
-
-    def _require_device_or_login(self) -> Optional[Tuple[Dict[str, Any], int]]:
-        user = self._current_user()
-        if user:
-            return None
-
-        manager = getattr(self.adapters, "device_auth_manager", None)
-        if manager is None:
-            return {"error": "unauthorized"}, 401
-
-        try:
-            ctx = manager.authenticate()
-            g.device_auth = ctx
-            return None
-        except DeviceAuthError as exc:
-            payload: Dict[str, Any] = {"error": exc.message}
-            retry_after = getattr(exc, "retry_after", None)
-            if retry_after:
-                payload["retry_after"] = retry_after
-            return payload, getattr(exc, "status_code", 401) or 401
-        except Exception:
-            self.service_log("server", "/api/repo/current_hash auth failure", level="ERROR")
-            return {"error": "unauthorized"}, 401
 
     def _require_admin(self) -> Optional[Tuple[Dict[str, Any], int]]:
         user = self._current_user()
@@ -2331,273 +2290,6 @@ class DeviceManagementService:
             200,
         )
 
-    def repo_current_hash(self) -> Tuple[Dict[str, Any], int]:
-        refresh_flag = (request.args.get("refresh") or "").strip().lower()
-        force_refresh = refresh_flag in {"1", "true", "yes", "force", "refresh"}
-        payload, status = self.repo_cache.current_repo_hash(
-            request.args.get("repo"),
-            request.args.get("branch"),
-            ttl=request.args.get("ttl"),
-            force_refresh=force_refresh,
-        )
-        return payload, status
-
-    def agent_hash_lookup(self, ctx) -> Tuple[Dict[str, Any], int]:
-        if ctx is None:
-            self.service_log("server", "/api/agent/hash missing device auth context", level="ERROR")
-            return {"error": "auth_context_missing"}, 500
-
-        auth_guid = normalize_guid(getattr(ctx, "guid", None))
-        if not auth_guid:
-            return {"error": "guid_required"}, 403
-
-        agent_guid = normalize_guid(request.args.get("agent_guid"))
-        agent_id = _clean_device_str(request.args.get("agent_id") or request.args.get("id"))
-        if not agent_guid and not agent_id:
-            body = request.get_json(silent=True) or {}
-            if agent_guid is None:
-                agent_guid = normalize_guid((body.get("agent_guid") if isinstance(body, dict) else None))
-            if not agent_id:
-                agent_id = _clean_device_str((body.get("agent_id") if isinstance(body, dict) else None))
-
-        if agent_guid and agent_guid != auth_guid:
-            return {"error": "guid_mismatch"}, 403
-
-        effective_guid = agent_guid or auth_guid
-
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            row = None
-            if effective_guid:
-                cur.execute(
-                    """
-                    SELECT guid, hostname, agent_hash, agent_id
-                      FROM devices
-                     WHERE LOWER(guid) = ?
-                    """,
-                    (effective_guid.lower(),),
-                )
-                row = cur.fetchone()
-            if row is None and agent_id:
-                cur.execute(
-                    """
-                    SELECT guid, hostname, agent_hash, agent_id
-                      FROM devices
-                     WHERE agent_id = ?
-                     ORDER BY last_seen DESC, created_at DESC
-                     LIMIT 1
-                    """,
-                    (agent_id,),
-                )
-                row = cur.fetchone()
-            if row is None:
-                return {"error": "agent hash not found"}, 404
-
-            stored_guid, hostname, agent_hash, stored_agent_id = row
-            normalized_guid = normalize_guid(stored_guid)
-            if normalized_guid and normalized_guid != auth_guid:
-                return {"error": "guid_mismatch"}, 403
-
-            payload: Dict[str, Any] = {
-                "agent_hash": (agent_hash or "").strip() or None,
-                "agent_guid": normalized_guid or effective_guid,
-            }
-            resolved_agent_id = _clean_device_str(stored_agent_id) or agent_id
-            if resolved_agent_id:
-                payload["agent_id"] = resolved_agent_id
-            if hostname:
-                payload["hostname"] = hostname
-            return payload, 200
-        except Exception as exc:
-            self.service_log("server", f"/api/agent/hash lookup error: {exc}")
-            return {"error": "internal error"}, 500
-        finally:
-            conn.close()
-
-    def agent_hash_update(self, ctx) -> Tuple[Dict[str, Any], int]:
-        if ctx is None:
-            self.service_log("server", "/api/agent/hash missing device auth context", level="ERROR")
-            return {"error": "auth_context_missing"}, 500
-
-        auth_guid = normalize_guid(getattr(ctx, "guid", None))
-        if not auth_guid:
-            return {"error": "guid_required"}, 403
-
-        payload = request.get_json(silent=True) or {}
-        agent_hash = _clean_device_str(payload.get("agent_hash"))
-        agent_id = _clean_device_str(payload.get("agent_id"))
-        requested_guid = normalize_guid(payload.get("agent_guid"))
-
-        if not agent_hash:
-            return {"error": "agent_hash required"}, 400
-
-        if requested_guid and requested_guid != auth_guid:
-            return {"error": "guid_mismatch"}, 403
-
-        effective_guid = requested_guid or auth_guid
-        resolved_agent_id = agent_id or ""
-
-        if not effective_guid and not resolved_agent_id:
-            return {"error": "agent_hash and agent_guid or agent_id required"}, 400
-
-        conn = self._db_conn()
-        hostname: Optional[str] = None
-        try:
-            cur = conn.cursor()
-            target_guid: Optional[str] = None
-
-            if effective_guid:
-                cur.execute(
-                    """
-                    SELECT guid, hostname, agent_id
-                      FROM devices
-                     WHERE LOWER(guid) = ?
-                    """,
-                    (effective_guid.lower(),),
-                )
-                row = cur.fetchone()
-                if row:
-                    target_guid = row[0] or effective_guid
-                    hostname = (row[1] or "").strip() or None
-                    stored_agent_id = _clean_device_str(row[2])
-                    if not resolved_agent_id and stored_agent_id:
-                        resolved_agent_id = stored_agent_id
-                    normalized_guid = normalize_guid(target_guid)
-                    if normalized_guid:
-                        effective_guid = normalized_guid
-
-            if target_guid is None and resolved_agent_id:
-                cur.execute(
-                    """
-                    SELECT guid, hostname, agent_id
-                      FROM devices
-                     WHERE agent_id = ?
-                     ORDER BY last_seen DESC, created_at DESC
-                     LIMIT 1
-                    """,
-                    (resolved_agent_id,),
-                )
-                row = cur.fetchone()
-                if row:
-                    target_guid = row[0] or ""
-                    hostname = (row[1] or "").strip() or hostname
-                    stored_agent_id = _clean_device_str(row[2])
-                    if not resolved_agent_id and stored_agent_id:
-                        resolved_agent_id = stored_agent_id
-                    normalized_guid = normalize_guid(row[0])
-                    if normalized_guid:
-                        if auth_guid and normalized_guid != auth_guid:
-                            return {"error": "guid_mismatch"}, 403
-                        effective_guid = normalized_guid
-
-            if target_guid is None:
-                ignored_payload: Dict[str, Any] = {
-                    "status": "ignored",
-                    "agent_hash": agent_hash,
-                }
-                if effective_guid:
-                    ignored_payload["agent_guid"] = effective_guid
-                if resolved_agent_id:
-                    ignored_payload["agent_id"] = resolved_agent_id
-                return ignored_payload, 200
-
-            if resolved_agent_id:
-                cur.execute(
-                    """
-                    UPDATE devices
-                       SET agent_hash = ?,
-                           agent_id = ?
-                     WHERE guid = ?
-                    """,
-                    (agent_hash, resolved_agent_id, target_guid),
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE devices
-                       SET agent_hash = ?
-                     WHERE guid = ?
-                    """,
-                    (agent_hash, target_guid),
-                )
-
-            if cur.rowcount == 0:
-                cur.execute(
-                    """
-                    UPDATE devices
-                       SET agent_hash = ?
-                     WHERE LOWER(guid) = ?
-                    """,
-                    (agent_hash, effective_guid.lower()),
-                )
-                if resolved_agent_id and cur.rowcount > 0:
-                    cur.execute(
-                        """
-                        UPDATE devices
-                           SET agent_id = ?
-                         WHERE LOWER(guid) = ?
-                        """,
-                        (resolved_agent_id, effective_guid.lower()),
-                    )
-
-            conn.commit()
-        except Exception as exc:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            self.service_log("server", f"/api/agent/hash error: {exc}")
-            return {"error": "internal error"}, 500
-        finally:
-            conn.close()
-
-        response: Dict[str, Any] = {
-            "status": "ok",
-            "agent_hash": agent_hash,
-        }
-        if resolved_agent_id:
-            response["agent_id"] = resolved_agent_id
-        if effective_guid:
-            response["agent_guid"] = effective_guid
-        if hostname:
-            response["hostname"] = hostname
-        return response, 200
-
-    def agent_hash_list(self) -> Tuple[Dict[str, Any], int]:
-        if not _is_internal_request(request.remote_addr):
-            remote_addr = (request.remote_addr or "unknown").strip() or "unknown"
-            self.service_log(
-                "server",
-                f"/api/agent/hash_list denied non-local request from {remote_addr}",
-                level="WARN",
-            )
-            return {"error": "forbidden"}, 403
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT guid, hostname, agent_hash, agent_id FROM devices",
-            )
-            agents = []
-            for guid, hostname, agent_hash, agent_id in cur.fetchall():
-                agents.append(
-                    {
-                        "agent_guid": normalize_guid(guid) or None,
-                        "hostname": hostname or None,
-                        "agent_hash": (agent_hash or "").strip() or None,
-                        "agent_id": (agent_id or "").strip() or None,
-                        "source": "database",
-                    }
-                )
-            agents.sort(key=lambda rec: (rec.get("hostname") or "", rec.get("agent_id") or ""))
-            return {"agents": agents}, 200
-        except Exception as exc:
-            self.service_log("server", f"/api/agent/hash_list error: {exc}")
-            return {"error": "internal error"}, 500
-        finally:
-            conn.close()
-
 def register_management(app, adapters: "EngineServiceAdapters") -> None:
     """Register device management endpoints onto the Flask app."""
 
@@ -2608,16 +2300,6 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
     @require_device_auth(adapters.device_auth_manager)
     def _agent_details():
         payload, status = service.save_agent_details()
-        return jsonify(payload), status
-
-    @blueprint.route("/api/agent/hash", methods=["GET", "POST"])
-    @require_device_auth(adapters.device_auth_manager)
-    def _agent_hash():
-        ctx = getattr(g, "device_auth", None)
-        if request.method == "GET":
-            payload, status = service.agent_hash_lookup(ctx)
-        else:
-            payload, status = service.agent_hash_update(ctx)
         return jsonify(payload), status
 
     @blueprint.route("/api/agents", methods=["GET"])
@@ -2693,24 +2375,6 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
         body = request.get_json(silent=True) or {}
         description = (body.get("description") or "").strip()
         payload, status = service.set_device_description(hostname, description)
-        return jsonify(payload), status
-
-    @blueprint.route("/api/repo/current_hash", methods=["GET"])
-    def _repo_current_hash():
-        requirement = service._require_device_or_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.repo_current_hash()
-        return jsonify(payload), status
-
-    @blueprint.route("/api/agent/hash_list", methods=["GET"])
-    def _agent_hash_list():
-        requirement = service._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.agent_hash_list()
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)
