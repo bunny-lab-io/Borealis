@@ -184,7 +184,17 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if !emitOK {
 		return map[string]any{"error": "agent_socket_missing"}, http.StatusConflict
 	}
-	waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	if !waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15)) {
+		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
+	}
+	if !waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5)) {
+		v.recordError(session.SessionID, "vnc_backend_unreachable")
+		return map[string]any{
+			"error": "vnc_backend_unreachable",
+			"host":  host,
+			"port":  vncPort,
+		}, http.StatusServiceUnavailable
+	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
 		return map[string]any{"error": "guacamole_unavailable", "detail": firstText(cleanText(health["reason"]), "unavailable")}, http.StatusServiceUnavailable

@@ -719,12 +719,13 @@ func (m *Manager) ensureFirewall(ctx context.Context, allowedIPs string, port in
 	if remote == "" {
 		return fmt.Errorf("invalid VNC firewall remote scope: %s", allowedIPs)
 	}
-	name := strings.ReplaceAll(firewallRuleName, "'", "''")
+	name := powerShellSingleQuoted(firewallRuleName)
+	remoteLiteral := powerShellSingleQuoted(remote)
 	command := fmt.Sprintf(
-		"$rule = Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue; "+
-			"if (-not $rule) { New-NetFirewallRule -DisplayName '%s' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress '%s' -Profile Any | Out-Null } "+
-			"else { Set-NetFirewallRule -DisplayName '%s' -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress '%s' -Profile Any -Enabled True | Out-Null }",
-		name, name, port, remote, name, port, remote,
+		"$ErrorActionPreference = 'Stop'; "+
+			"Get-NetFirewallRule -DisplayName %s -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; "+
+			"New-NetFirewallRule -DisplayName %s -Direction Inbound -Action Allow -Protocol TCP -LocalPort %d -RemoteAddress %s -Profile Any | Out-Null",
+		name, name, port, remoteLiteral,
 	)
 	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
@@ -734,6 +735,10 @@ func (m *Manager) ensureFirewall(ctx context.Context, allowedIPs string, port in
 		return fmt.Errorf("%s", strings.TrimSpace(result.Stdout+"\n"+result.Stderr))
 	}
 	return nil
+}
+
+func powerShellSingleQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func (m *Manager) queryServiceState(ctx context.Context, service string) string {

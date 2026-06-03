@@ -474,6 +474,10 @@ func (s *vpnTunnelService) requestAgentStart(ctx context.Context, agentID string
 		return nil
 	}
 	session.AllowedPorts = mergePorts(s.allowPorts, session.AllowedPorts, requiredPorts)
+	if session.ExpiresAt.Before(time.Now().UTC().Add(30 * time.Second)) {
+		session.ExpiresAt = time.Now().UTC().Add(defaultVPNTokenTTL)
+		session.Token = s.issueToken(session.AgentID, session.TunnelID, session.ExpiresAt)
+	}
 	payload := session.payload(true)
 	if forceRestart {
 		payload["force_restart"] = true
@@ -506,7 +510,6 @@ func (s *vpnTunnelService) recordAgentReady(agentID string, tunnelID string, all
 	session.LastAgentReadyReason = cleanText(reason)
 	session.LastAgentReadyServiceState = cleanText(serviceState)
 	session.LastActivity = now
-	session.LastTransportConfirmedAt = now
 	s.ready.Broadcast()
 	payload := s.dispatchReadyPayloadLocked(session, session.LastAgentReadyAllowedPorts)
 	s.mu.Unlock()
@@ -629,12 +632,7 @@ func (s *vpnTunnelService) sessionRuntimePayload(session *vpnSession, refresh bo
 	peerHealth := s.wg.checkPeerHealth(session.ClientPublicKey)
 	listenerHealthy := boolFromAny(health["healthy"])
 	peerPresent := boolFromAny(peerHealth["peer_present"])
-	transportReady := listenerHealthy && peerPresent
-	if cleanText(peerHealth["reason"]) == "no_handshake" && !session.LastTransportProbeAt.IsZero() {
-		if time.Since(session.LastTransportProbeAt) < 90*time.Second {
-			transportReady = true
-		}
-	}
+	transportReady := listenerHealthy && boolFromAny(peerHealth["healthy"])
 	status := "up"
 	if !transportReady {
 		status = "recovering"

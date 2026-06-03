@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -232,16 +233,29 @@ func (c *goRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source
 	if c == nil || c.service == nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "tunnel_unavailable"}
 	}
+	shellPort := parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_SHELL_PORT"), 47002)
 	payload, err := c.service.connect(ctx, vpnConnectRequest{
 		AgentID:       agentID,
 		OperatorID:    operatorID,
 		EndpointHost:  inferWireGuardEndpointHost(source),
 		MarkActivity:  true,
-		RequiredPorts: []int{parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_SHELL_PORT"), 47002)},
+		RequiredPorts: []int{shellPort},
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, map[string]any{"error": "connect_failed", "detail": err.Error()}
 	}
+	host := strings.Split(cleanText(payload["virtual_ip"]), "/")[0]
+	if host != "" && !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_SHELL_FAST_READY_POLL_INTERVAL_SECONDS", 0.15)) {
+		c.service.requestAgentStart(ctx, agentID, true, "remote_shell_backend_unreachable", []int{shellPort})
+	}
+	if host != "" && !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5)) {
+		return nil, http.StatusServiceUnavailable, map[string]any{
+			"error": "remote_shell_backend_unreachable",
+			"host":  host,
+			"port":  shellPort,
+		}
+	}
+	_ = c.service.confirmTransportSuccess(agentID)
 	return payload, http.StatusOK, nil
 }
 

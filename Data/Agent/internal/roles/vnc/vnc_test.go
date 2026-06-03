@@ -248,6 +248,38 @@ func TestNormalizeFirewallRemoteRequiresSingleHost(t *testing.T) {
 	}
 }
 
+func TestEnsureFirewallRecreatesRule(t *testing.T) {
+	manager := &Manager{}
+	var commands []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "powershell.exe" && len(args) > 0 {
+			commands = append(commands, args[len(args)-1])
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.ensureFirewall(context.Background(), "10.255.0.1/32", 5900); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("expected one firewall command, got %#v", commands)
+	}
+	command := commands[0]
+	for _, expected := range []string{
+		"Remove-NetFirewallRule",
+		"New-NetFirewallRule",
+		"-LocalPort 5900",
+		"-RemoteAddress '10.255.0.1/32'",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("firewall command missing %q: %s", expected, command)
+		}
+	}
+	if strings.Contains(command, "Set-NetFirewallRule") {
+		t.Fatalf("firewall command should recreate rule instead of updating filters: %s", command)
+	}
+}
+
 func TestUltraVNCConfigIncludesSecurityAndCaptureSettings(t *testing.T) {
 	settings := ultraVNCSettings(5901, "DBD83CFD727A145800", true, "")
 	rendered := renderUltraVNCConfig(settings)
