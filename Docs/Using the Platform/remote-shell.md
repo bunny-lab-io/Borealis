@@ -53,8 +53,8 @@ Use `Disconnect` when finished.
     ### Source map
 
     - Remote Shell UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Shell.jsx`
-    - Shell API: `Data/Engine/Containers/api-backend/data/services/API/devices/shell.py`
-    - Shell bridge: `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`
+    - Shell API: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_shell.go`
+    - Shell bridge/runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py` and `Data/Engine/Containers/api-backend/data/services/WebSocket/vpn_shell.py`
     - Tunnel service: `Data/Engine/Containers/api-backend/data/services/VPN/vpn_tunnel_service.py`
     - Agent shell role: `Data/Agent/internal/roles/remote_shell/`
     - Agent WireGuard role: `Data/Agent/internal/roles/wireguard_tunnel/`

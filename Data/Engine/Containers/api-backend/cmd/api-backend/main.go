@@ -96,6 +96,10 @@ func main() {
 		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
 		log.Fatalf("failed to initialise Agent token routes: %v", err)
 	}
+	if err := registerRemoteShellRoutes(mux, auth, cfg.LegacyURL); err != nil {
+		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
+		log.Fatalf("failed to initialise remote shell routes: %v", err)
+	}
 	registerServerTimeRoutes(mux, auth)
 	registerAgentReleaseChannelRoutes(mux, auth, proxy)
 	registerServerOverviewRoutes(mux, auth, proxy)

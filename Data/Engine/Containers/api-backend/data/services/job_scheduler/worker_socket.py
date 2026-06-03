@@ -23,7 +23,7 @@ from flask_socketio import SocketIO
 from Data.Engine.auth import device_purge_state, jwt_service as jwt_service_module
 from Data.Engine.auth.guid_utils import normalize_guid
 from Data.Engine.db import dbapi as sqlite3
-from Data.Engine.services.API.devices.file_management import (
+from Data.Engine.services.remote_files.transfers import (
     FILE_TRANSFER_SESSION_TTL_SECONDS,
     FileTransferStore,
     _normalize_text as _normalize_file_text,

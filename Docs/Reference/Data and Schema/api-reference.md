@@ -103,7 +103,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
     - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
     - `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
-    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
+    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact through the Engine API from site-worker transfer storage.
     - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
     - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
     - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.

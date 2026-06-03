@@ -11,15 +11,15 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-03 |
 | Current architecture | Go binary owns public loopback `127.0.0.1:5000`; Python compatibility backend remains supervised on `127.0.0.1:5001`; unported routes proxy to Python. |
-| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, public bootstrap/Aegis duplicate route fallbacks, and local user create/password-reset fallbacks. |
+| Latest verified commit | `5385c90a Port bootstrap login MFA flow to Go`; current working slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, public bootstrap/Aegis duplicate route fallbacks, local user create/password-reset fallbacks, and Remote Shell/File Management Flask API route fallbacks. |
 | Rewrite posture | Clean cutover by domain is preferred. After a domain is fully Go-owned and smoke-tested, delete matching Python route code instead of leaving stale fallback surface. |
 
 ## Status Legend
 
 | Status | Meaning |
 | --- | --- |
-| `Cutover` | Public route behavior is Go-owned. Old Python route code is obsolete once duplicate-route audit and smoke pass. |
-| `Hybrid` | Go owns part of domain, but Python still owns runtime state, challenge/session state, broadcast fanout, streaming state, or related mutation routes. |
+| `Cutover` | Public route behavior is Go-owned and old Flask compatibility route code has no remaining ownership. Site-worker Python may still own worker-side runtime where that is not the public API fallback. |
+| `Hybrid` | Go owns part of domain, but Python compatibility still owns public routes, runtime state, challenge/session state, broadcast fanout, or related mutation routes. |
 | `Python` | Domain still runs through Python compatibility backend. |
 | `Removed` | Route surface intentionally deleted from both WebUI and API. |
 
@@ -43,8 +43,8 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Sites, enrollment codes, device approvals | `Cutover` | Site list/create/delete/assign/rename/auto-approval, site device map, enrollment-code list/deprecated responses/delete, device approval approve/deny. | No required Python runtime dependency known. | Python API route registration, mixed site handlers, and isolated admin approval route module removed in current cleanup slice. |
 | Software, process, service, Agent maintenance | `Hybrid` | Software audit, icon, refresh, override/block actions, bulk software actions, process list/terminate, service list/action, bulk Agent maintenance queueing, single-device Agent update dispatch. | Software uninstall job dispatch still depends on Python scheduled-job creation/broadcast behavior. | Port uninstall dispatch after scheduled-job create/update parity exists. |
 | Remote-operation session broker | `Cutover` | Signed scoped operation-token broker for shell, desktop, and file capabilities. | No required Python runtime dependency known. | Python route registration and isolated broker module removed in current cleanup slice. |
-| Remote shell | `Python` | No native Go shell establish/disconnect routes. | Shell establish/disconnect and shell socket runtime remain Python-owned. | Port or retire shell establish/disconnect API surface after current UI route path is audited. |
-| Remote file management | `Hybrid` | Browse roots/children, upload conflict check, text read/write, mkdir, rename, move, delete, paste. | Upload/download transfer streaming, transfer status/cancel/content, and Agent transfer callbacks remain Python-owned. | Port transfer state and streaming helpers before deleting Python file-transfer routes. |
+| Remote shell | `Hybrid` | Public `/api/shell/establish` and `/api/shell/disconnect`, site access/device resolution through Go remote-op broker, remote-op token assembly. | Python tunnel connect manager still owns WireGuard tunnel session creation; site-worker Python still owns shell socket runtime. | Python `devices/shell.py` deleted. Port tunnel manager before declaring full shell/tunnel runtime cutover. |
+| Remote file management | `Cutover` | Browse roots/children, upload conflict check, text read/write, mkdir, rename, move, delete, paste, upload/download transfer start, transfer status/cancel/content proxy. | Site-worker Python still owns transfer session storage, Agent transfer callbacks, and artifact streaming runtime; no Flask API fallback remains. | Python `devices/file_management.py` deleted; shared transfer store moved to `services/remote_files/transfers.py` for site-worker use. |
 | Remote desktop, tunnel, VPN runtime | `Hybrid` | VNC viewer capability read. | VNC establish/session/disconnect/handoff, tunnel connect/status/active, and VPN session tracking remain Python-owned. | Needs Go runtime managers or explicit retained-Python exception. |
 | Assemblies, scripts, quick execution | `Python` | None for assemblies/editor/cache/quick execution domain. | Assemblies cache, editor behavior, dirty queue, and quick run routes remain Python-owned. | Port cache/editor/dirty queue as one domain to avoid split-brain state. |
 | Workflows | `Hybrid` | Workflow run reads, node reads, webhook CRUD. | Workflow execution, editor access, run resolution, and webhook trigger execution remain Python-owned. | Port execution manager and resolution/broadcast path before deleting Python workflow routes. |
@@ -65,6 +65,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Done | Directory and credential read duplicates | Python directory provider/site GET handlers and credential list/detail GET handlers removed; mutation fallbacks retained. |
 | Done | Low-risk duplicate/public cleanup | Python `authentication.py`, `server/log_management.py`, public notification dispatch route, public bootstrap state/setup/unlock duplicates, and public Aegis status duplicate removed; internal bridges and retained Python lifecycle routes left intact. |
 | Done | User create and password reset | Go owns local user create, admin password reset, and current-user password reset; Python `access_management/users.py` deleted. |
+| Done | Remote Shell and Remote File Management public API | Go owns shell establish/disconnect and full public remote-file API surface; Python shell/file Flask route modules deleted; site-worker runtime helpers retained outside compatibility API. |
 | 1 | Agent release-channel mutation/refresh and WireGuard recovery | Port remaining server-admin Python mutations, then delete retained `server/info.py` route surface. |
 | 2 | Timezone API | Already removed. Keep removed. |
 
@@ -76,8 +77,8 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | WebAuthn challenge state | Passkey registration and passkey login cutover. |
 | Directory login pending state | Directory authentication cutover. |
 | Operator realtime broadcast | Notification cutover and some job/workflow/watchdog UX parity. |
-| File transfer streaming state | Upload/download transfer route deletion. |
-| Remote desktop/tunnel runtime managers | VNC, VPN, tunnel callback cutover. |
+| Site-worker file transfer runtime | Retained worker-side upload/download session storage, Agent callback URLs, and artifact streaming. Public api-backend Flask route deletion no longer blocked. |
+| Remote desktop/tunnel runtime managers | VNC, VPN, tunnel callback cutover; Remote Shell still calls Python tunnel connect manager. |
 | Assemblies cache and dirty queue | Assemblies/editor/quick-run cutover. |
 | Scheduler mutation engine | Scheduled-job create/update/rerun/redeploy, software uninstall dispatch, workflow-backed scheduled helpers. |
 | Agent heartbeat/status fanout | Agent heartbeat/status callback cutover. |
@@ -97,12 +98,13 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Directory/credential read cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, retained Python mutation smoke. |
 | Low-risk duplicate/public cleanup | Python syntax compile for touched Flask modules, no Python duplicate route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, public Go smoke, internal Python route-removal smoke, operator WebUI smoke for login/logout, Server Info, Log Management, device inventory, filters/views, sites/approvals, Access Management, and credential reads, `git diff --check`. |
 | User create/password reset Go cutover | Go unit tests for create/admin reset/current-user reset dispatch, Python syntax compile for retained auth module, no Python user route residue, `go test ./...`, `build-api-backend.sh`, `sudo bash Engine.sh deploy prod`, safe route smoke, `git diff --check`. |
+| Remote Shell/File Management cutover | Go unit tests for shell establish token assembly, upload transfer start, and transfer content proxy; Python syntax compile for API package, site-worker, and moved transfer helpers; Python route residue scan; `build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; public unauth Go route smoke; direct Python route-removal smoke. |
 | Tracker cleanup | Run `git diff --check` after doc edit. |
 
 ## Next Work
 
-1. Pick one `Cutover` row, audit duplicate Python routes, delete obsolete Python handlers, run focused route tests, then smoke WebUI path.
-2. Prefer remaining server-admin mutations next. Metadata/filter/view, site/admin, remote-op broker, Agent duplicate cleanup, simple auth/user/RBAC cleanup, server-admin duplicate cleanup, directory/credential read cleanup, low-risk duplicate/public cleanup, and user create/password-reset cleanup already removed Python route surface.
+1. Run operator WebUI smoke for current Remote Shell/File Management cutover: open shell, browse files, upload/download a harmless test file, cancel a transfer.
+2. Prefer remaining server-admin mutations next. Metadata/filter/view, site/admin, remote-op broker, Agent duplicate cleanup, simple auth/user/RBAC cleanup, server-admin duplicate cleanup, directory/credential read cleanup, low-risk duplicate/public cleanup, user create/password-reset cleanup, and Remote Shell/File Management public API cleanup already removed Python route surface.
 3. Continue Aegis/bootstrap/login/passkey work only as full domain cutover: port missing Go state first, then delete Python ceremony/lifecycle routes.
 4. Keep Python process until every `Hybrid` and `Python` row is either ported or explicitly accepted as retained Python.
 
