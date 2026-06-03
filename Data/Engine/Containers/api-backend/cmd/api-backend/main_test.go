@@ -42,6 +42,11 @@ type fakeOperatorStore struct {
 	deviceMutation       map[string]any
 	deviceMutationCode   int
 	deviceMutationErr    error
+	devicePurgeGUID      string
+	devicePurgeProfile   operatorProfile
+	devicePurgeResult    devicePurgeResult
+	devicePurgeStatus    int
+	devicePurgeErr       error
 	releaseGUID          string
 	releaseChannel       any
 	releaseBranch        any
@@ -254,6 +259,30 @@ func (s *fakeOperatorStore) setAgentReleaseChannelOverride(_ context.Context, gu
 		}
 	}
 	return copyMap(payload), status, nil
+}
+
+func (s *fakeOperatorStore) purgeDevice(_ context.Context, profile operatorProfile, guid string) (devicePurgeResult, int, error) {
+	s.devicePurgeProfile = profile
+	s.devicePurgeGUID = guid
+	if s.devicePurgeErr != nil {
+		return devicePurgeResult{}, 0, s.devicePurgeErr
+	}
+	status := s.devicePurgeStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	result := s.devicePurgeResult
+	if result.Payload == nil {
+		result.Payload = map[string]any{
+			"status":                 "purged",
+			"device_guid":            guid,
+			"hostname":               "LAB-OPERATOR-01",
+			"required_token_version": int64(2),
+			"scheduled_jobs":         map[string]any{"updated": int64(0), "deleted": int64(0), "targets_removed": int64(0)},
+			"deleted_rows":           map[string]any{"devices": int64(1)},
+		}
+	}
+	return devicePurgeResult{Payload: copyMap(result.Payload), AgentID: result.AgentID}, status, nil
 }
 
 func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile) ([]map[string]any, error) {

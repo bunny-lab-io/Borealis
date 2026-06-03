@@ -32,6 +32,10 @@ type deviceMutationStore interface {
 	setAgentReleaseChannelOverride(ctx context.Context, guid string, channel any, branch any) (map[string]any, int, error)
 }
 
+type devicePurgeStore interface {
+	purgeDevice(ctx context.Context, profile operatorProfile, guid string) (devicePurgeResult, int, error)
+}
+
 type deviceRow struct {
 	GUID                        sql.NullString
 	Hostname                    sql.NullString
@@ -75,10 +79,11 @@ type deviceRow struct {
 	SiteDescription             sql.NullString
 }
 
-func registerDeviceRoutes(mux *http.ServeMux, auth *authService) {
+func registerDeviceRoutes(mux *http.ServeMux, auth *authService, runtime devicePurgeRuntime) {
 	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
 	mux.HandleFunc("GET /api/devices/{guid}", deviceByGUIDHandler(auth))
+	mux.HandleFunc("POST /api/devices/{guid}/purge", devicePurgeHandler(auth, runtime))
 	mux.HandleFunc("PUT /api/devices/{guid}/agent-release-channel", deviceAgentReleaseChannelHandler(auth))
 	mux.HandleFunc("GET /api/device/details/{hostname}", deviceDetailsHandler(auth))
 	mux.HandleFunc("POST /api/device/description/{hostname}", deviceDescriptionHandler(auth))

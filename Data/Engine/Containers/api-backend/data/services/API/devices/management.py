@@ -1,20 +1,12 @@
 # ======================================================
 # Data\Engine\services\API\devices\management.py
-# Description: Device inventory and repository hash endpoints for the Engine API transition layer.
+# Description: Agent detail ingest endpoint for the Engine API transition layer.
 #
 # API Endpoints (if applicable):
 # - POST /api/agent/details (Device Authenticated) - Ingests hardware and inventory payloads from enrolled agents.
-# - GET /api/agents (Token Authenticated) - Lists online collectors grouped by hostname and run context.
-# - GET /api/devices (Token Authenticated) - Returns a summary list of known devices for the WebUI transition.
-# - GET /api/devices/search (Token Authenticated) - Returns hostname search matches scoped to the operator's assigned sites unless the operator is an admin.
-# - GET /api/devices/<guid> (Token Authenticated) - Retrieves a single device record by GUID, including summary fields.
-# - POST /api/devices/<guid>/purge (Token Authenticated (Admin)) - Holistically purges a device, its trust records, and scheduled-job references.
-# - PUT /api/devices/<guid>/agent-release-channel (Token Authenticated (Admin)) - Updates an agent release channel override and optional source branch.
-# - GET /api/device/details/<hostname> (Token Authenticated) - Returns full device details keyed by hostname.
-# - POST /api/device/description/<hostname> (Token Authenticated) - Updates the human-readable description for a device.
 # ======================================================
 
-"""Device management endpoints for the Borealis Engine API."""
+"""Agent detail ingest endpoint for the Borealis Engine API."""
 from __future__ import annotations
 
 import json
@@ -2211,7 +2203,7 @@ class DeviceManagementService:
         self.service_log(
             "server",
             (
-                f"/api/devices/{normalized_guid}/purge completed "
+                f"device purge completed guid={normalized_guid} "
                 f"hostname={device_record.get('hostname') or '-'} "
                 f"jobs_updated={scheduled_job_summary.get('updated', 0)} "
                 f"jobs_deleted={scheduled_job_summary.get('deleted', 0)}"
@@ -2232,7 +2224,7 @@ class DeviceManagementService:
         )
 
 def register_management(app, adapters: "EngineServiceAdapters") -> None:
-    """Register device management endpoints onto the Flask app."""
+    """Register retained Agent detail ingest endpoint onto the Flask app."""
 
     service = DeviceManagementService(app, adapters)
     blueprint = Blueprint("devices", __name__)
@@ -2241,81 +2233,6 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
     @require_device_auth(adapters.device_auth_manager)
     def _agent_details():
         payload, status = service.save_agent_details()
-        return jsonify(payload), status
-
-    @blueprint.route("/api/agents", methods=["GET"])
-    def _list_agents():
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.list_agents()
-        return jsonify(payload), status
-
-    @blueprint.route("/api/devices", methods=["GET"])
-    def _list_devices():
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.list_devices()
-        return jsonify(payload), status
-
-    @blueprint.route("/api/devices/search", methods=["GET"])
-    def _search_devices():
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.search_devices_by_hostname(request.args.get("hostname") or "")
-        return jsonify(payload), status
-
-    @blueprint.route("/api/devices/<guid>", methods=["GET"])
-    def _device_by_guid(guid: str):
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.get_device_by_guid(guid)
-        return jsonify(payload), status
-
-    @blueprint.route("/api/devices/<guid>/purge", methods=["POST"])
-    def _device_purge(guid: str):
-        requirement = service._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.purge_device(guid)
-        return jsonify(payload), status
-
-    @blueprint.route("/api/devices/<guid>/agent-release-channel", methods=["PUT"])
-    def _set_device_agent_release_channel(guid: str):
-        requirement = service._require_admin()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        body = request.get_json(silent=True) or {}
-        payload, status = service.set_agent_release_channel_override(guid, body.get("channel"), body.get("branch"))
-        return jsonify(payload), status
-
-    @blueprint.route("/api/device/details/<hostname>", methods=["GET"])
-    def _device_details(hostname: str):
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        payload, status = service.get_device_details(hostname)
-        return jsonify(payload), status
-
-    @blueprint.route("/api/device/description/<hostname>", methods=["POST"])
-    def _set_description(hostname: str):
-        requirement = service._require_login()
-        if requirement:
-            payload, status = requirement
-            return jsonify(payload), status
-        body = request.get_json(silent=True) or {}
-        description = (body.get("description") or "").strip()
-        payload, status = service.set_device_description(hostname, description)
         return jsonify(payload), status
 
     app.register_blueprint(blueprint)

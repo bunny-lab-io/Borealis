@@ -116,7 +116,7 @@ func main() {
 	registerServerWireGuardRoutes(mux, auth)
 	registerServerLogRoutes(mux, auth, proxy)
 	registerMetadataRoutes(mux, auth)
-	registerDeviceRoutes(mux, auth)
+	registerDeviceRoutes(mux, auth, devicePurgeRuntime{vpn: vpnRuntime, vnc: vncRuntime})
 	registerSoftwareRoutes(mux, auth, proxy)
 	registerAgentMaintenanceRoutes(mux, auth)
 	registerProcessRoutes(mux, auth, proxy)
