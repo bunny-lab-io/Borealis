@@ -45,15 +45,15 @@ type hostnameConflict struct {
 	SiteName    string
 }
 
-func registerAdminDeviceRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/admin/enrollment-codes", adminEnrollmentCodesHandler(auth, fallback))
+func registerAdminDeviceRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("/api/admin/enrollment-codes", adminEnrollmentCodesHandler(auth))
 	mux.HandleFunc("DELETE /api/admin/enrollment-codes/{code_id}", adminEnrollmentCodeDeleteHandler(auth))
-	mux.HandleFunc("/api/admin/device-approvals", adminDeviceApprovalsHandler(auth, fallback))
+	mux.HandleFunc("/api/admin/device-approvals", adminDeviceApprovalsHandler(auth))
 	mux.HandleFunc("POST /api/admin/device-approvals/{approval_id}/approve", adminDeviceApprovalApproveHandler(auth))
 	mux.HandleFunc("POST /api/admin/device-approvals/{approval_id}/deny", adminDeviceApprovalDenyHandler(auth))
 }
 
-func adminEnrollmentCodesHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func adminEnrollmentCodesHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -81,7 +81,7 @@ func adminEnrollmentCodesHandler(auth *authService, fallback http.Handler) http.
 			}
 			writeJSON(w, http.StatusGone, map[string]any{"error": "legacy_endpoint_removed_use_sites_api"})
 		default:
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet+", "+http.MethodPost)
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		}
 	}
 }
@@ -96,10 +96,10 @@ func adminEnrollmentCodeDeleteHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func adminDeviceApprovalsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func adminDeviceApprovalsHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)

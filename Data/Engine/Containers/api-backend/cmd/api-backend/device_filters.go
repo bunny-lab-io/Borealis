@@ -101,15 +101,15 @@ type filterDeviceRow struct {
 	SiteDescription    sql.NullString
 }
 
-func registerDeviceFilterRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/device_filters", deviceFiltersRootHandler(auth, fallback))
+func registerDeviceFilterRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("/api/device_filters", deviceFiltersRootHandler(auth))
 	mux.HandleFunc("GET /api/device_filters/metadata", deviceFilterMetadataHandler(auth))
 	mux.HandleFunc("GET /api/device_filters/search", deviceFilterSearchHandler(auth))
 	mux.HandleFunc("POST /api/device_filters/preview", deviceFilterPreviewHandler(auth))
-	mux.HandleFunc("/api/device_filters/", deviceFilterIDHandler(auth, fallback))
+	mux.HandleFunc("/api/device_filters/", deviceFilterIDHandler(auth))
 }
 
-func deviceFiltersRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func deviceFiltersRootHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -117,7 +117,7 @@ func deviceFiltersRootHandler(auth *authService, fallback http.Handler) http.Han
 		case http.MethodPost:
 			handleDeviceFilterCreate(w, r, auth)
 		default:
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet+", "+http.MethodPost)
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		}
 	}
 }
@@ -205,7 +205,7 @@ func deviceFilterPreviewHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func deviceFilterIDHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func deviceFilterIDHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		profile, failure := requireDeviceFilterProfile(w, r, auth)
 		if failure != nil {
@@ -214,7 +214,7 @@ func deviceFilterIDHandler(auth *authService, fallback http.Handler) http.Handle
 		}
 		filterID, action, ok := parseDeviceFilterAction(r.URL.Path)
 		if !ok {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, "")
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
 			return
 		}
 		store, ok := auth.store.(deviceFilterStore)
@@ -253,7 +253,7 @@ func deviceFilterIDHandler(auth *authService, fallback http.Handler) http.Handle
 			payload, status, err := store.archiveDeviceFilter(ctx, profile, filterID, false)
 			writeFilterMutationResponse(w, payload, status, err)
 		default:
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, "")
+			writeMethodNotAllowed(w, "GET, PUT, DELETE, POST")
 		}
 	}
 }

@@ -38,16 +38,16 @@ type siteRow struct {
 	AutoApproveUntil sql.NullInt64
 }
 
-func registerSiteRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/sites", siteListHandler(auth, fallback))
-	mux.HandleFunc("/api/sites/device_map", siteDeviceMapHandler(auth, fallback))
+func registerSiteRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("/api/sites", siteListHandler(auth))
+	mux.HandleFunc("/api/sites/device_map", siteDeviceMapHandler(auth))
 	mux.HandleFunc("POST /api/sites/delete", siteDeleteHandler(auth))
 	mux.HandleFunc("POST /api/sites/assign", siteAssignHandler(auth))
 	mux.HandleFunc("POST /api/sites/rename", siteRenameHandler(auth))
 	mux.HandleFunc("POST /api/sites/{site_id}/auto-approval", siteAutoApprovalHandler(auth))
 }
 
-func siteListHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func siteListHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -55,7 +55,7 @@ func siteListHandler(auth *authService, fallback http.Handler) http.HandlerFunc 
 		case http.MethodPost:
 			handleSiteCreate(w, r, auth)
 		default:
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet+", "+http.MethodPost)
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		}
 	}
 }
@@ -630,10 +630,10 @@ func siteRowPayload(row siteRow) map[string]any {
 	}
 }
 
-func siteDeviceMapHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func siteDeviceMapHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)

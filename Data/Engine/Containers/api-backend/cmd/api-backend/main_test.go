@@ -1709,7 +1709,7 @@ func TestSiteListHandlerRequiresAuthentication(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
-	siteListHandler(auth, nil).ServeHTTP(recorder, request)
+	siteListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -1733,7 +1733,7 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	siteListHandler(auth, nil).ServeHTTP(recorder, request)
+	siteListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -1763,7 +1763,7 @@ func TestSiteListHandlerCreatesSite(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/sites", strings.NewReader(`{"name":"New Site","description":"Fresh"}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	siteListHandler(auth, nil).ServeHTTP(recorder, request)
+	siteListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -1785,7 +1785,7 @@ func TestSiteDeviceMapHandlerReturnsMapping(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/sites/device_map?hostnames=LAB-OPERATOR-01,,LAB-OPERATOR-01", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	siteDeviceMapHandler(auth, nil).ServeHTTP(recorder, request)
+	siteDeviceMapHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2072,7 +2072,7 @@ func TestAdminEnrollmentCodesHandlerReturnsCodes(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/enrollment-codes", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	adminEnrollmentCodesHandler(auth, nil).ServeHTTP(recorder, request)
+	adminEnrollmentCodesHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2095,7 +2095,7 @@ func TestAdminDeviceApprovalsHandlerReturnsApprovals(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/device-approvals?status=pending", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	adminDeviceApprovalsHandler(auth, nil).ServeHTTP(recorder, request)
+	adminDeviceApprovalsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2147,7 +2147,7 @@ func TestDeviceViewListHandlerReturnsViews(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/device_list_views", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2177,7 +2177,7 @@ func TestDeviceViewGetHandlerReturnsViewOrNotFound(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/device_list_views/7", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewGetHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2189,7 +2189,7 @@ func TestDeviceViewGetHandlerReturnsViewOrNotFound(t *testing.T) {
 	missing := httptest.NewRecorder()
 	missingRequest := httptest.NewRequest(http.MethodGet, "/api/device_list_views/8", nil)
 	missingRequest.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewGetHandler(auth, nil).ServeHTTP(missing, missingRequest)
+	deviceViewGetHandler(auth).ServeHTTP(missing, missingRequest)
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", missing.Code, missing.Body.String())
 	}
@@ -2201,7 +2201,7 @@ func TestDeviceViewListHandlerCreatesView(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/device_list_views", strings.NewReader(`{"name":"Lab Ops","columns":["status","hostname"],"filters":{"site":"Bunny Lab"}}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2230,7 +2230,7 @@ func TestDeviceViewListHandlerRejectsInvalidCreatePayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/device_list_views", strings.NewReader(`{"name":"   ","columns":["status"],"filters":{}}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewListHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewListHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2246,7 +2246,7 @@ func TestDeviceViewGetHandlerUpdatesView(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/device_list_views/7", strings.NewReader(`{"name":"Renamed","columns":["hostname"],"filters":{"status":"Online"}}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewGetHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2271,7 +2271,7 @@ func TestDeviceViewGetHandlerDeletesView(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodDelete, "/api/device_list_views/7", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceViewGetHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceViewGetHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2912,7 +2912,7 @@ func TestMetadataFieldDefinitionHandlerUpdatesField(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/metadata_fields/7", strings.NewReader(`{"description":"Location Code"}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	metadataFieldDefinitionHandler(auth, nil).ServeHTTP(recorder, request)
+	metadataFieldDefinitionHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2934,7 +2934,7 @@ func TestDeviceMetadataFieldsHandlerRequiresAuthentication(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/LAB-OPERATOR-01/metadata_fields", nil)
-	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceMetadataFieldsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2966,7 +2966,7 @@ func TestDeviceMetadataFieldsHandlerReturnsPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/LAB-OPERATOR-01/metadata_fields", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceMetadataFieldsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2994,7 +2994,7 @@ func TestDeviceMetadataFieldsHandlerUpdatesPayload(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/devices/LAB-OPERATOR-01/metadata_fields/9", strings.NewReader(`{"value":"Rack 9"}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	deviceMetadataFieldsHandler(auth, nil).ServeHTTP(recorder, request)
+	deviceMetadataFieldsHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -3012,17 +3012,20 @@ func TestDeviceMetadataFieldsHandlerUpdatesPayload(t *testing.T) {
 	}
 }
 
-func TestDeviceMetadataFieldsHandlerProxiesUnownedDeviceSubpaths(t *testing.T) {
+func TestMetadataRoutesDoNotShadowUnownedDeviceSubpaths(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 	fallbackHits := 0
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fallbackHits++
 		w.WriteHeader(http.StatusAccepted)
 	})
+	mux := http.NewServeMux()
+	registerMetadataRoutes(mux, auth)
+	mux.Handle("/", fallback)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/devices/device-guid", nil)
-	deviceMetadataFieldsHandler(auth, fallback).ServeHTTP(recorder, request)
+	mux.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusAccepted || fallbackHits != 1 {
 		t.Fatalf("expected fallback, got status=%d hits=%d", recorder.Code, fallbackHits)

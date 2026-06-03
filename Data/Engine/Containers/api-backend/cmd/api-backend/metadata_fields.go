@@ -47,10 +47,11 @@ type deviceMetadataValueRow struct {
 	UpdatedAt   sql.NullInt64
 }
 
-func registerMetadataRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+func registerMetadataRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/metadata_fields", metadataFieldsHandler(auth))
-	mux.HandleFunc("/api/metadata_fields/", metadataFieldDefinitionHandler(auth, fallback))
-	mux.HandleFunc("/api/devices/", deviceMetadataFieldsHandler(auth, fallback))
+	mux.HandleFunc("PUT /api/metadata_fields/{field_number}", metadataFieldDefinitionHandler(auth))
+	mux.HandleFunc("GET /api/devices/{device_id}/metadata_fields", deviceMetadataFieldsHandler(auth))
+	mux.HandleFunc("PUT /api/devices/{device_id}/metadata_fields/{field_number}", deviceMetadataFieldsHandler(auth))
 }
 
 func metadataFieldsHandler(auth *authService) http.HandlerFunc {
@@ -89,15 +90,15 @@ func metadataFieldsHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func metadataFieldDefinitionHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func metadataFieldDefinitionHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fieldNumber, ok := parseMetadataFieldDefinitionPath(r.URL.Path)
 		if !ok {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodPut)
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_field", "message": "Field number must be between 1 and 500."})
 			return
 		}
 		if r.Method != http.MethodPut {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodPut)
+			writeMethodNotAllowed(w, http.MethodPut)
 			return
 		}
 		identity, failure := requireAdmin(r.Context(), auth, r)
@@ -213,15 +214,15 @@ func listMetadataDefinitionsFromConn(ctx context.Context, conn *sql.Conn) ([]map
 	return buildMetadataDefinitions(descriptions), nil
 }
 
-func deviceMetadataFieldsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func deviceMetadataFieldsHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parsed, ok := parseDeviceMetadataFieldsPath(r.URL.Path)
 		if !ok {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
 			return
 		}
 		if r.Method == http.MethodGet && parsed.hasField {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+			writeMethodNotAllowed(w, http.MethodPut)
 			return
 		}
 		profile, err := auth.currentProfile(r.Context(), r)
@@ -260,7 +261,7 @@ func deviceMetadataFieldsHandler(auth *authService, fallback http.Handler) http.
 			}
 			payload, status, err = store.updateDeviceMetadataField(ctx, profile, parsed.deviceID, parsed.fieldNumber, normalizeMetadataValue(cleanText(body["value"])))
 		} else {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, "GET, PUT")
+			writeMethodNotAllowed(w, "GET, PUT")
 			return
 		}
 		if err != nil {

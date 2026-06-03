@@ -39,12 +39,12 @@ type deviceViewRow struct {
 	UpdatedAt   sql.NullInt64
 }
 
-func registerDeviceViewRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("/api/device_list_views", deviceViewListHandler(auth, fallback))
-	mux.HandleFunc("/api/device_list_views/", deviceViewGetHandler(auth, fallback))
+func registerDeviceViewRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("/api/device_list_views", deviceViewListHandler(auth))
+	mux.HandleFunc("/api/device_list_views/", deviceViewGetHandler(auth))
 }
 
-func deviceViewListHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func deviceViewListHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
@@ -89,7 +89,7 @@ func deviceViewListHandler(auth *authService, fallback http.Handler) http.Handle
 	}
 }
 
-func deviceViewGetHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func deviceViewGetHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
 			writeMethodNotAllowed(w, strings.Join([]string{http.MethodGet, http.MethodPut, http.MethodDelete}, ", "))
