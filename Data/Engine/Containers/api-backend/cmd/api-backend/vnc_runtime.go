@@ -858,13 +858,10 @@ func requestVNCServerCredential(ctx context.Context, auth *authService, route *a
 	if workerErr != nil {
 		return vncCredential{}, errors.New(firstText(cleanText(workerErr["error"]), strconv.Itoa(status)))
 	}
-	if !boolFromAny(response["called"]) {
-		return vncCredential{}, errors.New("agent_socket_missing")
-	}
-	raw, ok := response["response"].(map[string]any)
-	if !ok {
+	if response == nil {
 		return vncCredential{}, errors.New("credential_missing")
 	}
+	raw := response
 	if request := cleanText(raw["request_id"]); request != "" && request != requestID {
 		return vncCredential{}, errors.New("credential_request_mismatch")
 	}

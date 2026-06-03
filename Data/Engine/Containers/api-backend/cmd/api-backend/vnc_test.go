@@ -120,3 +120,53 @@ func TestVNCSessionRoutesUseGoHandler(t *testing.T) {
 		t.Fatalf("expected Go validation 400, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestRequestVNCServerCredentialConsumesWorkerCallEnvelope(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/call" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		if body["event_name"] != "vnc_credential_request" || body["hostname"] != "LAB-OPERATOR-01" {
+			t.Fatalf("unexpected worker body %#v", body)
+		}
+		payload := body["payload"].(map[string]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called": true,
+			"response": map[string]any{
+				"request_id":             payload["request_id"],
+				"controller_password":    "12345678",
+				"credential_revision":    12345,
+				"display_topology":       []map[string]any{{"id": "1", "width": 1024, "height": 768}},
+				"display_virtual_bounds": map[string]any{"width": 1024, "height": 768},
+			},
+		})
+	}))
+	defer worker.Close()
+
+	credential, err := requestVNCServerCredential(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-OPERATOR-01",
+		"system",
+		"LAB-OPERATOR-01_SYSTEM",
+		"vnc_establish",
+		1,
+	)
+	if err != nil {
+		t.Fatalf("expected credential, got error %v", err)
+	}
+	if credential.ControllerPassword != "12345678" || credential.CredentialRevision != 12345 {
+		t.Fatalf("unexpected credential %#v", credential)
+	}
+	if len(credential.DisplayTopology) != 1 || credential.DisplayVirtualBounds["width"] != float64(1024) {
+		t.Fatalf("display data missing %#v", credential)
+	}
+}
