@@ -58,7 +58,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     ### Source map
 
     - Server API: `Data/Engine/Containers/api-backend/data/services/API/server/info.py`
-    - Log API: `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py`
+    - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
     - Server Info UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Server_Info.jsx`
     - Service actions: `Data/Engine/Containers/api-backend/data/services/job_scheduler/`
 

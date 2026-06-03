@@ -3,6 +3,7 @@
 # Description: Primary authentication blueprint used by the Engine auth group for sessions, MFA, and logout.
 #
 # API Endpoints (if applicable):
+# - GET /api/internal/bootstrap/state (Internal Token) - Returns bootstrap state for Go auth bridge.
 # - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
 # - POST /api/auth/passkeys/register/options (Token Authenticated) - Starts a passkey registration ceremony for the current operator.
@@ -73,16 +74,12 @@ from ....public_endpoints import public_base_url
 from ...aegis_cipher import (
     AegisCipherServiceError,
     AegisDataCorruptionError,
-    AegisInvalidCipherError,
     AegisLockedError,
     AegisNotConfiguredError,
 )
 from ...auth.bootstrap_state import (
     BOOTSTRAP_PHASE_ADMIN_RECOVERY_REQUIRED,
     BOOTSTRAP_PHASE_ADMIN_SETUP_REQUIRED,
-    BOOTSTRAP_PHASE_AEGIS_SETUP_REQUIRED,
-    BOOTSTRAP_PHASE_AEGIS_UNLOCK_REQUIRED,
-    BOOTSTRAP_PHASE_LOGIN_REQUIRED,
     determine_bootstrap_state,
     operator_auth_allowed,
 )
@@ -644,34 +641,6 @@ class _AuthService:
 
     def bootstrap_state(self):
         return jsonify(self._public_bootstrap_state())
-
-    def bootstrap_aegis_setup(self):
-        state = self._bootstrap_state()
-        if state["phase"] != BOOTSTRAP_PHASE_AEGIS_SETUP_REQUIRED:
-            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
-        data = request.get_json(silent=True) or {}
-        cipher = str(data.get("cipher") or "")
-        self._clear_operator_session()
-        try:
-            self.aegis_cipher_service.setup(cipher)
-        except AegisCipherServiceError as exc:
-            return jsonify({"error": "invalid_request", "message": str(exc), **self._public_bootstrap_state()}), 400
-        return jsonify({"status": "ok", **self._public_bootstrap_state()})
-
-    def bootstrap_aegis_unlock(self):
-        state = self._bootstrap_state()
-        if state["phase"] != BOOTSTRAP_PHASE_AEGIS_UNLOCK_REQUIRED:
-            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
-        data = request.get_json(silent=True) or {}
-        cipher = str(data.get("cipher") or "")
-        self._clear_operator_session()
-        try:
-            self.aegis_cipher_service.unlock(cipher)
-        except AegisInvalidCipherError as exc:
-            return jsonify({"error": "invalid_cipher", "message": str(exc), **self._public_bootstrap_state()}), 401
-        except AegisCipherServiceError as exc:
-            return jsonify({"error": "invalid_request", "message": str(exc), **self._public_bootstrap_state()}), 400
-        return jsonify({"status": "ok", **self._public_bootstrap_state()})
 
     def bootstrap_admin_setup(self):
         state = self._bootstrap_state()
@@ -1355,18 +1324,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if not _require_internal():
             return jsonify({"error": "unauthorized"}), 401
         return service.bootstrap_state()
-
-    @blueprint.route("/api/bootstrap/state", methods=["GET"])
-    def _bootstrap_state():
-        return service.bootstrap_state()
-
-    @blueprint.route("/api/bootstrap/aegis/setup", methods=["POST"])
-    def _bootstrap_aegis_setup():
-        return service.bootstrap_aegis_setup()
-
-    @blueprint.route("/api/bootstrap/aegis/unlock", methods=["POST"])
-    def _bootstrap_aegis_unlock():
-        return service.bootstrap_aegis_unlock()
 
     @blueprint.route("/api/bootstrap/admin/setup", methods=["POST"])
     def _bootstrap_admin_setup():

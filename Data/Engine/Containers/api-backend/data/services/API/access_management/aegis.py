@@ -3,7 +3,6 @@
 # Description: Aegis Cipher status and unlock lifecycle endpoints for Engine secret storage.
 #
 # API Endpoints (if applicable):
-# - GET /api/aegis/status (Token Authenticated) - Returns Aegis Cipher setup and lock state.
 # - POST /api/aegis/setup (Token Authenticated (Admin)) - Configures Aegis Cipher and encrypts protected secrets.
 # - POST /api/aegis/unlock (Token Authenticated (Admin)) - Unlocks Aegis-protected secrets for the current Engine process.
 # - POST /api/aegis/rotate (Token Authenticated (Admin)) - Rotates the configured Aegis Cipher and re-encrypts protected secrets.
@@ -102,15 +101,6 @@ def register_aegis_cipher_management(app: Flask, adapters: "EngineServiceAdapter
         except AegisCipherServiceError as exc:
             return _error_payload("invalid_request", str(exc), 400)
         return jsonify({"status": "ok", **payload})
-
-    @blueprint.route("/api/aegis/status", methods=["GET"])
-    def _aegis_status():
-        user, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        payload = service.status()
-        payload["user_role"] = user.get("role") or "User"
-        return jsonify(payload)
 
     @blueprint.route("/api/aegis/setup", methods=["POST"])
     def _aegis_setup():

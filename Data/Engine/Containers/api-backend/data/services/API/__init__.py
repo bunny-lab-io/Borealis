@@ -351,10 +351,9 @@ def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_server(app: Flask, adapters: EngineServiceAdapters) -> None:
-    from .server import info as server_info, log_management
+    from .server import info as server_info
 
     server_info.register_info(app, adapters)
-    log_management.register_log_management(app, adapters)
 
 
 def _register_auth(app: Flask, adapters: EngineServiceAdapters) -> None:
