@@ -8,13 +8,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
-func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnRuntime *vpnTunnelService, fallback http.Handler) {
+	_ = fallback
 	mux.HandleFunc("/api/internal/job-scheduler/public-base-url", internalSchedulerPublicBaseURLHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
+	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
+	mux.HandleFunc("/api/internal/job-scheduler/vpn-prepare", internalSchedulerVPNPrepareHandler(auth, vpnRuntime))
 }
 
 func internalSchedulerPublicBaseURLHandler(auth *authService) http.HandlerFunc {
@@ -112,6 +116,153 @@ func internalSchedulerHostServiceEventHandler(auth *authService) http.HandlerFun
 			"queued":  boolFromAny(result["queued"]),
 		})
 	}
+}
+
+func internalSchedulerVPNSessionsHandler(auth *authService, vpnRuntime *vpnTunnelService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": vpnSessionMap(vpnRuntime)})
+	}
+}
+
+func internalSchedulerVPNPrepareHandler(auth *authService, vpnRuntime *vpnTunnelService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		if vpnRuntime == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "tunnel_unavailable"})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			return
+		}
+		agentIDs := schedulerCleanStringList(body["agent_ids"])
+		requiredPorts := coercePortList(body["required_ports"])
+		endpointHost := cleanText(body["endpoint_host"])
+		if endpointHost == "" {
+			endpointHost = inferWireGuardEndpointHost(r)
+		}
+		requestedStart := false
+		for _, agentID := range agentIDs {
+			if vpnRuntime.sessionPayload(agentID, false) != nil {
+				vpnRuntime.requestAgentStart(r.Context(), agentID, false, firstText(cleanText(body["reason"]), "job_scheduler_prepare"), requiredPorts)
+				requestedStart = true
+				continue
+			}
+			if _, err := vpnRuntime.connect(r.Context(), vpnConnectRequest{
+				AgentID:       agentID,
+				EndpointHost:  endpointHost,
+				MarkActivity:  false,
+				RequiredPorts: requiredPorts,
+			}); err == nil {
+				requestedStart = true
+			}
+		}
+		sessions := vpnSessionMap(vpnRuntime)
+		if requestedStart && len(agentIDs) > 0 {
+			sessions = vpnRuntime.waitForSessionsReady(
+				agentIDs,
+				requiredPorts,
+				coercePositiveFloat(firstNonEmpty(body["timeout_seconds"], body["wait_seconds"]), 45),
+				coercePositiveFloat(body["poll_interval_seconds"], 0.5),
+			)
+		}
+		for _, agentID := range agentIDs {
+			if payload := sessions[agentID]; payload != nil {
+				payload["_requested_start"] = true
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": sessions})
+	}
+}
+
+func vpnSessionMap(vpnRuntime *vpnTunnelService) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	if vpnRuntime == nil {
+		return out
+	}
+	for _, session := range vpnRuntime.listSessions() {
+		agentID := cleanText(session["agent_id"])
+		if agentID != "" {
+			out[agentID] = session
+		}
+	}
+	return out
+}
+
+func schedulerCleanStringList(value any) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(item any) {
+		cleaned := cleanText(item)
+		if cleaned == "" {
+			return
+		}
+		if _, ok := seen[cleaned]; ok {
+			return
+		}
+		seen[cleaned] = struct{}{}
+		out = append(out, cleaned)
+	}
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			add(item)
+		}
+	case []string:
+		for _, item := range typed {
+			add(item)
+		}
+	case string:
+		for _, item := range strings.FieldsFunc(typed, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t' }) {
+			add(item)
+		}
+	default:
+		add(typed)
+	}
+	return out
+}
+
+func coercePositiveFloat(value any, fallback float64) float64 {
+	switch typed := value.(type) {
+	case float64:
+		if typed > 0 {
+			return typed
+		}
+	case float32:
+		if typed > 0 {
+			return float64(typed)
+		}
+	case int:
+		if typed > 0 {
+			return float64(typed)
+		}
+	case int64:
+		if typed > 0 {
+			return float64(typed)
+		}
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
 }
 
 func emitWorkerHostServiceEvent(ctx context.Context, auth *authService, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, int, map[string]any) {

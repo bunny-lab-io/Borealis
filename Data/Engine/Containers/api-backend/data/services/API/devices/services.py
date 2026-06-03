@@ -69,7 +69,7 @@ from .service_inventory import (
     normalize_service_action,
     serialize_device_services,
 )
-from .tunnel import _current_user, _require_login, _resolve_requested_agent_id
+from .runtime_helpers import _current_user, _require_login, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
     from .. import EngineServiceAdapters

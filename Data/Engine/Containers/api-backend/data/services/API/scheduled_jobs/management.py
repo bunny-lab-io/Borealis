@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import os
 import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit
 from typing import TYPE_CHECKING, List, Optional
 
@@ -32,7 +34,7 @@ from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_res
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
 from ...job_scheduler.queue import enqueue_onboarding_run, enqueue_scheduled_run, enqueue_scheduled_workflow_run
-from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
 
@@ -112,6 +114,41 @@ def _endpoint_host_from_session_payload(payload: object) -> str:
     return raw_endpoint.rsplit(":", 1)[0].strip().strip("[]")
 
 
+def _internal_api_base() -> str:
+    configured = str(os.getenv("BOREALIS_INTERNAL_API_BASE_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    host = str(os.getenv("BOREALIS_GO_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = str(os.getenv("BOREALIS_GO_API_PORT") or "5000").strip() or "5000"
+    return f"http://{host}:{port}"
+
+
+def _internal_api_json(app: "Flask", path: str, *, payload: Optional[dict] = None, timeout: float = 10.0) -> dict:
+    secret = require_app_secret(app)
+    body = None
+    method = "GET"
+    headers = {
+        "Accept": "application/json",
+        INTERNAL_TOKEN_HEADER: internal_token(secret),
+    }
+    if payload is not None:
+        method = "POST"
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request_obj = urllib.request.Request(
+        f"{_internal_api_base()}{path}",
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout) as response:
+            decoded = json.loads(response.read().decode("utf-8") or "{}")
+            return decoded if isinstance(decoded, dict) else {}
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        return {}
+
+
 def _vpn_snapshot_ready(snapshot: object, requested_ids: List[str]) -> bool:
     if not requested_ids:
         return True
@@ -127,32 +164,6 @@ def _vpn_snapshot_ready(snapshot: object, requested_ids: List[str]) -> bool:
         elif bool(payload.get("recovery_in_progress")) or not bool(payload.get("listener_healthy")):
             return False
     return True
-
-
-def _bootstrap_vpn_session(
-    tunnel_service,
-    *,
-    agent_id: str,
-    endpoint_host: str,
-    required_ports: list[int] | tuple[int, ...] | None = None,
-) -> None:
-    last_error: Exception | None = None
-    for attempt in range(2):
-        try:
-            tunnel_service.connect(
-                agent_id=agent_id,
-                operator_id=None,
-                endpoint_host=endpoint_host or None,
-                required_ports=required_ports,
-            )
-            return
-        except Exception as exc:
-            last_error = exc
-            if attempt == 0:
-                time.sleep(1.0)
-                continue
-    if last_error is not None:
-        raise last_error
 
 
 def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
@@ -220,42 +231,23 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         return hostnames
 
     def _active_vpn_session_snapshot():
-        try:
-            from ..devices.tunnel import _get_tunnel_service
-
-            tunnel_service = _get_tunnel_service(adapters)
-            sessions = tunnel_service.list_sessions() or []
-        except Exception as exc:
+        payload = _internal_api_json(app, "/api/internal/job-scheduler/vpn-sessions", timeout=10.0)
+        sessions_payload = payload.get("sessions") if isinstance(payload, dict) else {}
+        if isinstance(sessions_payload, dict):
+            return {
+                str(agent_id or "").strip(): dict(session)
+                for agent_id, session in sessions_payload.items()
+                if str(agent_id or "").strip() and isinstance(session, dict)
+            }
+        if payload:
             adapters.service_log(
                 "scheduled_jobs",
-                f"vpn session snapshot lookup failed err={exc}",
+                "vpn session snapshot lookup returned invalid payload",
                 level="ERROR",
             )
-            sessions = []
-
-        snapshot = {}
-        for session in sessions:
-            if not isinstance(session, dict):
-                continue
-            agent_id = str(session.get("agent_id") or "").strip()
-            if not agent_id:
-                continue
-            snapshot[agent_id] = dict(session)
-        return snapshot
+        return {}
 
     def _prepare_vpn_session_snapshot(agent_ids: List[str], required_ports: Optional[List[int] | tuple[int, ...]] = None):
-        try:
-            from ..devices.tunnel import _get_tunnel_service
-
-            tunnel_service = _get_tunnel_service(adapters)
-        except Exception as exc:
-            adapters.service_log(
-                "scheduled_jobs",
-                f"vpn session preparation unavailable err={exc}",
-                level="ERROR",
-            )
-            return _active_vpn_session_snapshot()
-
         requested_ids = sorted({str(agent_id or "").strip() for agent_id in (agent_ids or []) if str(agent_id or "").strip()})
         snapshot = _active_vpn_session_snapshot()
         endpoint_host = _public_vpn_endpoint_host()
@@ -264,66 +256,32 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
                 endpoint_host = _endpoint_host_from_session_payload(payload)
                 if endpoint_host:
                     break
-        requested_start = False
-        for agent_id in requested_ids:
-            try:
-                session_payload = tunnel_service.session_payload(agent_id, include_token=False)
-                if session_payload:
-                    tunnel_service.request_agent_start(
-                        agent_id,
-                        reason="shared_ansible_prepare",
-                        required_ports=required_ports,
-                    )
-                else:
-                    _bootstrap_vpn_session(
-                        tunnel_service,
-                        agent_id=agent_id,
-                        endpoint_host=endpoint_host,
-                        required_ports=required_ports,
-                    )
-                requested_start = True
-            except Exception as exc:
-                adapters.service_log(
-                    "scheduled_jobs",
-                    f"vpn session prime failed agent_id={agent_id} endpoint_host={endpoint_host or '-'} err={exc}",
-                    level="WARNING",
-                )
-        snapshot = _active_vpn_session_snapshot()
-        if requested_start:
-            wait_ready = getattr(tunnel_service, "wait_for_sessions_ready", None)
-            if callable(wait_ready):
-                try:
-                    snapshot = dict(
-                        wait_ready(
-                            requested_ids,
-                            required_ports=required_ports,
-                            timeout_seconds=_shared_ansible_vpn_ready_timeout_seconds(),
-                            poll_interval_seconds=_shared_ansible_vpn_ready_poll_interval_seconds(),
-                        )
-                        or {}
-                    )
-                except Exception as exc:
-                    adapters.service_log(
-                        "scheduled_jobs",
-                        f"vpn dispatch readiness wait failed err={exc}",
-                        level="ERROR",
-                    )
-                    snapshot = _active_vpn_session_snapshot()
-            else:
-                deadline = time.monotonic() + _shared_ansible_vpn_ready_timeout_seconds()
-                poll_interval = _shared_ansible_vpn_ready_poll_interval_seconds()
-                while True:
-                    snapshot = _active_vpn_session_snapshot()
-                    if _vpn_snapshot_ready(snapshot, requested_ids):
-                        break
-                    if time.monotonic() >= deadline:
-                        adapters.service_log(
-                            "scheduled_jobs",
-                            "vpn dispatch readiness timed out before shared ansible dispatch",
-                            level="WARNING",
-                        )
-                        break
-                    time.sleep(poll_interval)
+        payload = _internal_api_json(
+            app,
+            "/api/internal/job-scheduler/vpn-prepare",
+            payload={
+                "agent_ids": requested_ids,
+                "required_ports": list(required_ports or []),
+                "endpoint_host": endpoint_host,
+                "reason": "shared_ansible_prepare",
+                "timeout_seconds": _shared_ansible_vpn_ready_timeout_seconds(),
+                "poll_interval_seconds": _shared_ansible_vpn_ready_poll_interval_seconds(),
+            },
+            timeout=_shared_ansible_vpn_ready_timeout_seconds() + 5.0,
+        )
+        sessions_payload = payload.get("sessions") if isinstance(payload, dict) else {}
+        if isinstance(sessions_payload, dict):
+            snapshot = {
+                str(agent_id or "").strip(): dict(session)
+                for agent_id, session in sessions_payload.items()
+                if str(agent_id or "").strip() and isinstance(session, dict)
+            }
+        if not _vpn_snapshot_ready(snapshot, requested_ids):
+            adapters.service_log(
+                "scheduled_jobs",
+                "vpn dispatch readiness timed out before shared ansible dispatch",
+                level="WARNING",
+            )
         for agent_id in requested_ids:
             payload = snapshot.get(agent_id)
             if isinstance(payload, dict):

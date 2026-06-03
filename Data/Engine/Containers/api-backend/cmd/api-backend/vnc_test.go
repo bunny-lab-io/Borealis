@@ -60,7 +60,7 @@ func TestVNCViewersHandlerReportsGuacdReady(t *testing.T) {
 	t.Setenv("BOREALIS_GUACAMOLE_VNC_WS_PATH", "remote-desktop/vnc/guacamole/")
 
 	mux := http.NewServeMux()
-	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), http.NotFoundHandler())
+	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), nil, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/vnc/viewers", nil)
@@ -87,7 +87,7 @@ func TestVNCViewersHandlerReportsGuacdReady(t *testing.T) {
 func TestVNCViewersHandlerReportsDisabled(t *testing.T) {
 	t.Setenv("BOREALIS_GUACAMOLE_ENABLED", "0")
 	mux := http.NewServeMux()
-	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), http.NotFoundHandler())
+	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), nil, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/vnc/viewers", nil)
@@ -107,22 +107,16 @@ func TestVNCViewersHandlerReportsDisabled(t *testing.T) {
 	}
 }
 
-func TestVNCSessionRoutesFallBack(t *testing.T) {
-	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/vnc/establish" {
-			t.Fatalf("unexpected fallback request %s %s", r.Method, r.URL.Path)
-		}
-		w.WriteHeader(http.StatusAccepted)
-	})
+func TestVNCSessionRoutesUseGoHandler(t *testing.T) {
 	mux := http.NewServeMux()
-	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), fallback)
+	registerVNCRoutes(mux, vncTestAuth(&fakeVNCStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}), nil, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/vnc/establish", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 	mux.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusAccepted {
-		t.Fatalf("expected fallback 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected Go validation 400, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

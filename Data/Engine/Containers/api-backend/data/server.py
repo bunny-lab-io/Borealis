@@ -25,7 +25,6 @@ import time
 import ssl
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
-from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
 
@@ -117,7 +116,6 @@ _ASSEMBLY_SHUTDOWN_REGISTERED = False
 
 from .config import EngineSettings, initialise_engine_logger, load_runtime_config
 from .assembly_management import initialise_assembly_runtime
-from .services.VPN import WireGuardServerConfig, WireGuardServerManager
 
 
 @dataclass
@@ -159,7 +157,6 @@ class EngineContext:
     guacd_host: str
     guacd_port: int
     guacamole_vnc_ws_path: str
-    wireguard_server_manager: Optional[Any] = None
     assembly_cache: Optional[Any] = None
     vnc_proxy: Optional[Any] = None
     vnc_registry: Optional[Any] = None
@@ -291,20 +288,6 @@ def create_app(config: Optional[Mapping[str, Any]] = None) -> Tuple[Flask, Socke
     context = _build_engine_context(settings, logger)
     context.socketio = socketio
 
-    try:
-        wg_config = WireGuardServerConfig(
-            port=context.wireguard_port,
-            engine_virtual_ip=context.wireguard_engine_virtual_ip,
-            peer_network=context.wireguard_peer_network,
-            private_key_path=Path(context.wireguard_server_private_key_path),
-            public_key_path=Path(context.wireguard_server_public_key_path),
-            acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
-            log_path=Path(context.vpn_tunnel_log_path),
-        )
-        context.wireguard_server_manager = WireGuardServerManager(wg_config)
-    except Exception:
-        logger.error("Failed to initialise WireGuard server manager", exc_info=True)
-
     assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
     assembly_cache.reload()
     context.assembly_cache = assembly_cache
@@ -371,20 +354,6 @@ def register_engine_api(app: Flask, *, config: Optional[Mapping[str, Any]] = Non
     settings: EngineSettings = load_runtime_config(config)
     logger = initialise_engine_logger(settings)
     context = _build_engine_context(settings, logger)
-
-    try:
-        wg_config = WireGuardServerConfig(
-            port=context.wireguard_port,
-            engine_virtual_ip=context.wireguard_engine_virtual_ip,
-            peer_network=context.wireguard_peer_network,
-            private_key_path=Path(context.wireguard_server_private_key_path),
-            public_key_path=Path(context.wireguard_server_public_key_path),
-            acl_allowlist_ports=tuple(context.wireguard_port_allowlist),
-            log_path=Path(context.vpn_tunnel_log_path),
-        )
-        context.wireguard_server_manager = WireGuardServerManager(wg_config)
-    except Exception:
-        logger.error("Failed to initialise WireGuard server manager", exc_info=True)
 
     assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
     assembly_cache.reload()

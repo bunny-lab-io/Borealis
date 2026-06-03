@@ -13,7 +13,7 @@ import (
 )
 
 type remoteShellTunnelConnector interface {
-	connectTunnel(ctx context.Context, source *http.Request, agentID string) (map[string]any, int, map[string]any)
+	connectTunnel(ctx context.Context, source *http.Request, agentID string, operatorID string) (map[string]any, int, map[string]any)
 }
 
 type legacyRemoteShellTunnelConnector struct {
@@ -22,15 +22,24 @@ type legacyRemoteShellTunnelConnector struct {
 	client  *http.Client
 }
 
-func registerRemoteShellRoutes(mux *http.ServeMux, auth *authService, legacyURL *url.URL) error {
+type goRemoteShellTunnelConnector struct {
+	service *vpnTunnelService
+}
+
+func registerRemoteShellRoutes(mux *http.ServeMux, auth *authService, legacyURL *url.URL, vpnRuntime *vpnTunnelService) error {
 	signer, err := loadOrCreateAgentJWTSigner()
 	if err != nil {
 		return err
 	}
-	connector := &legacyRemoteShellTunnelConnector{
-		baseURL: legacyURL,
-		auth:    auth,
-		client:  &http.Client{Timeout: 30 * time.Second},
+	var connector remoteShellTunnelConnector
+	if vpnRuntime != nil {
+		connector = &goRemoteShellTunnelConnector{service: vpnRuntime}
+	} else {
+		connector = &legacyRemoteShellTunnelConnector{
+			baseURL: legacyURL,
+			auth:    auth,
+			client:  &http.Client{Timeout: 30 * time.Second},
+		}
 	}
 	mux.HandleFunc("POST /api/shell/establish", remoteShellEstablishHandler(auth, signer, connector))
 	mux.HandleFunc("POST /api/shell/disconnect", remoteShellDisconnectHandler(auth))
@@ -96,7 +105,7 @@ func remoteShellEstablishHandler(auth *authService, signer *agentJWTSigner, conn
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "tunnel_unavailable"})
 			return
 		}
-		tunnelPayload, tunnelStatus, tunnelErr := connector.connectTunnel(r.Context(), r, result.Device.AgentID)
+		tunnelPayload, tunnelStatus, tunnelErr := connector.connectTunnel(r.Context(), r, result.Device.AgentID, profile.Username)
 		if tunnelErr != nil {
 			writeJSON(w, tunnelStatus, tunnelErr)
 			return
@@ -219,10 +228,28 @@ func remoteShellSessionPayload(r *http.Request, profile operatorProfile, result 
 	}
 }
 
-func (c *legacyRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source *http.Request, agentID string) (map[string]any, int, map[string]any) {
+func (c *goRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source *http.Request, agentID string, operatorID string) (map[string]any, int, map[string]any) {
+	if c == nil || c.service == nil {
+		return nil, http.StatusBadGateway, map[string]any{"error": "tunnel_unavailable"}
+	}
+	payload, err := c.service.connect(ctx, vpnConnectRequest{
+		AgentID:       agentID,
+		OperatorID:    operatorID,
+		EndpointHost:  inferWireGuardEndpointHost(source),
+		MarkActivity:  true,
+		RequiredPorts: []int{parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_SHELL_PORT"), 47002)},
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, map[string]any{"error": "connect_failed", "detail": err.Error()}
+	}
+	return payload, http.StatusOK, nil
+}
+
+func (c *legacyRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source *http.Request, agentID string, operatorID string) (map[string]any, int, map[string]any) {
 	if c == nil || c.baseURL == nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "tunnel_unavailable"}
 	}
+	_ = operatorID
 	payload, err := json.Marshal(map[string]any{"agent_id": agentID})
 	if err != nil {
 		return nil, http.StatusBadRequest, map[string]any{"error": "invalid_request"}

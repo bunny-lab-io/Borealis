@@ -5,7 +5,4 @@
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""VPN service helpers for the Engine runtime."""
-
-from .wireguard_server import WireGuardServerConfig, WireGuardServerManager  # noqa: F401
-from .vpn_tunnel_service import VpnTunnelService  # noqa: F401
+"""Go api-backend owns VPN runtime helpers."""

@@ -87,6 +87,8 @@ func main() {
 	defer closeAuth()
 
 	proxy := newLegacyProxy(cfg)
+	vpnRuntime := newVPNTunnelService(auth)
+	vncRuntime := newVNCRuntime(auth, vpnRuntime)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg, state))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
@@ -96,10 +98,15 @@ func main() {
 		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
 		log.Fatalf("failed to initialise Agent token routes: %v", err)
 	}
-	if err := registerRemoteShellRoutes(mux, auth, cfg.LegacyURL); err != nil {
+	if err := registerAgentVPNRuntimeRoutes(mux, auth, vpnRuntime, vncRuntime); err != nil {
+		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
+		log.Fatalf("failed to initialise Agent VPN/VNC runtime routes: %v", err)
+	}
+	if err := registerRemoteShellRoutes(mux, auth, cfg.LegacyURL, vpnRuntime); err != nil {
 		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
 		log.Fatalf("failed to initialise remote shell routes: %v", err)
 	}
+	registerTunnelRoutes(mux, auth, vpnRuntime)
 	registerServerTimeRoutes(mux, auth)
 	registerAgentReleaseChannelRoutes(mux, auth, proxy)
 	registerServerOverviewRoutes(mux, auth, proxy)
@@ -114,7 +121,7 @@ func main() {
 	registerAgentMaintenanceRoutes(mux, auth)
 	registerProcessRoutes(mux, auth, proxy)
 	registerRemoteFileRoutes(mux, auth, proxy)
-	registerVNCRoutes(mux, auth, proxy)
+	registerVNCRoutes(mux, auth, vpnRuntime, vncRuntime)
 	registerDeviceViewRoutes(mux, auth)
 	registerDeviceFilterRoutes(mux, auth)
 	registerDeviceSearchRoutes(mux, auth)
@@ -128,7 +135,7 @@ func main() {
 	registerWatchdogRoutes(mux, auth, proxy)
 	registerScheduledJobRoutes(mux, auth, proxy)
 	registerNotificationRoutes(mux, auth, cfg.LegacyURL)
-	registerInternalSchedulerRoutes(mux, auth, proxy)
+	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, proxy)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", proxy)
 

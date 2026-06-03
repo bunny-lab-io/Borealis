@@ -15,11 +15,6 @@ const (
 	defaultGuacdPort int64 = 4822
 )
 
-func registerVNCRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
-	mux.HandleFunc("GET /api/vnc/viewers", vncViewersHandler(auth))
-	mux.HandleFunc("/api/vnc/", vncFallbackHandler(fallback))
-}
-
 func vncViewersHandler(auth *authService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, failure := requireUser(r.Context(), auth, r); failure != nil {
@@ -48,16 +43,6 @@ func vncViewersHandler(auth *authService) http.HandlerFunc {
 				"reason":    cleanText(health["reason"]),
 			},
 		})
-	}
-}
-
-func vncFallbackHandler(fallback http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if fallback == nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
-			return
-		}
-		fallback.ServeHTTP(w, r)
 	}
 }
 

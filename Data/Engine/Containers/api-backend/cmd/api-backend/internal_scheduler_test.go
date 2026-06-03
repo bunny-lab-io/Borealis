@@ -22,7 +22,7 @@ func testInternalSchedulerAuth() *authService {
 
 func TestInternalSchedulerPublicBaseURLRequiresInternalToken(t *testing.T) {
 	mux := http.NewServeMux()
-	registerInternalSchedulerRoutes(mux, testInternalSchedulerAuth(), http.NotFoundHandler())
+	registerInternalSchedulerRoutes(mux, testInternalSchedulerAuth(), nil, http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/public-base-url", nil)
@@ -37,7 +37,7 @@ func TestInternalSchedulerPublicBaseURLReturnsConfiguredURL(t *testing.T) {
 	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.example.test/")
 	auth := testInternalSchedulerAuth()
 	mux := http.NewServeMux()
-	registerInternalSchedulerRoutes(mux, auth, http.NotFoundHandler())
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/public-base-url", nil)
@@ -90,7 +90,7 @@ func TestInternalSchedulerHostServiceEventRoutesToWorker(t *testing.T) {
 	}
 	auth := processTestAuth(store)
 	mux := http.NewServeMux()
-	registerInternalSchedulerRoutes(mux, auth, http.NotFoundHandler())
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
 
 	body := []byte(`{"hostname":"LAB-OPERATOR-01","event_name":"quick_job_run","payload":{"job_id":1},"allow_pending":true,"pending_ttl_seconds":240}`)
 	recorder := httptest.NewRecorder()
@@ -110,5 +110,68 @@ func TestInternalSchedulerHostServiceEventRoutesToWorker(t *testing.T) {
 	}
 	if payload["queued"] != true || payload["emitted"] != false {
 		t.Fatalf("unexpected response %#v", payload)
+	}
+}
+
+type fakeSchedulerWireGuardBackend struct{}
+
+func (fakeSchedulerWireGuardBackend) serverPublicKey() string { return "server-public" }
+
+func (fakeSchedulerWireGuardBackend) buildPeerProfile(agentID string, virtualIP string, allowedPorts []int) map[string]any {
+	return map[string]any{"agent_id": agentID, "virtual_ip": virtualIP, "allowed_ports": allowedPorts}
+}
+
+func (fakeSchedulerWireGuardBackend) upsertPeer(map[string]any) error { return nil }
+func (fakeSchedulerWireGuardBackend) removePeer(string, string) error { return nil }
+func (fakeSchedulerWireGuardBackend) reconcilePeers([]map[string]any) error {
+	return nil
+}
+func (fakeSchedulerWireGuardBackend) checkListenerHealth(int) map[string]any {
+	return map[string]any{"healthy": true, "reason": "listener_running", "peer_count": 1}
+}
+func (fakeSchedulerWireGuardBackend) checkPeerHealth(string) map[string]any {
+	return map[string]any{"healthy": true, "peer_present": true, "reason": "peer_ready"}
+}
+
+func TestInternalSchedulerVPNSessionsReturnsRuntimeSnapshot(t *testing.T) {
+	auth := testInternalSchedulerAuth()
+	now := time.Unix(1700000100, 0).UTC()
+	session := &vpnSession{
+		TunnelID:         "tunnel-1",
+		AgentID:          "LAB-01_SYSTEM",
+		VirtualIP:        "10.255.0.2/32",
+		ClientPublicKey:  "client-public",
+		ClientPrivateKey: "client-private",
+		AllowedPorts:     []int{22, 5900},
+		CreatedAt:        now,
+		ExpiresAt:        now.Add(5 * time.Minute),
+		LastActivity:     now,
+		Operators:        map[string]struct{}{},
+	}
+	vpnRuntime := &vpnTunnelService{
+		auth:            auth,
+		wg:              fakeSchedulerWireGuardBackend{},
+		sessionsByAgent: map[string]*vpnSession{session.AgentID: session},
+		sessionsByID:    map[string]*vpnSession{session.TunnelID: session},
+	}
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/vpn-sessions", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	sessions := payload["sessions"].(map[string]any)
+	row := sessions["LAB-01_SYSTEM"].(map[string]any)
+	if row["agent_id"] != "LAB-01_SYSTEM" || row["tunnel_id"] != "tunnel-1" || row["transport_ready"] != true {
+		t.Fatalf("unexpected vpn session payload %#v", row)
 	}
 }

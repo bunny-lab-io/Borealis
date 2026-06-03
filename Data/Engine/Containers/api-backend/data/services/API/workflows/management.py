@@ -16,8 +16,11 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+import urllib.error
+import urllib.request
 from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request
@@ -26,6 +29,8 @@ from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_res
 from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
+from ...auth.secrets import require_app_secret
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 from ...workflows import WorkflowRuntimeService
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -60,7 +65,7 @@ def _coerce_non_negative_float(value: Any, default: float) -> float:
 
 def _public_vpn_endpoint_host() -> str:
     for env_name in ("BOREALIS_AGENT_PUBLIC_BASE_URL", "BOREALIS_PUBLIC_BASE_URL"):
-        raw_value = str(request.environ.get(env_name) or "").strip()
+        raw_value = str(os.getenv(env_name) or "").strip()
         if not raw_value:
             continue
         try:
@@ -70,6 +75,41 @@ def _public_vpn_endpoint_host() -> str:
         except Exception:
             continue
     return ""
+
+
+def _internal_api_base() -> str:
+    configured = str(os.getenv("BOREALIS_INTERNAL_API_BASE_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
+    host = str(os.getenv("BOREALIS_GO_API_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = str(os.getenv("BOREALIS_GO_API_PORT") or "5000").strip() or "5000"
+    return f"http://{host}:{port}"
+
+
+def _internal_api_json(app: "Flask", path: str, *, payload: Optional[dict] = None, timeout: float = 10.0) -> dict:
+    secret = require_app_secret(app)
+    body = None
+    method = "GET"
+    headers = {
+        "Accept": "application/json",
+        INTERNAL_TOKEN_HEADER: internal_token(secret),
+    }
+    if payload is not None:
+        method = "POST"
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request_obj = urllib.request.Request(
+        f"{_internal_api_base()}{path}",
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout) as response:
+            decoded = json.loads(response.read().decode("utf-8") or "{}")
+            return decoded if isinstance(decoded, dict) else {}
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        return {}
 
 
 def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> WorkflowRuntimeService:
@@ -133,32 +173,19 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
     runtime.set_online_lookup(_online_hostnames_snapshot)
 
     def _active_vpn_session_snapshot():
-        try:
-            from ..devices.tunnel import _get_tunnel_service
-
-            tunnel_service = _get_tunnel_service(adapters)
-            sessions = tunnel_service.list_sessions() or []
-        except Exception:
-            sessions = []
-        snapshot = {}
-        for session in sessions:
-            if not isinstance(session, dict):
-                continue
-            agent_id = str(session.get("agent_id") or "").strip()
-            if agent_id:
-                snapshot[agent_id] = dict(session)
-        return snapshot
+        payload = _internal_api_json(app, "/api/internal/job-scheduler/vpn-sessions", timeout=10.0)
+        sessions = payload.get("sessions") if isinstance(payload, dict) else {}
+        if not isinstance(sessions, dict):
+            return {}
+        return {
+            str(agent_id or "").strip(): dict(session)
+            for agent_id, session in sessions.items()
+            if str(agent_id or "").strip() and isinstance(session, dict)
+        }
 
     runtime.set_vpn_session_lookup(_active_vpn_session_snapshot)
 
     def _prepare_vpn_session_snapshot(agent_ids: List[str], required_ports: Optional[List[int] | tuple[int, ...]] = None):
-        try:
-            from ..devices.tunnel import _get_tunnel_service
-
-            tunnel_service = _get_tunnel_service(adapters)
-        except Exception:
-            return _active_vpn_session_snapshot()
-
         requested_ids = sorted({str(agent_id or "").strip() for agent_id in (agent_ids or []) if str(agent_id or "").strip()})
         snapshot = _active_vpn_session_snapshot()
         endpoint_host = _public_vpn_endpoint_host()
@@ -172,45 +199,26 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
                 endpoint_host = endpoint.rsplit(":", 1)[0].strip().strip("[]")
                 if endpoint_host:
                     break
-        requested_start = False
-        for agent_id in requested_ids:
-            try:
-                session_payload = tunnel_service.session_payload(agent_id, include_token=False)
-                if session_payload:
-                    tunnel_service.request_agent_start(
-                        agent_id,
-                        reason="workflow_ansible_prepare",
-                        required_ports=required_ports,
-                    )
-                else:
-                    tunnel_service.connect(
-                        agent_id=agent_id,
-                        operator_id=None,
-                        endpoint_host=endpoint_host or None,
-                        required_ports=required_ports,
-                    )
-                requested_start = True
-            except Exception:
-                continue
-
-        snapshot = _active_vpn_session_snapshot()
-        if requested_start:
-            deadline = time.monotonic() + _DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS
-            while True:
-                snapshot = _active_vpn_session_snapshot()
-                ready = True
-                for agent_id in requested_ids:
-                    payload = snapshot.get(agent_id)
-                    if not isinstance(payload, dict):
-                        ready = False
-                        break
-                    if bool(payload.get("recovery_in_progress")) or not bool(payload.get("listener_healthy")):
-                        ready = False
-                        break
-                if ready or time.monotonic() >= deadline:
-                    break
-                time.sleep(_DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS)
-
+        payload = _internal_api_json(
+            app,
+            "/api/internal/job-scheduler/vpn-prepare",
+            payload={
+                "agent_ids": requested_ids,
+                "required_ports": list(required_ports or []),
+                "endpoint_host": endpoint_host,
+                "reason": "workflow_ansible_prepare",
+                "timeout_seconds": _DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS,
+                "poll_interval_seconds": _DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS,
+            },
+            timeout=_DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS + 5.0,
+        )
+        sessions = payload.get("sessions") if isinstance(payload, dict) else {}
+        if isinstance(sessions, dict):
+            snapshot = {
+                str(agent_id or "").strip(): dict(session)
+                for agent_id, session in sessions.items()
+                if str(agent_id or "").strip() and isinstance(session, dict)
+            }
         for agent_id in requested_ids:
             payload = snapshot.get(agent_id)
             if isinstance(payload, dict):

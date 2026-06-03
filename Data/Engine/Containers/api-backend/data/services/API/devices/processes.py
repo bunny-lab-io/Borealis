@@ -21,7 +21,7 @@ from ...remote_ops.worker_bridge import (
     worker_host_service_registered,
     worker_route_for_device,
 )
-from .tunnel import _current_user, _require_login, _resolve_requested_agent_id
+from .runtime_helpers import _current_user, _require_login, _resolve_requested_agent_id
 
 if False:  # pragma: no cover - hint for type checkers
     from .. import EngineServiceAdapters

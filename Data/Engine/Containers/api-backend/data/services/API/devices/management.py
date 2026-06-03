@@ -2130,31 +2130,10 @@ class DeviceManagementService:
         summary: Dict[str, Any] = {
             "vpn_disconnected": False,
             "vnc_sessions_revoked": 0,
-            "vnc_collaboration_session_closed": False,
             "vnc_connections_closed": 0,
         }
         if not normalized_agent_id:
             return summary
-
-        service = (
-            getattr(self.adapters.context, "vpn_tunnel_service", None)
-            or getattr(self.adapters, "_vpn_tunnel_service", None)
-        )
-        if service is not None and hasattr(service, "disconnect"):
-            try:
-                summary["vpn_disconnected"] = bool(
-                    service.disconnect(
-                        normalized_agent_id,
-                        reason="device_purged",
-                        force=True,
-                    )
-                )
-            except Exception:
-                self.logger.debug(
-                    "Failed to disconnect active tunnel for purged agent_id=%s",
-                    normalized_agent_id,
-                    exc_info=True,
-                )
 
         registry = (
             getattr(self.adapters.context, "vnc_registry", None)
@@ -2170,44 +2149,6 @@ class DeviceManagementService:
                     exc_info=True,
                 )
 
-        collaboration_manager = getattr(self.adapters.context, "vnc_collaboration_manager", None)
-        collaboration_result = None
-        if collaboration_manager is not None and hasattr(collaboration_manager, "revoke_agent"):
-            try:
-                collaboration_result = collaboration_manager.revoke_agent(
-                    normalized_agent_id,
-                    reason="device_purged",
-                )
-                summary["vnc_collaboration_session_closed"] = bool(collaboration_result)
-            except Exception:
-                self.logger.debug(
-                    "Failed to revoke VNC collaboration session for purged agent_id=%s",
-                    normalized_agent_id,
-                    exc_info=True,
-                )
-        proxy = getattr(self.adapters.context, "vnc_proxy", None)
-        if (
-            collaboration_result
-            and proxy is not None
-            and hasattr(proxy, "disconnect_session")
-        ):
-            try:
-                session = collaboration_result.get("session") if isinstance(collaboration_result, dict) else None
-                session_id = str(getattr(session, "session_id", "") or "").strip()
-                if session_id:
-                    summary["vnc_connections_closed"] = int(
-                        proxy.disconnect_session(
-                            session_id,
-                            reason="device_purged",
-                        )
-                        or 0
-                    )
-            except Exception:
-                self.logger.debug(
-                    "Failed to close live VNC collaboration connections for purged agent_id=%s",
-                    normalized_agent_id,
-                    exc_info=True,
-                )
         return summary
 
     def purge_device(self, guid: str) -> Tuple[Dict[str, Any], int]:

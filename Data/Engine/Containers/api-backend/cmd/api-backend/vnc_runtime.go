@@ -1,0 +1,995 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+type vncRuntime struct {
+	auth    *authService
+	vpn     *vpnTunnelService
+	signer  *agentJWTSigner
+	mu      sync.Mutex
+	byID    map[string]*vncCollaborationSession
+	byAgent map[string]string
+}
+
+type vncCollaborationSession struct {
+	SessionID             string
+	AgentID               string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	State                 string
+	ControllerOperatorID  string
+	ControllerParticipant string
+	ControllerPassword    string
+	CredentialRevision    int
+	RemoveWallpaper       bool
+	LastError             string
+	TunnelID              string
+	AllowedIPs            string
+	EngineVirtualIP       string
+	LastBackendReadyAt    time.Time
+	DisplayTopology       []map[string]any
+	DisplayVirtualBounds  map[string]any
+	Participants          map[string]*vncParticipant
+}
+
+type vncParticipant struct {
+	ParticipantID      string
+	OperatorID         string
+	Role               string
+	JoinedAt           time.Time
+	LastActivityAt     time.Time
+	ActiveConnections  int
+	LastConnectedAt    time.Time
+	LastDisconnectedAt time.Time
+}
+
+type vncCredential struct {
+	ControllerPassword   string
+	CredentialRevision   int
+	DisplayTopology      []map[string]any
+	DisplayVirtualBounds map[string]any
+}
+
+func newVNCRuntime(auth *authService, vpn *vpnTunnelService) *vncRuntime {
+	signer, _ := loadOrCreateAgentJWTSigner()
+	return &vncRuntime{
+		auth:    auth,
+		vpn:     vpn,
+		signer:  signer,
+		byID:    map[string]*vncCollaborationSession{},
+		byAgent: map[string]string{},
+	}
+}
+
+func registerVNCRoutes(mux *http.ServeMux, auth *authService, vpn *vpnTunnelService, runtime *vncRuntime) {
+	if runtime == nil {
+		runtime = newVNCRuntime(auth, vpn)
+	}
+	mux.HandleFunc("GET /api/vnc/viewers", vncViewersHandler(auth))
+	mux.HandleFunc("POST /api/vnc/establish", vncEstablishHandler(auth, runtime))
+	mux.HandleFunc("POST /api/vnc/session", vncEstablishHandler(auth, runtime))
+	mux.HandleFunc("POST /api/vnc/disconnect", vncDisconnectHandler(auth, runtime))
+	mux.HandleFunc("POST /api/vnc/handoff", vncHandoffHandler(auth, runtime))
+	mux.HandleFunc("GET /api/vnc/sessions", vncSessionsHandler(auth, runtime))
+	mux.HandleFunc("POST /api/internal/vnc/session-event", vncInternalSessionEventHandler(auth, runtime))
+}
+
+func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+		requestedAgentID := cleanText(body["agent_id"])
+		if requestedAgentID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "agent_id_required"})
+			return
+		}
+		viewer := strings.ToLower(firstText(cleanText(body["viewer"]), "guacamole"))
+		if viewer != "guacamole" && viewer != "apache-guacamole" && viewer != "apache_guacamole" && viewer != "guac" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_viewer"})
+			return
+		}
+		result, status, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, requestedAgentID)
+		if payloadErr != nil {
+			writeJSON(w, status, payloadErr)
+			return
+		}
+		if result.Route == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."})
+			return
+		}
+		payload, statusCode := runtime.issueSession(r.Context(), r, profile, result, body)
+		writeJSON(w, statusCode, payload)
+	}
+}
+
+func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile operatorProfile, result remoteOpsSessionResult, body map[string]any) (map[string]any, int) {
+	if v == nil || v.vpn == nil {
+		return map[string]any{"error": "tunnel_unavailable"}, http.StatusServiceUnavailable
+	}
+	agentID := result.Device.AgentID
+	hostname := result.Device.Hostname
+	serviceMode := serviceModeFromAgentID(agentID)
+	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_establish", vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", 20))
+	if credErr != nil || credential.ControllerPassword == "" {
+		return map[string]any{"error": "vnc_agent_live_credentials_unavailable"}, http.StatusServiceUnavailable
+	}
+	removeWallpaper := true
+	if _, ok := body["remove_wallpaper"]; ok {
+		removeWallpaper = boolFromAny(body["remove_wallpaper"])
+	}
+	session, participant, created := v.ensureSession(agentID, profile.Username, credential, removeWallpaper)
+	_ = created
+	vncPort := parseIntDefault(os.Getenv("BOREALIS_VNC_PORT"), defaultVNCBackendPort)
+	tunnelPayload := v.vpn.sessionPayload(agentID, false)
+	if tunnelPayload == nil {
+		var err error
+		tunnelPayload, err = v.vpn.connect(ctx, vpnConnectRequest{
+			AgentID:       agentID,
+			OperatorID:    profile.Username,
+			EndpointHost:  inferWireGuardEndpointHost(r),
+			MarkActivity:  true,
+			RequiredPorts: []int{vncPort},
+		})
+		if err != nil {
+			return map[string]any{"error": "tunnel_down", "detail": err.Error()}, http.StatusConflict
+		}
+	} else {
+		v.vpn.requestAgentStart(ctx, agentID, false, "vnc_establish", []int{vncPort})
+	}
+	virtualIP := cleanText(tunnelPayload["virtual_ip"])
+	host := strings.Split(virtualIP, "/")[0]
+	if host == "" {
+		return map[string]any{"error": "virtual_ip_missing"}, http.StatusInternalServerError
+	}
+	allowedIPs := cleanText(firstNonEmpty(tunnelPayload["allowed_ips"], tunnelPayload["engine_virtual_ip"]))
+	if allowedIPs == "" {
+		allowedIPs = cleanText(tunnelPayload["engine_virtual_ip"])
+	}
+	v.recordBackendReady(session.SessionID, cleanText(tunnelPayload["tunnel_id"]), allowedIPs, cleanText(tunnelPayload["engine_virtual_ip"]))
+	emitOK := emitVNCStart(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
+		"agent_id":            agentID,
+		"session_id":          session.SessionID,
+		"controller_password": "",
+		"view_only_password":  "",
+		"port":                vncPort,
+		"allowed_ips":         allowedIPs,
+		"remove_wallpaper":    removeWallpaper,
+		"credential_revision": session.CredentialRevision,
+		"reason":              "vnc_establish",
+	})
+	if !emitOK {
+		return map[string]any{"error": "agent_socket_missing"}, http.StatusConflict
+	}
+	waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	health := guacdHealth(ctx, 350*time.Millisecond)
+	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
+		return map[string]any{"error": "guacamole_unavailable", "detail": firstText(cleanText(health["reason"]), "unavailable")}, http.StatusServiceUnavailable
+	}
+	issued, issueErr := v.issueRemoteDesktopToken(profile, result)
+	if issueErr != nil {
+		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
+	}
+	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
+	workerResponse, workerStatus, workerErr := remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
+		"operation_token":        issued.Token,
+		"agent_id":               agentID,
+		"host":                   host,
+		"port":                   vncPort,
+		"password":               session.ControllerPassword,
+		"operator_id":            profile.Username,
+		"session_id":             session.SessionID,
+		"participant_id":         participant.ParticipantID,
+		"role":                   participant.Role,
+		"width":                  width,
+		"height":                 height,
+		"dpi":                    96,
+		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
+	}, 10*time.Second)
+	if workerErr != nil {
+		v.recordError(session.SessionID, "worker_guacamole_unavailable")
+		if workerStatus == 0 {
+			workerStatus = http.StatusServiceUnavailable
+		}
+		return workerErr, workerStatus
+	}
+	guacToken := cleanText(workerResponse["token"])
+	if guacToken == "" {
+		v.recordError(session.SessionID, "worker_guacamole_token_missing")
+		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
+	}
+	_ = v.vpn.confirmTransportSuccess(agentID)
+	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
+	urls := remoteOpsWorkerURLs(r, result.Route)
+	snapshot := v.sessionSnapshot(session, profile.Username)
+	snapshot["display_topology"] = credential.DisplayTopology
+	snapshot["display_virtual_bounds"] = credential.DisplayVirtualBounds
+	return map[string]any{
+		"viewer":                 "guacamole",
+		"session_id":             session.SessionID,
+		"participant_id":         participant.ParticipantID,
+		"participant_role":       participant.Role,
+		"view_only":              false,
+		"session_state":          session.State,
+		"controller_operator_id": session.ControllerOperatorID,
+		"credential_revision":    session.CredentialRevision,
+		"session":                snapshot,
+		"display_topology":       credential.DisplayTopology,
+		"display_virtual_bounds": credential.DisplayVirtualBounds,
+		"virtual_ip":             host,
+		"tunnel_id":              tunnelPayload["tunnel_id"],
+		"engine_virtual_ip":      tunnelPayload["engine_virtual_ip"],
+		"vnc_port":               vncPort,
+		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
+		"guacamole_ws_url":       websocketURLForRequest(r, wsPath),
+		"guacamole_ws_path":      wsPath,
+		"token":                  guacToken,
+		"remote_ops_session": map[string]any{
+			"session_id":   issued.SessionID,
+			"token_type":   "Bearer",
+			"issued_at":    issued.IssuedAt,
+			"expires_at":   issued.ExpiresAt,
+			"expires_in":   issued.ExpiresIn,
+			"capabilities": []string{"remote_desktop"},
+			"device": map[string]any{
+				"guid":      result.Device.GUID,
+				"hostname":  result.Device.Hostname,
+				"agent_id":  result.Device.AgentID,
+				"site_id":   nullableInt64(result.Device.SiteID),
+				"site_name": result.Device.SiteName,
+			},
+			"worker": map[string]any{
+				"worker_guid":       result.Route.WorkerGUID,
+				"route_generation":  result.Route.Generation,
+				"route_path_prefix": result.Route.RoutePathPrefix,
+				"base_url":          urls["base"],
+				"urls":              urls,
+			},
+		},
+	}, http.StatusOK
+}
+
+func (v *vncRuntime) issueRemoteDesktopToken(profile operatorProfile, result remoteOpsSessionResult) (issuedRemoteOpsSession, error) {
+	if v.signer == nil {
+		signer, err := loadOrCreateAgentJWTSigner()
+		if err != nil {
+			return issuedRemoteOpsSession{}, err
+		}
+		v.signer = signer
+	}
+	if result.Route == nil {
+		return issuedRemoteOpsSession{}, errors.New("site_worker_unavailable")
+	}
+	return v.signer.issueRemoteOpsSession(profile, result.Device, *result.Route, []string{"remote_desktop"}, time.Now().UTC(), defaultRemoteOpSessionTTL)
+}
+
+func vncDisconnectHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+		sessionID := cleanText(body["session_id"])
+		agentID := cleanText(body["agent_id"])
+		reason := firstText(cleanText(body["reason"]), "operator_disconnect")
+		closeSession := boolFromAny(body["close_session"])
+		session := runtime.sessionByID(sessionID)
+		if session == nil && agentID != "" {
+			result, status, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, agentID)
+			if payloadErr != nil {
+				writeJSON(w, status, payloadErr)
+				return
+			}
+			session = runtime.sessionByAgent(result.Device.AgentID)
+		}
+		if session == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session_not_found"})
+			return
+		}
+		if _, status, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, session.AgentID); payloadErr != nil {
+			writeJSON(w, status, payloadErr)
+			return
+		}
+		result, err := runtime.leaveOrClose(session.SessionID, profile.Username, closeSession, strings.EqualFold(profile.Role, "admin"), reason)
+		if err != nil {
+			switch err.Error() {
+			case "participant_required":
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "participant_required"})
+			default:
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "session_not_found"})
+			}
+			return
+		}
+		device, route := runtime.vpn.lookupDeviceRouteByAgentID(r.Context(), session.AgentID)
+		if route != nil {
+			if boolFromAny(result["closed"]) {
+				_, _, _ = remoteFilePostWorkerJSON(r.Context(), auth, route, "/remote-desktop/vnc/disconnect", map[string]any{
+					"session_id":    session.SessionID,
+					"reason":        reason,
+					"close_session": true,
+				}, 5*time.Second)
+				emitVNCStop(r.Context(), auth, route, device.Hostname, serviceModeFromAgentID(session.AgentID), session.AgentID, reason)
+			} else if participantID := cleanText(result["participant_id"]); participantID != "" {
+				_, _, _ = remoteFilePostWorkerJSON(r.Context(), auth, route, "/remote-desktop/vnc/disconnect", map[string]any{
+					"session_id":     session.SessionID,
+					"participant_id": participantID,
+					"reason":         reason,
+					"close_session":  false,
+				}, 5*time.Second)
+			}
+		}
+		response := map[string]any{
+			"status":            map[bool]string{true: "closed", false: "left"}[boolFromAny(result["closed"])],
+			"reason":            reason,
+			"session_id":        session.SessionID,
+			"controller_vacant": false,
+			"reconnect_pending": boolFromAny(result["reconnect_pending"]),
+		}
+		if refreshed := runtime.sessionByID(session.SessionID); refreshed != nil {
+			response["session"] = runtime.sessionSnapshot(refreshed, profile.Username)
+		}
+		writeJSON(w, http.StatusOK, response)
+	}
+}
+
+func vncHandoffHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+		sessionID := cleanText(body["session_id"])
+		if sessionID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "session_id_required"})
+			return
+		}
+		session := runtime.sessionByID(sessionID)
+		if session == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session_not_found"})
+			return
+		}
+		if _, status, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, session.AgentID); payloadErr != nil {
+			writeJSON(w, status, payloadErr)
+			return
+		}
+		refreshed, err := runtime.handoff(sessionID, profile.Username, cleanText(body["target_operator_id"]))
+		if err != nil {
+			switch err.Error() {
+			case "controller_required":
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "controller_required"})
+			case "target_already_controller":
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "target_already_controller"})
+			default:
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			}
+			return
+		}
+		snapshot := runtime.sessionSnapshot(refreshed, profile.Username)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":                 "ok",
+			"participant_role":       snapshot["current_operator_role"],
+			"session":                snapshot,
+			"reconnect_required":     false,
+			"allowed_ips":            refreshed.AllowedIPs,
+			"display_topology":       refreshed.DisplayTopology,
+			"display_virtual_bounds": refreshed.DisplayVirtualBounds,
+		})
+	}
+}
+
+func vncSessionsHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		sessionID := cleanText(r.URL.Query().Get("session_id"))
+		agentID := cleanText(r.URL.Query().Get("agent_id"))
+		sessions := runtime.listSessions()
+		visible := []map[string]any{}
+		for _, session := range sessions {
+			if sessionID != "" && session.SessionID != sessionID {
+				continue
+			}
+			if agentID != "" && !strings.EqualFold(session.AgentID, agentID) {
+				continue
+			}
+			if _, _, payloadErr := vpnAuthorizedDevice(r.Context(), auth, profile, session.AgentID); payloadErr != nil {
+				continue
+			}
+			visible = append(visible, runtime.sessionSnapshot(session, profile.Username))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sessions": visible, "count": len(visible)})
+	}
+}
+
+func vncInternalSessionEventHandler(auth *authService, runtime *vncRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+		event := strings.ToLower(cleanText(body["event"]))
+		sessionID := cleanText(body["session_id"])
+		participantID := cleanText(body["participant_id"])
+		if event == "" || sessionID == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "event_and_session_id_required"})
+			return
+		}
+		session := runtime.sessionByID(sessionID)
+		if session == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "session_not_found"})
+			return
+		}
+		switch event {
+		case "open":
+			runtime.recordProxyOpen(sessionID, participantID)
+		case "close":
+			runtime.recordProxyClose(sessionID, participantID, cleanText(body["reason"]))
+		case "transport_confirm":
+			if runtime.vpn != nil {
+				runtime.vpn.confirmTransportSuccess(session.AgentID)
+			}
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_event"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	}
+}
+
+func (v *vncRuntime) ensureSession(agentID string, operatorID string, credential vncCredential, removeWallpaper bool) (*vncCollaborationSession, *vncParticipant, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cleanupStaleLocked()
+	now := time.Now().UTC()
+	sessionID := v.byAgent[agentID]
+	session := v.byID[sessionID]
+	created := false
+	if session == nil {
+		sessionID, _ = randomHex(16)
+		participantID, _ := randomHex(16)
+		participant := &vncParticipant{ParticipantID: participantID, OperatorID: operatorID, Role: "controller", JoinedAt: now, LastActivityAt: now}
+		session = &vncCollaborationSession{
+			SessionID:             sessionID,
+			AgentID:               agentID,
+			CreatedAt:             now,
+			UpdatedAt:             now,
+			State:                 "active",
+			ControllerOperatorID:  operatorID,
+			ControllerParticipant: participantID,
+			ControllerPassword:    credential.ControllerPassword,
+			CredentialRevision:    maxInt(1, credential.CredentialRevision),
+			RemoveWallpaper:       removeWallpaper,
+			DisplayTopology:       cloneMapSlice(credential.DisplayTopology),
+			DisplayVirtualBounds:  copyMap(credential.DisplayVirtualBounds),
+			Participants:          map[string]*vncParticipant{participantID: participant},
+		}
+		v.byID[sessionID] = session
+		v.byAgent[agentID] = sessionID
+		return session, participant, true
+	}
+	created = false
+	session.ControllerPassword = credential.ControllerPassword
+	session.CredentialRevision = maxInt(1, credential.CredentialRevision)
+	session.RemoveWallpaper = removeWallpaper
+	session.DisplayTopology = cloneMapSlice(credential.DisplayTopology)
+	session.DisplayVirtualBounds = copyMap(credential.DisplayVirtualBounds)
+	session.UpdatedAt = now
+	for _, participant := range session.Participants {
+		if participant.OperatorID == operatorID {
+			participant.Role = "controller"
+			participant.LastActivityAt = now
+			session.State = "active"
+			if session.ControllerOperatorID == "" {
+				session.ControllerOperatorID = operatorID
+				session.ControllerParticipant = participant.ParticipantID
+			}
+			return session, participant, created
+		}
+	}
+	participantID, _ := randomHex(16)
+	participant := &vncParticipant{ParticipantID: participantID, OperatorID: operatorID, Role: "controller", JoinedAt: now, LastActivityAt: now}
+	session.Participants[participantID] = participant
+	if session.ControllerOperatorID == "" {
+		session.ControllerOperatorID = operatorID
+		session.ControllerParticipant = participantID
+	}
+	return session, participant, created
+}
+
+func (v *vncRuntime) recordBackendReady(sessionID string, tunnelID string, allowedIPs string, engineVirtualIP string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[sessionID]
+	if session == nil {
+		return
+	}
+	session.TunnelID = tunnelID
+	session.AllowedIPs = allowedIPs
+	session.EngineVirtualIP = engineVirtualIP
+	session.LastBackendReadyAt = time.Now().UTC()
+	session.LastError = ""
+	session.UpdatedAt = time.Now().UTC()
+}
+
+func (v *vncRuntime) recordError(sessionID string, reason string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if session := v.byID[sessionID]; session != nil {
+		session.LastError = cleanText(reason)
+		session.UpdatedAt = time.Now().UTC()
+	}
+}
+
+func (v *vncRuntime) sessionByID(sessionID string) *vncCollaborationSession {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cleanupStaleLocked()
+	return v.byID[cleanText(sessionID)]
+}
+
+func (v *vncRuntime) sessionByAgent(agentID string) *vncCollaborationSession {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cleanupStaleLocked()
+	return v.byID[v.byAgent[cleanText(agentID)]]
+}
+
+func (v *vncRuntime) listSessions() []*vncCollaborationSession {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.cleanupStaleLocked()
+	sessions := make([]*vncCollaborationSession, 0, len(v.byID))
+	for _, session := range v.byID {
+		sessions = append(sessions, session)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt)
+	})
+	return sessions
+}
+
+func (v *vncRuntime) leaveOrClose(sessionID string, operatorID string, closeSession bool, admin bool, reason string) (map[string]any, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[sessionID]
+	if session == nil {
+		return nil, errors.New("session_not_found")
+	}
+	var participant *vncParticipant
+	for _, candidate := range session.Participants {
+		if candidate.OperatorID == operatorID {
+			participant = candidate
+			break
+		}
+	}
+	if participant == nil && !admin {
+		return nil, errors.New("participant_required")
+	}
+	if closeSession || admin {
+		delete(v.byID, session.SessionID)
+		delete(v.byAgent, session.AgentID)
+		return map[string]any{"closed": true, "participant_id": ""}, nil
+	}
+	delete(session.Participants, participant.ParticipantID)
+	if len(session.Participants) == 0 {
+		delete(v.byID, session.SessionID)
+		delete(v.byAgent, session.AgentID)
+		return map[string]any{"closed": true, "participant_id": participant.ParticipantID}, nil
+	}
+	if session.ControllerOperatorID == operatorID {
+		v.assignControllerLocked(session, "")
+	}
+	session.UpdatedAt = time.Now().UTC()
+	_ = reason
+	return map[string]any{"closed": false, "participant_id": participant.ParticipantID}, nil
+}
+
+func (v *vncRuntime) handoff(sessionID string, actor string, target string) (*vncCollaborationSession, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[sessionID]
+	if session == nil {
+		return nil, errors.New("session_not_found")
+	}
+	if session.ControllerOperatorID != "" && session.ControllerOperatorID != actor {
+		return nil, errors.New("controller_required")
+	}
+	targetParticipant := (*vncParticipant)(nil)
+	if target == "" {
+		target = actor
+	}
+	for _, participant := range session.Participants {
+		if participant.OperatorID == target {
+			targetParticipant = participant
+			break
+		}
+	}
+	if targetParticipant == nil {
+		return nil, errors.New("target_not_found")
+	}
+	if targetParticipant.OperatorID == actor && session.ControllerOperatorID == actor {
+		return nil, errors.New("target_already_controller")
+	}
+	v.assignControllerLocked(session, targetParticipant.ParticipantID)
+	return session, nil
+}
+
+func (v *vncRuntime) assignControllerLocked(session *vncCollaborationSession, preferredParticipantID string) {
+	if session == nil || len(session.Participants) == 0 {
+		return
+	}
+	var selected *vncParticipant
+	if preferredParticipantID != "" {
+		selected = session.Participants[preferredParticipantID]
+	}
+	if selected == nil {
+		for _, participant := range session.Participants {
+			selected = participant
+			break
+		}
+	}
+	if selected == nil {
+		return
+	}
+	session.ControllerOperatorID = selected.OperatorID
+	session.ControllerParticipant = selected.ParticipantID
+	session.State = "active"
+	session.UpdatedAt = time.Now().UTC()
+}
+
+func (v *vncRuntime) recordProxyOpen(sessionID string, participantID string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[sessionID]
+	if session == nil {
+		return
+	}
+	if participant := session.Participants[participantID]; participant != nil {
+		now := time.Now().UTC()
+		participant.ActiveConnections++
+		participant.LastConnectedAt = now
+		participant.LastActivityAt = now
+		session.UpdatedAt = now
+	}
+}
+
+func (v *vncRuntime) recordProxyClose(sessionID string, participantID string, reason string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[sessionID]
+	if session == nil {
+		return
+	}
+	if participant := session.Participants[participantID]; participant != nil {
+		now := time.Now().UTC()
+		if participant.ActiveConnections > 0 {
+			participant.ActiveConnections--
+		}
+		participant.LastDisconnectedAt = now
+		participant.LastActivityAt = now
+		session.UpdatedAt = now
+	}
+	if cleanText(reason) != "" {
+		session.LastError = cleanText(reason)
+	}
+}
+
+func (v *vncRuntime) cleanupStaleLocked() {
+	now := time.Now().UTC()
+	for sessionID, session := range v.byID {
+		for participantID, participant := range session.Participants {
+			if participant.ActiveConnections <= 0 && now.Sub(participant.LastActivityAt) >= 90*time.Second {
+				delete(session.Participants, participantID)
+			}
+		}
+		if len(session.Participants) == 0 {
+			delete(v.byID, sessionID)
+			delete(v.byAgent, session.AgentID)
+		}
+	}
+}
+
+func (v *vncRuntime) sessionSnapshot(session *vncCollaborationSession, currentOperator string) map[string]any {
+	participants := []map[string]any{}
+	currentRole := ""
+	currentParticipantID := ""
+	for _, participant := range session.Participants {
+		if participant.OperatorID == currentOperator {
+			currentRole = participant.Role
+			currentParticipantID = participant.ParticipantID
+		}
+		participants = append(participants, map[string]any{
+			"participant_id":       participant.ParticipantID,
+			"operator_id":          participant.OperatorID,
+			"role":                 participant.Role,
+			"connected":            participant.ActiveConnections > 0,
+			"joined_at":            float64(participant.JoinedAt.Unix()),
+			"last_activity_at":     float64(participant.LastActivityAt.Unix()),
+			"last_connected_at":    unixOrNil(participant.LastConnectedAt),
+			"last_disconnected_at": unixOrNil(participant.LastDisconnectedAt),
+		})
+	}
+	sort.Slice(participants, func(i, j int) bool {
+		return cleanText(participants[i]["operator_id"]) < cleanText(participants[j]["operator_id"])
+	})
+	return map[string]any{
+		"session_id":                  session.SessionID,
+		"agent_id":                    session.AgentID,
+		"state":                       session.State,
+		"controller_operator_id":      session.ControllerOperatorID,
+		"controller_participant_id":   session.ControllerParticipant,
+		"participant_count":           len(session.Participants),
+		"connected_participant_count": connectedVNCParticipantCount(session),
+		"credential_revision":         session.CredentialRevision,
+		"created_at":                  float64(session.CreatedAt.Unix()),
+		"updated_at":                  float64(session.UpdatedAt.Unix()),
+		"remove_wallpaper":            session.RemoveWallpaper,
+		"last_error":                  session.LastError,
+		"tunnel_id":                   session.TunnelID,
+		"allowed_ips":                 session.AllowedIPs,
+		"engine_virtual_ip":           session.EngineVirtualIP,
+		"last_backend_ready_at":       float64(session.LastBackendReadyAt.Unix()),
+		"participants":                participants,
+		"current_operator_role":       currentRole,
+		"current_participant_id":      currentParticipantID,
+		"controller_vacant":           session.State == "controller_vacant",
+		"reconnect_pending":           session.State == "reconnect_pending",
+		"can_handoff":                 false,
+		"can_claim_control":           false,
+		"display_topology":            session.DisplayTopology,
+		"display_virtual_bounds":      session.DisplayVirtualBounds,
+	}
+}
+
+func connectedVNCParticipantCount(session *vncCollaborationSession) int {
+	count := 0
+	for _, participant := range session.Participants {
+		if participant.ActiveConnections > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func requestVNCServerCredential(ctx context.Context, auth *authService, route *agentWorkerRoute, hostname string, serviceMode string, agentID string, reason string, timeoutSeconds float64) (vncCredential, error) {
+	requestID, _ := randomHex(16)
+	response, status, workerErr := callWorkerHostServiceEvent(ctx, auth, route, map[string]any{
+		"hostname":        hostname,
+		"service_mode":    serviceMode,
+		"event_name":      "vnc_credential_request",
+		"timeout_seconds": timeoutSeconds,
+		"payload": map[string]any{
+			"agent_id":   agentID,
+			"request_id": requestID,
+			"reason":     reason,
+		},
+	}, time.Duration((timeoutSeconds+1)*float64(time.Second)))
+	if workerErr != nil {
+		return vncCredential{}, errors.New(firstText(cleanText(workerErr["error"]), strconv.Itoa(status)))
+	}
+	if !boolFromAny(response["called"]) {
+		return vncCredential{}, errors.New("agent_socket_missing")
+	}
+	raw, ok := response["response"].(map[string]any)
+	if !ok {
+		return vncCredential{}, errors.New("credential_missing")
+	}
+	if request := cleanText(raw["request_id"]); request != "" && request != requestID {
+		return vncCredential{}, errors.New("credential_request_mismatch")
+	}
+	password := cleanText(firstNonEmpty(raw["controller_password"], raw["vnc_password"], raw["password"]))
+	if len(password) > 8 {
+		password = password[:8]
+	}
+	if password == "" {
+		return vncCredential{}, errors.New("credential_password_missing")
+	}
+	revision := int(coerceInt64(raw["credential_revision"]))
+	if revision <= 0 {
+		revision = int(time.Now().UnixMilli())
+	}
+	return vncCredential{
+		ControllerPassword:   password,
+		CredentialRevision:   revision,
+		DisplayTopology:      cloneAnyMapSlice(raw["display_topology"]),
+		DisplayVirtualBounds: copyAnyMap(raw["display_virtual_bounds"]),
+	}, nil
+}
+
+func emitVNCStart(ctx context.Context, auth *authService, route *agentWorkerRoute, hostname string, serviceMode string, payload map[string]any) bool {
+	result, _, workerErr := emitWorkerHostServiceEvent(ctx, auth, route, map[string]any{
+		"hostname":     hostname,
+		"service_mode": serviceMode,
+		"event_name":   "vnc_start",
+		"payload":      payload,
+	}, 6*time.Second)
+	return workerErr == nil && boolFromAny(result["emitted"])
+}
+
+func emitVNCStop(ctx context.Context, auth *authService, route *agentWorkerRoute, hostname string, serviceMode string, agentID string, reason string) bool {
+	result, _, workerErr := emitWorkerHostServiceEvent(ctx, auth, route, map[string]any{
+		"hostname":     hostname,
+		"service_mode": serviceMode,
+		"event_name":   "vnc_stop",
+		"payload": map[string]any{
+			"agent_id": agentID,
+			"reason":   reason,
+		},
+	}, 6*time.Second)
+	return workerErr == nil && boolFromAny(result["emitted"])
+}
+
+func waitForTCP(host string, port int, timeoutSeconds float64, pollSeconds float64) bool {
+	if host == "" || port <= 0 || timeoutSeconds <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(time.Duration(timeoutSeconds * float64(time.Second)))
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 750*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
+		sleep := time.Duration(pollSeconds * float64(time.Second))
+		if sleep <= 0 {
+			sleep = 150 * time.Millisecond
+		}
+		if remaining := time.Until(deadline); sleep > remaining {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+	return false
+}
+
+func initialDisplaySize(bounds map[string]any, topology []map[string]any) (int, int) {
+	width := int(coerceInt64(bounds["width"]))
+	height := int(coerceInt64(bounds["height"]))
+	if width > 0 && height > 0 {
+		return width, height
+	}
+	for _, item := range topology {
+		width = int(coerceInt64(item["width"]))
+		height = int(coerceInt64(item["height"]))
+		if width > 0 && height > 0 {
+			return width, height
+		}
+	}
+	return 1024, 768
+}
+
+func normalizePerformancePreference(value any) int {
+	parsed := int(coerceInt64(value))
+	if parsed < 0 {
+		return 0
+	}
+	if parsed > 2 {
+		return 2
+	}
+	return parsed
+}
+
+func vncEnvFloat(name string, fallback float64) float64 {
+	value := cleanText(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
+}
+
+func websocketURLForRequest(r *http.Request, path string) string {
+	base := publicBaseURLForRequest(r)
+	if strings.HasPrefix(base, "https://") {
+		base = "wss://" + strings.TrimPrefix(base, "https://")
+	} else if strings.HasPrefix(base, "http://") {
+		base = "ws://" + strings.TrimPrefix(base, "http://")
+	}
+	return joinURL(base, path)
+}
+
+func cloneAnyMapSlice(value any) []map[string]any {
+	if raw, ok := value.(string); ok {
+		var parsed []any
+		if json.Unmarshal([]byte(raw), &parsed) == nil {
+			value = parsed
+		}
+	}
+	items, ok := value.([]any)
+	if !ok {
+		if typed, ok := value.([]map[string]any); ok {
+			return cloneMapSlice(typed)
+		}
+		return []map[string]any{}
+	}
+	out := []map[string]any{}
+	for _, item := range items {
+		if row, ok := item.(map[string]any); ok {
+			out = append(out, copyMap(row))
+		}
+	}
+	return out
+}
+
+func cloneMapSlice(value []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(value))
+	for _, item := range value {
+		out = append(out, copyMap(item))
+	}
+	return out
+}
+
+func copyAnyMap(value any) map[string]any {
+	if raw, ok := value.(string); ok {
+		var parsed map[string]any
+		if json.Unmarshal([]byte(raw), &parsed) == nil {
+			value = parsed
+		}
+	}
+	if row, ok := value.(map[string]any); ok {
+		return copyMap(row)
+	}
+	return map[string]any{}
+}

@@ -16,7 +16,8 @@ type fakeShellTunnelConnector struct {
 	err     map[string]any
 }
 
-func (c *fakeShellTunnelConnector) connectTunnel(_ context.Context, _ *http.Request, agentID string) (map[string]any, int, map[string]any) {
+func (c *fakeShellTunnelConnector) connectTunnel(_ context.Context, _ *http.Request, agentID string, operatorID string) (map[string]any, int, map[string]any) {
+	_ = operatorID
 	c.agentID = agentID
 	status := c.status
 	if status == 0 {
