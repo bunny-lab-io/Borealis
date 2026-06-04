@@ -302,6 +302,10 @@ func (s *goAegisService) clearActiveKey() {
 }
 
 func (s *goAegisService) migrateLegacyCredentials(ctx context.Context, tx *sql.Tx, key []byte) error {
+	type credentialSecretRow struct {
+		id     int64
+		values [][]byte
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, password_encrypted, private_key_encrypted, private_key_passphrase_encrypted, become_password_encrypted
 		  FROM engine.credentials
@@ -310,15 +314,25 @@ func (s *goAegisService) migrateLegacyCredentials(ctx context.Context, tx *sql.T
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]credentialSecretRow, 0)
 	for rows.Next() {
-		var id int64
-		values := make([][]byte, 4)
-		if err := rows.Scan(&id, &values[0], &values[1], &values[2], &values[3]); err != nil {
+		record := credentialSecretRow{values: make([][]byte, 4)}
+		if err := rows.Scan(&record.id, &record.values[0], &record.values[1], &record.values[2], &record.values[3]); err != nil {
+			_ = rows.Close()
 			return err
 		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
 		plaintexts := make([]*string, 4)
-		for i, value := range values {
+		for i, value := range record.values {
 			plain, err := legacySecretOrNil(value)
 			if err != nil {
 				return err
@@ -340,14 +354,18 @@ func (s *goAegisService) migrateLegacyCredentials(ctx context.Context, tx *sql.T
 			       private_key_passphrase_encrypted=$3,
 			       become_password_encrypted=$4
 			 WHERE id=$5
-		`, encrypted[0], encrypted[1], encrypted[2], encrypted[3], id); err != nil {
+		`, encrypted[0], encrypted[1], encrypted[2], encrypted[3], record.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *goAegisService) reencryptCredentials(ctx context.Context, tx *sql.Tx, oldKey []byte, newKey []byte) error {
+	type credentialSecretRow struct {
+		id     int64
+		values [][]byte
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, password_encrypted, private_key_encrypted, private_key_passphrase_encrypted, become_password_encrypted
 		  FROM engine.credentials
@@ -356,15 +374,25 @@ func (s *goAegisService) reencryptCredentials(ctx context.Context, tx *sql.Tx, o
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]credentialSecretRow, 0)
 	for rows.Next() {
-		var id int64
-		values := make([][]byte, 4)
-		if err := rows.Scan(&id, &values[0], &values[1], &values[2], &values[3]); err != nil {
+		record := credentialSecretRow{values: make([][]byte, 4)}
+		if err := rows.Scan(&record.id, &record.values[0], &record.values[1], &record.values[2], &record.values[3]); err != nil {
+			_ = rows.Close()
 			return err
 		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
 		encrypted := make([]any, 4)
-		for i, value := range values {
+		for i, value := range record.values {
 			plain, err := decryptOptional(value, oldKey)
 			if err != nil {
 				return err
@@ -382,11 +410,11 @@ func (s *goAegisService) reencryptCredentials(ctx context.Context, tx *sql.Tx, o
 			       private_key_passphrase_encrypted=$3,
 			       become_password_encrypted=$4
 			 WHERE id=$5
-		`, encrypted[0], encrypted[1], encrypted[2], encrypted[3], id); err != nil {
+		`, encrypted[0], encrypted[1], encrypted[2], encrypted[3], record.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *goAegisService) migrateLegacyGithubToken(ctx context.Context, tx *sql.Tx, key []byte) error {
@@ -471,31 +499,45 @@ func (s *goAegisService) migrateLegacyOperatorAuth(ctx context.Context, tx *sql.
 }
 
 func (s *goAegisService) migrateLegacyUserSecrets(ctx context.Context, tx *sql.Tx, key []byte) error {
+	type userSecretRow struct {
+		id       int64
+		password sql.NullString
+		mfa      sql.NullString
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, password_sha512, mfa_secret FROM engine.users ORDER BY id ASC`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]userSecretRow, 0)
 	for rows.Next() {
-		var id int64
-		var password sql.NullString
-		var mfa sql.NullString
-		if err := rows.Scan(&id, &password, &mfa); err != nil {
+		var record userSecretRow
+		if err := rows.Scan(&record.id, &record.password, &record.mfa); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		nextPassword := password.String
-		nextMFA := mfa
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
+		nextPassword := record.password.String
+		nextMFA := record.mfa
 		changed := false
-		if password.Valid && strings.TrimSpace(password.String) != "" && !strings.HasPrefix(password.String, aegisEnvelopePrefix) {
-			encrypted, err := aegisEncryptText(password.String, key)
+		if record.password.Valid && strings.TrimSpace(record.password.String) != "" && !strings.HasPrefix(record.password.String, aegisEnvelopePrefix) {
+			encrypted, err := aegisEncryptText(record.password.String, key)
 			if err != nil {
 				return err
 			}
 			nextPassword = encrypted
 			changed = true
 		}
-		if mfa.Valid && strings.TrimSpace(mfa.String) != "" && !strings.HasPrefix(mfa.String, aegisEnvelopePrefix) {
-			encrypted, err := aegisEncryptText(mfa.String, key)
+		if record.mfa.Valid && strings.TrimSpace(record.mfa.String) != "" && !strings.HasPrefix(record.mfa.String, aegisEnvelopePrefix) {
+			encrypted, err := aegisEncryptText(record.mfa.String, key)
 			if err != nil {
 				return err
 			}
@@ -507,15 +549,23 @@ func (s *goAegisService) migrateLegacyUserSecrets(ctx context.Context, tx *sql.T
 			if nextMFA.Valid {
 				mfaValue = nextMFA.String
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE engine.users SET password_sha512=$1, mfa_secret=$2 WHERE id=$3`, nextPassword, mfaValue, id); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE engine.users SET password_sha512=$1, mfa_secret=$2 WHERE id=$3`, nextPassword, mfaValue, record.id); err != nil {
 				return err
 			}
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *goAegisService) migrateLegacyPasskeys(ctx context.Context, tx *sql.Tx, key []byte) error {
+	type passkeySecretRow struct {
+		id              int64
+		credentialID    any
+		publicKey       any
+		signCount       sql.NullInt64
+		aaguid          sql.NullString
+		encryptedSecret sql.NullString
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, credential_id, public_key, sign_count, aaguid, secret_encrypted
 		  FROM engine.user_passkeys
@@ -524,29 +574,35 @@ func (s *goAegisService) migrateLegacyPasskeys(ctx context.Context, tx *sql.Tx, 
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]passkeySecretRow, 0)
 	for rows.Next() {
-		var id int64
-		var credentialID any
-		var publicKey any
-		var signCount sql.NullInt64
-		var aaguid sql.NullString
-		var encryptedSecret sql.NullString
-		if err := rows.Scan(&id, &credentialID, &publicKey, &signCount, &aaguid, &encryptedSecret); err != nil {
+		var record passkeySecretRow
+		if err := rows.Scan(&record.id, &record.credentialID, &record.publicKey, &record.signCount, &record.aaguid, &record.encryptedSecret); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		if encryptedSecret.Valid && strings.TrimSpace(encryptedSecret.String) != "" {
-			if !strings.HasPrefix(encryptedSecret.String, aegisEnvelopePrefix) {
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.encryptedSecret.Valid && strings.TrimSpace(record.encryptedSecret.String) != "" {
+			if !strings.HasPrefix(record.encryptedSecret.String, aegisEnvelopePrefix) {
 				return fmt.Errorf("%w: protected secret is not stored as an Aegis envelope", errAegisDataCorruption)
 			}
 			continue
 		}
-		credential := normalizeWebAuthnStorageValue(credentialID)
-		pub := normalizeWebAuthnStorageValue(publicKey)
+		credential := normalizeWebAuthnStorageValue(record.credentialID)
+		pub := normalizeWebAuthnStorageValue(record.publicKey)
 		if credential == "" || pub == "" {
 			return fmt.Errorf("%w: stored passkey record is incomplete", errAegisDataCorruption)
 		}
-		bundle, err := passkeySecretBundle(credential, pub, signCount.Int64, aaguid.String)
+		bundle, err := passkeySecretBundle(credential, pub, record.signCount.Int64, record.aaguid.String)
 		if err != nil {
 			return err
 		}
@@ -563,31 +619,45 @@ func (s *goAegisService) migrateLegacyPasskeys(ctx context.Context, tx *sql.Tx, 
 			       credential_lookup_hmac=$1,
 			       secret_encrypted=$2
 			 WHERE id=$3
-		`, s.passkeyLookupHMAC(credential), secret, id); err != nil {
+		`, s.passkeyLookupHMAC(credential), secret, record.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *goAegisService) reencryptOperatorAuth(ctx context.Context, tx *sql.Tx, oldKey []byte, newKey []byte) error {
+	type userSecretRow struct {
+		id       int64
+		password []byte
+		mfa      []byte
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, password_sha512, mfa_secret FROM engine.users ORDER BY id ASC`)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]userSecretRow, 0)
 	for rows.Next() {
-		var id int64
-		var password []byte
-		var mfa []byte
-		if err := rows.Scan(&id, &password, &mfa); err != nil {
+		var record userSecretRow
+		if err := rows.Scan(&record.id, &record.password, &record.mfa); err != nil {
+			_ = rows.Close()
 			return err
 		}
-		passwordPlain, err := decryptOptional(password, oldKey)
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
+		passwordPlain, err := decryptOptional(record.password, oldKey)
 		if err != nil {
 			return err
 		}
-		mfaPlain, err := decryptOptional(mfa, oldKey)
+		mfaPlain, err := decryptOptional(record.mfa, oldKey)
 		if err != nil {
 			return err
 		}
@@ -604,17 +674,22 @@ func (s *goAegisService) reencryptOperatorAuth(ctx context.Context, tx *sql.Tx, 
 			   SET password_sha512=$1,
 			       mfa_secret=$2
 			 WHERE id=$3
-		`, nextPassword, nextMFA, id); err != nil {
+		`, nextPassword, nextMFA, record.id); err != nil {
 			return err
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	return s.reencryptPasskeys(ctx, tx, oldKey, newKey)
 }
 
 func (s *goAegisService) reencryptPasskeys(ctx context.Context, tx *sql.Tx, oldKey []byte, newKey []byte) error {
+	type passkeySecretRow struct {
+		id              int64
+		credentialID    any
+		publicKey       any
+		signCount       sql.NullInt64
+		aaguid          sql.NullString
+		encryptedSecret []byte
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, credential_id, public_key, sign_count, aaguid, secret_encrypted
 		  FROM engine.user_passkeys
@@ -623,20 +698,26 @@ func (s *goAegisService) reencryptPasskeys(ctx context.Context, tx *sql.Tx, oldK
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	records := make([]passkeySecretRow, 0)
 	for rows.Next() {
-		var id int64
-		var credentialID any
-		var publicKey any
-		var signCount sql.NullInt64
-		var aaguid sql.NullString
-		var encryptedSecret []byte
-		if err := rows.Scan(&id, &credentialID, &publicKey, &signCount, &aaguid, &encryptedSecret); err != nil {
+		var record passkeySecretRow
+		if err := rows.Scan(&record.id, &record.credentialID, &record.publicKey, &record.signCount, &record.aaguid, &record.encryptedSecret); err != nil {
+			_ = rows.Close()
 			return err
 		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, record := range records {
 		var bundle string
-		if len(encryptedSecret) > 0 {
-			plain, err := decryptOptional(encryptedSecret, oldKey)
+		if len(record.encryptedSecret) > 0 {
+			plain, err := decryptOptional(record.encryptedSecret, oldKey)
 			if err != nil {
 				return err
 			}
@@ -645,13 +726,13 @@ func (s *goAegisService) reencryptPasskeys(ctx context.Context, tx *sql.Tx, oldK
 			}
 			bundle = *plain
 		} else {
-			credential := normalizeWebAuthnStorageValue(credentialID)
-			pub := normalizeWebAuthnStorageValue(publicKey)
+			credential := normalizeWebAuthnStorageValue(record.credentialID)
+			pub := normalizeWebAuthnStorageValue(record.publicKey)
 			if credential == "" || pub == "" {
 				return fmt.Errorf("%w: stored passkey record is incomplete", errAegisDataCorruption)
 			}
 			var err error
-			bundle, err = passkeySecretBundle(credential, pub, signCount.Int64, aaguid.String)
+			bundle, err = passkeySecretBundle(credential, pub, record.signCount.Int64, record.aaguid.String)
 			if err != nil {
 				return err
 			}
@@ -674,14 +755,19 @@ func (s *goAegisService) reencryptPasskeys(ctx context.Context, tx *sql.Tx, oldK
 			       credential_lookup_hmac=$1,
 			       secret_encrypted=$2
 			 WHERE id=$3
-		`, s.passkeyLookupHMAC(credential), secret, id); err != nil {
+		`, s.passkeyLookupHMAC(credential), secret, record.id); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func (s *goAegisService) resetCredentialSecrets(ctx context.Context, tx *sql.Tx, now int64) ([]int64, error) {
+	type credentialResetRow struct {
+		id       int64
+		values   [][]byte
+		metadata sql.NullString
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, password_encrypted, private_key_encrypted, private_key_passphrase_encrypted, become_password_encrypted, metadata_json
 		  FROM engine.credentials
@@ -690,17 +776,26 @@ func (s *goAegisService) resetCredentialSecrets(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	records := make([]credentialResetRow, 0)
 	ids := make([]int64, 0)
 	for rows.Next() {
-		var id int64
-		values := make([][]byte, 4)
-		var metadataRaw sql.NullString
-		if err := rows.Scan(&id, &values[0], &values[1], &values[2], &values[3], &metadataRaw); err != nil {
+		record := credentialResetRow{values: make([][]byte, 4)}
+		if err := rows.Scan(&record.id, &record.values[0], &record.values[1], &record.values[2], &record.values[3], &record.metadata); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, record := range records {
 		fields := make([]string, 0, 4)
-		for index, value := range values {
+		for index, value := range record.values {
 			if len(value) == 0 {
 				continue
 			}
@@ -712,7 +807,7 @@ func (s *goAegisService) resetCredentialSecrets(ctx context.Context, tx *sql.Tx,
 		if len(fields) == 0 {
 			continue
 		}
-		metadata := parseJSONObject(metadataRaw)
+		metadata := parseJSONObject(record.metadata)
 		metadata["aegis_secret_state"] = "reset_required"
 		metadata["aegis_lost_secret_fields"] = aegisStringSliceToAny(fields)
 		metadata["aegis_reset_at"] = now
@@ -729,12 +824,12 @@ func (s *goAegisService) resetCredentialSecrets(ctx context.Context, tx *sql.Tx,
 			       metadata_json=$1,
 			       updated_at=$2
 			 WHERE id=$3
-		`, string(metadataJSON), now, id); err != nil {
+		`, string(metadataJSON), now, record.id); err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		ids = append(ids, record.id)
 	}
-	return ids, rows.Err()
+	return ids, nil
 }
 
 func (s *goAegisService) resetGithubToken(ctx context.Context, tx *sql.Tx, now int64) (bool, error) {
