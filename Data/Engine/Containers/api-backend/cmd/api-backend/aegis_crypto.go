@@ -14,8 +14,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-
-	"golang.org/x/crypto/scrypt"
 )
 
 const (
@@ -27,9 +25,10 @@ const (
 )
 
 type goAegisService struct {
-	db  *sql.DB
-	mu  sync.RWMutex
-	key []byte
+	db         *sql.DB
+	hmacSecret []byte
+	mu         sync.RWMutex
+	key        []byte
 }
 
 type aegisState struct {
@@ -40,8 +39,8 @@ type aegisState struct {
 	UpdatedAt         int64
 }
 
-func newGoAegisService(db *sql.DB) *goAegisService {
-	return &goAegisService{db: db}
+func newGoAegisService(db *sql.DB, hmacSecret []byte) *goAegisService {
+	return &goAegisService{db: db, hmacSecret: append([]byte(nil), hmacSecret...)}
 }
 
 func (s *goAegisService) status(ctx context.Context) (map[string]any, error) {
@@ -68,6 +67,25 @@ func (s *goAegisService) unlockWithCipher(ctx context.Context, cipherText string
 	key, err := s.deriveAndVerify(ctx, cipherText)
 	if err != nil {
 		return nil, err
+	}
+	if s != nil && s.db != nil {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		committed := false
+		defer func() {
+			if !committed {
+				_ = tx.Rollback()
+			}
+		}()
+		if err := s.migrateLegacyOperatorAuth(ctx, tx, key); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		committed = true
 	}
 	s.mu.Lock()
 	s.key = append([]byte(nil), key...)
@@ -122,33 +140,29 @@ func (s *goAegisService) activeKey() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.key) == 0 {
-		return nil, errors.New("Aegis Cipher has not been entered; protected secrets remain locked")
+		return nil, errAegisLocked
 	}
 	return append([]byte(nil), s.key...), nil
 }
 
 func (s *goAegisService) deriveAndVerify(ctx context.Context, cipherText string) ([]byte, error) {
 	if strings.TrimSpace(cipherText) == "" {
-		return nil, errors.New("Aegis Cipher is required")
+		return nil, fmt.Errorf("%w: Aegis Cipher is required", errAegisInvalidRequest)
 	}
 	state, err := s.state(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !state.Configured {
-		return nil, errors.New("Aegis Cipher is not configured")
+		return nil, errAegisNotConfigured
 	}
-	params, err := parseAegisKDFParams(state)
-	if err != nil {
-		return nil, err
-	}
-	key, err := scrypt.Key([]byte(cipherText), params.salt, params.n, params.r, params.p, params.length)
+	key, err := s.deriveKeyFromState(cipherText, state)
 	if err != nil {
 		return nil, err
 	}
 	plain, err := aegisDecryptText(state.VerificationToken, key)
 	if err != nil || plain != aegisVerificationPlaintext {
-		return nil, errors.New("Incorrect Aegis Cipher")
+		return nil, errAegisInvalidCipher
 	}
 	return key, nil
 }

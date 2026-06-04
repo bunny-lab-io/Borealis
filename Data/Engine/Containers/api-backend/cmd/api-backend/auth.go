@@ -82,7 +82,10 @@ type operatorAuthGate interface {
 
 type authSecretService interface {
 	status(ctx context.Context) (map[string]any, error)
+	setupWithCipher(ctx context.Context, cipherText string) (map[string]any, error)
 	unlockWithCipher(ctx context.Context, cipherText string) (map[string]any, error)
+	rotateWithCipher(ctx context.Context, currentCipher string, newCipher string) (map[string]any, error)
+	forceReset(ctx context.Context) (map[string]any, error)
 	decryptSecretText(ctx context.Context, value any) (string, error)
 	encryptSecretText(ctx context.Context, value string) (string, error)
 }
@@ -115,7 +118,12 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 
 	var aegis *goAegisService
 	if pgStore, ok := store.(*postgresOperatorStore); ok {
-		aegis = newGoAegisService(pgStore.db)
+		aegis = newGoAegisService(pgStore.db, []byte(secret))
+	}
+	legacyAegis := &legacyBootstrapGate{
+		baseURL: cfg.LegacyURL,
+		secret:  []byte(secret),
+		client:  &http.Client{Timeout: cfg.AuthTimeout},
 	}
 
 	return &authService{
@@ -125,10 +133,10 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 			now:    time.Now,
 		},
 		store: store,
-		bootstrapGate: &legacyBootstrapGate{
-			baseURL: cfg.LegacyURL,
-			secret:  []byte(secret),
-			client:  &http.Client{Timeout: cfg.AuthTimeout},
+		bootstrapGate: &goBootstrapGate{
+			store:       store,
+			aegis:       aegis,
+			legacyAegis: legacyAegis,
 		},
 		aegis:   aegis,
 		timeout: cfg.AuthTimeout,
@@ -267,6 +275,9 @@ func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Han
 	mux.HandleFunc("GET /api/bootstrap/state", bootstrapStateHandler(auth))
 	mux.HandleFunc("POST /api/bootstrap/aegis/setup", bootstrapAegisSetupHandler(auth))
 	mux.HandleFunc("POST /api/bootstrap/aegis/unlock", bootstrapAegisUnlockHandler(auth))
+	mux.HandleFunc("POST /api/bootstrap/admin/setup", bootstrapAdminSetupHandler(auth))
+	mux.HandleFunc("POST /api/bootstrap/admin/recover", bootstrapAdminRecoverHandler(auth))
+	mux.HandleFunc("POST /api/bootstrap/admin/mfa/verify", bootstrapAdminMFAVerifyHandler(auth))
 	mux.HandleFunc("POST /api/auth/login", authLoginHandler(auth, fallback))
 	mux.HandleFunc("POST /api/auth/logout", authLogoutHandler())
 	mux.HandleFunc("POST /api/auth/mfa/verify", authMFAVerifyHandler(auth, fallback))

@@ -16,18 +16,22 @@ type aegisStatusProvider interface {
 	aegisStatus(ctx context.Context) (map[string]any, error)
 }
 
+type goAegisStatusProvider struct {
+	auth *authService
+}
+
 type legacyAegisStatusProvider struct {
 	baseURL *url.URL
 	auth    *authService
 	client  *http.Client
 }
 
-func registerAegisRoutes(mux *http.ServeMux, auth *authService, legacyURL *url.URL) {
-	mux.HandleFunc("GET /api/aegis/status", aegisStatusHandler(auth, &legacyAegisStatusProvider{
-		baseURL: legacyURL,
-		auth:    auth,
-		client:  &http.Client{Timeout: 3 * time.Second},
-	}))
+func registerAegisRoutes(mux *http.ServeMux, auth *authService) {
+	mux.HandleFunc("GET /api/aegis/status", aegisStatusHandler(auth, &goAegisStatusProvider{auth: auth}))
+	mux.HandleFunc("POST /api/aegis/setup", aegisSetupHandler(auth))
+	mux.HandleFunc("POST /api/aegis/unlock", aegisUnlockHandler(auth))
+	mux.HandleFunc("POST /api/aegis/rotate", aegisRotateHandler(auth))
+	mux.HandleFunc("POST /api/aegis/force_reset", aegisForceResetHandler(auth))
 }
 
 func aegisStatusHandler(auth *authService, provider aegisStatusProvider) http.HandlerFunc {
@@ -61,6 +65,13 @@ func aegisStatusHandler(auth *authService, provider aegisStatusProvider) http.Ha
 		response["user_role"] = firstText(user.Role, "User")
 		writeJSON(w, http.StatusOK, response)
 	}
+}
+
+func (p *goAegisStatusProvider) aegisStatus(ctx context.Context) (map[string]any, error) {
+	if p == nil || p.auth == nil || p.auth.aegis == nil {
+		return nil, errors.New("aegis status provider unavailable")
+	}
+	return p.auth.aegis.status(ctx)
 }
 
 func (p *legacyAegisStatusProvider) aegisStatus(ctx context.Context) (map[string]any, error) {
@@ -98,6 +109,95 @@ func (p *legacyAegisStatusProvider) aegisStatus(ctx context.Context) (map[string
 		payload = map[string]any{}
 	}
 	return payload, nil
+}
+
+func aegisSetupHandler(auth *authService) http.HandlerFunc {
+	return aegisLifecyclePostHandler(auth, func(ctx context.Context, body map[string]any) (map[string]any, error) {
+		if auth == nil || auth.aegis == nil {
+			return nil, errors.New("aegis store unavailable")
+		}
+		return auth.aegis.setupWithCipher(ctx, cleanText(body["cipher"]))
+	})
+}
+
+func aegisUnlockHandler(auth *authService) http.HandlerFunc {
+	return aegisLifecyclePostHandler(auth, func(ctx context.Context, body map[string]any) (map[string]any, error) {
+		if auth == nil || auth.aegis == nil {
+			return nil, errors.New("aegis store unavailable")
+		}
+		payload, err := auth.aegis.unlockWithCipher(ctx, cleanText(body["cipher"]))
+		if err != nil {
+			return nil, err
+		}
+		if gate, ok := auth.bootstrapGate.(*goBootstrapGate); ok && gate.legacyAegis != nil {
+			if legacyPayload, status, err := gate.legacyAegis.bootstrapAegisUnlock(ctx, cleanText(body["cipher"])); err != nil {
+				return nil, err
+			} else if status < 200 || status > 299 {
+				return legacyPayload, fmt.Errorf("%w: python Aegis unlock bridge returned HTTP %d", errAegisInvalidRequest, status)
+			}
+		}
+		return payload, nil
+	})
+}
+
+func aegisRotateHandler(auth *authService) http.HandlerFunc {
+	return aegisLifecyclePostHandler(auth, func(ctx context.Context, body map[string]any) (map[string]any, error) {
+		if auth == nil || auth.aegis == nil {
+			return nil, errors.New("aegis store unavailable")
+		}
+		newCipher := cleanText(body["new_cipher"])
+		payload, err := auth.aegis.rotateWithCipher(ctx, cleanText(body["current_cipher"]), newCipher)
+		if err != nil {
+			return nil, err
+		}
+		if gate, ok := auth.bootstrapGate.(*goBootstrapGate); ok && gate.legacyAegis != nil {
+			if legacyPayload, status, err := gate.legacyAegis.bootstrapAegisUnlock(ctx, newCipher); err != nil {
+				return nil, err
+			} else if status < 200 || status > 299 {
+				return legacyPayload, fmt.Errorf("%w: python Aegis unlock bridge returned HTTP %d", errAegisInvalidRequest, status)
+			}
+		}
+		return payload, nil
+	})
+}
+
+func aegisForceResetHandler(auth *authService) http.HandlerFunc {
+	return aegisLifecyclePostHandler(auth, func(ctx context.Context, _ map[string]any) (map[string]any, error) {
+		if auth == nil || auth.aegis == nil {
+			return nil, errors.New("aegis store unavailable")
+		}
+		return auth.aegis.forceReset(ctx)
+	})
+}
+
+func aegisLifecyclePostHandler(auth *authService, action func(context.Context, map[string]any) (map[string]any, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		user, failure := requireAdmin(r.Context(), auth, r)
+		if failure != nil {
+			failure.write(w)
+			return
+		}
+		body, ok := readAuthJSON(w, r)
+		if !ok {
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		payload, err := action(ctx, body)
+		if err != nil {
+			errorBody, status := aegisErrorBody(err)
+			writeJSON(w, status, errorBody)
+			return
+		}
+		response := copyMap(payload)
+		response["status"] = "ok"
+		response["user_role"] = firstText(user.Role, "User")
+		writeJSON(w, http.StatusOK, response)
+	}
 }
 
 func aegisPayloadBool(payload map[string]any, key string) bool {

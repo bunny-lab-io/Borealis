@@ -3,7 +3,6 @@
 # Description: Primary authentication blueprint used by the Engine auth group for sessions, MFA, and logout.
 #
 # API Endpoints (if applicable):
-# - GET /api/internal/bootstrap/state (Internal Token) - Returns bootstrap state for Go auth bridge.
 # - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
 # - POST /api/auth/passkeys/register/options (Token Authenticated) - Starts a passkey registration ceremony for the current operator.
@@ -78,14 +77,11 @@ from ...aegis_cipher import (
     AegisNotConfiguredError,
 )
 from ...auth.bootstrap_state import (
-    BOOTSTRAP_PHASE_ADMIN_RECOVERY_REQUIRED,
-    BOOTSTRAP_PHASE_ADMIN_SETUP_REQUIRED,
     determine_bootstrap_state,
     operator_auth_allowed,
 )
 from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
-from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from .aegis import register_aegis_cipher_management
 from .credentials import register_credential_management
 from .directory_services import (
@@ -255,44 +251,6 @@ class _AuthService:
         if text == "":
             return ""
         return self.aegis_cipher_service.decrypt_secret_text(text)
-
-    def _create_bootstrap_pending(
-        self,
-        *,
-        flow: str,
-        username: str,
-        role: str,
-        password_sha512: str,
-        display_name: str = "",
-    ) -> Dict[str, Any]:
-        secret = _generate_totp_secret()
-        pending_token = uuid.uuid4().hex
-        pending = {
-            "flow": flow,
-            "username": username,
-            "display_name": display_name or username,
-            "role": role,
-            "password_sha512": password_sha512,
-            "secret": secret,
-            "token": pending_token,
-            "expires": _now_ts() + 300,
-        }
-        session["bootstrap_admin_pending"] = pending
-        session.pop("mfa_pending", None)
-        session.pop("passkey_pending", None)
-        session.modified = True
-        return {
-            "status": "mfa_required",
-            "pending_token": pending_token,
-            "stage": "setup",
-            "username": username,
-            "role": role,
-            "preferred_method": "totp",
-            "available_methods": ["totp"],
-            "secret": secret,
-            "otpauth_url": _totp_provisioning_uri(secret, username),
-            "qr_image": _totp_qr_data_uri(_totp_provisioning_uri(secret, username) or ""),
-        }
 
     def _clear_operator_session(self) -> None:
         session.pop("username", None)
@@ -528,7 +486,6 @@ class _AuthService:
     def _finalize_login(self, username: str, role: str):
         session.pop("mfa_pending", None)
         session.pop("passkey_pending", None)
-        session.pop("bootstrap_admin_pending", None)
         session["username"] = username
         session["role"] = role
         self._update_last_login(username)
@@ -637,188 +594,6 @@ class _AuthService:
             existing_secret=existing_secret,
             mfa_disabled=False,
         )
-
-    def bootstrap_state(self):
-        return jsonify(self._public_bootstrap_state())
-
-    def bootstrap_admin_setup(self):
-        state = self._bootstrap_state()
-        if state["phase"] != BOOTSTRAP_PHASE_ADMIN_SETUP_REQUIRED:
-            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
-
-        payload = request.get_json(silent=True) or {}
-        username = str(payload.get("username") or "").strip()
-        display_name = str(payload.get("display_name") or username).strip()
-        password_sha512 = str(payload.get("password_sha512") or "").strip().lower()
-        if not username or len(password_sha512) != 128:
-            return jsonify({"error": "username and password_sha512 are required"}), 400
-
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM users")
-            if int((cur.fetchone() or [0])[0] or 0) > 0:
-                return jsonify({"error": "bootstrap_already_initialized", **self._public_bootstrap_state()}), 409
-        finally:
-            conn.close()
-
-        return jsonify(
-            self._create_bootstrap_pending(
-                flow="setup",
-                username=username,
-                display_name=display_name or username,
-                role="Admin",
-                password_sha512=password_sha512,
-            )
-        )
-
-    def bootstrap_admin_recover(self):
-        state = self._bootstrap_state()
-        if state["phase"] != BOOTSTRAP_PHASE_ADMIN_RECOVERY_REQUIRED:
-            return jsonify({"error": "invalid_phase", **self._public_bootstrap_state()}), 409
-
-        payload = request.get_json(silent=True) or {}
-        username = str(payload.get("username") or "").strip()
-        password_sha512 = str(payload.get("password_sha512") or "").strip().lower()
-        if not username or len(password_sha512) != 128:
-            return jsonify({"error": "username and password_sha512 are required"}), 400
-
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT COALESCE(display_name, username), COALESCE(auth_reset_required, 0)
-                  FROM users
-                 WHERE LOWER(username)=LOWER(?)
-                   AND LOWER(role)='admin'
-                 LIMIT 1
-                """,
-                (username,),
-            )
-            row = cur.fetchone()
-        finally:
-            conn.close()
-        if not row:
-            return jsonify({"error": "admin_not_found"}), 404
-        if not bool(row[1] or 0):
-            return jsonify({"error": "admin_recovery_not_required"}), 409
-
-        return jsonify(
-            self._create_bootstrap_pending(
-                flow="recover",
-                username=username,
-                display_name=str(row[0] or username),
-                role="Admin",
-                password_sha512=password_sha512,
-            )
-        )
-
-    def bootstrap_admin_mfa_verify(self):
-        pending = session.get("bootstrap_admin_pending") or {}
-        if not pending or not isinstance(pending, dict):
-            return jsonify({"error": "bootstrap_pending"}), 401
-
-        payload = request.get_json(silent=True) or {}
-        token = str(payload.get("pending_token") or "").strip()
-        code = "".join(ch for ch in str(payload.get("code") or "").strip() if ch.isdigit())
-        if not token or token != pending.get("token"):
-            return jsonify({"error": "invalid_session"}), 401
-        if pending.get("expires", 0) < _now_ts():
-            session.pop("bootstrap_admin_pending", None)
-            return jsonify({"error": "expired"}), 401
-        if len(code) < 6:
-            return jsonify({"error": "invalid_code"}), 400
-
-        secret = str(pending.get("secret") or "")
-        try:
-            if not _totp_for_secret(secret).verify(code, valid_window=1):
-                return jsonify({"error": "invalid_code"}), 401
-        except Exception as exc:
-            return jsonify({"error": str(exc) or "mfa_unavailable"}), 500
-
-        username = str(pending.get("username") or "").strip()
-        display_name = str(pending.get("display_name") or username).strip() or username
-        role = str(pending.get("role") or "Admin").strip() or "Admin"
-        password_sha512 = str(pending.get("password_sha512") or "").strip().lower()
-        if not username or len(password_sha512) != 128:
-            return jsonify({"error": "invalid_session"}), 401
-
-        try:
-            encrypted_password = self._encrypt_auth_secret(password_sha512)
-            encrypted_mfa_secret = self._encrypt_auth_secret(secret)
-        except AegisCipherServiceError:
-            return self._bootstrap_error_response()
-
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            now_ts = _now_ts()
-            if str(pending.get("flow") or "") == "setup":
-                cur.execute("SELECT COUNT(*) FROM users")
-                if int((cur.fetchone() or [0])[0] or 0) > 0:
-                    conn.rollback()
-                    return jsonify({"error": "bootstrap_already_initialized", **self._public_bootstrap_state()}), 409
-                cur.execute(
-                    """
-                    INSERT INTO users(
-                        username,
-                        display_name,
-                        password_sha512,
-                        role,
-                        created_at,
-                        updated_at,
-                        mfa_enabled,
-                        mfa_disabled,
-                        mfa_secret,
-                        auth_reset_required,
-                        auth_reset_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        username,
-                        display_name,
-                        encrypted_password,
-                        role,
-                        now_ts,
-                        now_ts,
-                        1,
-                        0,
-                        encrypted_mfa_secret,
-                        0,
-                        None,
-                    ),
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE users
-                       SET password_sha512=?,
-                           mfa_secret=?,
-                           mfa_enabled=1,
-                           mfa_disabled=0,
-                           auth_reset_required=0,
-                           auth_reset_at=NULL,
-                           updated_at=?
-                     WHERE LOWER(username)=LOWER(?)
-                       AND LOWER(role)='admin'
-                    """,
-                    (encrypted_password, encrypted_mfa_secret, now_ts, username),
-                )
-                if int(cur.rowcount or 0) <= 0:
-                    conn.rollback()
-                    return jsonify({"error": "admin_not_found"}), 404
-                delete_user_passkeys(conn, username)
-            conn.commit()
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            return jsonify({"error": "username already exists"}), 409
-        finally:
-            conn.close()
-
-        session.pop("bootstrap_admin_pending", None)
-        session.modified = True
-        return self._finalize_login(username, role)
 
     def login(self):
         if not self._operator_auth_allowed():
@@ -1310,31 +1085,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     service = _AuthService(app, adapters)
     blueprint = Blueprint("auth", __name__)
-
-    def _require_internal() -> bool:
-        try:
-            secret = require_app_secret(app)
-        except Exception:
-            return False
-        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
-
-    @blueprint.route("/api/internal/bootstrap/state", methods=["GET"])
-    def _internal_bootstrap_state():
-        if not _require_internal():
-            return jsonify({"error": "unauthorized"}), 401
-        return service.bootstrap_state()
-
-    @blueprint.route("/api/bootstrap/admin/setup", methods=["POST"])
-    def _bootstrap_admin_setup():
-        return service.bootstrap_admin_setup()
-
-    @blueprint.route("/api/bootstrap/admin/recover", methods=["POST"])
-    def _bootstrap_admin_recover():
-        return service.bootstrap_admin_recover()
-
-    @blueprint.route("/api/bootstrap/admin/mfa/verify", methods=["POST"])
-    def _bootstrap_admin_mfa_verify():
-        return service.bootstrap_admin_mfa_verify()
 
     @blueprint.route("/api/auth/login", methods=["POST"])
     def _login():

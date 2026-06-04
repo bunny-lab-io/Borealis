@@ -44,9 +44,24 @@ func (a *authLoginTestAegis) status(_ context.Context) (map[string]any, error) {
 	return map[string]any{"configured": true, "locked": a.unlockedCipher == ""}, nil
 }
 
+func (a *authLoginTestAegis) setupWithCipher(_ context.Context, cipherText string) (map[string]any, error) {
+	a.unlockedCipher = cipherText
+	return map[string]any{"configured": true, "locked": false}, nil
+}
+
 func (a *authLoginTestAegis) unlockWithCipher(_ context.Context, cipherText string) (map[string]any, error) {
 	a.unlockedCipher = cipherText
 	return map[string]any{"configured": true, "locked": false}, nil
+}
+
+func (a *authLoginTestAegis) rotateWithCipher(_ context.Context, _ string, newCipher string) (map[string]any, error) {
+	a.unlockedCipher = newCipher
+	return map[string]any{"configured": true, "locked": false}, nil
+}
+
+func (a *authLoginTestAegis) forceReset(_ context.Context) (map[string]any, error) {
+	a.unlockedCipher = ""
+	return map[string]any{"configured": false, "locked": false}, nil
 }
 
 func (a *authLoginTestAegis) decryptSecretText(_ context.Context, value any) (string, error) {
