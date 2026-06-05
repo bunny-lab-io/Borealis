@@ -30,6 +30,15 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - Go toolchain (native Linux api-backend build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 - github.com/lib/pq v1.10.9 (Go PostgreSQL driver for native api-backend auth/database reads) - MIT - https://github.com/lib/pq/blob/master/LICENSE.md
 - golang.org/x/crypto v0.33.0 (Go scrypt KDF support for native api-backend Aegis Cipher unlock/decrypt flow) - BSD-3-Clause - https://cs.opensource.google/go/x/crypto/+/master:LICENSE
+- github.com/go-webauthn/webauthn v0.10.2 (Go WebAuthn passkey ceremonies) - BSD-3-Clause - https://github.com/go-webauthn/webauthn/blob/master/LICENSE
+- github.com/fxamacker/cbor/v2 v2.6.0 (Go WebAuthn CBOR codec dependency) - MIT - https://github.com/fxamacker/cbor/blob/master/LICENSE
+- github.com/go-webauthn/x v0.1.9 (Go WebAuthn support dependency) - BSD-3-Clause - https://github.com/go-webauthn/x/blob/master/LICENSE
+- github.com/golang-jwt/jwt/v5 v5.2.1 (Go WebAuthn transitive JWT support dependency) - MIT - https://github.com/golang-jwt/jwt/blob/main/LICENSE
+- github.com/google/go-tpm v0.9.0 (Go WebAuthn TPM attestation support dependency) - Apache-2.0 - https://github.com/google/go-tpm/blob/main/LICENSE
+- github.com/google/uuid v1.6.0 (Go WebAuthn UUID support dependency) - BSD-3-Clause - https://github.com/google/uuid/blob/master/LICENSE
+- github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) - MIT - https://github.com/mitchellh/mapstructure/blob/main/LICENSE
+- github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) - MIT - https://github.com/x448/float16/blob/master/LICENSE
+- golang.org/x/sys v0.30.0 (Go WebAuthn system support dependency) - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
 - Python (system Python on Linux) - PSF License - https://docs.python.org/3/license.html
 - Flask - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 - flask-cors - MIT - https://spdx.org/licenses/MIT.html

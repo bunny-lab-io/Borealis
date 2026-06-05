@@ -285,6 +285,10 @@ func registerAuthRoutes(mux *http.ServeMux, auth *authService, fallback http.Han
 	mux.HandleFunc("/api/auth/mfa/reset", ownMFAResetHandler(auth))
 	mux.HandleFunc("POST /api/auth/password/reset", ownPasswordResetHandler(auth))
 	mux.HandleFunc("/api/auth/passkeys", authPasskeysHandler(auth, fallback))
+	mux.HandleFunc("POST /api/auth/passkeys/register/options", passkeyRegisterOptionsHandler(auth))
+	mux.HandleFunc("POST /api/auth/passkeys/register/verify", passkeyRegisterVerifyHandler(auth))
+	mux.HandleFunc("POST /api/auth/passkeys/authenticate/options", passkeyAuthenticateOptionsHandler(auth))
+	mux.HandleFunc("POST /api/auth/passkeys/authenticate/verify", passkeyAuthenticateVerifyHandler(auth))
 	mux.HandleFunc("/api/auth/passkeys/", authPasskeyByIDHandler(auth, fallback))
 }
 

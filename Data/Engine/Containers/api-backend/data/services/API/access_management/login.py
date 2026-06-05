@@ -5,10 +5,6 @@
 # API Endpoints (if applicable):
 # - POST /api/auth/login (No Authentication) - Authenticates operator credentials and starts a session token or MFA setup/verification challenge.
 # - POST /api/auth/mfa/verify (Token Authenticated (MFA pending)) - Verifies TOTP codes during multifactor setup or login.
-# - POST /api/auth/passkeys/register/options (Token Authenticated) - Starts a passkey registration ceremony for the current operator.
-# - POST /api/auth/passkeys/register/verify (Token Authenticated) - Verifies a passkey registration response and stores the credential.
-# - POST /api/auth/passkeys/authenticate/options (No Authentication) - Starts a passkey sign-in ceremony for passwordless operator login.
-# - POST /api/auth/passkeys/authenticate/verify (No Authentication) - Verifies a passkey sign-in response and completes operator login.
 # ======================================================
 
 """Authentication endpoints for the Borealis Engine API."""
@@ -17,13 +13,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
-import json
 import logging
 import os
 from Data.Engine.db import dbapi as sqlite3
 import time
 import uuid
-from urllib.parse import urlsplit
 from typing import Any, Dict, Mapping, Optional, TYPE_CHECKING
 
 from flask import Blueprint, Flask, jsonify, request, session
@@ -39,37 +33,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     qrcode = None  # type: ignore
 
-try:
-    from webauthn import (  # type: ignore
-        base64url_to_bytes,
-        generate_authentication_options,
-        generate_registration_options,
-        options_to_json,
-        verify_authentication_response,
-        verify_registration_response,
-    )
-    from webauthn.helpers.structs import (  # type: ignore
-        AuthenticatorSelectionCriteria,
-        PublicKeyCredentialDescriptor,
-        ResidentKeyRequirement,
-        UserVerificationRequirement,
-    )
-except Exception:  # pragma: no cover - optional dependency
-    base64url_to_bytes = None  # type: ignore
-    generate_authentication_options = None  # type: ignore
-    generate_registration_options = None  # type: ignore
-    options_to_json = None  # type: ignore
-    verify_authentication_response = None  # type: ignore
-    verify_registration_response = None  # type: ignore
-    AuthenticatorSelectionCriteria = None  # type: ignore
-    PublicKeyCredentialDescriptor = None  # type: ignore
-    ResidentKeyRequirement = None  # type: ignore
-    UserVerificationRequirement = None  # type: ignore
-
 if TYPE_CHECKING:  # pragma: no cover - typing helper
     from Data.Engine.services.API import EngineServiceAdapters
 
-from ....public_endpoints import public_base_url
 from ...aegis_cipher import (
     AegisCipherServiceError,
     AegisDataCorruptionError,
@@ -88,20 +54,6 @@ from .directory_services import (
     DirectoryAuthenticationManager,
     DirectoryAuthError,
     register_directory_services,
-)
-from .passkeys import (
-    build_passkey_lookup_hmac,
-    build_webauthn_user_id,
-    count_user_passkeys,
-    credential_lookup_candidates,
-    deserialize_passkey_secret_bundle,
-    delete_user_passkeys,
-    get_passkey_by_lookup_hmac,
-    get_passkey_by_credential_id,
-    list_user_passkeys,
-    normalize_webauthn_storage_value,
-    serialize_passkey_secret_bundle,
-    serialize_transports,
 )
 
 _logger = logging.getLogger(__name__)
@@ -160,25 +112,6 @@ def _totp_qr_data_uri(payload: str) -> Optional[str]:
             _logger.warning("Failed to generate MFA QR code: %s", exc, exc_info=True)
             _qr_logger_warning_emitted = True
         return None
-
-
-def _bytes_to_base64url(value: bytes) -> str:
-    encoded = base64.urlsafe_b64encode(value or b"").decode("ascii")
-    return encoded.rstrip("=")
-
-
-def _passkey_to_dict(item: Any) -> Dict[str, Any]:
-    label = str(getattr(item, "label", "") or "").strip() or "Passkey"
-    transports = getattr(item, "transports", None)
-    if not isinstance(transports, list):
-        transports = []
-    return {
-        "id": int(getattr(item, "id", 0) or 0),
-        "label": label,
-        "created_at": int(getattr(item, "created_at", 0) or 0),
-        "last_used_at": int(getattr(item, "last_used_at", 0) or 0),
-        "transports": [str(value).strip() for value in transports if str(value).strip()],
-    }
 
 
 class _AuthService:
@@ -254,66 +187,12 @@ class _AuthService:
         session.pop("username", None)
         session.pop("role", None)
         session.pop("mfa_pending", None)
-        session.pop("passkey_pending", None)
 
     def _clear_all_auth_sessions(self):
         session.clear()
         response = jsonify({"status": "ok"})
         response.set_cookie("borealis_auth", "", expires=0, path="/")
         return response
-
-    def _passkeys_available(self) -> bool:
-        return all(
-            (
-                base64url_to_bytes,
-                generate_authentication_options,
-                generate_registration_options,
-                options_to_json,
-                verify_authentication_response,
-                verify_registration_response,
-                AuthenticatorSelectionCriteria,
-                PublicKeyCredentialDescriptor,
-                ResidentKeyRequirement,
-                UserVerificationRequirement,
-            )
-        )
-
-    def _passkey_rp_name(self) -> str:
-        return str(os.environ.get("BOREALIS_PASSKEY_RP_NAME", "Borealis") or "Borealis").strip() or "Borealis"
-
-    def _passkey_origin(self) -> str:
-        base = public_base_url(self.context, req=request) or str(self.app.config.get("PUBLIC_BASE_URL") or "").strip()
-        if base:
-            parsed = urlsplit(base if "://" in base else f"https://{base}")
-            scheme = parsed.scheme or "https"
-            hostname = parsed.hostname or (request.host.split(":", 1)[0] if request.host else "")
-            if parsed.port and parsed.port not in (80, 443):
-                netloc = f"{hostname}:{parsed.port}"
-            else:
-                netloc = hostname
-            if netloc:
-                return f"{scheme}://{netloc}".rstrip("/")
-        scheme = "https" if getattr(request, "is_secure", False) else "https"
-        host = str(request.host or "").strip()
-        return f"{scheme}://{host}".rstrip("/")
-
-    def _passkey_rp_id(self) -> str:
-        origin = self._passkey_origin()
-        parsed = urlsplit(origin)
-        return parsed.hostname or (str(request.host or "").split(":", 1)[0].strip())
-
-    def _passkey_count(self, username: str) -> int:
-        if not username:
-            return 0
-        try:
-            conn = self._db_conn()
-            try:
-                return count_user_passkeys(conn, username)
-            finally:
-                conn.close()
-        except Exception:
-            self.logger.debug("Failed to count passkeys for %s", username, exc_info=True)
-            return 0
 
     def _load_pending_mfa(self, token: str):
         pending = session.get("mfa_pending") or {}
@@ -323,7 +202,6 @@ class _AuthService:
             return None, ({"error": "invalid_session"}, 401)
         if pending.get("expires", 0) < _now_ts():
             session.pop("mfa_pending", None)
-            session.pop("passkey_pending", None)
             return None, ({"error": "expired"}, 401)
         return pending, None
 
@@ -483,7 +361,6 @@ class _AuthService:
 
     def _finalize_login(self, username: str, role: str):
         session.pop("mfa_pending", None)
-        session.pop("passkey_pending", None)
         session["username"] = username
         session["role"] = role
         self._update_last_login(username)
@@ -511,7 +388,6 @@ class _AuthService:
 
         session.pop("username", None)
         session.pop("role", None)
-        session.pop("passkey_pending", None)
 
         if mfa_disabled:
             session.pop("mfa_pending", None)
@@ -665,7 +541,6 @@ class _AuthService:
             return jsonify({"error": "invalid_session"}), 401
         if pending.get("expires", 0) < _now_ts():
             session.pop("mfa_pending", None)
-            session.pop("passkey_pending", None)
             return jsonify({"error": "expired"}), 401
         if len(code) < 6:
             return jsonify({"error": "invalid_code"}), 400
@@ -724,360 +599,6 @@ class _AuthService:
 
         return self._finalize_login(username, role)
 
-    def passkey_register_options(self):
-        if not self._operator_auth_allowed():
-            return self._bootstrap_error_response()
-        if not self._passkeys_available():
-            return jsonify({"error": "passkeys_unavailable"}), 503
-
-        payload = request.get_json(silent=True) or {}
-        label = str(payload.get("label") or "").strip()
-
-        current_user = self._current_user()
-        if not current_user:
-            return jsonify({"error": "unauthorized"}), 401
-
-        username = str(current_user.get("username") or "").strip()
-        role = str(current_user.get("role") or "User").strip() or "User"
-
-        identity = self._load_user_identity(username)
-        if not identity:
-            return jsonify({"error": "user_not_found"}), 404
-        if str(identity.get("auth_source") or "local").lower() == DIRECTORY_AUTH_SOURCE:
-            return jsonify({"error": "passkeys_local_users_only"}), 403
-        if bool(identity.get("directory_disabled")):
-            return jsonify({"error": "user_disabled"}), 403
-
-        conn = self._db_conn()
-        try:
-            stored_passkeys = list_user_passkeys(conn, identity["username"])
-        finally:
-            conn.close()
-
-        exclude_credentials = []
-        for item in stored_passkeys:
-            normalized_credential_id = ""
-            if item.secret_encrypted:
-                try:
-                    bundle = deserialize_passkey_secret_bundle(
-                        self._decrypt_auth_secret(item.secret_encrypted)
-                    )
-                    normalized_credential_id = str(bundle.get("credential_id") or "")
-                except Exception:
-                    normalized_credential_id = ""
-            if not normalized_credential_id:
-                normalized_credential_id = normalize_webauthn_storage_value(item.credential_id)
-            if not normalized_credential_id:
-                continue
-            try:
-                exclude_credentials.append(
-                    PublicKeyCredentialDescriptor(id=base64url_to_bytes(normalized_credential_id))
-                )
-            except Exception:
-                self.logger.debug(
-                    "Skipping invalid stored passkey credential %s for %s",
-                    getattr(item, "id", 0),
-                    identity["username"],
-                    exc_info=True,
-                )
-
-        try:
-            options = generate_registration_options(
-                rp_id=self._passkey_rp_id(),
-                rp_name=self._passkey_rp_name(),
-                user_id=build_webauthn_user_id(identity["id"], identity["username"]),
-                user_name=identity["username"],
-                user_display_name=identity["display_name"],
-                exclude_credentials=exclude_credentials,
-                authenticator_selection=AuthenticatorSelectionCriteria(
-                    resident_key=ResidentKeyRequirement.REQUIRED,
-                    user_verification=UserVerificationRequirement.REQUIRED,
-                ),
-            )
-        except Exception as exc:
-            self.logger.debug("Failed to generate passkey registration options for %s", identity["username"], exc_info=True)
-            return jsonify({"error": str(exc) or "passkey_setup_unavailable"}), 500
-
-        request_id = uuid.uuid4().hex
-        session["passkey_pending"] = {
-            "flow": "register",
-            "request_id": request_id,
-            "username": identity["username"],
-            "role": role,
-            "challenge": _bytes_to_base64url(options.challenge),
-            "label": label,
-            "expires": _now_ts() + 300,
-        }
-        session.modified = True
-
-        return jsonify(
-            {
-                "status": "ok",
-                "request_id": request_id,
-                "options": json.loads(options_to_json(options)),
-            }
-        )
-
-    def passkey_register_verify(self):
-        if not self._operator_auth_allowed():
-            return self._bootstrap_error_response()
-        if not self._passkeys_available():
-            return jsonify({"error": "passkeys_unavailable"}), 503
-
-        ceremony = session.get("passkey_pending") or {}
-        if not ceremony or not isinstance(ceremony, dict) or ceremony.get("flow") != "register":
-            return jsonify({"error": "passkey_pending"}), 401
-
-        payload = request.get_json(silent=True) or {}
-        request_id = str(payload.get("request_id") or "").strip()
-        credential = payload.get("credential") or {}
-
-        if not request_id or request_id != ceremony.get("request_id"):
-            return jsonify({"error": "invalid_session"}), 401
-        if ceremony.get("expires", 0) < _now_ts():
-            session.pop("passkey_pending", None)
-            return jsonify({"error": "expired"}), 401
-
-        username = str(ceremony.get("username") or "").strip()
-        role = str(ceremony.get("role") or "User").strip() or "User"
-        current_user = self._current_user()
-        if not current_user:
-            session.pop("passkey_pending", None)
-            return jsonify({"error": "unauthorized"}), 401
-        if str(current_user.get("username") or "").strip().lower() != username.lower():
-            session.pop("passkey_pending", None)
-            return jsonify({"error": "invalid_session"}), 401
-
-        identity = self._load_user_identity(username)
-        if not identity:
-            session.pop("passkey_pending", None)
-            return jsonify({"error": "user_not_found"}), 404
-
-        try:
-            verification = verify_registration_response(
-                credential=credential,
-                expected_challenge=base64url_to_bytes(str(ceremony.get("challenge") or "")),
-                expected_rp_id=self._passkey_rp_id(),
-                expected_origin=self._passkey_origin(),
-                require_user_verification=True,
-            )
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 400
-
-        credential_id = normalize_webauthn_storage_value(
-            getattr(verification, "credential_id", None) or credential.get("id") or ""
-        )
-        public_key = normalize_webauthn_storage_value(getattr(verification, "credential_public_key", None) or "")
-        sign_count = int(getattr(verification, "sign_count", 0) or 0)
-        aaguid = str(getattr(verification, "aaguid", "") or "").strip()
-        transports = []
-        response_payload = credential.get("response") or {}
-        if isinstance(response_payload, dict):
-            transports = response_payload.get("transports") or []
-
-        if not credential_id or not public_key:
-            return jsonify({"error": "invalid_passkey"}), 400
-
-        label = str(payload.get("label") or ceremony.get("label") or "").strip()
-        now_ts = _now_ts()
-        conn = self._db_conn()
-        try:
-            cur = conn.cursor()
-            secret_encrypted = self._encrypt_auth_secret(
-                serialize_passkey_secret_bundle(
-                    credential_id=credential_id,
-                    public_key=public_key,
-                    sign_count=sign_count,
-                    aaguid=aaguid,
-                )
-            )
-            cur.execute(
-                """
-                INSERT INTO user_passkeys(
-                    user_id,
-                    credential_id,
-                    public_key,
-                    sign_count,
-                    label,
-                    transports_json,
-                    aaguid,
-                    created_at,
-                    last_used_at,
-                    credential_lookup_hmac,
-                    secret_encrypted
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    identity["id"],
-                    "",
-                    "",
-                    0,
-                    label or "Passkey",
-                    serialize_transports(transports),
-                    "",
-                    now_ts,
-                    now_ts,
-                    build_passkey_lookup_hmac(require_app_secret(self.app), credential_id),
-                    secret_encrypted,
-                ),
-            )
-            total_passkeys = count_user_passkeys(conn, identity["username"])
-            conn.commit()
-        except sqlite3.IntegrityError:
-            conn.rollback()
-            return jsonify({"error": "passkey_already_registered"}), 409
-        finally:
-            conn.close()
-
-        session.pop("passkey_pending", None)
-        session.modified = True
-        return jsonify(
-            {
-                "status": "ok",
-                "username": identity["username"],
-                "passkey_count": total_passkeys,
-            }
-        )
-
-    def passkey_authenticate_options(self):
-        if not self._operator_auth_allowed():
-            return self._bootstrap_error_response()
-        if not self._passkeys_available():
-            return jsonify({"error": "passkeys_unavailable"}), 503
-
-        try:
-            options = generate_authentication_options(
-                rp_id=self._passkey_rp_id(),
-                user_verification=UserVerificationRequirement.REQUIRED,
-            )
-        except Exception as exc:
-            self.logger.debug("Failed to generate passkey authentication options", exc_info=True)
-            return jsonify({"error": str(exc) or "passkey_auth_unavailable"}), 500
-
-        request_id = uuid.uuid4().hex
-        session["passkey_pending"] = {
-            "flow": "authenticate_primary",
-            "request_id": request_id,
-            "challenge": _bytes_to_base64url(options.challenge),
-            "expires": _now_ts() + 300,
-        }
-        session.modified = True
-
-        return jsonify(
-            {
-                "status": "ok",
-                "request_id": request_id,
-                "options": json.loads(options_to_json(options)),
-            }
-        )
-
-    def passkey_authenticate_verify(self):
-        if not self._operator_auth_allowed():
-            return self._bootstrap_error_response()
-        if not self._passkeys_available():
-            return jsonify({"error": "passkeys_unavailable"}), 503
-
-        ceremony = session.get("passkey_pending") or {}
-        if not ceremony or not isinstance(ceremony, dict) or ceremony.get("flow") != "authenticate_primary":
-            return jsonify({"error": "passkey_pending"}), 401
-
-        payload = request.get_json(silent=True) or {}
-        request_id = str(payload.get("request_id") or "").strip()
-        credential = payload.get("credential") or {}
-        credential_id = normalize_webauthn_storage_value(credential.get("id") or "")
-
-        if not request_id or request_id != ceremony.get("request_id"):
-            return jsonify({"error": "invalid_session"}), 401
-        if ceremony.get("expires", 0) < _now_ts():
-            session.pop("passkey_pending", None)
-            return jsonify({"error": "expired"}), 401
-        if not credential_id:
-            return jsonify({"error": "invalid_passkey"}), 400
-
-        now_ts = _now_ts()
-
-        conn = self._db_conn()
-        try:
-            stored_passkey = None
-            for candidate in credential_lookup_candidates(credential_id):
-                lookup_hmac = build_passkey_lookup_hmac(require_app_secret(self.app), candidate)
-                stored_passkey = get_passkey_by_lookup_hmac(conn, lookup_hmac)
-                if not stored_passkey:
-                    stored_passkey = get_passkey_by_credential_id(conn, candidate)
-                if stored_passkey:
-                    break
-            if not stored_passkey:
-                return jsonify({"error": "passkey_not_configured"}), 404
-
-            identity = self._load_user_identity_by_id(stored_passkey.user_id)
-            if not identity:
-                return jsonify({"error": "user_not_found"}), 404
-            if str(identity.get("auth_source") or "local").lower() == DIRECTORY_AUTH_SOURCE:
-                return jsonify({"error": "passkeys_local_users_only"}), 403
-            if bool(identity.get("directory_disabled")):
-                return jsonify({"error": "user_disabled"}), 403
-
-            bundle = deserialize_passkey_secret_bundle(
-                self._decrypt_auth_secret(stored_passkey.secret_encrypted)
-                if stored_passkey.secret_encrypted
-                else serialize_passkey_secret_bundle(
-                    credential_id=stored_passkey.credential_id,
-                    public_key=stored_passkey.public_key,
-                    sign_count=stored_passkey.sign_count,
-                    aaguid=stored_passkey.aaguid,
-                )
-            )
-            normalized_stored_credential_id = normalize_webauthn_storage_value(bundle.get("credential_id"))
-            normalized_public_key = normalize_webauthn_storage_value(bundle.get("public_key"))
-            if not normalized_stored_credential_id or not normalized_public_key:
-                return jsonify({"error": "invalid_passkey"}), 400
-
-            verification = verify_authentication_response(
-                credential=credential,
-                expected_challenge=base64url_to_bytes(str(ceremony.get("challenge") or "")),
-                expected_rp_id=self._passkey_rp_id(),
-                expected_origin=self._passkey_origin(),
-                credential_public_key=base64url_to_bytes(normalized_public_key),
-                credential_current_sign_count=int(bundle.get("sign_count") or 0),
-                require_user_verification=True,
-            )
-
-            cur = conn.cursor()
-            cur.execute(
-                """
-                UPDATE user_passkeys
-                   SET credential_id='',
-                       public_key='',
-                       sign_count=0,
-                       aaguid='',
-                       credential_lookup_hmac=?,
-                       secret_encrypted=?,
-                       last_used_at=?
-                 WHERE id=?
-                """,
-                (
-                    build_passkey_lookup_hmac(require_app_secret(self.app), normalized_stored_credential_id),
-                    self._encrypt_auth_secret(
-                        serialize_passkey_secret_bundle(
-                            credential_id=normalized_stored_credential_id,
-                            public_key=normalized_public_key,
-                            sign_count=int(getattr(verification, "new_sign_count", bundle.get("sign_count", 0)) or 0),
-                            aaguid=bundle.get("aaguid") or "",
-                        )
-                    ),
-                    now_ts,
-                    stored_passkey.id,
-                ),
-            )
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            return jsonify({"error": str(exc)}), 400
-        finally:
-            conn.close()
-
-        return self._finalize_login(identity["username"], identity["role"])
-
 def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     """Register authentication endpoints for the Engine."""
 
@@ -1091,22 +612,6 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
     @blueprint.route("/api/auth/mfa/verify", methods=["POST"])
     def _mfa_verify():
         return service.mfa_verify()
-
-    @blueprint.route("/api/auth/passkeys/register/options", methods=["POST"])
-    def _passkey_register_options():
-        return service.passkey_register_options()
-
-    @blueprint.route("/api/auth/passkeys/register/verify", methods=["POST"])
-    def _passkey_register_verify():
-        return service.passkey_register_verify()
-
-    @blueprint.route("/api/auth/passkeys/authenticate/options", methods=["POST"])
-    def _passkey_authenticate_options():
-        return service.passkey_authenticate_options()
-
-    @blueprint.route("/api/auth/passkeys/authenticate/verify", methods=["POST"])
-    def _passkey_authenticate_verify():
-        return service.passkey_authenticate_verify()
 
     app.register_blueprint(blueprint)
     register_aegis_cipher_management(app, adapters)
