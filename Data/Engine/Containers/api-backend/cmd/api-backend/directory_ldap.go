@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-ldap/ldap/v3"
 )
@@ -596,9 +597,115 @@ func directoryEntryAttrs(entry *ldap.Entry) map[string][]string {
 		if attr == nil {
 			continue
 		}
-		result[strings.ToLower(strings.TrimSpace(attr.Name))] = append([]string{}, attr.Values...)
+		name := strings.ToLower(strings.TrimSpace(attr.Name))
+		if name == "" {
+			continue
+		}
+		result[name] = directoryLDAPAttrValues(name, attr)
 	}
 	return result
+}
+
+func directoryLDAPAttrValues(name string, attr *ldap.EntryAttribute) []string {
+	values := make([]string, 0, maxInt(len(attr.Values), len(attr.ByteValues)))
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "objectguid":
+		for _, raw := range directoryLDAPRawValues(attr) {
+			values = append(values, directoryFormatObjectGUID(raw))
+		}
+	case "objectsid":
+		for _, raw := range directoryLDAPRawValues(attr) {
+			values = append(values, directoryFormatObjectSID(raw))
+		}
+	default:
+		rawValues := directoryLDAPRawValues(attr)
+		for index := 0; index < maxInt(len(attr.Values), len(rawValues)); index++ {
+			var raw []byte
+			if index < len(rawValues) {
+				raw = rawValues[index]
+			}
+			value := ""
+			if index < len(attr.Values) {
+				value = attr.Values[index]
+			}
+			values = append(values, directorySafeLDAPText(raw, value))
+		}
+	}
+	return cleanStringSlice(values)
+}
+
+func directoryLDAPRawValues(attr *ldap.EntryAttribute) [][]byte {
+	if len(attr.ByteValues) > 0 {
+		return attr.ByteValues
+	}
+	raw := make([][]byte, 0, len(attr.Values))
+	for _, value := range attr.Values {
+		raw = append(raw, []byte(value))
+	}
+	return raw
+}
+
+func directorySafeLDAPText(raw []byte, fallback string) string {
+	if fallback != "" && utf8.ValidString(fallback) && !strings.ContainsRune(fallback, 0) {
+		return strings.TrimSpace(fallback)
+	}
+	if len(raw) == 0 {
+		raw = []byte(fallback)
+	}
+	if utf8.Valid(raw) && !bytesContain(raw, 0) {
+		return strings.TrimSpace(string(raw))
+	}
+	if len(raw) == 0 {
+		return ""
+	}
+	return "hex:" + hex.EncodeToString(raw)
+}
+
+func directoryFormatObjectGUID(raw []byte) string {
+	if len(raw) != 16 {
+		return directorySafeLDAPText(raw, "")
+	}
+	d1 := directoryLEUint32(raw[0:4])
+	d2 := directoryLEUint16(raw[4:6])
+	d3 := directoryLEUint16(raw[6:8])
+	tail := hex.EncodeToString(raw[8:])
+	return fmt.Sprintf("%08x-%04x-%04x-%s-%s", d1, d2, d3, tail[:4], tail[4:])
+}
+
+func directoryFormatObjectSID(raw []byte) string {
+	if len(raw) < 8 {
+		return directorySafeLDAPText(raw, "")
+	}
+	subAuthorityCount := int(raw[1])
+	if len(raw) < 8+subAuthorityCount*4 {
+		return directorySafeLDAPText(raw, "")
+	}
+	authority := uint64(0)
+	for _, value := range raw[2:8] {
+		authority = (authority << 8) | uint64(value)
+	}
+	parts := []string{fmt.Sprintf("S-%d-%d", raw[0], authority)}
+	for offset := 8; offset < 8+subAuthorityCount*4; offset += 4 {
+		parts = append(parts, fmt.Sprint(directoryLEUint32(raw[offset:offset+4])))
+	}
+	return strings.Join(parts, "-")
+}
+
+func directoryLEUint16(raw []byte) uint16 {
+	return uint16(raw[0]) | uint16(raw[1])<<8
+}
+
+func directoryLEUint32(raw []byte) uint32 {
+	return uint32(raw[0]) | uint32(raw[1])<<8 | uint32(raw[2])<<16 | uint32(raw[3])<<24
+}
+
+func bytesContain(raw []byte, needle byte) bool {
+	for _, value := range raw {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func firstDirectoryAttr(attrs map[string][]string, names ...string) string {
