@@ -535,10 +535,11 @@ func finalizeLogin(w http.ResponseWriter, r *http.Request, auth *authService, st
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"username": username,
-		"role":     role,
-		"token":    token,
+		"status":      "ok",
+		"username":    username,
+		"role":        role,
+		"auth_source": firstText(profile.AuthSource, "local"),
+		"token":       token,
 	})
 }
 
