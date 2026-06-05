@@ -85,6 +85,19 @@ type fakeOperatorStore struct {
 	credentialByID       map[int64]map[string]any
 	credentialIDSeen     int64
 	credentialErr        error
+	credentialCreate     map[string]any
+	credentialCreateBody map[string]any
+	credentialCreateCode int
+	credentialCreateErr  error
+	credentialUpdateID   int64
+	credentialUpdate     map[string]any
+	credentialUpdateBody map[string]any
+	credentialUpdateCode int
+	credentialUpdateErr  error
+	credentialDeleteID   int64
+	credentialDeleteBody map[string]any
+	credentialDeleteCode int
+	credentialDeleteErr  error
 	enrollmentCodes      []map[string]any
 	approvals            []map[string]any
 	approvalErr          error
@@ -126,6 +139,10 @@ type fakeOperatorStore struct {
 	workerHistory        int
 	workerContainers     bool
 	githubToken          map[string]any
+	githubTokenRecord    githubTokenRecord
+	githubTokenErr       error
+	githubTokenStored    string
+	githubTokenStoreErr  error
 	tokenRefreshReq      agentTokenRefreshRequest
 	tokenRefreshResult   agentTokenRefreshResult
 	tokenRefreshStatus   int
@@ -496,6 +513,76 @@ func (s *fakeOperatorStore) getCredential(_ context.Context, credentialID int64)
 	return copyMap(credential), true, nil
 }
 
+func (s *fakeOperatorStore) createCredential(_ context.Context, _ authSecretService, payload map[string]any) (map[string]any, int, error) {
+	s.credentialCreate = copyMap(payload)
+	if s.credentialCreateErr != nil {
+		status := s.credentialCreateCode
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return s.credentialCreateBody, status, s.credentialCreateErr
+	}
+	status := s.credentialCreateCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.credentialCreateBody != nil {
+		return copyMap(s.credentialCreateBody), status, nil
+	}
+	return map[string]any{
+		"status": "ok",
+		"credential": map[string]any{
+			"id":   int64(7),
+			"name": cleanText(payload["name"]),
+		},
+	}, status, nil
+}
+
+func (s *fakeOperatorStore) updateCredential(_ context.Context, _ authSecretService, credentialID int64, payload map[string]any) (map[string]any, int, error) {
+	s.credentialUpdateID = credentialID
+	s.credentialUpdate = copyMap(payload)
+	if s.credentialUpdateErr != nil {
+		status := s.credentialUpdateCode
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return s.credentialUpdateBody, status, s.credentialUpdateErr
+	}
+	status := s.credentialUpdateCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.credentialUpdateBody != nil {
+		return copyMap(s.credentialUpdateBody), status, nil
+	}
+	return map[string]any{
+		"status": "ok",
+		"credential": map[string]any{
+			"id":   credentialID,
+			"name": cleanText(payload["name"]),
+		},
+	}, status, nil
+}
+
+func (s *fakeOperatorStore) deleteCredential(_ context.Context, _ authSecretService, credentialID int64) (map[string]any, int, error) {
+	s.credentialDeleteID = credentialID
+	if s.credentialDeleteErr != nil {
+		status := s.credentialDeleteCode
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		return s.credentialDeleteBody, status, s.credentialDeleteErr
+	}
+	status := s.credentialDeleteCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.credentialDeleteBody != nil {
+		return copyMap(s.credentialDeleteBody), status, nil
+	}
+	return map[string]any{"status": "ok"}, status, nil
+}
+
 func (s *fakeOperatorStore) listEnrollmentCodes(_ context.Context) ([]map[string]any, error) {
 	if s.approvalErr != nil {
 		return nil, s.approvalErr
@@ -729,6 +816,18 @@ func (s *fakeOperatorStore) githubTokenState(_ context.Context) map[string]any {
 		payload[key] = value
 	}
 	return payload
+}
+
+func (s *fakeOperatorStore) loadGithubToken(_ context.Context, _ authSecretService) (githubTokenRecord, error) {
+	if s.githubTokenErr != nil {
+		return githubTokenRecord{}, s.githubTokenErr
+	}
+	return s.githubTokenRecord, nil
+}
+
+func (s *fakeOperatorStore) storeGithubToken(_ context.Context, _ authSecretService, token string) error {
+	s.githubTokenStored = token
+	return s.githubTokenStoreErr
 }
 
 func (s *fakeOperatorStore) refreshAgentToken(_ context.Context, request agentTokenRefreshRequest) (agentTokenRefreshResult, int, error) {
@@ -2062,6 +2161,136 @@ func TestCredentialByIDHandlerMissingCredential(t *testing.T) {
 	}
 }
 
+func TestCredentialsHandlerCreatesCredentialInGo(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+	fallbackHits := 0
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits++
+		w.WriteHeader(http.StatusAccepted)
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/credentials", strings.NewReader(`{"name":"Lab SSH","password":"secret"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialsHandler(auth, fallback).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if fallbackHits != 0 {
+		t.Fatalf("expected no fallback hits, got %d", fallbackHits)
+	}
+	if store.credentialCreate["name"] != "Lab SSH" || store.credentialCreate["password"] != "secret" {
+		t.Fatalf("unexpected create payload %+v", store.credentialCreate)
+	}
+}
+
+func TestCredentialByIDHandlerUpdatesCredentialInGo(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/credentials/7", strings.NewReader(`{"name":"Updated SSH"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.credentialUpdateID != 7 || store.credentialUpdate["name"] != "Updated SSH" {
+		t.Fatalf("unexpected update id=%d payload=%+v", store.credentialUpdateID, store.credentialUpdate)
+	}
+}
+
+func TestCredentialByIDHandlerDeletesCredentialInGo(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodDelete, "/api/credentials/7", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialByIDHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.credentialDeleteID != 7 {
+		t.Fatalf("expected delete id 7, got %d", store.credentialDeleteID)
+	}
+}
+
+func TestCredentialMutationRequiresUnlockedAegis(t *testing.T) {
+	auth, _ := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/credentials", strings.NewReader(`{"name":"Lab SSH"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	credentialsHandler(auth, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusLocked {
+		t.Fatalf("expected 423, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestGithubTokenHandlerReturnsLockedPayload(t *testing.T) {
+	auth, _ := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/github/token", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	githubTokenHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["status"] != "locked" || payload["locked"] != true {
+		t.Fatalf("unexpected locked payload %+v", payload)
+	}
+}
+
+func TestGithubTokenHandlerStoresTokenInGo(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+	originalVerifier := githubTokenVerifier
+	originalFetch := repoHashFetchHead
+	githubTokenVerifier = func(token string) githubTokenVerification {
+		return githubTokenVerification{Valid: true, Message: "API Authentication Successful", Status: "ok", RateLimit: 5000}
+	}
+	repoHashFetchHead = func(repo string, branch string, token string) (string, string) {
+		return "", ""
+	}
+	defer func() {
+		githubTokenVerifier = originalVerifier
+		repoHashFetchHead = originalFetch
+	}()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/github/token", strings.NewReader(`{"token":"  ghp_test  "}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	githubTokenHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.githubTokenStored != "ghp_test" {
+		t.Fatalf("expected trimmed token, got %q", store.githubTokenStored)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["valid"] != true || payload["status"] != "ok" {
+		t.Fatalf("unexpected github token payload %+v", payload)
+	}
+}
+
 func TestDirectorySitesHandlerReturnsSites(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.directorySites = []map[string]any{
@@ -2332,7 +2561,6 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		path    string
 	}{
 		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
-		{name: "credential create", handler: credentialsHandler(auth, fallback), method: http.MethodPost, path: "/api/credentials"},
 	} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(entry.method, entry.path, nil)
@@ -2341,8 +2569,8 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
 		}
 	}
-	if fallbackHits != 2 {
-		t.Fatalf("expected 2 fallback hits, got %d", fallbackHits)
+	if fallbackHits != 1 {
+		t.Fatalf("expected 1 fallback hit, got %d", fallbackHits)
 	}
 }
 

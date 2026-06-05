@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,6 +23,12 @@ var credentialSecretFields = map[string]struct{}{
 type credentialReadStore interface {
 	listCredentials(ctx context.Context) ([]map[string]any, error)
 	getCredential(ctx context.Context, credentialID int64) (map[string]any, bool, error)
+}
+
+type credentialMutationStore interface {
+	createCredential(ctx context.Context, secret authSecretService, payload map[string]any) (map[string]any, int, error)
+	updateCredential(ctx context.Context, secret authSecretService, credentialID int64, payload map[string]any) (map[string]any, int, error)
+	deleteCredential(ctx context.Context, secret authSecretService, credentialID int64) (map[string]any, int, error)
 }
 
 type credentialRow struct {
@@ -46,67 +54,243 @@ type credentialRow struct {
 func registerCredentialRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/credentials", credentialsHandler(auth, fallback))
 	mux.HandleFunc("/api/credentials/", credentialByIDHandler(auth, fallback))
+	mux.HandleFunc("/api/github/token", githubTokenHandler(auth))
 }
 
 func credentialsHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
-			return
+		switch r.Method {
+		case http.MethodGet:
+			handleCredentialsList(w, r, auth)
+		case http.MethodPost:
+			handleCredentialCreate(w, r, auth)
+		default:
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 		}
-		if _, failure := requireUser(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
-		store, ok := auth.store.(credentialReadStore)
-		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
-			return
-		}
-		ctx, cancel := requestTimeout(r.Context(), auth)
-		defer cancel()
-		credentials, err := store.listCredentials(ctx)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials})
 	}
 }
 
 func credentialByIDHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
-			return
-		}
-		if _, failure := requireUser(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
 		raw := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/credentials/"), "/")
 		credentialID, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil || credentialID <= 0 {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "credential not found"})
 			return
 		}
-		store, ok := auth.store.(credentialReadStore)
-		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
-			return
+		switch r.Method {
+		case http.MethodGet:
+			handleCredentialGet(w, r, auth, credentialID)
+		case http.MethodPut:
+			handleCredentialUpdate(w, r, auth, credentialID)
+		case http.MethodDelete:
+			handleCredentialDelete(w, r, auth, credentialID)
+		default:
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPut+", "+http.MethodDelete)
 		}
-		ctx, cancel := requestTimeout(r.Context(), auth)
-		defer cancel()
-		credential, found, err := store.getCredential(ctx, credentialID)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
+	}
+}
+
+func handleCredentialsList(w http.ResponseWriter, r *http.Request, auth *authService) {
+	if _, failure := requireUser(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	store, ok := auth.store.(credentialReadStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
+		return
+	}
+	ctx, cancel := requestTimeout(r.Context(), auth)
+	defer cancel()
+	credentials, err := store.listCredentials(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credentials": credentials})
+}
+
+func handleCredentialGet(w http.ResponseWriter, r *http.Request, auth *authService, credentialID int64) {
+	if _, failure := requireUser(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	store, ok := auth.store.(credentialReadStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
+		return
+	}
+	ctx, cancel := requestTimeout(r.Context(), auth)
+	defer cancel()
+	credential, found, err := store.getCredential(ctx, credentialID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "credential not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"credential": credential})
+}
+
+func handleCredentialCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	if body, status, blocked := protectedSecretMutationBlock(r.Context(), auth); blocked {
+		writeJSON(w, status, body)
+		return
+	}
+	store, ok := auth.store.(credentialMutationStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
+		return
+	}
+	payload, err := readCredentialJSONMap(w, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	ctx, cancel := requestTimeout(r.Context(), auth)
+	defer cancel()
+	body, status, err := store.createCredential(ctx, auth.aegis, payload)
+	writeStoreMutationResponse(w, body, status, err)
+}
+
+func handleCredentialUpdate(w http.ResponseWriter, r *http.Request, auth *authService, credentialID int64) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	if body, status, blocked := protectedSecretMutationBlock(r.Context(), auth); blocked {
+		writeJSON(w, status, body)
+		return
+	}
+	store, ok := auth.store.(credentialMutationStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
+		return
+	}
+	payload, err := readCredentialJSONMap(w, r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	ctx, cancel := requestTimeout(r.Context(), auth)
+	defer cancel()
+	body, status, err := store.updateCredential(ctx, auth.aegis, credentialID, payload)
+	writeStoreMutationResponse(w, body, status, err)
+}
+
+func handleCredentialDelete(w http.ResponseWriter, r *http.Request, auth *authService, credentialID int64) {
+	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+		failure.write(w)
+		return
+	}
+	if body, status, blocked := protectedSecretMutationBlock(r.Context(), auth); blocked {
+		writeJSON(w, status, body)
+		return
+	}
+	store, ok := auth.store.(credentialMutationStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "credentials_unavailable"})
+		return
+	}
+	ctx, cancel := requestTimeout(r.Context(), auth)
+	defer cancel()
+	body, status, err := store.deleteCredential(ctx, auth.aegis, credentialID)
+	writeStoreMutationResponse(w, body, status, err)
+}
+
+func readCredentialJSONMap(w http.ResponseWriter, r *http.Request) (map[string]any, error) {
+	var payload map[string]any
+	err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&payload)
+	if errors.Is(err, io.EOF) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	return payload, nil
+}
+
+func writeStoreMutationResponse(w http.ResponseWriter, payload map[string]any, status int, err error) {
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if err != nil {
+		if payload == nil {
+			payload = map[string]any{"error": err.Error()}
 		}
-		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "credential not found"})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"credential": credential})
+		writeJSON(w, status, payload)
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func protectedSecretMutationBlock(ctx context.Context, auth *authService) (map[string]any, int, bool) {
+	if auth.aegis == nil {
+		return map[string]any{"error": "aegis_unavailable", "message": "Aegis Cipher service unavailable"}, http.StatusBadGateway, true
+	}
+	status, err := auth.aegis.status(ctx)
+	if err != nil {
+		return protectedSecretErrorBody(err), protectedSecretErrorStatus(err), true
+	}
+	if !boolFromPayload(status["configured"]) {
+		return map[string]any{"error": "aegis_not_configured", "message": errAegisNotConfigured.Error()}, http.StatusConflict, true
+	}
+	if boolFromPayload(status["locked"]) {
+		return map[string]any{"error": "aegis_locked", "message": errAegisLocked.Error()}, http.StatusLocked, true
+	}
+	return nil, 0, false
+}
+
+func protectedSecretErrorBody(err error) map[string]any {
+	switch {
+	case errors.Is(err, errAegisNotConfigured):
+		return map[string]any{"error": "aegis_not_configured", "message": err.Error()}
+	case errors.Is(err, errAegisLocked):
+		return map[string]any{"error": "aegis_locked", "message": err.Error()}
+	case errors.Is(err, errAegisDataCorruption):
+		return map[string]any{"error": "corrupt_secret_store", "message": err.Error()}
+	default:
+		return map[string]any{"error": "aegis_error", "message": err.Error()}
+	}
+}
+
+func protectedSecretErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, errAegisNotConfigured):
+		return http.StatusConflict
+	case errors.Is(err, errAegisLocked):
+		return http.StatusLocked
+	case errors.Is(err, errAegisDataCorruption):
+		return http.StatusInternalServerError
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func boolFromPayload(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return parseTruthy(typed)
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	case float64:
+		return typed != 0
+	default:
+		return false
 	}
 }
 

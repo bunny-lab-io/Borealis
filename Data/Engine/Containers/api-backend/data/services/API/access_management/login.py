@@ -83,14 +83,12 @@ from ...auth.bootstrap_state import (
 from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
 from .aegis import register_aegis_cipher_management
-from .credentials import register_credential_management
 from .directory_services import (
     DIRECTORY_AUTH_SOURCE,
     DirectoryAuthenticationManager,
     DirectoryAuthError,
     register_directory_services,
 )
-from .github import register_github_token_management
 from .passkeys import (
     build_passkey_lookup_hmac,
     build_webauthn_user_id,
@@ -1112,6 +1110,4 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     app.register_blueprint(blueprint)
     register_aegis_cipher_management(app, adapters)
-    register_github_token_management(app, adapters)
-    register_credential_management(app, adapters)
     register_directory_services(app, adapters)
