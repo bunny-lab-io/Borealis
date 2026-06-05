@@ -828,7 +828,7 @@ func passkeyCredentialCandidates(rawID []byte) []string {
 	seen := map[string]struct{}{}
 	candidates := []string{}
 	add := func(value string) {
-		value = normalizeWebAuthnStorageValue(value)
+		value = strings.TrimSpace(value)
 		if value == "" {
 			return
 		}
@@ -841,9 +841,40 @@ func passkeyCredentialCandidates(rawID []byte) []string {
 	encoded := normalizeWebAuthnStorageValue(rawID)
 	add(encoded)
 	if len(rawID) > 0 {
-		add(string(rawID))
+		add(passkeyPythonBytesLiteral(rawID))
 	}
 	return candidates
+}
+
+func passkeyPythonBytesLiteral(raw []byte) string {
+	const alphabet = "0123456789abcdef"
+	var builder strings.Builder
+	builder.Grow(len(raw)*4 + 3)
+	builder.WriteString("b'")
+	for _, value := range raw {
+		switch value {
+		case '\\':
+			builder.WriteString("\\\\")
+		case '\'':
+			builder.WriteString("\\'")
+		case '\n':
+			builder.WriteString("\\n")
+		case '\r':
+			builder.WriteString("\\r")
+		case '\t':
+			builder.WriteString("\\t")
+		default:
+			if value >= 0x20 && value <= 0x7e {
+				builder.WriteByte(value)
+			} else {
+				builder.WriteString("\\x")
+				builder.WriteByte(alphabet[value>>4])
+				builder.WriteByte(alphabet[value&0x0f])
+			}
+		}
+	}
+	builder.WriteString("'")
+	return builder.String()
 }
 
 func passkeyLookupHMAC(auth *authService, credentialID string) string {

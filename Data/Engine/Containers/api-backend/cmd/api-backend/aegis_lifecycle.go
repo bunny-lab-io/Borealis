@@ -962,13 +962,94 @@ func normalizeWebAuthnStorageValue(value any) string {
 			return ""
 		}
 		if strings.HasPrefix(text, "b'") || strings.HasPrefix(text, "b\"") {
-			if unquoted, err := strconv.Unquote(text[1:]); err == nil {
-				return base64.RawURLEncoding.EncodeToString([]byte(unquoted))
+			if raw, ok := parsePythonBytesLiteral(text); ok {
+				return base64.RawURLEncoding.EncodeToString(raw)
 			}
 		}
 		return text
 	default:
 		return strings.TrimSpace(fmt.Sprint(value))
+	}
+}
+
+func parsePythonBytesLiteral(text string) ([]byte, bool) {
+	text = strings.TrimSpace(text)
+	if len(text) < 3 || text[0] != 'b' {
+		return nil, false
+	}
+	quote := text[1]
+	if quote != '\'' && quote != '"' || text[len(text)-1] != quote {
+		return nil, false
+	}
+	body := text[2 : len(text)-1]
+	out := make([]byte, 0, len(body))
+	for i := 0; i < len(body); i++ {
+		value := body[i]
+		if value != '\\' {
+			out = append(out, value)
+			continue
+		}
+		if i+1 >= len(body) {
+			out = append(out, '\\')
+			continue
+		}
+		i++
+		escaped := body[i]
+		switch escaped {
+		case 'x':
+			if i+2 < len(body) {
+				if decoded, ok := parseHexByte(body[i+1], body[i+2]); ok {
+					out = append(out, decoded)
+					i += 2
+					continue
+				}
+			}
+			out = append(out, '\\', escaped)
+		case 'n':
+			out = append(out, '\n')
+		case 'r':
+			out = append(out, '\r')
+		case 't':
+			out = append(out, '\t')
+		case 'a':
+			out = append(out, '\a')
+		case 'b':
+			out = append(out, '\b')
+		case 'f':
+			out = append(out, '\f')
+		case 'v':
+			out = append(out, '\v')
+		case '\\', '\'', '"':
+			out = append(out, escaped)
+		default:
+			out = append(out, escaped)
+		}
+	}
+	return out, true
+}
+
+func parseHexByte(high byte, low byte) (byte, bool) {
+	hi, ok := hexNibble(high)
+	if !ok {
+		return 0, false
+	}
+	lo, ok := hexNibble(low)
+	if !ok {
+		return 0, false
+	}
+	return hi<<4 | lo, true
+}
+
+func hexNibble(value byte) (byte, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return value - '0', true
+	case value >= 'a' && value <= 'f':
+		return value - 'a' + 10, true
+	case value >= 'A' && value <= 'F':
+		return value - 'A' + 10, true
+	default:
+		return 0, false
 	}
 }
 

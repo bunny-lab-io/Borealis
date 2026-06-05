@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 type passkeyCeremonyTestStore struct {
@@ -140,5 +142,29 @@ func TestPasskeyRegisterVerifyRejectsInvalidSignedSession(t *testing.T) {
 	}
 	if payload["error"] != "invalid_session" {
 		t.Fatalf("unexpected error payload %+v", payload)
+	}
+}
+
+func TestPasskeyCredentialCandidatesAvoidRawBinaryText(t *testing.T) {
+	rawID := []byte{0x89, 0x00, 'A', '\'', '\\', '\n'}
+	expected := base64.RawURLEncoding.EncodeToString(rawID)
+
+	candidates := passkeyCredentialCandidates(rawID)
+	if len(candidates) != 2 {
+		t.Fatalf("expected normalized and legacy candidates, got %+v", candidates)
+	}
+	if candidates[0] != expected {
+		t.Fatalf("unexpected normalized candidate %q", candidates[0])
+	}
+	if candidates[1] != "b'\\x89\\x00A\\'\\\\\\n'" {
+		t.Fatalf("unexpected legacy candidate %q", candidates[1])
+	}
+	for _, candidate := range candidates {
+		if !utf8.ValidString(candidate) || strings.ContainsRune(candidate, 0) {
+			t.Fatalf("candidate is not PostgreSQL text safe: %q", candidate)
+		}
+	}
+	if normalizeWebAuthnStorageValue(candidates[1]) != expected {
+		t.Fatalf("legacy candidate did not normalize to credential ID")
 	}
 }
