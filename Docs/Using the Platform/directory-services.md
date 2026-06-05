@@ -56,7 +56,7 @@ Directory users cannot use local Borealis passwords or passkeys.
 
     ### Source map
 
-    - Directory API: `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
+    - Directory API: `Data/Engine/Containers/api-backend/cmd/api-backend/directory.go`, `directory_management.go`, and `directory_ldap.go`
     - Directory UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
     - Auth flow: `Data/Engine/Containers/api-backend/data/services/API/access_management/login.py`
 
@@ -65,5 +65,5 @@ Directory users cannot use local Borealis passwords or passkeys.
     - Provider config lives in `directory_providers`.
     - Group role mapping lives in `directory_provider_group_mappings`.
     - Group-to-site mapping lives in `directory_provider_site_mappings`.
-    - Directory bind passwords and keytabs are Aegis-protected.
+    - Directory bind passwords are Aegis-protected.
     - Directory user sessions are revalidated against cached user state on authenticated requests.

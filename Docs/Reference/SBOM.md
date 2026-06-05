@@ -30,6 +30,9 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - Go toolchain (native Linux api-backend build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
 - github.com/lib/pq v1.10.9 (Go PostgreSQL driver for native api-backend auth/database reads) - MIT - https://github.com/lib/pq/blob/master/LICENSE.md
 - golang.org/x/crypto v0.33.0 (Go scrypt KDF support for native api-backend Aegis Cipher unlock/decrypt flow) - BSD-3-Clause - https://cs.opensource.google/go/x/crypto/+/master:LICENSE
+- github.com/go-ldap/ldap/v3 v3.4.8 (Go LDAP/LDAPS directory-provider authentication and diagnostics) - MIT - https://github.com/go-ldap/ldap/blob/master/LICENSE
+- github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 (Go LDAP NTLM support dependency) - MIT - https://github.com/Azure/go-ntlmssp/blob/master/LICENSE
+- github.com/go-asn1-ber/asn1-ber v1.5.5 (Go LDAP ASN.1 BER codec dependency) - MIT - https://github.com/go-asn1-ber/asn1-ber/blob/master/LICENSE
 - github.com/go-webauthn/webauthn v0.10.2 (Go WebAuthn passkey ceremonies) - BSD-3-Clause - https://github.com/go-webauthn/webauthn/blob/master/LICENSE
 - github.com/fxamacker/cbor/v2 v2.6.0 (Go WebAuthn CBOR codec dependency) - MIT - https://github.com/fxamacker/cbor/blob/master/LICENSE
 - github.com/go-webauthn/x v0.1.9 (Go WebAuthn support dependency) - BSD-3-Clause - https://github.com/go-webauthn/x/blob/master/LICENSE
@@ -60,8 +63,6 @@ The Python requirement files are currently unpinned, so the exact resolved versi
 - alembic - MIT - https://spdx.org/licenses/MIT.html
 - psycopg (`psycopg[binary]`) - LGPL-3.0-only - https://spdx.org/licenses/LGPL-3.0-only.html
 - ldap3 - LGPL-3.0-or-later - https://github.com/cannatag/ldap3/blob/dev/COPYING
-- python-gssapi (`gssapi`, optional Kerberos Engine package) - ISC - https://github.com/pythongssapi/python-gssapi/blob/main/LICENSE.txt
-- MIT Kerberos (`krb5-user`/`krb5-workstation` runtime packages) - MIT - https://web.mit.edu/kerberos/krb5-devel/doc/mitK5license.html
 - ansible-core - GPL-3.0-or-later - https://spdx.org/licenses/GPL-3.0-or-later.html
 - ansible-runner - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
 - jmespath - MIT - https://spdx.org/licenses/MIT.html

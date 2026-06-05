@@ -81,32 +81,39 @@ type directorySiteRow struct {
 
 func registerDirectoryRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/directory/providers", directoryProvidersHandler(auth, fallback))
+	mux.HandleFunc("POST /api/directory/providers/certificate", directoryCertificateHandler(auth))
+	mux.HandleFunc("/api/directory/providers/", directoryProviderSubtreeHandler(auth))
 	mux.HandleFunc("/api/directory/sites", directorySitesHandler(auth))
+	mux.HandleFunc("POST /api/users/{username}/directory-cache", directoryUserCacheHandler(auth))
 }
 
 func directoryProvidersHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			proxyFallbackOrMethodNotAllowed(w, r, fallback, http.MethodGet)
+		switch r.Method {
+		case http.MethodGet:
+			if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+				failure.write(w)
+				return
+			}
+			store, ok := auth.store.(directoryReadStore)
+			if !ok {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "directory_unavailable"})
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), authTimeout(auth))
+			defer cancel()
+			providers, err := store.listDirectoryProviders(ctx)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
+		case http.MethodPost:
+			directoryProviderSave(w, r, auth, 0)
+		default:
+			writeMethodNotAllowed(w, http.MethodGet+", "+http.MethodPost)
 			return
 		}
-		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-			failure.write(w)
-			return
-		}
-		store, ok := auth.store.(directoryReadStore)
-		if !ok {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "directory_unavailable"})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), authTimeout(auth))
-		defer cancel()
-		providers, err := store.listDirectoryProviders(ctx)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 	}
 }
 
@@ -380,41 +387,38 @@ func directoryProviderPayload(provider directoryProviderRow, groupMappings []map
 		}
 	}
 	return map[string]any{
-		"id":                      nullInt(provider.ID),
-		"name":                    nullString(provider.Name),
-		"provider_type":           providerType,
-		"enabled":                 sqlIntBool(provider.Enabled),
-		"priority":                intWithDefault(provider.Priority, 100),
-		"domain_suffix":           nullString(provider.DomainSuffix),
-		"server_urls":             jsonStringList(provider.ServerURLsJSON),
-		"host_overrides":          jsonStringObject(provider.HostOverridesJSON),
-		"use_ldaps":               sqlIntBool(provider.UseLDAPS),
-		"tls_required":            sqlIntBool(provider.TLSRequired),
-		"tls_ca_pem_present":      nullString(provider.TLSCAPEM) != "",
-		"base_dn":                 nullString(provider.BaseDN),
-		"bind_dn":                 nullString(provider.BindDN),
-		"bind_password_present":   nullString(provider.BindPasswordEncrypted) != "",
-		"user_search_filter":      nullString(provider.UserSearchFilter),
-		"username_attribute":      usernameAttribute,
-		"display_name_attribute":  stringWithDefault(provider.DisplayNameAttribute, "displayName"),
-		"email_attribute":         stringWithDefault(provider.EmailAttribute, "mail"),
-		"member_of_attribute":     stringWithDefault(provider.MemberOfAttribute, "memberOf"),
-		"group_search_base_dn":    nullString(provider.GroupSearchBaseDN),
-		"nested_groups":           sqlIntBool(provider.NestedGroups),
-		"kerberos_realm":          nullString(provider.KerberosRealm),
-		"kerberos_kdc":            nullString(provider.KerberosKDC),
-		"kerberos_keytab_present": nullString(provider.KerberosKeytabEncrypted) != "",
-		"sync_interval_seconds":   intWithDefault(provider.SyncIntervalSeconds, defaultDirectorySyncIntervalSeconds),
-		"last_sync_at":            nullInt(provider.LastSyncAt),
-		"last_sync_status":        nullString(provider.LastSyncStatus),
-		"last_sync_message":       nullString(provider.LastSyncMessage),
-		"last_test_at":            nullInt(provider.LastTestAt),
-		"last_test_status":        nullString(provider.LastTestStatus),
-		"last_test_message":       nullString(provider.LastTestMessage),
-		"created_at":              nullInt(provider.CreatedAt),
-		"updated_at":              nullInt(provider.UpdatedAt),
-		"group_mappings":          groupMappings,
-		"site_mappings":           siteMappings,
+		"id":                     nullInt(provider.ID),
+		"name":                   nullString(provider.Name),
+		"provider_type":          providerType,
+		"enabled":                sqlIntBool(provider.Enabled),
+		"priority":               intWithDefault(provider.Priority, 100),
+		"domain_suffix":          nullString(provider.DomainSuffix),
+		"server_urls":            jsonStringList(provider.ServerURLsJSON),
+		"host_overrides":         jsonStringObject(provider.HostOverridesJSON),
+		"use_ldaps":              sqlIntBool(provider.UseLDAPS),
+		"tls_required":           sqlIntBool(provider.TLSRequired),
+		"tls_ca_pem_present":     nullString(provider.TLSCAPEM) != "",
+		"base_dn":                nullString(provider.BaseDN),
+		"bind_dn":                nullString(provider.BindDN),
+		"bind_password_present":  nullString(provider.BindPasswordEncrypted) != "",
+		"user_search_filter":     nullString(provider.UserSearchFilter),
+		"username_attribute":     usernameAttribute,
+		"display_name_attribute": stringWithDefault(provider.DisplayNameAttribute, "displayName"),
+		"email_attribute":        stringWithDefault(provider.EmailAttribute, "mail"),
+		"member_of_attribute":    stringWithDefault(provider.MemberOfAttribute, "memberOf"),
+		"group_search_base_dn":   nullString(provider.GroupSearchBaseDN),
+		"nested_groups":          sqlIntBool(provider.NestedGroups),
+		"sync_interval_seconds":  intWithDefault(provider.SyncIntervalSeconds, defaultDirectorySyncIntervalSeconds),
+		"last_sync_at":           nullInt(provider.LastSyncAt),
+		"last_sync_status":       nullString(provider.LastSyncStatus),
+		"last_sync_message":      nullString(provider.LastSyncMessage),
+		"last_test_at":           nullInt(provider.LastTestAt),
+		"last_test_status":       nullString(provider.LastTestStatus),
+		"last_test_message":      nullString(provider.LastTestMessage),
+		"created_at":             nullInt(provider.CreatedAt),
+		"updated_at":             nullInt(provider.UpdatedAt),
+		"group_mappings":         groupMappings,
+		"site_mappings":          siteMappings,
 	}
 }
 

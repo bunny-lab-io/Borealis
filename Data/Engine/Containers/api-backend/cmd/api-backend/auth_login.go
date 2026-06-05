@@ -206,8 +206,16 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 			})
 			return
 		}
-		if !found || strings.EqualFold(row.AuthSource, directoryAuth) {
-			proxyWithRawBody(w, r, fallback, raw)
+		if !found {
+			directoryLoginAndRespond(w, r, auth, store, username, password)
+			return
+		}
+		if strings.EqualFold(row.AuthSource, directoryAuth) {
+			if row.DirectoryDisabled {
+				writeJSON(w, http.StatusForbidden, map[string]any{"error": "directory_user_disabled"})
+				return
+			}
+			directoryLoginAndRespond(w, r, auth, store, username, password)
 			return
 		}
 		if row.DirectoryDisabled {

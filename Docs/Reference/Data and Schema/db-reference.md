@@ -935,7 +935,7 @@ finally:
     - Directory Services admin APIs.
     - `/api/auth/login` directory credential-provider routing.
     - Notes:
-    - Aegis protects `bind_password_encrypted` and `kerberos_keytab_encrypted`.
+    - Aegis protects `bind_password_encrypted`; `kerberos_*` columns are retained for legacy schema compatibility.
     - Providers must pass `/api/directory/providers/<id>/test` before enablement.
     - LDAPS is strict by default; optional PEM trust anchors supplement system trust.
 

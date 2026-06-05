@@ -7,10 +7,15 @@ require (
 	github.com/lib/pq v1.10.9
 )
 
-require golang.org/x/crypto v0.33.0
+require (
+	github.com/go-ldap/ldap/v3 v3.4.8
+	golang.org/x/crypto v0.33.0
+)
 
 require (
+	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/fxamacker/cbor/v2 v2.6.0 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.5 // indirect
 	github.com/go-webauthn/x v0.1.9 // indirect
 	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/google/go-tpm v0.9.0 // indirect

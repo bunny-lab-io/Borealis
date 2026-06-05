@@ -49,12 +49,8 @@ from ...auth.bootstrap_state import (
 from ...auth.context import revalidate_operator_identity
 from ...auth.secrets import require_app_secret
 from .aegis import register_aegis_cipher_management
-from .directory_services import (
-    DIRECTORY_AUTH_SOURCE,
-    DirectoryAuthenticationManager,
-    DirectoryAuthError,
-    register_directory_services,
-)
+
+DIRECTORY_AUTH_SOURCE = "directory"
 
 _logger = logging.getLogger(__name__)
 _qr_logger_warning_emitted = False
@@ -441,34 +437,6 @@ class _AuthService:
             )
         return jsonify(response_payload)
 
-    def _directory_login(self, username: str, password: str):
-        try:
-            result = DirectoryAuthenticationManager(
-                db_conn_factory=self.db_conn_factory,
-                aegis_cipher_service=self.aegis_cipher_service,
-                logger=self.logger,
-                service_log=self.service_log,
-            ).authenticate_login(username, password)
-        except DirectoryAuthError as exc:
-            return jsonify({"error": exc.code, "message": str(exc)}), exc.status_code
-        except Exception as exc:
-            self.logger.debug("Directory authentication failed for %s.", username, exc_info=True)
-            return jsonify({"error": "directory_auth_failed", "message": str(exc)}), 502
-
-        row = self._load_login_row(result.username)
-        if not row:
-            return jsonify({"error": "directory_cache_failed"}), 500
-        try:
-            existing_secret = self._decrypt_auth_secret(row[9]).strip()
-        except Exception:
-            existing_secret = ""
-        return self._begin_mfa_or_finalize(
-            username=row[1],
-            role=row[4] or result.role or "User",
-            existing_secret=existing_secret,
-            mfa_disabled=False,
-        )
-
     def login(self):
         if not self._operator_auth_allowed():
             return self._bootstrap_error_response()
@@ -484,17 +452,13 @@ class _AuthService:
         row = self._load_login_row(username)
 
         if not row:
-            if not password:
-                return jsonify({"error": "directory_password_required"}), 400
-            return self._directory_login(username, str(password))
+            return jsonify({"error": "invalid username or password"}), 401
 
         auth_source = str(row[12] or "local").strip().lower() if len(row) > 12 else "local"
         if auth_source == DIRECTORY_AUTH_SOURCE:
             if bool(row[13] or 0):
                 return jsonify({"error": "directory_user_disabled"}), 403
-            if not password:
-                return jsonify({"error": "directory_password_required"}), 400
-            return self._directory_login(username, str(password))
+            return jsonify({"error": "directory_auth_go_owned"}), 410
 
         if bool(row[11] or 0):
             return jsonify({"error": "auth_reset_required"}), 423
@@ -615,4 +579,3 @@ def register_auth(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     app.register_blueprint(blueprint)
     register_aegis_cipher_management(app, adapters)
-    register_directory_services(app, adapters)

@@ -138,10 +138,10 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | --- | --- | --- | --- |
 | MFA | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
 | Passkeys / modern auth | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
-| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
+| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_ldap.go`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
 | Script/code signing | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/Assemblies/scripts.md` | Strong differentiator versus much of the field. |
 | Aegis secret protection | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
-| Site-scoped RBAC | Shipped | `Docs/Using the Platform/site-assignments.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
+| Site-scoped RBAC | Shipped | `Docs/Using the Platform/site-assignments.md`, `README.md`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go` | Strong multi-operator control model now extends to directory-backed user groups. |
 | Customer lockbox | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/engine-log-management.md` | No tenancy-support lockbox pattern is documented. |
 | SAML / SSO | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
 | Management IP allowlisting | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/remote-shell.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
@@ -262,7 +262,8 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Docs/Reference/security-and-trust.md`
   - `Docs/Reference/Core Runtimes/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
-  - `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
+  - `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`
+  - `Data/Engine/Containers/api-backend/cmd/api-backend/directory_ldap.go`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
   - `Data/Engine/Containers/api-backend/data/database.py`
 - Site-scoped RBAC and scoped targeting:

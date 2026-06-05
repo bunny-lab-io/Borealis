@@ -10,7 +10,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Operator session signing secret: generated once and persisted at `Engine/Services/api-backend/secrets/engine_secret.txt`.
 - Front-door operator bootstrap: Borealis now requires the Aegis Cipher before it will render any login UI after first setup or restart.
 - Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
-- Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords/keytabs, reusable credentials, and the GitHub API token.
+- Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and the GitHub API token.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
 - On supported Windows deployments, only the SYSTEM Borealis runtime authenticates to the Engine; per-session helpers are local-only and inherit no Borealis token or socket identity.
 
@@ -24,7 +24,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
 - Centralized logging under `Engine/Services/api-backend/logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review. Recent wrong-code enrollment attempts are also surfaced in the Device Approval Queue.
 - Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
-- Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory Kerberos password verification. LDAPS providers can use system trust, uploaded CA PEM, or an operator-reviewed pinned peer certificate downloaded from the LDAP server. Provider-scoped host overrides let Borealis connect to a configured IP while keeping FQDN SNI and certificate validation intact. Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
+- Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory-compatible LDAP/LDAPS simple bind. LDAPS providers can use system trust, uploaded CA PEM, or an operator-reviewed pinned peer certificate downloaded from the LDAP server. Provider-scoped host overrides let Borealis connect to a configured IP while keeping FQDN SNI and certificate validation intact. Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
 - Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
 - Borealis operator accounts still support username/password plus TOTP and direct passkey sign-in, but those flows are now unreachable until Aegis setup or unlock is complete.
 

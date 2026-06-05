@@ -2546,7 +2546,7 @@ func TestDeviceViewGetHandlerDeletesView(t *testing.T) {
 	}
 }
 
-func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
+func TestDirectoryProviderCreateDoesNotProxyToPython(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 	fallbackHits := 0
 	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2554,23 +2554,14 @@ func TestReadOnlyHandlersProxyNonNativeMethods(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 
-	for _, entry := range []struct {
-		name    string
-		handler http.HandlerFunc
-		method  string
-		path    string
-	}{
-		{name: "directory provider create", handler: directoryProvidersHandler(auth, fallback), method: http.MethodPost, path: "/api/directory/providers"},
-	} {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(entry.method, entry.path, nil)
-		entry.handler.ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusAccepted {
-			t.Fatalf("%s expected fallback 202, got %d", entry.name, recorder.Code)
-		}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/directory/providers", strings.NewReader(`{}`))
+	directoryProvidersHandler(auth, fallback).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected auth gate 401, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if fallbackHits != 1 {
-		t.Fatalf("expected 1 fallback hit, got %d", fallbackHits)
+	if fallbackHits != 0 {
+		t.Fatalf("expected no fallback hit, got %d", fallbackHits)
 	}
 }
 
