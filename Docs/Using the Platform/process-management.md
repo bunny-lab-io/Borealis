@@ -46,7 +46,7 @@ Right-click row actions can copy executable location or command line. Use this b
 
     ### Source map
 
-    - Process API: `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`
+    - Process API: `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`
     - Process tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
     - Agent process role: `Data/Agent/internal/roles/process_management/`
 
