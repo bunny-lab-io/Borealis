@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,6 +56,130 @@ func TestInternalSchedulerPublicBaseURLReturnsConfiguredURL(t *testing.T) {
 	}
 	if payload["public_base_url"] != "https://borealis.example.test" {
 		t.Fatalf("unexpected payload %+v", payload)
+	}
+}
+
+type fakeInternalSchedulerCredentialStore struct {
+	*fakeOperatorStore
+	credential map[string]any
+	found      bool
+	err        error
+	idSeen     int64
+	secretSeen bool
+}
+
+func (s *fakeInternalSchedulerCredentialStore) loadDecryptedSchedulerCredential(_ context.Context, secret authSecretService, credentialID int64) (map[string]any, bool, error) {
+	s.idSeen = credentialID
+	s.secretSeen = secret != nil
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	return copyMap(s.credential), s.found, nil
+}
+
+func TestInternalSchedulerCredentialReturnsDecryptedPayload(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerCredentialStore{
+		fakeOperatorStore: baseStore,
+		found:             true,
+		credential: map[string]any{
+			"id":              int64(42),
+			"name":            "Lab SSH",
+			"username":        "operator",
+			"password":        "secret",
+			"connection_type": "ssh",
+		},
+	}
+	auth.store = store
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/credential/42", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.idSeen != 42 || !store.secretSeen {
+		t.Fatalf("expected credential lookup with Aegis, id=%d secret=%v", store.idSeen, store.secretSeen)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	credential := payload["credential"].(map[string]any)
+	if credential["password"] != "secret" || credential["username"] != "operator" {
+		t.Fatalf("unexpected credential payload %#v", credential)
+	}
+}
+
+func TestInternalSchedulerCredentialMapsResetRequired(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerCredentialStore{
+		fakeOperatorStore: baseStore,
+		err:               errSchedulerCredentialResetRequired,
+	}
+	auth.store = store
+	auth.aegis = &authLoginTestAegis{unlockedCipher: "ready"}
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/credential/42", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusLocked {
+		t.Fatalf("expected 423, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["error"] != "credential_reset_required" {
+		t.Fatalf("unexpected reset payload %#v", payload)
+	}
+}
+
+func TestSchedulerDecryptedCredentialPayload(t *testing.T) {
+	row := credentialRow{
+		ID:                      sql.NullInt64{Int64: 7, Valid: true},
+		Name:                    sql.NullString{String: "Lab SSH", Valid: true},
+		SiteID:                  sql.NullInt64{Int64: 3, Valid: true},
+		CredentialType:          sql.NullString{String: "Machine", Valid: true},
+		ConnectionType:          sql.NullString{String: "SSH", Valid: true},
+		Username:                sql.NullString{String: "operator", Valid: true},
+		PasswordEncrypted:       []byte("enc:password"),
+		PrivateKeyEncrypted:     []byte("enc:key"),
+		PrivateKeyPassphrase:    []byte("enc:phrase"),
+		BecomeMethod:            sql.NullString{String: "sudo", Valid: true},
+		BecomeUsername:          sql.NullString{String: "root", Valid: true},
+		BecomePasswordEncrypted: []byte("enc:become"),
+		MetadataJSON:            sql.NullString{String: `{"scope":"lab"}`, Valid: true},
+	}
+	credential, err := schedulerDecryptedCredentialPayload(context.Background(), &authLoginTestAegis{unlockedCipher: "ready"}, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential["password"] != "password" || credential["private_key"] != "key" || credential["become_password"] != "become" {
+		t.Fatalf("unexpected decrypted credential %#v", credential)
+	}
+	if credential["credential_type"] != "machine" || credential["connection_type"] != "ssh" {
+		t.Fatalf("unexpected normalized types %#v", credential)
+	}
+}
+
+func TestSchedulerDecryptedCredentialPayloadBlocksResetRequired(t *testing.T) {
+	row := credentialRow{
+		ID:           sql.NullInt64{Int64: 7, Valid: true},
+		MetadataJSON: sql.NullString{String: `{"aegis_secret_state":"reset_required","aegis_lost_secret_fields":["password"]}`, Valid: true},
+	}
+	_, err := schedulerDecryptedCredentialPayload(context.Background(), &authLoginTestAegis{unlockedCipher: "ready"}, row)
+	if !errors.Is(err, errSchedulerCredentialResetRequired) {
+		t.Fatalf("expected reset required, got %v", err)
 	}
 }
 

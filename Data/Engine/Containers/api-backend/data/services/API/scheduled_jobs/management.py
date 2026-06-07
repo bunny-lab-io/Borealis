@@ -444,7 +444,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     _register_internal_job_scheduler_routes(
         app,
         adapters,
-        _load_decrypted_credential,
         _scheduler_public_base_url,
         _active_vpn_session_snapshot,
         _prepare_vpn_session_snapshot,
@@ -461,7 +460,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
 def _register_internal_job_scheduler_routes(
     app: "Flask",
     adapters: "EngineServiceAdapters",
-    credential_loader,
     public_base_url_loader,
     vpn_session_loader=None,
     vpn_session_prepare=None,
@@ -478,18 +476,6 @@ def _register_internal_job_scheduler_routes(
         except Exception:
             return False
         return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
-
-    @app.route("/api/internal/job-scheduler/credential/<int:credential_id>", methods=["GET"])
-    def _internal_job_scheduler_credential(credential_id: int):
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        try:
-            credential = credential_loader(int(credential_id))
-        except Exception as exc:
-            return _internal_error(str(exc), 423)
-        if not credential:
-            return _internal_error("credential_not_found", 404)
-        return jsonify({"credential": credential})
 
     @app.route("/api/internal/job-scheduler/public-base-url", methods=["GET"])
     def _internal_job_scheduler_public_base_url():

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -15,10 +16,65 @@ import (
 
 func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnRuntime *vpnTunnelService, fallback http.Handler) {
 	_ = fallback
+	mux.HandleFunc("/api/internal/job-scheduler/credential/", internalSchedulerCredentialHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/public-base-url", internalSchedulerPublicBaseURLHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-prepare", internalSchedulerVPNPrepareHandler(auth, vpnRuntime))
+}
+
+var errSchedulerCredentialResetRequired = errors.New("Stored credential secret material was reset. Edit and save the credential before enabling jobs that use it.")
+
+type internalSchedulerCredentialStore interface {
+	loadDecryptedSchedulerCredential(ctx context.Context, secret authSecretService, credentialID int64) (map[string]any, bool, error)
+}
+
+func internalSchedulerCredentialHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		if auth == nil || auth.aegis == nil {
+			writeJSON(w, http.StatusLocked, map[string]any{"error": "aegis_locked", "message": errAegisLocked.Error()})
+			return
+		}
+		store, ok := auth.store.(internalSchedulerCredentialStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "credential_store_unavailable"})
+			return
+		}
+		rawID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/internal/job-scheduler/credential/"), "/")
+		credentialID, err := strconv.ParseInt(rawID, 10, 64)
+		if err != nil || credentialID <= 0 {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "credential_not_found"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		credential, found, err := store.loadDecryptedSchedulerCredential(ctx, auth.aegis, credentialID)
+		if err != nil {
+			if errors.Is(err, errSchedulerCredentialResetRequired) {
+				writeJSON(w, http.StatusLocked, map[string]any{"error": "credential_reset_required", "message": errSchedulerCredentialResetRequired.Error()})
+				return
+			}
+			if errors.Is(err, errAegisNotConfigured) || errors.Is(err, errAegisLocked) || errors.Is(err, errAegisDataCorruption) {
+				writeJSON(w, protectedSecretErrorStatus(err), protectedSecretErrorBody(err))
+				return
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "credential_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"credential": credential})
+	}
 }
 
 func internalSchedulerPublicBaseURLHandler(auth *authService) http.HandlerFunc {

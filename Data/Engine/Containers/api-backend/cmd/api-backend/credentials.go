@@ -357,6 +357,52 @@ func (s *postgresOperatorStore) getCredential(ctx context.Context, credentialID 
 	return credentialPayload(row), true, nil
 }
 
+func (s *postgresOperatorStore) loadDecryptedSchedulerCredential(ctx context.Context, secret authSecretService, credentialID int64) (map[string]any, bool, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, errors.Join(errOperatorStoreDown, err)
+	}
+
+	rows, err := conn.QueryContext(ctx, credentialSelectSQL()+" WHERE c.id=$1", credentialID)
+	if err != nil {
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			_ = conn.Close()
+			return nil, false, err
+		}
+		_ = rows.Close()
+		_ = conn.Close()
+		return nil, false, nil
+	}
+	row, err := scanCredentialRow(rows)
+	if err != nil {
+		_ = rows.Close()
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if err := rows.Close(); err != nil {
+		_ = conn.Close()
+		return nil, false, err
+	}
+	if err := conn.Close(); err != nil {
+		return nil, false, err
+	}
+	credential, err := schedulerDecryptedCredentialPayload(ctx, secret, row)
+	if err != nil {
+		return nil, false, err
+	}
+	return credential, true, nil
+}
+
 func credentialSelectSQL() string {
 	return `
 		SELECT
@@ -406,6 +452,47 @@ func scanCredentialRow(scanner interface {
 		&row.UpdatedAt,
 	)
 	return row, err
+}
+
+func schedulerDecryptedCredentialPayload(ctx context.Context, secret authSecretService, row credentialRow) (map[string]any, error) {
+	if secret == nil {
+		return nil, errAegisLocked
+	}
+	metadata := parseJSONObject(row.MetadataJSON)
+	if credentialSecretResetRequired(metadata) {
+		return nil, errSchedulerCredentialResetRequired
+	}
+	password, err := secret.decryptSecretText(ctx, row.PasswordEncrypted)
+	if err != nil {
+		return nil, err
+	}
+	privateKey, err := secret.decryptSecretText(ctx, row.PrivateKeyEncrypted)
+	if err != nil {
+		return nil, err
+	}
+	privateKeyPassphrase, err := secret.decryptSecretText(ctx, row.PrivateKeyPassphrase)
+	if err != nil {
+		return nil, err
+	}
+	becomePassword, err := secret.decryptSecretText(ctx, row.BecomePasswordEncrypted)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"id":                     nullInt(row.ID),
+		"name":                   nullString(row.Name),
+		"site_id":                nullableInt(row.SiteID),
+		"credential_type":        strings.ToLower(nullString(row.CredentialType)),
+		"connection_type":        strings.ToLower(nullString(row.ConnectionType)),
+		"username":               nullString(row.Username),
+		"password":               password,
+		"private_key":            privateKey,
+		"private_key_passphrase": privateKeyPassphrase,
+		"become_method":          nullString(row.BecomeMethod),
+		"become_username":        nullString(row.BecomeUsername),
+		"become_password":        becomePassword,
+		"metadata":               metadata,
+	}, nil
 }
 
 func credentialPayload(row credentialRow) map[string]any {

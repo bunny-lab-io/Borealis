@@ -65,6 +65,9 @@ func (a *authLoginTestAegis) forceReset(_ context.Context) (map[string]any, erro
 }
 
 func (a *authLoginTestAegis) decryptSecretText(_ context.Context, value any) (string, error) {
+	if raw, ok := value.([]byte); ok {
+		return strings.TrimPrefix(string(raw), "enc:"), nil
+	}
 	return strings.TrimPrefix(cleanText(value), "enc:"), nil
 }
 
