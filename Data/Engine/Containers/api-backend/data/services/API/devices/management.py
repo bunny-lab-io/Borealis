@@ -30,6 +30,7 @@ from ....auth.device_auth import require_device_auth
 from ...auth import UserSiteAccessManager
 from ...auth.secrets import require_app_secret
 from ...activity_history import update_activity_history_row
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, validate_internal_token
 from ..scheduled_jobs.targets import prune_device_targets
 from .agent_role_health import (
     merge_agent_role_health,
@@ -2224,7 +2225,7 @@ class DeviceManagementService:
         )
 
 def register_management(app, adapters: "EngineServiceAdapters") -> None:
-    """Register retained Agent detail ingest endpoint onto the Flask app."""
+    """Register retained Agent detail ingest and internal fanout endpoints."""
 
     service = DeviceManagementService(app, adapters)
     blueprint = Blueprint("devices", __name__)
@@ -2234,5 +2235,28 @@ def register_management(app, adapters: "EngineServiceAdapters") -> None:
     def _agent_details():
         payload, status = service.save_agent_details()
         return jsonify(payload), status
+
+    def _require_internal() -> bool:
+        try:
+            secret = require_app_secret(app)
+        except Exception:
+            return False
+        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
+
+    @blueprint.route("/api/internal/agent/status-changed", methods=["POST"])
+    def _agent_status_changed():
+        if not _require_internal():
+            return jsonify({"error": "unauthorized"}), 401
+        body = request.get_json(silent=True) or {}
+        event = body.get("event")
+        if not isinstance(event, dict):
+            return jsonify({"error": "invalid_payload"}), 400
+        socketio = getattr(adapters.context, "socketio", None)
+        if socketio is not None:
+            try:
+                socketio.emit("agent_status_changed", event)
+            except Exception:
+                adapters.context.logger.debug("Failed to emit agent status event.", exc_info=True)
+        return jsonify({"status": "sent"})
 
     app.register_blueprint(blueprint)

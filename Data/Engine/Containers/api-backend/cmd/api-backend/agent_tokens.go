@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -78,7 +79,7 @@ type dpopVerifier struct {
 	now     func() time.Time
 }
 
-func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
+func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService, legacyURL *url.URL) error {
 	signer, err := loadOrCreateAgentJWTSigner()
 	if err != nil {
 		return fmt.Errorf("failed to initialise agent JWT signer: %w", err)
@@ -92,6 +93,11 @@ func registerAgentTokenRoutes(mux *http.ServeMux, auth *authService) error {
 	registerAgentHashRoutes(mux, auth, signer, verifier)
 	registerRepoHashRoutes(mux, auth, signer, verifier)
 	registerRemoteOpsSessionRoutes(mux, auth, signer)
+	registerAgentIngestRoutes(mux, auth, signer, verifier, &legacyAgentStatusBroadcaster{
+		baseURL: legacyURL,
+		auth:    auth,
+		client:  &http.Client{Timeout: 3 * time.Second},
+	})
 	return nil
 }
 
