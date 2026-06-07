@@ -18,10 +18,21 @@ type fakeScheduledJobStore struct {
 	listFilter  scheduledJobListFilter
 	jobs        []map[string]any
 
+	createProfile  operatorProfile
+	createPayload  map[string]any
+	createResponse map[string]any
+	createStatus   int
+
 	detailProfile operatorProfile
 	detailID      int64
 	detailPayload map[string]any
 	detailStatus  int
+
+	updateProfile  operatorProfile
+	updateJobID    int64
+	updatePayload  map[string]any
+	updateResponse map[string]any
+	updateStatus   int
 
 	toggleProfile operatorProfile
 	toggleJobID   int64
@@ -75,6 +86,19 @@ func (s *fakeScheduledJobStore) listScheduledJobs(_ context.Context, profile ope
 	return s.jobs, nil
 }
 
+func (s *fakeScheduledJobStore) createScheduledJob(_ context.Context, profile operatorProfile, payload map[string]any) (map[string]any, int, error) {
+	s.createProfile = profile
+	s.createPayload = copyMap(payload)
+	status := s.createStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.createResponse != nil {
+		return s.createResponse, status, nil
+	}
+	return map[string]any{"job": map[string]any{"id": int64(99), "name": payload["name"]}}, status, nil
+}
+
 func (s *fakeScheduledJobStore) getScheduledJob(_ context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
 	s.detailProfile = profile
 	s.detailID = jobID
@@ -83,6 +107,20 @@ func (s *fakeScheduledJobStore) getScheduledJob(_ context.Context, profile opera
 		status = http.StatusOK
 	}
 	return s.detailPayload, status, nil
+}
+
+func (s *fakeScheduledJobStore) updateScheduledJob(_ context.Context, profile operatorProfile, jobID int64, payload map[string]any) (map[string]any, int, error) {
+	s.updateProfile = profile
+	s.updateJobID = jobID
+	s.updatePayload = copyMap(payload)
+	status := s.updateStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.updateResponse != nil {
+		return s.updateResponse, status, nil
+	}
+	return map[string]any{"job": map[string]any{"id": jobID, "name": payload["name"]}}, status, nil
 }
 
 func (s *fakeScheduledJobStore) toggleScheduledJob(_ context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error) {
@@ -299,13 +337,29 @@ func TestOnboardingTargetsHandlerPassesOccurrence(t *testing.T) {
 	}
 }
 
-func TestScheduledJobMutationsFallBack(t *testing.T) {
+func TestScheduledJobCreateHandlerRoutesToStore(t *testing.T) {
 	store := &fakeScheduledJobStore{}
 	recorder := httptest.NewRecorder()
-	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobRequest(http.MethodPost, "/api/scheduled_jobs"))
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobJSONRequest(http.MethodPost, "/api/scheduled_jobs", `{"name":"Patch Tuesday"}`))
 
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("expected fallback 404, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.createPayload["name"] != "Patch Tuesday" {
+		t.Fatalf("unexpected create payload %#v", store.createPayload)
+	}
+}
+
+func TestScheduledJobUpdateHandlerRoutesToStore(t *testing.T) {
+	store := &fakeScheduledJobStore{}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobJSONRequest(http.MethodPut, "/api/scheduled_jobs/42", `{"name":"Updated"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.updateJobID != 42 || store.updatePayload["name"] != "Updated" {
+		t.Fatalf("unexpected update args id=%d payload=%#v", store.updateJobID, store.updatePayload)
 	}
 }
 

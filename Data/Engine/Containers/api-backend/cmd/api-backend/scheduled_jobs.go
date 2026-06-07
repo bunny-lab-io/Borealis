@@ -34,7 +34,9 @@ const (
 
 type scheduledJobStore interface {
 	listScheduledJobs(ctx context.Context, profile operatorProfile, filter scheduledJobListFilter) ([]map[string]any, error)
+	createScheduledJob(ctx context.Context, profile operatorProfile, payload map[string]any) (map[string]any, int, error)
 	getScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
+	updateScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, payload map[string]any) (map[string]any, int, error)
 	toggleScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error)
 	deleteScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	listScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error)
@@ -134,6 +136,10 @@ func scheduledJobsRootHandler(auth *authService, fallback http.Handler) http.Han
 			scheduledJobList(w, r, auth)
 			return
 		}
+		if strings.TrimRight(r.URL.Path, "/") == "/api/scheduled_jobs" && r.Method == http.MethodPost {
+			scheduledJobCreate(w, r, auth)
+			return
+		}
 		fallback.ServeHTTP(w, r)
 	}
 }
@@ -143,6 +149,10 @@ func scheduledJobsSubtreeHandler(auth *authService, fallback http.Handler) http.
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/scheduled_jobs/"), "/"), "/")
 		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodGet {
 			scheduledJobDetail(w, r, auth, parts[0])
+			return
+		}
+		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodPut {
+			scheduledJobUpdate(w, r, auth, parts[0])
 			return
 		}
 		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
@@ -198,6 +208,29 @@ func scheduledJobList(w http.ResponseWriter, r *http.Request, auth *authService)
 	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
+func scheduledJobCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.createScheduledJob(ctx, profile, body)
+	if err != nil {
+		if payload == nil {
+			payload = map[string]any{"error": err.Error()}
+		}
+		writeJSON(w, statusOrDefault(status, http.StatusInternalServerError), payload)
+		return
+	}
+	writeJSON(w, statusOrDefault(status, http.StatusOK), payload)
+}
+
 func scheduledJobDetail(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
 	profile, store, ok := scheduledJobRequestContext(w, r, auth)
 	if !ok {
@@ -216,6 +249,34 @@ func scheduledJobDetail(w http.ResponseWriter, r *http.Request, auth *authServic
 		return
 	}
 	writeJSON(w, status, payload)
+}
+
+func scheduledJobUpdate(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	body, err := readJSONMap(r)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.updateScheduledJob(ctx, profile, jobID, body)
+	if err != nil {
+		if payload == nil {
+			payload = map[string]any{"error": err.Error()}
+		}
+		writeJSON(w, statusOrDefault(status, http.StatusInternalServerError), payload)
+		return
+	}
+	writeJSON(w, statusOrDefault(status, http.StatusOK), payload)
 }
 
 func scheduledJobToggle(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
