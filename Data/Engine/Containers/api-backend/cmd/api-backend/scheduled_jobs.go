@@ -37,6 +37,7 @@ type scheduledJobStore interface {
 	createScheduledJob(ctx context.Context, profile operatorProfile, payload map[string]any) (map[string]any, int, error)
 	getScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	updateScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, payload map[string]any) (map[string]any, int, error)
+	rerunScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	toggleScheduledJob(ctx context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error)
 	deleteScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	listScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error)
@@ -163,6 +164,10 @@ func scheduledJobsSubtreeHandler(auth *authService, fallback http.Handler) http.
 			scheduledJobToggle(w, r, auth, parts[0])
 			return
 		}
+		if len(parts) == 2 && parts[1] == "rerun" && r.Method == http.MethodPost {
+			scheduledJobRerun(w, r, auth, parts[0])
+			return
+		}
 		if len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet {
 			scheduledJobRuns(w, r, auth, parts[0])
 			return
@@ -269,6 +274,29 @@ func scheduledJobUpdate(w http.ResponseWriter, r *http.Request, auth *authServic
 	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
 	defer cancel()
 	payload, status, err := store.updateScheduledJob(ctx, profile, jobID, body)
+	if err != nil {
+		if payload == nil {
+			payload = map[string]any{"error": err.Error()}
+		}
+		writeJSON(w, statusOrDefault(status, http.StatusInternalServerError), payload)
+		return
+	}
+	writeJSON(w, statusOrDefault(status, http.StatusOK), payload)
+}
+
+func scheduledJobRerun(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.rerunScheduledJob(ctx, profile, jobID)
 	if err != nil {
 		if payload == nil {
 			payload = map[string]any{"error": err.Error()}

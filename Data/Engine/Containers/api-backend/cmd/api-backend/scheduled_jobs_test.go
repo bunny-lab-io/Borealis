@@ -34,6 +34,11 @@ type fakeScheduledJobStore struct {
 	updateResponse map[string]any
 	updateStatus   int
 
+	rerunProfile operatorProfile
+	rerunJobID   int64
+	rerunPayload map[string]any
+	rerunStatus  int
+
 	toggleProfile operatorProfile
 	toggleJobID   int64
 	toggleEnabled bool
@@ -121,6 +126,19 @@ func (s *fakeScheduledJobStore) updateScheduledJob(_ context.Context, profile op
 		return s.updateResponse, status, nil
 	}
 	return map[string]any{"job": map[string]any{"id": jobID, "name": payload["name"]}}, status, nil
+}
+
+func (s *fakeScheduledJobStore) rerunScheduledJob(_ context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	s.rerunProfile = profile
+	s.rerunJobID = jobID
+	status := s.rerunStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.rerunPayload != nil {
+		return s.rerunPayload, status, nil
+	}
+	return map[string]any{"status": "queued", "occurrence": int64(1700000100)}, status, nil
 }
 
 func (s *fakeScheduledJobStore) toggleScheduledJob(_ context.Context, profile operatorProfile, jobID int64, enabled bool) (map[string]any, int, error) {
@@ -360,6 +378,19 @@ func TestScheduledJobUpdateHandlerRoutesToStore(t *testing.T) {
 	}
 	if store.updateJobID != 42 || store.updatePayload["name"] != "Updated" {
 		t.Fatalf("unexpected update args id=%d payload=%#v", store.updateJobID, store.updatePayload)
+	}
+}
+
+func TestScheduledJobRerunHandlerRoutesToStore(t *testing.T) {
+	store := &fakeScheduledJobStore{}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobRequest(http.MethodPost, "/api/scheduled_jobs/42/rerun"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.rerunJobID != 42 {
+		t.Fatalf("unexpected rerun job id %d", store.rerunJobID)
 	}
 }
 
