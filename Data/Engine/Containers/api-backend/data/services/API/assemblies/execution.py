@@ -1,11 +1,9 @@
 # ======================================================
 # Data\Engine\services\API\assemblies\execution.py
-# Description: Quick job dispatch and activity history endpoints for script assemblies.
+# Description: Quick job dispatch endpoints for script assemblies.
 #
 # API Endpoints (if applicable):
 # - POST /api/scripts/quick_run (Token Authenticated) - Queues a script assembly for execution on agents.
-# - GET/DELETE /api/device/activity/<hostname> (Token Authenticated) - Retrieves or clears device activity history.
-# - GET /api/device/activity/job/<int:job_id> (Token Authenticated) - Retrieves a specific activity record.
 # ======================================================
 
 """Assembly execution helpers for the Borealis Engine runtime."""
@@ -28,9 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
 from ...activity_history import (
-    get_activity_history_row,
     insert_activity_history_row,
-    list_activity_history_rows,
     update_activity_history_row,
 )
 from ..devices.session_dispatch import build_currentuser_dispatch_fields
@@ -814,49 +810,5 @@ def register_execution(app: "Flask", adapters: "EngineServiceAdapters") -> None:
             return jsonify({"error": str(exc)}), 500
 
         return jsonify({"results": dispatch["results"]})
-
-    @blueprint.route("/api/device/activity/<hostname>", methods=["GET", "DELETE"])
-    def device_activity(hostname: str):
-        user, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        if not site_access.user_can_access_hostname(user, hostname):
-            return jsonify({"error": "Not found"}), 404
-        conn = None
-        try:
-            conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            if request.method == "DELETE":
-                cur.execute("DELETE FROM activity_history WHERE hostname = ?", (hostname,))
-                conn.commit()
-                return jsonify({"status": "ok"})
-            history = list_activity_history_rows(conn, hostname)
-            return jsonify({"history": history})
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
-
-    @blueprint.route("/api/device/activity/job/<int:job_id>", methods=["GET"])
-    def device_activity_job(job_id: int):
-        user, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        conn = None
-        try:
-            conn = adapters.db_conn_factory()
-            row = get_activity_history_row(conn, job_id)
-            if not row:
-                return jsonify({"error": "Not found"}), 404
-            hostname = str(row.get("hostname") or "")
-            if not site_access.user_can_access_hostname(user, hostname):
-                return jsonify({"error": "Not found"}), 404
-            return jsonify(row)
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-        finally:
-            if conn is not None:
-                conn.close()
 
     app.register_blueprint(blueprint)
