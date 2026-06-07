@@ -441,13 +441,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     workflow_runtime = workflows_management.ensure_workflow_runtime(app, adapters)
     job_scheduler.set_workflow_run_launcher(scheduler, workflow_runtime.start_run)
     job_scheduler.set_workflow_document_validator(scheduler, workflow_runtime.validate_saved_workflow)
-    _register_internal_job_scheduler_routes(
-        app,
-        adapters,
-        _scheduler_public_base_url,
-        _active_vpn_session_snapshot,
-        _prepare_vpn_session_snapshot,
-    )
+    _register_internal_job_scheduler_routes(app, adapters)
     if _scheduler_loop_enabled():
         scheduler.start()
     else:
@@ -460,9 +454,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
 def _register_internal_job_scheduler_routes(
     app: "Flask",
     adapters: "EngineServiceAdapters",
-    public_base_url_loader,
-    vpn_session_loader=None,
-    vpn_session_prepare=None,
 ) -> None:
     if getattr(app, "_borealis_job_scheduler_internal_routes", False):
         return
@@ -476,82 +467,6 @@ def _register_internal_job_scheduler_routes(
         except Exception:
             return False
         return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
-
-    @app.route("/api/internal/job-scheduler/public-base-url", methods=["GET"])
-    def _internal_job_scheduler_public_base_url():
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        return jsonify({"public_base_url": public_base_url_loader()})
-
-    @app.route("/api/internal/job-scheduler/vpn-sessions", methods=["GET"])
-    def _internal_job_scheduler_vpn_sessions():
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        if not callable(vpn_session_loader):
-            return _internal_error("vpn_session_loader_unavailable", 503)
-        try:
-            sessions = vpn_session_loader()
-        except Exception as exc:
-            return _internal_error(str(exc), 500)
-        return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
-
-    @app.route("/api/internal/job-scheduler/vpn-prepare", methods=["POST"])
-    def _internal_job_scheduler_vpn_prepare():
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        if not callable(vpn_session_prepare):
-            return _internal_error("vpn_session_prepare_unavailable", 503)
-        body = request.get_json(silent=True) or {}
-        agent_ids = [str(item).strip() for item in (body.get("agent_ids") or []) if str(item).strip()]
-        required_ports = []
-        for item in body.get("required_ports") or []:
-            try:
-                port = int(item)
-            except Exception:
-                continue
-            if port > 0:
-                required_ports.append(port)
-        try:
-            sessions = vpn_session_prepare(agent_ids, required_ports=required_ports)
-        except Exception as exc:
-            return _internal_error(str(exc), 500)
-        return jsonify({"sessions": sessions if isinstance(sessions, dict) else {}})
-
-    @app.route("/api/internal/job-scheduler/host-service-event", methods=["POST"])
-    def _internal_job_scheduler_host_service_event():
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        body = request.get_json(silent=True) or {}
-        hostname = str(body.get("hostname") or "").strip()
-        service_mode = str(body.get("service_mode") or body.get("mode") or "system").strip() or "system"
-        event_name = str(body.get("event_name") or "").strip()
-        payload = body.get("payload")
-        if not hostname or not event_name:
-            return _internal_error("hostname_and_event_name_required", 400)
-        emitter = getattr(adapters.context, "emit_host_service_event", None)
-        if not callable(emitter):
-            return _internal_error("host_service_emitter_unavailable", 503)
-        try:
-            if "allow_pending" in body or "pending_ttl_seconds" in body:
-                try:
-                    pending_ttl_seconds = int(body.get("pending_ttl_seconds") or 180)
-                except Exception:
-                    pending_ttl_seconds = 180
-                emitted = bool(
-                    emitter(
-                        hostname,
-                        service_mode,
-                        event_name,
-                        payload,
-                        allow_pending=bool(body.get("allow_pending")),
-                        pending_ttl_seconds=pending_ttl_seconds,
-                    )
-                )
-            else:
-                emitted = bool(emitter(hostname, service_mode, event_name, payload))
-        except TypeError:
-            emitted = bool(emitter(hostname, service_mode, event_name, payload))
-        return jsonify({"emitted": emitted})
 
     @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])
     def _internal_job_scheduler_workflow_start():

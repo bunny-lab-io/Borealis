@@ -1162,39 +1162,7 @@ def _now_minute_ts() -> int:
 
 class OnboardingSchedulerMixin:
     def _register_onboarding_routes(self, app: Any) -> None:
-        @app.route("/api/onboarding/jobs/<int:job_id>/targets", methods=["GET"])
-        def api_onboarding_job_targets(job_id: int):
-            requirement = self._require_user()
-            if requirement:
-                return json.dumps(requirement[0]), requirement[1], {"Content-Type": "application/json"}
-            user = self._current_user() or {}
-            try:
-                from flask import request
-
-                occurrence = request.args.get("occurrence")
-                occ = int(occurrence) if occurrence else None
-                conn = self._conn()
-                try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT targets_json, job_kind FROM scheduled_jobs WHERE id=?", (job_id,))
-                    row = cur.fetchone()
-                    if not row:
-                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
-                    if _normalize_onboarding_job_kind(row[1]) != JOB_KIND_ONBOARDING:
-                        return json.dumps({"error": "not onboarding job"}), 400, {"Content-Type": "application/json"}
-                    if not self._job_visible_to_user(user, row[0]):
-                        return json.dumps({"error": "not found"}), 404, {"Content-Type": "application/json"}
-                    if occ is None:
-                        cur.execute("SELECT MAX(scheduled_ts) FROM scheduled_job_runs WHERE job_id=?", (job_id,))
-                        occ_row = cur.fetchone()
-                        occ = int(occ_row[0]) if occ_row and occ_row[0] else None
-                finally:
-                    conn.close()
-                rows = self._load_onboarding_target_rows(int(job_id), int(occ)) if occ is not None else []
-                rows = self._backfill_onboarding_target_approval_references(rows)
-                return json.dumps({"occurrence": occ, "targets": rows}), 200, {"Content-Type": "application/json"}
-            except Exception as e:
-                return json.dumps({"error": str(e)}), 500, {"Content-Type": "application/json"}
+        return None
 
     def _score_remote_onboarding_protocols(
         self,
