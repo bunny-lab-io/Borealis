@@ -301,11 +301,9 @@ class EngineServiceAdapters:
 def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .devices import routes as device_routes
     from .devices.management import register_management
-    from .devices.services import register_services
 
     register_management(app, adapters)
     device_routes.register_agents(app, adapters)
-    register_services(app, adapters)
 
 
 def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> None:

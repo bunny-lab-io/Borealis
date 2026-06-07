@@ -26,10 +26,12 @@ func registerSoftwareRoutes(mux *http.ServeMux, auth *authService, fallback http
 	mux.HandleFunc("POST /api/device/software/{hostname}/uninstall-override", deviceSoftwareOverrideHandler(auth, "uninstall-override"))
 	mux.HandleFunc("POST /api/device/software/{hostname}/uninstall-block", deviceSoftwareOverrideHandler(auth, "uninstall-block"))
 	mux.HandleFunc("POST /api/device/software/{hostname}/uninstall-unblock", deviceSoftwareOverrideHandler(auth, "uninstall-unblock"))
+	mux.HandleFunc("POST /api/device/software/{hostname}/uninstall", deviceSoftwareUninstallHandler(auth))
 	mux.HandleFunc("GET /api/device/services/{hostname}", deviceServicesHandler(auth))
 	mux.HandleFunc("POST /api/device/services/{hostname}/action", deviceServiceActionHandler(auth))
 	mux.HandleFunc("GET /api/software/audit", softwareAuditHandler(auth))
 	mux.HandleFunc("POST /api/software/action/{action}", bulkSoftwareActionHandler(auth))
+	mux.HandleFunc("POST /api/software/uninstall", bulkSoftwareUninstallHandler(auth))
 	mux.HandleFunc("/api/software/", softwareSubtreeHandler(fallback))
 }
 

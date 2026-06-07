@@ -3,6 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -35,6 +38,13 @@ type fakeSoftwareIconStore struct {
 	overrideStatus   int
 	overrideErr      error
 	overrideHostname string
+
+	nextActivityID       int64
+	insertedActivityHost string
+	insertedActivityName string
+	insertedMetadata     map[string]any
+	failedActivityID     int64
+	failedActivityText   string
 
 	persistedServiceHost       string
 	persistedServices          []map[string]any
@@ -85,6 +95,22 @@ func (s *fakeSoftwareIconStore) loadDeviceSoftwareContext(_ context.Context, _ o
 		return softwareOverrideContext{}, status, s.overrideErr
 	}
 	return s.overrideSnapshot, status, nil
+}
+
+func (s *fakeSoftwareIconStore) insertSoftwareUninstallActivity(_ context.Context, hostname string, scriptName string, metadata map[string]any) (int64, error) {
+	s.insertedActivityHost = hostname
+	s.insertedActivityName = scriptName
+	s.insertedMetadata = metadata
+	if s.nextActivityID <= 0 {
+		s.nextActivityID = 900
+	}
+	return s.nextActivityID, nil
+}
+
+func (s *fakeSoftwareIconStore) markSoftwareUninstallActivityFailed(_ context.Context, activityID int64, failureText string) error {
+	s.failedActivityID = activityID
+	s.failedActivityText = failureText
+	return nil
 }
 
 func (s *fakeSoftwareIconStore) persistDeviceServices(_ context.Context, hostname string, services []map[string]any, reportedAt int64) error {
@@ -551,6 +577,119 @@ func TestDeviceSoftwareUninstallBlockAndUnblockPersistsRules(t *testing.T) {
 	rows = persisted["windows_quiet_uninstall_blocklist"].([]any)
 	if len(rows) != 0 {
 		t.Fatalf("expected empty blocklist, got %#v", persisted)
+	}
+}
+
+func TestDeviceSoftwareUninstallQueuesSignedQuickJob(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CERT_ROOT", t.TempDir())
+	var sawEvent bool
+	var eventBody map[string]any
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
+		}
+		switch r.URL.Path {
+		case "/remote-ops/host-service/status":
+			if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" {
+				t.Fatalf("unexpected status body %#v", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+		case "/remote-ops/host-service/event":
+			sawEvent = true
+			eventBody = body
+			_ = json.NewEncoder(w).Encode(map[string]any{"emitted": true})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+	store := &fakeSoftwareIconStore{
+		profile:        operatorProfile{Username: "operator", Role: "Admin"},
+		nextActivityID: 4242,
+		overrideSnapshot: softwareOverrideContext{
+			Hostname:        "LAB-OPERATOR-01",
+			AgentID:         "LAB-OPERATOR-01_SYSTEM",
+			OperatingSystem: "Windows 11 Pro",
+			Route:           routeForTestWorker(t, worker.URL),
+			Software: []map[string]any{
+				{
+					"name":    "Contoso Agent",
+					"version": "1.0",
+					"source":  "local_installed",
+					"metadata": map[string]any{
+						"quiet_uninstall_string": `"C:\Program Files\Contoso\uninstall.exe" /S`,
+						"uninstall_string":       `"C:\Program Files\Contoso\uninstall.exe"`,
+					},
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	body := []byte(`{"name":"Contoso Agent","version":"1.0","source":"local_installed"}`)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/software/LAB-OPERATOR-01/uninstall", bytes.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawEvent {
+		t.Fatalf("expected quick job event")
+	}
+	if store.insertedActivityHost != "LAB-OPERATOR-01" || store.insertedActivityName != "Uninstall - Contoso Agent" {
+		t.Fatalf("unexpected activity insert host=%q name=%q metadata=%#v", store.insertedActivityHost, store.insertedActivityName, store.insertedMetadata)
+	}
+	if store.insertedMetadata["queue_lane"] != nil {
+		t.Fatalf("queue lane belongs on row, not metadata: %#v", store.insertedMetadata)
+	}
+	if eventBody["hostname"] != "LAB-OPERATOR-01" || eventBody["service_mode"] != "system" || eventBody["event_name"] != "quick_job_run" {
+		t.Fatalf("unexpected event body %#v", eventBody)
+	}
+	payload := eventBody["payload"].(map[string]any)
+	if payload["job_id"].(float64) != 4242 || payload["script_path"] != windowsSoftwareUninstallPath || payload["run_mode"] != "system" {
+		t.Fatalf("unexpected quick job payload %#v", payload)
+	}
+	env := payload["environment"].(map[string]any)
+	if env["SOFTWARE_NAME"] != "Contoso Agent" || env["SOFTWARE_SOURCE"] != "local_installed" || env["QUIET_UNINSTALL_STRING"] == "" {
+		t.Fatalf("unexpected environment %#v", env)
+	}
+	contextBlock := payload["context"].(map[string]any)
+	if contextBlock["queue_lane"] != softwareUninstallQueueLane || contextBlock["activity_kind"] != softwareUninstallActivity {
+		t.Fatalf("unexpected context %#v", contextBlock)
+	}
+	scriptBytes, err := base64.StdEncoding.DecodeString(payload["script_content"].(string))
+	if err != nil {
+		t.Fatalf("script decode failed: %v", err)
+	}
+	signature, err := base64.StdEncoding.DecodeString(payload["signature"].(string))
+	if err != nil {
+		t.Fatalf("signature decode failed: %v", err)
+	}
+	publicDER, err := base64.StdEncoding.DecodeString(payload["signing_key"].(string))
+	if err != nil {
+		t.Fatalf("signing key decode failed: %v", err)
+	}
+	publicAny, err := x509.ParsePKIXPublicKey(publicDER)
+	if err != nil {
+		t.Fatalf("signing key parse failed: %v", err)
+	}
+	publicKey, ok := publicAny.(ed25519.PublicKey)
+	if !ok || !ed25519.Verify(publicKey, scriptBytes, signature) {
+		t.Fatalf("signature did not verify")
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if response["status"] != "queued" || response["job_id"].(float64) != 4242 || response["script_name"] != "Uninstall - Contoso Agent" {
+		t.Fatalf("unexpected response %#v", response)
 	}
 }
 
