@@ -44,6 +44,7 @@ type scheduledJobStore interface {
 	clearScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 	listScheduledJobDevices(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error)
 	listOnboardingJobTargets(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error)
+	redeployOnboardingJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error)
 }
 
 type scheduledJobListFilter struct {
@@ -187,6 +188,10 @@ func scheduledJobsSubtreeHandler(auth *authService, fallback http.Handler) http.
 func onboardingJobsSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/onboarding/jobs/"), "/"), "/")
+		if len(parts) == 2 && parts[1] == "redeploy" && r.Method == http.MethodPost {
+			onboardingJobRedeploy(w, r, auth, parts[0])
+			return
+		}
 		if len(parts) == 2 && parts[1] == "targets" && r.Method == http.MethodGet {
 			onboardingJobTargets(w, r, auth, parts[0])
 			return
@@ -443,6 +448,29 @@ func onboardingJobTargets(w http.ResponseWriter, r *http.Request, auth *authServ
 		return
 	}
 	writeJSON(w, status, payload)
+}
+
+func onboardingJobRedeploy(w http.ResponseWriter, r *http.Request, auth *authService, jobIDText string) {
+	profile, store, ok := scheduledJobRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	jobID, err := parsePositivePathInt(jobIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	ctx, cancel := scheduledJobTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.redeployOnboardingJob(ctx, profile, jobID)
+	if err != nil {
+		if payload == nil {
+			payload = map[string]any{"error": err.Error()}
+		}
+		writeJSON(w, statusOrDefault(status, http.StatusInternalServerError), payload)
+		return
+	}
+	writeJSON(w, statusOrDefault(status, http.StatusOK), payload)
 }
 
 func scheduledJobRequestContext(w http.ResponseWriter, r *http.Request, auth *authService) (operatorProfile, scheduledJobStore, bool) {

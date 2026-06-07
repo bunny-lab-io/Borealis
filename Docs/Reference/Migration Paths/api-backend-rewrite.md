@@ -11,7 +11,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Active milestone | `M17: Go API Domain Porting` |
 | Last updated | 2026-06-06 |
 | Current architecture | Go binary owns public loopback `127.0.0.1:5000`; Python compatibility backend remains supervised on `127.0.0.1:5001`; unported routes proxy to Python. |
-| Latest verified slice | Directory Services cutover plus LDAP binary-attribute UTF-8 fix; current slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, public bootstrap/Aegis duplicate route fallbacks, local user create/password-reset fallbacks, Remote Shell/File Management Flask API route fallbacks, final Server Info Flask route fallbacks, Remote Desktop/tunnel/VPN Flask runtime fallbacks, Device inventory/search/details/description/release-channel/purge Flask route fallbacks, public Aegis/admin-bootstrap lifecycle Flask fallbacks, credential/GitHub token mutation Flask fallbacks, WebAuthn passkey ceremony Flask fallbacks, Directory Services Flask route/login manager fallbacks, Process Management Flask route fallback, internal job-scheduler credential helper Flask endpoint, scheduled-job create/update Flask fallbacks, and scheduled-job rerun Flask fallback. Latest live VNC fix corrects Go credential response unwrapping and confirms WebUI Remote Desktop smoke. |
+| Latest verified slice | Directory Services cutover plus LDAP binary-attribute UTF-8 fix; current slice removes Python metadata/filter/view, site/admin approval, remote-op session broker, Agent enrollment/token/update/script/hash/repo, auth/profile/user/RBAC, server-admin, directory-read, credential-read, server log-management, public notification, public bootstrap/Aegis duplicate route fallbacks, local user create/password-reset fallbacks, Remote Shell/File Management Flask API route fallbacks, final Server Info Flask route fallbacks, Remote Desktop/tunnel/VPN Flask runtime fallbacks, Device inventory/search/details/description/release-channel/purge Flask route fallbacks, public Aegis/admin-bootstrap lifecycle Flask fallbacks, credential/GitHub token mutation Flask fallbacks, WebAuthn passkey ceremony Flask fallbacks, Directory Services Flask route/login manager fallbacks, Process Management Flask route fallback, internal job-scheduler credential helper Flask endpoint, scheduled-job create/update Flask fallbacks, scheduled-job rerun Flask fallback, and onboarding redeploy Flask fallback. Latest live VNC fix corrects Go credential response unwrapping and confirms WebUI Remote Desktop smoke. |
 | Rewrite posture | Clean cutover by domain is preferred. After a domain is fully Go-owned and smoke-tested, mark it `Done` and delete matching Python route code instead of leaving stale fallback surface. |
 
 ## Status Legend
@@ -49,7 +49,7 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Assemblies, scripts, quick execution | `Python` | None for assemblies/editor/cache/quick execution domain. | Assemblies cache, editor behavior, dirty queue, and quick run routes remain Python-owned. | Port cache/editor/dirty queue as one domain to avoid split-brain state. |
 | Workflows | `Hybrid` | Workflow run reads, node reads, webhook CRUD. | Workflow execution, editor access, run resolution, and webhook trigger execution remain Python-owned. | Port execution manager and resolution/broadcast path before deleting Python workflow routes. |
 | Watchdogs | `Hybrid` | Watchdog metadata, list/detail, incident list/count reads. | Watchdog mutations, evaluation, incident acknowledgement, and remediation dispatch remain Python-owned. | Port mutation/evaluation path with incident-state tests. |
-| Scheduled and onboarding jobs | `Hybrid` | Job list/detail, create, update, rerun, delete, run history clear, toggle, device targets, onboarding target read, internal credential decrypt helper, internal public-base-url, host-service-event helpers, and internal VPN session prepare/snapshot helpers. Workflow runtime credential fetch now uses the Go internal helper. | Onboarding redeploy and scheduler executor/dispatch paths still use Python, including local protected-credential loading while those paths remain Python-owned. | Port onboarding redeploy and scheduler execution helper flows before deleting remaining Python job code. |
+| Scheduled and onboarding jobs | `Hybrid` | Job list/detail, create, update, rerun, delete, run history clear, toggle, device targets, onboarding target read, onboarding redeploy queue reset, internal credential decrypt helper, internal public-base-url, host-service-event helpers, and internal VPN session prepare/snapshot helpers. Workflow runtime credential fetch now uses the Go internal helper. | Scheduler executor/dispatch paths still use Python, including onboarding execution and local protected-credential loading while those paths remain Python-owned. | Port scheduler execution helper flows before deleting remaining Python job code. |
 | Notifications | `Hybrid` | Public authenticated notification payload validation/dispatch route. | Python still owns Socket.IO operator broadcast fanout through internal broadcast endpoint. | Python public notification duplicate removed in current cleanup slice. Build Go realtime/operator-toast channel, then remove Python internal notification broadcast. |
 
 ## Cleanup Queue
@@ -78,16 +78,17 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Done | Internal job-scheduler credential helper | Go owns `/api/internal/job-scheduler/credential/<id>` and decrypts credential secrets after closing DB handles; Python workflow runtime consumes this Go helper and the Python internal credential route is removed. |
 | Done | Scheduled job create/update | Go owns `/api/scheduled_jobs` POST and `/api/scheduled_jobs/<id>` PUT with site-scoped target persistence, component/domain validation, onboarding save validation, and credential-reset warning behavior; matching Python Flask route handlers removed. |
 | Done | Scheduled job rerun | Go owns `/api/scheduled_jobs/<id>/rerun` and records workflow, script/device, shared Ansible, individual Ansible, and onboarding pending/skipped occurrence snapshots; matching Python Flask route handler removed. |
+| Done | Onboarding redeploy route | Go owns `/api/onboarding/jobs/<id>/redeploy`, clears prior run history, creates a fresh pending onboarding occurrence, and returns queued run IDs; matching Python Flask route handler removed. |
 
 ## Hard Python Dependencies
 
 | Dependency | Blocks |
 | --- | --- |
-| Aegis runtime/session bridge | Retained Python protected-secret access for onboarding redeploy and scheduler executor/dispatch paths until those Python-owned paths move to Go. |
+| Aegis runtime/session bridge | Retained Python protected-secret access for scheduler executor/dispatch paths until those Python-owned paths move to Go. |
 | Operator realtime broadcast | Notification cutover and some job/workflow/watchdog UX parity. |
 | Site-worker file transfer runtime | Retained worker-side upload/download session storage, Agent callback URLs, and artifact streaming. Public api-backend Flask route deletion no longer blocked. |
 | Assemblies cache and dirty queue | Assemblies/editor/quick-run cutover. |
-| Scheduler mutation engine | Onboarding redeploy, software uninstall dispatch, workflow-backed scheduled helpers, and background scheduled-job execution. |
+| Scheduler mutation engine | Software uninstall dispatch, workflow-backed scheduled helpers, and background scheduled-job execution. |
 | Agent heartbeat/status/detail ingest fanout | Agent heartbeat, status, and inventory detail callback cutover. |
 
 ## Validation Snapshot
@@ -117,12 +118,13 @@ Current tracker for moving `api-backend` route ownership from Flask/Python to Go
 | Internal scheduler credential helper cutover | Go unit tests for internal credential route, reset-required mapping, and decrypted scheduler payload; Python syntax compile for workflow/scheduler management modules; route residue scan confirms Python internal credential endpoint removed; `go test ./...`; `build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; live `/health`; Go internal credential route auth-gate smoke; direct Python internal credential route-removal smoke; `git diff --check`. |
 | Scheduled job create/update cutover | Go unit tests for create/update route ownership and full scheduler test lane; Python syntax compile for retained scheduler module; route residue scan confirms Python POST/PUT scheduled-job handlers removed; `go test ./...`; `build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; live `/health`; public Go auth-gate smoke; direct Python route-removal smoke; `git diff --check`. |
 | Scheduled job rerun cutover | Go unit tests for rerun route ownership and full scheduler test lane; Python syntax compile for retained scheduler module; route residue scan confirms Python rerun handler removed; `go test ./...`; `build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; live `/health`; public Go auth-gate smoke; direct Python route-removal smoke; `git diff --check`. |
+| Onboarding redeploy route cutover | Go unit tests for redeploy route ownership and scheduler queue-reset behavior; Python syntax compile for retained onboarding scheduler runtime; route residue scan confirms Python redeploy handler removed; `go test ./...`; `build-api-backend.sh`; `sudo bash Engine.sh deploy prod`; live `/health`; public Go auth-gate smoke; direct Python route-removal smoke; `git diff --check`. |
 | Tracker cleanup | Run `git diff --check` after doc edit. |
 
 ## Next Work
 
-1. Port onboarding redeploy and remaining onboarding dispatch credential consumers to Go.
-2. Port software uninstall dispatch now that scheduled-job create/update/rerun parity exists.
+1. Port software uninstall dispatch now that scheduled-job create/update/rerun parity exists.
+2. Port scheduler executor/helper flows that still run inside Python job-scheduler.
 3. Keep Python process until every `Hybrid` and `Python` row is either ported or explicitly accepted as retained Python.
 
 ??? example "Detailed Codex Breakdown"

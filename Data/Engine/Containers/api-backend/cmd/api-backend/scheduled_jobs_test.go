@@ -72,6 +72,11 @@ type fakeScheduledJobStore struct {
 	onboardingOccurrence *int64
 	onboardingPayload    map[string]any
 	onboardingStatus     int
+
+	redeployProfile operatorProfile
+	redeployJobID   int64
+	redeployPayload map[string]any
+	redeployStatus  int
 }
 
 func (s *fakeScheduledJobStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -203,6 +208,19 @@ func (s *fakeScheduledJobStore) listOnboardingJobTargets(_ context.Context, prof
 		status = http.StatusOK
 	}
 	return s.onboardingPayload, status, nil
+}
+
+func (s *fakeScheduledJobStore) redeployOnboardingJob(_ context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
+	s.redeployProfile = profile
+	s.redeployJobID = jobID
+	status := s.redeployStatus
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.redeployPayload != nil {
+		return s.redeployPayload, status, nil
+	}
+	return map[string]any{"status": "ok", "occurrence": int64(1700000100), "run_ids": []any{int64(5)}}, status, nil
 }
 
 func testScheduledJobAuth(store *fakeScheduledJobStore) *authService {
@@ -352,6 +370,19 @@ func TestOnboardingTargetsHandlerPassesOccurrence(t *testing.T) {
 	}
 	if store.onboardingJobID != 8 || store.onboardingOccurrence == nil || *store.onboardingOccurrence != 200 {
 		t.Fatalf("unexpected onboarding args job=%d occurrence=%v", store.onboardingJobID, store.onboardingOccurrence)
+	}
+}
+
+func TestOnboardingRedeployHandlerRoutesToStore(t *testing.T) {
+	store := &fakeScheduledJobStore{}
+	recorder := httptest.NewRecorder()
+	scheduledJobTestMux(store).ServeHTTP(recorder, scheduledJobRequest(http.MethodPost, "/api/onboarding/jobs/8/redeploy"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.redeployJobID != 8 {
+		t.Fatalf("unexpected redeploy job id %d", store.redeployJobID)
 	}
 }
 
