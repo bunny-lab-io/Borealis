@@ -1,14 +1,12 @@
 # ======================================================
 # Data\Engine\services\API\workflows\management.py
-# Description: Workflow runtime API endpoints for manual launch, read-only run
-#              inspection, and webhook management.
+# Description: Workflow runtime API endpoints for manual launch, editor access,
+#              run recovery, and webhook execution.
 #
 # API Endpoints (if applicable):
 # - POST /api/workflows/run (Token Authenticated) - Save-triggered manual workflow launch.
-# - GET /api/workflows/<workflow_guid>/runs (Token Authenticated) - Lists historical runs for a saved workflow.
-# - GET /api/workflows/runs/<run_id> (Token Authenticated) - Returns an immutable workflow run snapshot.
-# - GET /api/workflows/runs/<run_id>/nodes/<node_id> (Token Authenticated) - Returns one persisted node-run record.
 # - POST /api/workflows/runs/<run_id>/resolve (Operator Admin Session) - Manually resolves an active stuck workflow run as Failed or Timed Out.
+# - POST /api/workflows/webhooks/<opaque_token> (Public) - Launches a workflow from a saved webhook.
 # ======================================================
 
 """Workflow runtime API endpoints for the Borealis Engine."""
@@ -41,26 +39,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing aide
 
 _DEFAULT_SHARED_ANSIBLE_VPN_PREP_WAIT_SECONDS = 10.0
 _DEFAULT_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS = 0.5
-
-
-def _coerce_positive_int(value: Any, default: int) -> int:
-    try:
-        parsed = int(value)
-        if parsed > 0:
-            return parsed
-    except Exception:
-        pass
-    return default
-
-
-def _coerce_non_negative_float(value: Any, default: float) -> float:
-    try:
-        parsed = float(value)
-        if parsed >= 0:
-            return parsed
-    except Exception:
-        pass
-    return default
 
 
 def _public_vpn_endpoint_host() -> str:
@@ -491,15 +469,6 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
             "message": "" if allowed else "This workflow references targets outside your assigned sites and cannot be opened.",
         }
 
-    def _webhook_payload(record: Mapping[str, Any]) -> Dict[str, Any]:
-        token = str(record.get("opaque_token") or "")
-        return {
-            **dict(record),
-            "webhook_url": request.url_root.rstrip("/") + f"/api/workflows/webhooks/{token}",
-            "created": int(record.get("created_at") or 0),
-            "creator": str(record.get("creator_username") or "").strip() or "Unknown",
-        }
-
     @blueprint.route("/run", methods=["POST"])
     def run_workflow():
         user, error = auth.require_user()
@@ -539,28 +508,6 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
         except Exception as exc:
             return jsonify({"error": str(exc)}), 500
 
-    @blueprint.route("/<workflow_guid>/runs", methods=["GET"])
-    def list_workflow_runs(workflow_guid: str):
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        limit = _coerce_positive_int(request.args.get("limit"), 100)
-        try:
-            runs = runtime.list_runs(workflow_guid, limit=limit)
-            return jsonify({"runs": runs})
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-
-    @blueprint.route("/runs/<int:run_id>", methods=["GET"])
-    def get_workflow_run(run_id: int):
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        record = runtime.get_run(run_id)
-        if not record:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(record)
-
     @blueprint.route("/runs/<int:run_id>/resolve", methods=["POST"])
     def resolve_workflow_run(run_id: int):
         error = auth.require_admin()
@@ -594,48 +541,6 @@ def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None
                 409,
             )
         return jsonify(result), 200
-
-    @blueprint.route("/runs/<int:run_id>/nodes/<node_id>", methods=["GET"])
-    def get_workflow_node_run(run_id: int, node_id: str):
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        record = runtime.get_node_run(run_id, node_id)
-        if not record:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(record)
-
-    @blueprint.route("/<workflow_guid>/webhooks", methods=["GET"])
-    def list_workflow_webhooks(workflow_guid: str):
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        try:
-            webhooks = [_webhook_payload(record) for record in runtime.list_webhooks(workflow_guid)]
-            return jsonify({"webhooks": webhooks})
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-
-    @blueprint.route("/<workflow_guid>/webhooks", methods=["POST"])
-    def create_workflow_webhook(workflow_guid: str):
-        user, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        try:
-            webhook = runtime.create_webhook(workflow_guid, creator=user)
-            return jsonify({"webhook": _webhook_payload(webhook)}), 200
-        except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
-
-    @blueprint.route("/<workflow_guid>/webhooks/<int:webhook_id>", methods=["DELETE"])
-    def delete_workflow_webhook(workflow_guid: str, webhook_id: int):
-        _, error = auth.require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        deleted = runtime.delete_webhook(workflow_guid, webhook_id)
-        if not deleted:
-            return jsonify({"error": "not found"}), 404
-        return jsonify({"status": "ok"})
 
     @blueprint.route("/webhooks/<opaque_token>", methods=["POST"])
     def trigger_workflow_webhook(opaque_token: str):
