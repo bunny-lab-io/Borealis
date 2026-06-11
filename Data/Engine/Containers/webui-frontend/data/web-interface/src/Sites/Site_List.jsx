@@ -917,27 +917,37 @@ function StatusPill({ label, tone }) {
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
-        minWidth: 86,
+        minWidth: 0,
         maxWidth: "100%",
-        px: 1.15,
-        py: 0,
-        height: 24,
+        px: 0.85,
+        py: 0.25,
+        minHeight: 20,
         borderRadius: 999,
         border: `1px solid ${style.border}`,
         background: style.bg,
         color: style.text,
-        fontSize: "0.78rem",
+        fontSize: "11px",
         fontWeight: 700,
         lineHeight: 1,
+        gap: 0.5,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
         verticalAlign: "middle",
       }}
     >
-      <Box component="span" sx={{ display: "inline-block", transform: "translateY(-1px)" }}>
-        {label}
-      </Box>
+      <Box
+        component="span"
+        sx={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: style.text,
+          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+          flexShrink: 0,
+        }}
+      />
+      {label}
     </Box>
   );
 }
@@ -999,13 +1009,17 @@ function SiteWorkerContainerCell(params) {
         display: "grid",
         gridTemplateColumns: "auto minmax(0, 1fr)",
         alignItems: "center",
+        alignContent: "center",
         columnGap: 0.8,
         rowGap: 0.2,
         width: "100%",
+        height: "100%",
         minWidth: 0,
       }}
     >
-      <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
+      <Box sx={{ gridRow: "1 / span 2", alignSelf: "center", display: "flex", alignItems: "center" }}>
+        <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
+      </Box>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
         <Typography
           component="span"
@@ -1101,6 +1115,7 @@ function ConnectedDevicesCell(params) {
         justifyContent: "center",
         gap: 0.35,
         width: "100%",
+        height: "100%",
         minWidth: 0,
         lineHeight: 1.25,
       }}
@@ -1161,9 +1176,11 @@ function AssignedTasksCell(params) {
   const navigate = params?.context?.navigate;
   if (!groups.length) {
     return (
-      <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-        No assigned tasks
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          No Running Tasks
+        </Typography>
+      </Box>
     );
   }
   return (
@@ -1174,6 +1191,7 @@ function AssignedTasksCell(params) {
         alignItems: "center",
         justifyContent: "center",
         width: "100%",
+        height: "100%",
         minHeight: "100%",
         py: 0.35,
       }}
@@ -1935,23 +1953,68 @@ export default function SiteList() {
     {
       headerName: "Name",
       field: "name",
-      minWidth: 220,
-      flex: 0.9,
+      minWidth: 260,
+      flex: 1.15,
       cellRendererParams: {
         suppressMouseEventHandling: () => true,
       },
-      cellRenderer: (params) => (
-        <span
-          style={{ color: BOREALIS_LINK_COLOR, cursor: "pointer", fontWeight: 500 }}
-          onMouseDown={stopGridRowSelectionEvent}
-          onClick={(event) => {
-            stopGridRowSelectionEvent(event);
-            handleOpenDevicesForSite(params.data);
-          }}
-        >
-          {params.value}
-        </span>
-      ),
+      cellRenderer: (params) => {
+        const description = String(params?.data?.description || "").trim();
+        return (
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "flex-start",
+              width: "100%",
+              height: "100%",
+              minWidth: 0,
+              lineHeight: 1.25,
+            }}
+          >
+            <Box
+              component="span"
+              sx={{
+                color: BOREALIS_LINK_COLOR,
+                cursor: "pointer",
+                fontWeight: 500,
+                fontSize: "0.88rem",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "100%",
+              }}
+              onMouseDown={stopGridRowSelectionEvent}
+              onClick={(event) => {
+                stopGridRowSelectionEvent(event);
+                handleOpenDevicesForSite(params.data);
+              }}
+            >
+              {params.value}
+            </Box>
+            {description ? (
+              <Typography
+                component="span"
+                title={description}
+                sx={{
+                  mt: 0.25,
+                  color: "rgba(148,163,184,0.72)",
+                  fontSize: "0.72rem",
+                  fontWeight: 500,
+                  lineHeight: 1.2,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: "100%",
+                }}
+              >
+                {description}
+              </Typography>
+            ) : null}
+          </Box>
+        );
+      },
     },
     {
       headerName: "Container ID",
@@ -1965,12 +2028,6 @@ export default function SiteList() {
         suppressMouseEventHandling: () => true,
       },
       cellRenderer: SiteWorkerContainerCell,
-    },
-    {
-      headerName: "Description",
-      field: "description",
-      minWidth: 280,
-      flex: 0.9,
     },
     {
       headerName: "Connected Devices",
@@ -2512,6 +2569,18 @@ export default function SiteList() {
                 backgroundColor: "rgba(125,211,252,0.2) !important",
                 boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
               },
+              "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+                display: "flex",
+                alignItems: "center",
+              },
+              "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                paddingTop: 0,
+                paddingBottom: 0,
+              },
               "& .ag-center-cols-container .ag-cell.center-col, & .ag-pinned-left-cols-container .ag-cell.center-col, & .ag-pinned-right-cols-container .ag-cell.center-col": {
                 justifyContent: "center",
                 textAlign: "center",
@@ -2521,6 +2590,9 @@ export default function SiteList() {
               },
               "& .ag-cell-value": {
                 width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
               },
             }}
           >
