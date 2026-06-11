@@ -544,19 +544,6 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
-                  path: "site-workers",
-                  handle: {
-                    title: "Site Workers",
-                    breadcrumb: "Site Workers",
-                    navKey: "site-workers",
-                    pageKey: "site-workers",
-                  },
-                  lazy: lazyNamed(
-                    () => import("../route-modules/adminRoutes.jsx"),
-                    "SiteWorkersRoute"
-                  ),
-                },
-                {
                   path: "metadata-fields",
                   handle: {
                     title: "Metadata Fields",
