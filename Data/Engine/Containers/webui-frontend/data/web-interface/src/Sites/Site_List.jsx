@@ -14,7 +14,6 @@ import {
   MenuItem,
   Paper,
   Typography,
-  IconButton,
   Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -24,7 +23,6 @@ import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
@@ -64,7 +62,7 @@ const iconFontFamily = '"Quartz Regular"';
 const WORKER_HISTORY_SECONDS = 300;
 const WORKER_REMOVE_SECONDS = 30;
 const BASE_ROW_HEIGHT = 56;
-const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices", "enrollment_code"];
+const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -1560,7 +1558,7 @@ function InstallBranchDialog({
 }
 
 const PAGE_TITLE = "Sites";
-const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
+const PAGE_SUBTITLE = "Manage sites and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
 
 export default function SiteList() {
@@ -1819,29 +1817,6 @@ export default function SiteList() {
     }
   }, []);
 
-  const handleCopy = useCallback(async (code, siteName = "") => {
-    const value = (code || "").trim();
-    if (!value) return;
-    const normalizedSiteName = String(siteName || "Unknown Site").trim() || "Unknown Site";
-    const copied = await copyTextToClipboard(value, "Copy enrollment code");
-    if (copied) {
-      await sendNotification({
-        title: "Enrollment Code Copied",
-        message: `Enrollment code for <b>${normalizedSiteName}</b> copied to clipboard.`,
-        icon: "done",
-        variant: "info",
-      });
-      return;
-    }
-
-    await sendNotification({
-      title: "Manual Copy Required",
-      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for the enrollment code at <b>${normalizedSiteName}</b>.`,
-      icon: "warning",
-      variant: "warning",
-    });
-  }, [copyTextToClipboard, sendNotification]);
-
   const handleCloseInstallMenu = useCallback(() => {
     setInstallMenuAnchorEl(null);
     setInstallMenuSite(null);
@@ -2024,50 +1999,6 @@ export default function SiteList() {
       cellRenderer: AssignedTasksCell,
     },
     {
-      headerName: "Agent Enrollment Code",
-      field: "enrollment_code",
-      minWidth: 260,
-      resizable: false,
-      filter: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      cellRendererParams: {
-        suppressMouseEventHandling: () => true,
-      },
-      cellRenderer: (params) => {
-        const code = params.value || "—";
-        const siteName = params?.data?.name || "";
-        return (
-          <Box
-            sx={{ display: "flex", alignItems: "center", gap: 1 }}
-            onMouseDown={stopGridRowSelectionEvent}
-            onClick={stopGridRowSelectionEvent}
-            onDoubleClick={stopGridRowSelectionEvent}
-            onTouchStart={stopGridRowSelectionEvent}
-          >
-            <Typography variant="body2" sx={{ fontFamily: "monospace", color: "#9aa3ad" }}>
-              {code}
-            </Typography>
-            <Tooltip title="Copy">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={(event) => {
-                    stopGridRowSelectionEvent(event);
-                    void handleCopy(code, siteName);
-                  }}
-                  disabled={!code || code === "—"}
-                  sx={{ color: MAGIC_UI.textMuted }}
-                >
-                  <ContentCopyIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        );
-      },
-    },
-    {
       headerName: "Auto-Approval",
       field: "auto_approve_until",
       minWidth: 210,
@@ -2098,7 +2029,7 @@ export default function SiteList() {
         );
       },
     },
-  ], [handleCopy, handleOpenDevicesForSite]);
+  ], [handleOpenDevicesForSite]);
 
   const defaultColDef = useMemo(() => ({
     sortable: false,
@@ -2293,7 +2224,6 @@ export default function SiteList() {
   const siteContextActions = useMemo(() => {
     const row = siteContextMenu.row || null;
     const unavailableReason = row ? "" : "Select a site first.";
-    const enrollmentCode = String(row?.enrollment_code || "").trim();
     const deleteTargetCount = row?.id != null && selectedIds.has(row.id) ? selectedSiteRows.length : row ? 1 : 0;
     return [
       {
@@ -2336,19 +2266,6 @@ export default function SiteList() {
         },
       },
       {
-        id: "copy-enrollment-code",
-        group: "primary",
-        label: "Copy Site Enrollment Code",
-        icon: ContentCopyIcon,
-        disabled: Boolean(unavailableReason) || !enrollmentCode,
-        disabledReason: unavailableReason || (!enrollmentCode ? "This site is missing an enrollment code." : ""),
-        description: "Copy the agent enrollment code for this site.",
-        onClick: () => {
-          handleCloseSiteContextMenu();
-          void handleCopy(enrollmentCode, row?.name || "");
-        },
-      },
-      {
         id: "configure-auto-approval",
         group: "primary",
         label: "Configure Auto-Approval",
@@ -2388,7 +2305,6 @@ export default function SiteList() {
     ];
   }, [
     handleCloseSiteContextMenu,
-    handleCopy,
     handleOpenDeleteDialog,
     handleOpenDevicesForSite,
     handleOpenOnboardingForSite,
