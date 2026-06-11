@@ -299,9 +299,7 @@ class EngineServiceAdapters:
 
 
 def _register_devices(app: Flask, adapters: EngineServiceAdapters) -> None:
-    from .devices.management import register_management
-
-    register_management(app, adapters)
+    return None
 
 
 def _register_scheduled_jobs(app: Flask, adapters: EngineServiceAdapters) -> None:
@@ -317,9 +315,7 @@ def _register_workflows(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_notifications(app: Flask, adapters: EngineServiceAdapters) -> None:
-    from .notifications import management as notifications_management
-
-    notifications_management.register_notifications(app, adapters)
+    return None
 
 
 def _register_watchdogs(app: Flask, adapters: EngineServiceAdapters) -> None:

@@ -9,7 +9,7 @@ import {
   registerPasskey as registerPasskeyCeremony,
   updatePasskeyLabel as updatePasskeyLabelCeremony,
 } from "../utils/passkeys.js";
-import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
+import { connectBorealisRealtime, disconnectBorealisRealtime, getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 
 const SESSION_CACHE_KEY = "borealis_session";
 const SESSION_CACHE_TTL_MS = 3600 * 1000;
@@ -75,6 +75,7 @@ export function AuthProvider({ children }) {
   const [aegisDialog, setAegisDialog] = useState(null);
 
   const clearClientSession = useCallback(() => {
+    disconnectBorealisRealtime();
     clearPersistedSession();
     setUser(null);
     setRole(null);
@@ -216,9 +217,11 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!ready || !user || String(bootstrapState?.phase || "") !== "login_required") {
+      disconnectBorealisRealtime();
       setAegisStatus(EMPTY_AEGIS_STATUS);
       return;
     }
+    connectBorealisRealtime();
     fetchAegisStatus();
   }, [bootstrapState, fetchAegisStatus, ready, user]);
 

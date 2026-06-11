@@ -87,14 +87,16 @@ func main() {
 	defer closeAuth()
 
 	proxy := newLegacyProxy(cfg)
+	operatorRealtime := newOperatorRealtimeHub()
 	vpnRuntime := newVPNTunnelService(auth)
 	vncRuntime := newVNCRuntime(auth, vpnRuntime)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(cfg, state))
 	mux.HandleFunc("/api/system/go-backend/status", statusHandler(cfg, state))
+	registerRealtimeRoutes(mux, auth, operatorRealtime)
 	registerAuthRoutes(mux, auth, proxy)
 	registerAegisRoutes(mux, auth)
-	if err := registerAgentTokenRoutes(mux, auth, cfg.LegacyURL); err != nil {
+	if err := registerAgentTokenRoutes(mux, auth, operatorRealtime); err != nil {
 		state.markExited(terminateLegacy(legacyCmd, legacyExited, cfg.ShutdownTimeout))
 		log.Fatalf("failed to initialise Agent token routes: %v", err)
 	}
@@ -134,7 +136,7 @@ func main() {
 	registerWorkflowRoutes(mux, auth, proxy)
 	registerWatchdogRoutes(mux, auth, proxy)
 	registerScheduledJobRoutes(mux, auth, proxy)
-	registerNotificationRoutes(mux, auth, cfg.LegacyURL)
+	registerNotificationRoutes(mux, auth, operatorRealtime)
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, proxy)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", proxy)

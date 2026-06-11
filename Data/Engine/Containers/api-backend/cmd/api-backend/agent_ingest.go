@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -10,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,12 +35,6 @@ type agentIngestStore interface {
 type agentStatusBroadcaster interface {
 	broadcastAgentStatus(ctx context.Context, payload map[string]any) error
 	broadcastDeviceEvent(ctx context.Context, eventName string, payload map[string]any) error
-}
-
-type legacyAgentStatusBroadcaster struct {
-	baseURL *url.URL
-	auth    *authService
-	client  *http.Client
 }
 
 type agentStatusUpdateResult struct {
@@ -370,74 +362,6 @@ func agentDetailsCacheKey(deviceCtx deviceBearerAuthContext, payload map[string]
 	hostname := firstText(cleanText(payload["hostname"]), cleanText(summary["hostname"]))
 	serviceMode := normalizeAgentServiceMode(firstNonEmpty(payload["service_mode"], summary["service_mode"], claimString(deviceCtx.Claims, "service_mode"), "system"))
 	return firstText(normalizeCanonicalGUID(deviceCtx.GUID), cleanText(deviceCtx.GUID)) + "|" + strings.ToLower(hostname) + "|" + serviceMode
-}
-
-func (b *legacyAgentStatusBroadcaster) broadcastAgentStatus(ctx context.Context, payload map[string]any) error {
-	if b == nil || b.baseURL == nil || b.auth == nil || b.auth.verifier == nil || len(b.auth.verifier.secret) == 0 {
-		return errors.New("agent status broadcaster unavailable")
-	}
-	client := b.client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	body, err := json.Marshal(map[string]any{"event": payload})
-	if err != nil {
-		return err
-	}
-	target := b.baseURL.ResolveReference(&url.URL{Path: "/api/internal/agent/status-changed"})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(internalTokenHeader, goInternalToken(b.auth.verifier.secret))
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("legacy agent status broadcaster returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return nil
-}
-
-func (b *legacyAgentStatusBroadcaster) broadcastDeviceEvent(ctx context.Context, eventName string, payload map[string]any) error {
-	if b == nil || b.baseURL == nil || b.auth == nil || b.auth.verifier == nil || len(b.auth.verifier.secret) == 0 {
-		return errors.New("device event broadcaster unavailable")
-	}
-	eventName = cleanText(eventName)
-	if eventName == "" {
-		return errors.New("event_name_required")
-	}
-	client := b.client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	body, err := json.Marshal(map[string]any{"event_name": eventName, "payload": payload})
-	if err != nil {
-		return err
-	}
-	target := b.baseURL.ResolveReference(&url.URL{Path: "/api/internal/agent/device-event"})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(internalTokenHeader, goInternalToken(b.auth.verifier.secret))
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("legacy device event broadcaster returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-	return nil
 }
 
 func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (map[string]any, int, error) {

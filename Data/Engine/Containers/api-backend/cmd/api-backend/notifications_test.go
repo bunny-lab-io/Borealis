@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -71,33 +70,5 @@ func TestNotificationNotifyHandlerBroadcastFailure(t *testing.T) {
 
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "notification_broadcast_failed") {
 		t.Fatalf("expected broadcast failure, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestLegacyNotificationBroadcasterUsesInternalToken(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-	var gotToken string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/internal/notifications/broadcast" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		gotToken = r.Header.Get(internalTokenHeader)
-		writeJSON(w, http.StatusOK, map[string]any{"status": "sent"})
-	}))
-	defer server.Close()
-	baseURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = (&legacyNotificationBroadcaster{baseURL: baseURL, auth: auth, client: server.Client()}).broadcastNotification(
-		context.Background(),
-		map[string]any{"message": "Job finished"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotToken != goInternalToken(auth.verifier.secret) {
-		t.Fatalf("unexpected internal token %q", gotToken)
 	}
 }
