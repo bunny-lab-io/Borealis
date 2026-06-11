@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -23,15 +24,19 @@ const (
 	agentStatusDuplicateSuppressSeconds = 30 * time.Second
 	agentStatusEmitMinInterval          = 10 * time.Second
 	agentStatusCacheMaxEntries          = 2048
+	agentDetailsDuplicateWindow         = 30 * time.Second
+	agentDetailsCacheMaxEntries         = 2048
 )
 
 type agentIngestStore interface {
 	updateAgentHeartbeat(ctx context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (map[string]any, int, error)
 	updateAgentStatus(ctx context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (agentStatusUpdateResult, int, error)
+	updateAgentDetails(ctx context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (agentDetailsUpdateResult, int, error)
 }
 
 type agentStatusBroadcaster interface {
 	broadcastAgentStatus(ctx context.Context, payload map[string]any) error
+	broadcastDeviceEvent(ctx context.Context, eventName string, payload map[string]any) error
 }
 
 type legacyAgentStatusBroadcaster struct {
@@ -50,6 +55,14 @@ type agentStatusUpdateResult struct {
 	ShouldBroadcast bool
 }
 
+type agentDetailsUpdateResult struct {
+	Payload           map[string]any
+	Hostname          string
+	ServicesChanged   bool
+	SoftwareChanged   bool
+	RememberDuplicate bool
+}
+
 type agentStatusCacheEntry struct {
 	Signature  string
 	SeenAt     time.Time
@@ -63,11 +76,23 @@ type agentStatusCache struct {
 	entries map[string]agentStatusCacheEntry
 }
 
+type agentDetailsCacheEntry struct {
+	Hash   string
+	SeenAt time.Time
+}
+
+type agentDetailsCache struct {
+	mu      sync.Mutex
+	entries map[string]agentDetailsCacheEntry
+}
+
 var globalAgentStatusCache = &agentStatusCache{entries: map[string]agentStatusCacheEntry{}}
+var globalAgentDetailsCache = &agentDetailsCache{entries: map[string]agentDetailsCacheEntry{}}
 
 func registerAgentIngestRoutes(mux *http.ServeMux, auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, broadcaster agentStatusBroadcaster) {
 	mux.HandleFunc("POST /api/agent/heartbeat", agentHeartbeatHandler(auth, signer, dpop))
 	mux.HandleFunc("POST /api/agent/status", agentStatusHandler(auth, signer, dpop, broadcaster, globalAgentStatusCache))
+	mux.HandleFunc("POST /api/agent/details", agentDetailsHandler(auth, signer, dpop, broadcaster, globalAgentDetailsCache))
 }
 
 func agentHeartbeatHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier) http.HandlerFunc {
@@ -164,12 +189,89 @@ func readAgentJSONMap(w http.ResponseWriter, r *http.Request, limit int64) (map[
 	return body, nil
 }
 
+func readAgentJSONMapWithHash(w http.ResponseWriter, r *http.Request, limit int64) (map[string]any, string, error) {
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		return nil, "", err
+	}
+	bodyHash := ""
+	if len(bodyBytes) > 0 {
+		bodyHash = fmt.Sprintf("%x", sha256.Sum256(bodyBytes))
+	}
+	if len(strings.TrimSpace(string(bodyBytes))) == 0 {
+		return map[string]any{}, bodyHash, nil
+	}
+	var body map[string]any
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+		return nil, bodyHash, err
+	}
+	if body == nil {
+		body = map[string]any{}
+	}
+	return body, bodyHash, nil
+}
+
+func agentDetailsHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVerifier, broadcaster agentStatusBroadcaster, cache *agentDetailsCache) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		deviceCtx, failure := authenticateDeviceBearer(r.Context(), r, auth, signer, dpop)
+		if failure != nil {
+			failure.write(w)
+			return
+		}
+		payload, payloadHash, err := readAgentJSONMapWithHash(w, r, 24<<20)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+		cacheKey := agentDetailsCacheKey(deviceCtx, payload)
+		if cache.cached(cacheKey, payloadHash, time.Now()) {
+			writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "coalesced": true})
+			return
+		}
+		store, ok := auth.store.(agentIngestStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent_ingest_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		result, status, err := store.updateAgentDetails(ctx, deviceCtx, payload)
+		if err != nil {
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		if result.RememberDuplicate {
+			cache.remember(cacheKey, payloadHash, time.Now())
+		}
+		if broadcaster != nil && result.Hostname != "" {
+			if result.ServicesChanged {
+				if err := broadcaster.broadcastDeviceEvent(r.Context(), "device_services_changed", map[string]any{"hostname": result.Hostname, "change": "updated"}); err != nil {
+					logDebug("agents", "device_services_changed broadcast failed: "+err.Error())
+				}
+			}
+			if result.SoftwareChanged {
+				if err := broadcaster.broadcastDeviceEvent(r.Context(), "device_inventory_changed", map[string]any{"hostname": result.Hostname, "change": "software_updated"}); err != nil {
+					logDebug("agents", "device_inventory_changed broadcast failed: "+err.Error())
+				}
+			}
+		}
+		writeJSON(w, status, result.Payload)
+	}
+}
+
 func (c *agentStatusCache) cached(key string, signature string, now time.Time) map[string]any {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]agentStatusCacheEntry{}
+	}
 	entry, ok := c.entries[key]
 	if !ok || entry.Signature != signature || now.Sub(entry.SeenAt) > agentStatusDuplicateSuppressSeconds {
 		return nil
@@ -218,6 +320,58 @@ func (c *agentStatusCache) remember(key string, signature string, now time.Time,
 	return emitAllowed
 }
 
+func (c *agentDetailsCache) cached(key string, hash string, now time.Time) bool {
+	if c == nil || key == "" || hash == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]agentDetailsCacheEntry{}
+	}
+	entry, ok := c.entries[key]
+	if !ok || entry.Hash != hash || now.Sub(entry.SeenAt) > agentDetailsDuplicateWindow {
+		return false
+	}
+	entry.SeenAt = now
+	c.entries[key] = entry
+	return true
+}
+
+func (c *agentDetailsCache) remember(key string, hash string, now time.Time) {
+	if c == nil || key == "" || hash == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[string]agentDetailsCacheEntry{}
+	}
+	c.entries[key] = agentDetailsCacheEntry{Hash: hash, SeenAt: now}
+	if len(c.entries) > agentDetailsCacheMaxEntries {
+		type staleEntry struct {
+			Key    string
+			SeenAt time.Time
+		}
+		stale := make([]staleEntry, 0, len(c.entries))
+		for key, entry := range c.entries {
+			stale = append(stale, staleEntry{Key: key, SeenAt: entry.SeenAt})
+		}
+		sort.Slice(stale, func(i, j int) bool { return stale[i].SeenAt.Before(stale[j].SeenAt) })
+		for _, item := range stale[:maxInt(1, len(c.entries)-agentDetailsCacheMaxEntries)] {
+			delete(c.entries, item.Key)
+		}
+	}
+}
+
+func agentDetailsCacheKey(deviceCtx deviceBearerAuthContext, payload map[string]any) string {
+	details, _ := payload["details"].(map[string]any)
+	summary, _ := details["summary"].(map[string]any)
+	hostname := firstText(cleanText(payload["hostname"]), cleanText(summary["hostname"]))
+	serviceMode := normalizeAgentServiceMode(firstNonEmpty(payload["service_mode"], summary["service_mode"], claimString(deviceCtx.Claims, "service_mode"), "system"))
+	return firstText(normalizeCanonicalGUID(deviceCtx.GUID), cleanText(deviceCtx.GUID)) + "|" + strings.ToLower(hostname) + "|" + serviceMode
+}
+
 func (b *legacyAgentStatusBroadcaster) broadcastAgentStatus(ctx context.Context, payload map[string]any) error {
 	if b == nil || b.baseURL == nil || b.auth == nil || b.auth.verifier == nil || len(b.auth.verifier.secret) == 0 {
 		return errors.New("agent status broadcaster unavailable")
@@ -246,6 +400,42 @@ func (b *legacyAgentStatusBroadcaster) broadcastAgentStatus(ctx context.Context,
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("legacy agent status broadcaster returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	return nil
+}
+
+func (b *legacyAgentStatusBroadcaster) broadcastDeviceEvent(ctx context.Context, eventName string, payload map[string]any) error {
+	if b == nil || b.baseURL == nil || b.auth == nil || b.auth.verifier == nil || len(b.auth.verifier.secret) == 0 {
+		return errors.New("device event broadcaster unavailable")
+	}
+	eventName = cleanText(eventName)
+	if eventName == "" {
+		return errors.New("event_name_required")
+	}
+	client := b.client
+	if client == nil {
+		client = &http.Client{Timeout: 3 * time.Second}
+	}
+	body, err := json.Marshal(map[string]any{"event_name": eventName, "payload": payload})
+	if err != nil {
+		return err
+	}
+	target := b.baseURL.ResolveReference(&url.URL{Path: "/api/internal/agent/device-event"})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(internalTokenHeader, goInternalToken(b.auth.verifier.secret))
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("legacy device event broadcaster returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
 }

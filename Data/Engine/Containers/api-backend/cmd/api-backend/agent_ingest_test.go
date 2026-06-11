@@ -26,6 +26,13 @@ type agentIngestTestStore struct {
 	statusCode    int
 	statusErr     error
 	statusCalls   int
+
+	detailsGUID    string
+	detailsPayload map[string]any
+	detailsResult  agentDetailsUpdateResult
+	detailsCode    int
+	detailsErr     error
+	detailsCalls   int
 }
 
 func (s *agentIngestTestStore) requiredDeviceTokenVersion(_ context.Context, _ string) (*int, error) {
@@ -70,10 +77,29 @@ func (s *agentIngestTestStore) updateAgentStatus(_ context.Context, deviceCtx de
 	return s.statusResult, status, nil
 }
 
+func (s *agentIngestTestStore) updateAgentDetails(_ context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (agentDetailsUpdateResult, int, error) {
+	s.detailsCalls++
+	s.detailsGUID = deviceCtx.GUID
+	s.detailsPayload = copyMap(payload)
+	status := s.detailsCode
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.detailsErr != nil {
+		return agentDetailsUpdateResult{}, status, s.detailsErr
+	}
+	if s.detailsResult.Payload == nil {
+		s.detailsResult.Payload = map[string]any{"status": "ok"}
+	}
+	return s.detailsResult, status, nil
+}
+
 type fakeAgentStatusBroadcaster struct {
 	payload map[string]any
 	calls   int
 	err     error
+
+	deviceEvents []map[string]any
 }
 
 func (s *agentIngestTestStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -83,6 +109,11 @@ func (s *agentIngestTestStore) lookupOperator(_ context.Context, username string
 func (b *fakeAgentStatusBroadcaster) broadcastAgentStatus(_ context.Context, payload map[string]any) error {
 	b.calls++
 	b.payload = copyMap(payload)
+	return b.err
+}
+
+func (b *fakeAgentStatusBroadcaster) broadcastDeviceEvent(_ context.Context, eventName string, payload map[string]any) error {
+	b.deviceEvents = append(b.deviceEvents, map[string]any{"event_name": eventName, "payload": copyMap(payload)})
 	return b.err
 }
 
