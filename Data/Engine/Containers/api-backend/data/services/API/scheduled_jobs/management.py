@@ -33,7 +33,6 @@ from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisDataCorruptionError, AegisLockedError, AegisSecretResetRequiredError
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
-from ...job_scheduler.queue import enqueue_onboarding_run, enqueue_scheduled_run, enqueue_scheduled_workflow_run
 from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
@@ -50,6 +49,9 @@ _LEGACY_SHARED_ANSIBLE_VPN_PREP_WAIT_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_WAI
 _LEGACY_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_ENV = "BOREALIS_SHARED_ANSIBLE_VPN_PREP_POLL_INTERVAL_SECONDS"
 _DEFAULT_SHARED_ANSIBLE_VPN_READY_TIMEOUT_SECONDS = 45.0
 _DEFAULT_SHARED_ANSIBLE_VPN_READY_POLL_INTERVAL_SECONDS = 0.5
+_WORK_KIND_ONBOARDING_RUN = "onboarding_run"
+_WORK_KIND_SCHEDULED_RUN = "scheduled_run"
+_WORK_KIND_SCHEDULED_WORKFLOW_RUN = "scheduled_workflow_run"
 
 
 def _scheduler_loop_enabled() -> bool:
@@ -149,15 +151,23 @@ def _internal_api_json(app: "Flask", path: str, *, payload: Optional[dict] = Non
         return {}
 
 
-def _internal_api_json_strict(app: "Flask", path: str, *, timeout: float = 10.0) -> dict:
+def _internal_api_json_strict(app: "Flask", path: str, *, payload: Optional[dict] = None, timeout: float = 10.0) -> dict:
     secret = require_app_secret(app)
+    body = None
+    method = "GET"
+    headers = {
+        "Accept": "application/json",
+        INTERNAL_TOKEN_HEADER: internal_token(secret),
+    }
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        method = "POST"
+        headers["Content-Type"] = "application/json"
     request_obj = urllib.request.Request(
         f"{_internal_api_base()}{path}",
-        headers={
-            "Accept": "application/json",
-            INTERNAL_TOKEN_HEADER: internal_token(secret),
-        },
-        method="GET",
+        data=body,
+        headers=headers,
+        method=method,
     )
     try:
         with urllib.request.urlopen(request_obj, timeout=timeout) as response:
@@ -332,6 +342,20 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     def _scheduler_public_base_url() -> str:
         return str(public_base_url(adapters.context) or "").strip()
 
+    def _enqueue_scheduler_work_item(kind: str, **kwargs):
+        payload = dict(kwargs or {})
+        payload["kind"] = kind
+        result = _internal_api_json_strict(
+            app,
+            "/api/internal/job-scheduler/work-items",
+            payload=payload,
+            timeout=30.0,
+        )
+        try:
+            return int(result.get("work_id") or 0) or None
+        except Exception:
+            return None
+
     scheduler = job_scheduler.register(
         app,
         socketio,
@@ -377,42 +401,17 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
             finally:
                 conn.close()
             return None
-        conn = adapters.db_conn_factory()
-        try:
-            work_id = enqueue_onboarding_run(
-                conn,
-                job_id=int(kwargs.get("job_id") or 0),
-                run_id=int(kwargs.get("run_row_id") or 0),
-                scheduled_ts=int(kwargs.get("scheduled_ts") or 0),
-                site_id=config.get("site_id"),
-                components=components,
-                targets=targets,
-                credential_id=kwargs.get("credential_id"),
-            )
-            conn.commit()
-            return work_id
-        finally:
-            conn.close()
+        payload = dict(kwargs or {})
+        payload["site_id"] = config.get("site_id")
+        return _enqueue_scheduler_work_item(_WORK_KIND_ONBOARDING_RUN, **payload)
 
     job_scheduler.set_onboarding_run_dispatcher(scheduler, _enqueue_onboarding_run)
 
     def _enqueue_scheduled_run(**kwargs):
-        conn = adapters.db_conn_factory()
-        try:
-            work_id = enqueue_scheduled_run(conn, **kwargs)
-            conn.commit()
-            return work_id
-        finally:
-            conn.close()
+        return _enqueue_scheduler_work_item(_WORK_KIND_SCHEDULED_RUN, **kwargs)
 
     def _enqueue_scheduled_workflow(**kwargs):
-        conn = adapters.db_conn_factory()
-        try:
-            work_id = enqueue_scheduled_workflow_run(conn, **kwargs)
-            conn.commit()
-            return work_id
-        finally:
-            conn.close()
+        return _enqueue_scheduler_work_item(_WORK_KIND_SCHEDULED_WORKFLOW_RUN, **kwargs)
 
     job_scheduler.set_scheduled_run_dispatcher(scheduler, _enqueue_scheduled_run)
     job_scheduler.set_scheduled_workflow_dispatcher(scheduler, _enqueue_scheduled_workflow)

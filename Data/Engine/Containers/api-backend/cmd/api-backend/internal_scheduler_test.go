@@ -144,6 +144,134 @@ func TestInternalSchedulerCredentialMapsResetRequired(t *testing.T) {
 	}
 }
 
+type fakeInternalSchedulerWorkItemStore struct {
+	*fakeOperatorStore
+	kind    string
+	payload map[string]any
+	workID  int64
+	err     error
+}
+
+func (s *fakeInternalSchedulerWorkItemStore) enqueueInternalSchedulerWorkItem(_ context.Context, kind string, payload map[string]any) (int64, error) {
+	s.kind = kind
+	s.payload = copyMap(payload)
+	if s.err != nil {
+		return 0, s.err
+	}
+	return s.workID, nil
+}
+
+func TestInternalSchedulerWorkItemsEnqueuesThroughStore(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerWorkItemStore{
+		fakeOperatorStore: baseStore,
+		workID:            77,
+	}
+	auth.store = store
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	body := []byte(`{"kind":"scheduled_run","job_id":12,"run_id":34,"scheduled_ts":1700000300,"site_id":5}`)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/job-scheduler/work-items", bytes.NewReader(body))
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.kind != schedulerKindScheduledRun || coerceInt64(store.payload["run_id"]) != 34 {
+		t.Fatalf("unexpected store call kind=%s payload=%#v", store.kind, store.payload)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["work_id"] != float64(77) {
+		t.Fatalf("unexpected response %#v", payload)
+	}
+}
+
+func TestInternalSchedulerWorkItemsRequiresInternalToken(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	auth.store = &fakeInternalSchedulerWorkItemStore{fakeOperatorStore: baseStore, workID: 77}
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/job-scheduler/work-items", bytes.NewReader([]byte(`{"kind":"scheduled_run"}`)))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSchedulerWorkItemPayloadsMatchPythonQueue(t *testing.T) {
+	item, updateRun, err := schedulerWorkItemFromPayload(schedulerKindOnboardingRun, map[string]any{
+		"job_id":        float64(8),
+		"run_row_id":    float64(9),
+		"scheduled_ts":  float64(1700000400),
+		"site_id":       float64(3),
+		"components":    []any{map[string]any{"kind": "onboarding"}},
+		"targets":       []any{map[string]any{"hostname": "LAB-01"}},
+		"credential_id": float64(6),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updateRun || item.DedupeKey != "onboarding:9" || item.Kind != schedulerKindOnboardingRun || item.Lane != schedulerLaneOnboarding || item.Priority != 50 {
+		t.Fatalf("unexpected onboarding item %#v update=%v", item, updateRun)
+	}
+	if item.SiteID.Int64 != 3 || item.JobID.Int64 != 8 || item.RunID.Int64 != 9 {
+		t.Fatalf("unexpected ids %#v", item)
+	}
+	if item.Payload["credential_id"] != int64(6) {
+		t.Fatalf("unexpected payload %#v", item.Payload)
+	}
+
+	item, updateRun, err = schedulerWorkItemFromPayload(schedulerKindScheduledRun, map[string]any{
+		"job_id":              float64(10),
+		"run_id":              float64(11),
+		"scheduled_ts":        float64(1700000500),
+		"site_id":             float64(4),
+		"run_mode":            "ssh",
+		"target_row_ids":      []any{float64(7), float64(8)},
+		"use_service_account": true,
+		"shared_execution":    true,
+		"component_index":     float64(2),
+		"task_link":           map[string]any{"kind": "ansible"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateRun || item.DedupeKey != "scheduled-run:11:7,8" || item.Kind != schedulerKindScheduledRun || item.Lane != schedulerLaneScheduledJob || item.Priority != 40 {
+		t.Fatalf("unexpected scheduled item %#v update=%v", item, updateRun)
+	}
+	targets := item.Payload["target_row_ids"].([]int64)
+	if len(targets) != 2 || targets[0] != 7 || item.Payload["run_mode"] != "ssh" || item.Payload["component_index"] != int64(2) {
+		t.Fatalf("unexpected scheduled payload %#v", item.Payload)
+	}
+
+	item, updateRun, err = schedulerWorkItemFromPayload(schedulerKindScheduledWorkflowRun, map[string]any{
+		"job_id":             float64(12),
+		"run_id":             float64(13),
+		"scheduled_ts":       float64(1700000600),
+		"site_id":            float64(5),
+		"workflow_component": map[string]any{"id": "workflow-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateRun || item.DedupeKey != "scheduled-workflow:13:5" || item.Kind != schedulerKindScheduledWorkflowRun {
+		t.Fatalf("unexpected workflow item %#v update=%v", item, updateRun)
+	}
+	scope := item.Payload["workflow_site_scope"].(map[string]any)
+	if scope["site_id"] != int64(5) {
+		t.Fatalf("unexpected workflow payload %#v", item.Payload)
+	}
+}
+
 func TestSchedulerDecryptedCredentialPayload(t *testing.T) {
 	row := credentialRow{
 		ID:                      sql.NullInt64{Int64: 7, Valid: true},

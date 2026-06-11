@@ -21,12 +21,17 @@ func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnR
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-prepare", internalSchedulerVPNPrepareHandler(auth, vpnRuntime))
+	mux.HandleFunc("/api/internal/job-scheduler/work-items", internalSchedulerWorkItemsHandler(auth))
 }
 
 var errSchedulerCredentialResetRequired = errors.New("Stored credential secret material was reset. Edit and save the credential before enabling jobs that use it.")
 
 type internalSchedulerCredentialStore interface {
 	loadDecryptedSchedulerCredential(ctx context.Context, secret authSecretService, credentialID int64) (map[string]any, bool, error)
+}
+
+type internalSchedulerWorkItemStore interface {
+	enqueueInternalSchedulerWorkItem(ctx context.Context, kind string, payload map[string]any) (int64, error)
 }
 
 func internalSchedulerCredentialHandler(auth *authService) http.HandlerFunc {
@@ -89,6 +94,53 @@ func internalSchedulerPublicBaseURLHandler(auth *authService) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"public_base_url": configuredPublicBaseURL(r)})
 	}
+}
+
+func internalSchedulerWorkItemsHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		store, ok := auth.store.(internalSchedulerWorkItemStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "scheduler_work_item_store_unavailable"})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			return
+		}
+		kind := strings.ToLower(cleanText(firstNonEmpty(body["kind"], body["work_kind"])))
+		if kind == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "work_item_kind_required"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		workID, err := store.enqueueInternalSchedulerWorkItem(ctx, kind, body)
+		if err != nil {
+			writeJSON(w, internalSchedulerWorkItemErrorStatus(err), map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"work_id": workID})
+	}
+}
+
+func internalSchedulerWorkItemErrorStatus(err error) int {
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	if strings.Contains(message, "_required") || strings.HasPrefix(message, "unsupported_work_item_kind:") {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
 }
 
 func validInternalSchedulerRequest(auth *authService, r *http.Request) bool {
