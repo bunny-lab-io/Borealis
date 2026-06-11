@@ -69,7 +69,6 @@ const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_
 const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
 const BOREALIS_LINK_COLOR = "#58a6ff";
 const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
-const PLACEHOLDER_TEXT_COLOR = "rgba(148,163,184,0.52)";
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
@@ -349,24 +348,6 @@ function titleCase(value) {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function epochLabel(value) {
-  const numberValue = Number(value || 0);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) return "not started";
-  try {
-    const date = new Date(numberValue * 1000);
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    const year = date.getFullYear();
-    const hours24 = date.getHours();
-    const hours = hours24 % 12 || 12;
-    const minutes = String(date.getMinutes()).padStart(2, "0");
-    const suffix = hours24 >= 12 ? "PM" : "AM";
-    return `${month}-${day}-${year} @ ${hours}:${minutes}${suffix}`;
-  } catch {
-    return "not started";
-  }
 }
 
 function durationLabel(seconds) {
@@ -720,7 +701,6 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_name: containerName,
         site_worker_container_id: String(worker?.container_id || "").trim() || "Unknown",
         site_worker_container_id_full: String(worker?.container_id_full || "").trim(),
-        site_worker_created_label: epochLabel(worker?.started_at),
         site_worker_status_label: status.label,
         site_worker_status_tone: status.tone,
         connected_devices: deviceCounts.connected_devices,
@@ -775,7 +755,6 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_name: "",
         site_worker_container_id: "N/A",
         site_worker_container_id_full: "",
-        site_worker_created_label: "N/A",
         site_worker_status_label: "No Online Devices",
         site_worker_status_tone: "no_online",
         connected_devices: 0,
@@ -1001,101 +980,60 @@ function SiteWorkerContainerCell(params) {
   const onRecreate = params?.context?.onRecreate;
   const busy = params?.context?.recreateBusyId === row.site_worker_guid;
   const canRecreate = Boolean(row.site_worker_guid);
-  const containerId = String(row.site_worker_container_id || "N/A");
-  const muted = containerId === "Unknown" || containerId === "N/A";
   return (
     <Box
       sx={{
-        display: "grid",
-        gridTemplateColumns: "auto minmax(0, 1fr)",
+        display: "flex",
         alignItems: "center",
-        alignContent: "center",
-        columnGap: 0.8,
-        rowGap: 0.2,
+        justifyContent: "flex-start",
+        gap: 0.9,
         width: "100%",
         height: "100%",
         minWidth: 0,
       }}
     >
-      <Box sx={{ gridRow: "1 / span 2", alignSelf: "center", display: "flex", alignItems: "center" }}>
-        <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
-      </Box>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, minWidth: 0 }}>
-        <Typography
-          component="span"
-          title={row.site_worker_container_id_full || row.site_worker_container_name || containerId}
+      <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
+      {canRecreate ? (
+        <Box
+          component="button"
+          type="button"
+          disabled={busy}
+          onMouseDown={stopGridRowSelectionEvent}
+          onClick={(event) => {
+            stopGridRowSelectionEvent(event);
+            if (busy) return;
+            onRecreate?.(row);
+          }}
           sx={{
-            color: muted ? PLACEHOLDER_TEXT_COLOR : "#f4f7ff",
-            fontSize: "0.84rem",
+            display: "inline-flex",
+            alignItems: "center",
+            p: 0,
+            m: 0,
+            border: 0,
+            background: "transparent",
+            color: BOREALIS_LINK_COLOR,
+            cursor: busy ? "default" : "pointer",
+            font: "inherit",
+            fontSize: "0.82rem",
             fontWeight: 700,
-            lineHeight: 1.35,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            lineHeight: 1.45,
+            textDecoration: "none",
             whiteSpace: "nowrap",
-            minWidth: 0,
-            flexShrink: 1,
+            transition: "color 160ms ease, opacity 160ms ease",
+            "&:hover": busy
+              ? undefined
+              : {
+                  color: BOREALIS_LINK_HOVER_COLOR,
+                  textDecoration: "underline",
+                },
+            "&:disabled": {
+              opacity: 0.6,
+            },
           }}
         >
-          {containerId}
-        </Typography>
-        {canRecreate ? (
-          <Box
-            component="button"
-            type="button"
-            disabled={busy}
-            onMouseDown={stopGridRowSelectionEvent}
-            onClick={(event) => {
-              stopGridRowSelectionEvent(event);
-              if (busy) return;
-              onRecreate?.(row);
-            }}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              p: 0,
-              m: 0,
-              border: 0,
-              background: "transparent",
-              color: BOREALIS_LINK_COLOR,
-              cursor: busy ? "default" : "pointer",
-              font: "inherit",
-              fontSize: "0.82rem",
-              fontWeight: 700,
-              lineHeight: 1.45,
-              textDecoration: "none",
-              whiteSpace: "nowrap",
-              transition: "color 160ms ease, opacity 160ms ease",
-              "&:hover": busy
-                ? undefined
-                : {
-                    color: BOREALIS_LINK_HOVER_COLOR,
-                    textDecoration: "underline",
-                  },
-              "&:disabled": {
-                opacity: 0.6,
-              },
-            }}
-          >
-            {busy ? "[Queued...]" : "[Re-Create]"}
-          </Box>
-        ) : null}
-      </Box>
-      <Box />
-      <Typography
-        component="span"
-        sx={{
-          color: "rgba(148,163,184,0.62)",
-          fontSize: "0.72rem",
-          fontWeight: 600,
-          lineHeight: 1.25,
-          minWidth: 0,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {row.site_worker_created_label || "N/A"}
-      </Typography>
+          {busy ? "Re-Deploy Queued" : "Re-Deploy Site Worker"}
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -2019,8 +1957,8 @@ export default function SiteList() {
     {
       headerName: "Site Worker Container",
       field: "site_worker_container_id",
-      minWidth: 360,
-      flex: 1.2,
+      minWidth: 300,
+      flex: 0.95,
       filter: false,
       suppressHeaderMenuButton: true,
       suppressHeaderContextMenu: true,
@@ -2193,14 +2131,14 @@ export default function SiteList() {
       if (!response.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
       }
-      await sendNotification(`Re-create queued for ${recreateConfirmRow?.name || "site worker"}.`);
+      await sendNotification(`Re-deploy queued for ${recreateConfirmRow?.name || "site worker"}.`);
       setRecreateConfirmRow(null);
       await fetchSites();
     } catch (error) {
-      const message = error?.message || "Unable to queue site-worker re-create.";
+      const message = error?.message || "Unable to queue site-worker re-deploy.";
       setRecreateError(message);
       await sendNotification({
-        title: "Site Worker Re-Create Failed",
+        title: "Site Worker Re-Deploy Failed",
         message,
         icon: "warning",
         variant: "error",
@@ -2650,7 +2588,7 @@ export default function SiteList() {
         <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
           <Box sx={{ minWidth: 0 }}>
             <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
-              Re-Create Site Worker
+              Re-Deploy Site Worker
             </Typography>
             <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
               {recreateConfirmRow?.name ? `Site: ${recreateConfirmRow.name}` : "Site worker container"}
@@ -2660,17 +2598,6 @@ export default function SiteList() {
         <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
           <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem", lineHeight: 1.55 }}>
             Borealis will stop this site-worker container. Job Scheduler will deploy a replacement when same-site Agent or task demand remains.
-          </Typography>
-          <Typography
-            sx={{
-              mt: 1.4,
-              color: MAGIC_UI.textBright,
-              fontFamily: '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace',
-              fontSize: "0.84rem",
-              overflowWrap: "anywhere",
-            }}
-          >
-            {recreateConfirmRow?.site_worker_container_id || recreateConfirmRow?.site_worker_container_name || "Unknown container"}
           </Typography>
           {recreateError ? (
             <Alert severity="error" variant="outlined" sx={{ mt: 2, color: "#fecdd3", borderColor: "rgba(251,113,133,0.42)" }}>
@@ -2683,7 +2610,7 @@ export default function SiteList() {
             Cancel
           </Button>
           <Button onClick={confirmRecreate} sx={SITE_DIALOG_DANGER_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
-            {recreateBusyId ? "Queuing..." : "Re-Create"}
+            {recreateBusyId ? "Queuing..." : "Re-Deploy"}
           </Button>
         </DialogActions>
       </Dialog>
