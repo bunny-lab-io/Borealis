@@ -24,13 +24,13 @@ import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Mapping, Optional
 
 from flask import jsonify, request
 
 from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
-from ...aegis_cipher import AegisSecretResetRequiredError, credential_secret_reset_required
+from ...aegis_cipher import AegisDataCorruptionError, AegisLockedError, AegisSecretResetRequiredError
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
 from ...job_scheduler.queue import enqueue_onboarding_run, enqueue_scheduled_run, enqueue_scheduled_workflow_run
@@ -147,6 +147,38 @@ def _internal_api_json(app: "Flask", path: str, *, payload: Optional[dict] = Non
             return decoded if isinstance(decoded, dict) else {}
     except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
         return {}
+
+
+def _internal_api_json_strict(app: "Flask", path: str, *, timeout: float = 10.0) -> dict:
+    secret = require_app_secret(app)
+    request_obj = urllib.request.Request(
+        f"{_internal_api_base()}{path}",
+        headers={
+            "Accept": "application/json",
+            INTERNAL_TOKEN_HEADER: internal_token(secret),
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request_obj, timeout=timeout) as response:
+            decoded = json.loads(response.read().decode("utf-8") or "{}")
+            return decoded if isinstance(decoded, dict) else {}
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8") or "{}")
+        except Exception:
+            payload = {}
+        error_code = str(payload.get("error") or "").strip()
+        message = str(payload.get("message") or error_code or exc).strip()
+        if exc.code == 423 and error_code == "credential_reset_required":
+            raise AegisSecretResetRequiredError(message)
+        if exc.code == 423 and error_code == "aegis_locked":
+            raise AegisLockedError(message)
+        if error_code == "corrupt_secret_store":
+            raise AegisDataCorruptionError(message)
+        raise RuntimeError(message)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 def _vpn_snapshot_ready(snapshot: object, requested_ids: List[str]) -> bool:
@@ -289,64 +321,13 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         return snapshot
 
     def _load_decrypted_credential(credential_id: int):
-        conn = None
-        row = None
-        try:
-            conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    name,
-                    site_id,
-                    credential_type,
-                    connection_type,
-                    username,
-                    password_encrypted,
-                    private_key_encrypted,
-                    private_key_passphrase_encrypted,
-                    become_method,
-                    become_username,
-                    become_password_encrypted,
-                    metadata_json
-                  FROM credentials
-                 WHERE id=?
-                """,
-                (int(credential_id),),
-            )
-            row = cur.fetchone()
-        finally:
-            try:
-                if conn is not None:
-                    conn.close()
-            except Exception:
-                pass
-        if not row:
-            return None
-        metadata = {}
-        try:
-            metadata = json.loads(row[12] or "{}")
-        except Exception:
-            metadata = {}
-        if credential_secret_reset_required(metadata if isinstance(metadata, dict) else {}):
-            raise AegisSecretResetRequiredError(job_scheduler.CREDENTIAL_RESET_REQUIRED_MESSAGE)
-        aegis = adapters.aegis_cipher_service
-        return {
-            "id": int(row[0]),
-            "name": row[1] or "",
-            "site_id": row[2],
-            "credential_type": row[3] or "",
-            "connection_type": row[4] or "",
-            "username": row[5] or "",
-            "password": aegis.decrypt_secret_blob(row[6]),
-            "private_key": aegis.decrypt_secret_blob(row[7]),
-            "private_key_passphrase": aegis.decrypt_secret_blob(row[8]),
-            "become_method": row[9] or "",
-            "become_username": row[10] or "",
-            "become_password": aegis.decrypt_secret_blob(row[11]),
-            "metadata": metadata if isinstance(metadata, dict) else {},
-        }
+        payload = _internal_api_json_strict(
+            app,
+            f"/api/internal/job-scheduler/credential/{int(credential_id)}",
+            timeout=30.0,
+        )
+        credential = payload.get("credential") if isinstance(payload, Mapping) else None
+        return dict(credential) if isinstance(credential, Mapping) else None
 
     def _scheduler_public_base_url() -> str:
         return str(public_base_url(adapters.context) or "").strip()
