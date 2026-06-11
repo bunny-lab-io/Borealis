@@ -2017,7 +2017,7 @@ export default function SiteList() {
       },
     },
     {
-      headerName: "Container ID",
+      headerName: "Site Worker Container",
       field: "site_worker_container_id",
       minWidth: 360,
       flex: 1.2,
