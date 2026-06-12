@@ -1392,6 +1392,64 @@ func (s *postgresOperatorStore) loadSchedulerOnlineHostnames(ctx context.Context
 	return hostnames, nil
 }
 
+func (s *postgresOperatorStore) loadSchedulerOnlineSites(ctx context.Context, windowSeconds int64, siteIDs []int64) (map[int64]int64, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = 300
+	}
+	threshold := time.Now().Unix() - windowSeconds
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	sqlText := `
+		SELECT ds.site_id, COUNT(DISTINCT d.guid)
+		  FROM engine.device_sites ds
+		  JOIN engine.devices d ON lower(d.hostname)=lower(ds.device_hostname)
+		 WHERE ds.site_id IS NOT NULL
+		   AND ds.site_id > 0
+		   AND d.last_seen IS NOT NULL
+		   AND d.last_seen >= $1
+		   AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+	`
+	args := []any{threshold}
+	if len(siteIDs) > 0 {
+		sqlText += " AND ds.site_id = ANY($2)"
+		args = append(args, pq.Array(siteIDs))
+	}
+	sqlText += " GROUP BY ds.site_id ORDER BY ds.site_id ASC"
+	rows, err := conn.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	counts := map[int64]int64{}
+	for rows.Next() {
+		var siteID sql.NullInt64
+		var count sql.NullInt64
+		if err := rows.Scan(&siteID, &count); err != nil {
+			_ = rows.Close()
+			_ = conn.Close()
+			return nil, err
+		}
+		if siteID.Valid {
+			counts[siteID.Int64] = nullInt(count)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
 func loadOnboardingApprovalLookup(ctx context.Context, conn *sql.Conn, rows []onboardingTargetRow) (map[string]map[string]any, error) {
 	keys := []string{}
 	for _, row := range rows {

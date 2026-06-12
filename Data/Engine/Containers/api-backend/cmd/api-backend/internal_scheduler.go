@@ -21,6 +21,7 @@ func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnR
 	mux.HandleFunc("/api/internal/job-scheduler/credential/", internalSchedulerCredentialHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/service-account/", internalSchedulerServiceAccountHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/online-hosts", internalSchedulerOnlineHostsHandler(auth))
+	mux.HandleFunc("/api/internal/job-scheduler/online-sites", internalSchedulerOnlineSitesHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/public-base-url", internalSchedulerPublicBaseURLHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
@@ -40,6 +41,10 @@ type internalSchedulerServiceAccountStore interface {
 
 type internalSchedulerOnlineHostStore interface {
 	loadSchedulerOnlineHostnames(ctx context.Context, windowSeconds int64) ([]string, error)
+}
+
+type internalSchedulerOnlineSiteStore interface {
+	loadSchedulerOnlineSites(ctx context.Context, windowSeconds int64, siteIDs []int64) (map[int64]int64, error)
 }
 
 type internalSchedulerWorkItemStore interface {
@@ -190,6 +195,73 @@ func schedulerHostnameVariants(hostnames []string) []string {
 	sort.SliceStable(out, func(i, j int) bool {
 		return strings.ToLower(out[i]) < strings.ToLower(out[j])
 	})
+	return out
+}
+
+func internalSchedulerOnlineSitesHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		store, ok := auth.store.(internalSchedulerOnlineSiteStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "online_site_store_unavailable"})
+			return
+		}
+		windowSeconds := coerceInt64(r.URL.Query().Get("window_seconds"))
+		if windowSeconds <= 0 {
+			windowSeconds = 300
+		}
+		if windowSeconds > 3600 {
+			windowSeconds = 3600
+		}
+		siteIDValues := append([]string{}, r.URL.Query()["site_id"]...)
+		siteIDValues = append(siteIDValues, r.URL.Query()["site_ids"]...)
+		siteIDs := schedulerPositiveQueryInt64List(siteIDValues)
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		counts, err := store.loadSchedulerOnlineSites(ctx, windowSeconds, siteIDs)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"site_ids":                  sortedIntKeys(counts),
+			"site_online_device_counts": schedulerStringInt64Map(counts),
+		})
+	}
+}
+
+func schedulerPositiveQueryInt64List(values []string) []int64 {
+	seen := map[int64]struct{}{}
+	out := []int64{}
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			parsed := coerceInt64(part)
+			if parsed <= 0 {
+				continue
+			}
+			if _, ok := seen[parsed]; ok {
+				continue
+			}
+			seen[parsed] = struct{}{}
+			out = append(out, parsed)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func schedulerStringInt64Map(values map[int64]int64) map[string]int64 {
+	out := map[string]int64{}
+	for key, value := range values {
+		out[strconv.FormatInt(key, 10)] = value
+	}
 	return out
 }
 

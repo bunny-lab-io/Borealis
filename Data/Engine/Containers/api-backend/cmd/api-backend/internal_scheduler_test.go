@@ -108,6 +108,27 @@ func (s *fakeInternalSchedulerOnlineHostStore) loadSchedulerOnlineHostnames(_ co
 	return append([]string{}, s.hostnames...), nil
 }
 
+type fakeInternalSchedulerOnlineSiteStore struct {
+	*fakeOperatorStore
+	counts     map[int64]int64
+	err        error
+	windowSeen int64
+	siteIDs    []int64
+}
+
+func (s *fakeInternalSchedulerOnlineSiteStore) loadSchedulerOnlineSites(_ context.Context, windowSeconds int64, siteIDs []int64) (map[int64]int64, error) {
+	s.windowSeen = windowSeconds
+	s.siteIDs = append([]int64{}, siteIDs...)
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := map[int64]int64{}
+	for key, value := range s.counts {
+		out[key] = value
+	}
+	return out, nil
+}
+
 func TestInternalSchedulerCredentialReturnsDecryptedPayload(t *testing.T) {
 	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store := &fakeInternalSchedulerCredentialStore{
@@ -211,6 +232,41 @@ func TestInternalSchedulerOnlineHostsReturnsVariants(t *testing.T) {
 	hostnames := payload["hostnames"].([]any)
 	if len(hostnames) != 3 || hostnames[0] != "Lab-01" || hostnames[1] != "LAB-01" || hostnames[2] != "lab-01" {
 		t.Fatalf("unexpected hostnames %#v", hostnames)
+	}
+}
+
+func TestInternalSchedulerOnlineSitesReturnsCounts(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerOnlineSiteStore{
+		fakeOperatorStore: baseStore,
+		counts:            map[int64]int64{3: 2},
+	}
+	auth.store = store
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/online-sites?site_id=3&site_ids=5,6&window_seconds=90", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.windowSeen != 90 {
+		t.Fatalf("expected custom window, got %d", store.windowSeen)
+	}
+	if len(store.siteIDs) != 3 || store.siteIDs[0] != 3 || store.siteIDs[1] != 5 || store.siteIDs[2] != 6 {
+		t.Fatalf("unexpected site filter %#v", store.siteIDs)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	siteIDs := payload["site_ids"].([]any)
+	counts := payload["site_online_device_counts"].(map[string]any)
+	if len(siteIDs) != 1 || siteIDs[0] != float64(3) || counts["3"] != float64(2) {
+		t.Fatalf("unexpected online site payload %#v", payload)
 	}
 }
 

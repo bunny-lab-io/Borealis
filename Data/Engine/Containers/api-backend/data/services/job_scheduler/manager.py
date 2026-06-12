@@ -539,27 +539,27 @@ def _filter_current_site_worker_snapshots(snapshots: Sequence[Mapping[str, Any]]
     return current
 
 
-def _online_site_ids(conn: sqlite3.Connection, *, now_ts: Optional[int] = None, window_seconds: Optional[int] = None) -> List[int]:
-    cutoff = int(now_ts if now_ts is not None else _now_ts()) - int(window_seconds or _agent_online_window_seconds())
-    cur = conn.cursor()
+def _online_site_ids(secret: str, logger, *, window_seconds: Optional[int] = None) -> List[int]:
+    window = int(window_seconds or _agent_online_window_seconds())
     try:
-        cur.execute(
-            """
-            SELECT DISTINCT ds.site_id
-              FROM device_sites ds
-              JOIN devices d ON lower(d.hostname)=lower(ds.device_hostname)
-             WHERE ds.site_id IS NOT NULL
-               AND ds.site_id>0
-               AND d.last_seen IS NOT NULL
-               AND d.last_seen>=?
-               AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
-             ORDER BY ds.site_id ASC
-            """,
-            (cutoff,),
+        payload = _get_internal(
+            f"/api/internal/job-scheduler/online-sites?window_seconds={window}",
+            secret=secret,
+            timeout=10.0,
         )
-    except Exception:
+    except Exception as exc:
+        logger.error("online site snapshot lookup failed: %s", exc)
         return []
-    return [int(row[0]) for row in cur.fetchall() or [] if row and row[0] is not None]
+    raw_site_ids = payload.get("site_ids") if isinstance(payload.get("site_ids"), list) else []
+    site_ids: List[int] = []
+    for raw_site_id in raw_site_ids:
+        try:
+            site_id = int(raw_site_id)
+        except Exception:
+            continue
+        if site_id > 0:
+            site_ids.append(site_id)
+    return sorted(set(site_ids))
 
 
 def _reconcile_site_workers(db_factory, logger) -> None:
@@ -1132,6 +1132,7 @@ def _process_global_scheduled_work(scheduler, db_factory, logger) -> None:
 def main() -> None:
     settings = load_runtime_config()
     logger = initialise_engine_logger(settings, name="borealis.job_scheduler")
+    secret = str(settings.secret_key or "")
     scheduler, db_factory = _build_scheduler(settings, logger)
     logger.info("job-scheduler starting")
     try:
@@ -1165,14 +1166,16 @@ def main() -> None:
                 logger.exception("site-worker reconcile failed")
             next_worker_reconcile = now + worker_reconcile_interval
         conn = db_factory()
+        queued_ids: List[int] = []
         try:
             expire_stale_leases(conn)
             mark_lost_workers(conn)
             prune_worker_history(conn, retention_seconds=worker_history_seconds)
-            site_ids = sorted(set(queued_site_ids(conn)) | set(_online_site_ids(conn)))
+            queued_ids = [int(site_id) for site_id in queued_site_ids(conn)]
             conn.commit()
         finally:
             conn.close()
+        site_ids = sorted(set(queued_ids) | set(_online_site_ids(secret, logger)))
         for site_id in site_ids:
             try:
                 _spawn_site_worker(db_factory, site_id=int(site_id), logger=logger)

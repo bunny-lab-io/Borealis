@@ -521,27 +521,21 @@ def _agent_online_window_seconds() -> int:
         return 300
 
 
-def _online_site_device_count(conn: sqlite3.Connection, *, site_id: int, now_ts: Optional[int] = None) -> int:
-    cutoff = int(now_ts if now_ts is not None else _now_ts()) - _agent_online_window_seconds()
-    cur = conn.cursor()
+def _online_site_device_count(secret: str, *, site_id: int, window_seconds: Optional[int] = None) -> int:
+    if int(site_id or 0) <= 0:
+        return 0
+    window = int(window_seconds or _agent_online_window_seconds())
     try:
-        cur.execute(
-            """
-            SELECT COUNT(DISTINCT d.guid)
-              FROM device_sites ds
-              JOIN devices d ON lower(d.hostname)=lower(ds.device_hostname)
-             WHERE ds.site_id=?
-               AND d.last_seen IS NOT NULL
-               AND d.last_seen>=?
-               AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
-            """,
-            (int(site_id), cutoff),
+        payload = _get_internal(
+            secret,
+            f"/api/internal/job-scheduler/online-sites?site_id={int(site_id)}&window_seconds={window}",
+            timeout=10.0,
         )
-        row = cur.fetchone()
     except Exception:
         return 0
+    counts = payload.get("site_online_device_counts") if isinstance(payload.get("site_online_device_counts"), Mapping) else {}
     try:
-        return max(0, int(row[0] if row else 0))
+        return max(0, int(counts.get(str(int(site_id))) or 0))
     except Exception:
         return 0
 
@@ -1195,6 +1189,7 @@ def _execute_work_item(
 def main() -> None:
     settings = load_runtime_config()
     logger = initialise_engine_logger(settings, name="borealis.site_worker")
+    secret = str(settings.secret_key or "")
     database.initialise_engine_database(settings.database_url, logger=logger)
     db_factory = _db_factory(settings.database_url)
     worker_guid = str(os.environ.get("BOREALIS_SITE_WORKER_GUID") or "").strip()
@@ -1264,8 +1259,8 @@ def main() -> None:
         except Exception:
             return 0
 
-    def online_device_count(conn: sqlite3.Connection) -> int:
-        return _online_site_device_count(conn, site_id=site_id)
+    def online_device_count(_conn: sqlite3.Connection) -> int:
+        return _online_site_device_count(secret, site_id=site_id)
 
     def visible_links() -> list[Dict[str, Any]]:
         count = connected_device_count()
