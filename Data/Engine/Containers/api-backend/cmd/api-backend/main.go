@@ -134,7 +134,7 @@ func main() {
 	registerCredentialRoutes(mux, auth, proxy)
 	registerAdminDeviceRoutes(mux, auth)
 	registerWorkflowRoutes(mux, auth, proxy)
-	registerWatchdogRoutes(mux, auth, proxy)
+	registerWatchdogRoutes(mux, auth, proxy, operatorRealtime)
 	registerScheduledJobRoutes(mux, auth, proxy)
 	registerNotificationRoutes(mux, auth, operatorRealtime)
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, proxy)

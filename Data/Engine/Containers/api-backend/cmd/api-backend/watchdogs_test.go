@@ -24,6 +24,18 @@ type fakeWatchdogStore struct {
 	incidentProfile operatorProfile
 	incidentFilter  watchdogIncidentFilter
 	incidentPayload map[string]any
+
+	ackProfile  operatorProfile
+	ackID       int64
+	ackIncident map[string]any
+	ackFound    bool
+
+	stateProfile  operatorProfile
+	stateID       int64
+	stateValue    string
+	stateReason   string
+	stateIncident map[string]any
+	stateErrors   []string
 }
 
 func (s *fakeWatchdogStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -55,6 +67,29 @@ func (s *fakeWatchdogStore) listWatchdogIncidents(_ context.Context, profile ope
 	return s.incidentPayload, nil
 }
 
+func (s *fakeWatchdogStore) acknowledgeWatchdogIncident(_ context.Context, profile operatorProfile, incidentID int64) (map[string]any, bool, error) {
+	s.ackProfile = profile
+	s.ackID = incidentID
+	return s.ackIncident, s.ackFound, nil
+}
+
+func (s *fakeWatchdogStore) updateWatchdogIncidentState(_ context.Context, profile operatorProfile, incidentID int64, state string, reason string) (map[string]any, []string, error) {
+	s.stateProfile = profile
+	s.stateID = incidentID
+	s.stateValue = state
+	s.stateReason = reason
+	return s.stateIncident, s.stateErrors, nil
+}
+
+type fakeWatchdogIncidentBroadcaster struct {
+	payload map[string]any
+}
+
+func (b *fakeWatchdogIncidentBroadcaster) broadcastWatchdogIncidents(_ context.Context, payload map[string]any) error {
+	b.payload = copyMap(payload)
+	return nil
+}
+
 func testWatchdogAuth(store *fakeWatchdogStore) *authService {
 	if store.profile.Username == "" {
 		store.profile.Username = "operator"
@@ -75,13 +110,26 @@ func testWatchdogAuth(store *fakeWatchdogStore) *authService {
 
 func watchdogTestMux(store *fakeWatchdogStore) *http.ServeMux {
 	mux := http.NewServeMux()
-	registerWatchdogRoutes(mux, testWatchdogAuth(store), http.NotFoundHandler())
+	registerWatchdogRoutes(mux, testWatchdogAuth(store), http.NotFoundHandler(), nil)
+	return mux
+}
+
+func watchdogTestMuxWithBroadcaster(store *fakeWatchdogStore, broadcaster watchdogIncidentBroadcaster) *http.ServeMux {
+	mux := http.NewServeMux()
+	registerWatchdogRoutes(mux, testWatchdogAuth(store), http.NotFoundHandler(), broadcaster)
 	return mux
 }
 
 func watchdogRequest(method string, path string) *http.Request {
 	request := httptest.NewRequest(method, path, nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	return request
+}
+
+func watchdogJSONRequest(method string, path string, body string) *http.Request {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.Header.Set("Content-Type", "application/json")
 	return request
 }
 
@@ -153,6 +201,51 @@ func TestWatchdogIncidentsHandlerPassesStateAndSite(t *testing.T) {
 	}
 	if store.incidentFilter.State != "all" || store.incidentFilter.SiteID == nil || *store.incidentFilter.SiteID != 3 {
 		t.Fatalf("unexpected incident filter %+v", store.incidentFilter)
+	}
+}
+
+func TestWatchdogIncidentAcknowledgeUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		ackIncident: map[string]any{"id": int64(12), "watchdog_id": int64(4), "hostname": "host-1"},
+		ackFound:    true,
+	}
+	broadcaster := &fakeWatchdogIncidentBroadcaster{}
+	recorder := httptest.NewRecorder()
+	watchdogTestMuxWithBroadcaster(store, broadcaster).ServeHTTP(recorder, watchdogRequest(http.MethodPost, "/api/watchdogs/incidents/12/acknowledge"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.ackID != 12 {
+		t.Fatalf("unexpected ack id %d", store.ackID)
+	}
+	if broadcaster.payload["hostname"] != "host-1" || broadcaster.payload["watchdog_id"] != int64(4) {
+		t.Fatalf("unexpected broadcast payload %+v", broadcaster.payload)
+	}
+}
+
+func TestWatchdogIncidentStateUpdatePassesPayload(t *testing.T) {
+	store := &fakeWatchdogStore{
+		stateIncident: map[string]any{"id": int64(12), "watchdog_id": int64(4), "hostname": "host-1", "state": "suppressed"},
+	}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs/incidents/12/state", `{"state":"suppressed","reason":"maintenance"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.stateID != 12 || store.stateValue != "suppressed" || store.stateReason != "maintenance" {
+		t.Fatalf("unexpected state update id=%d state=%q reason=%q", store.stateID, store.stateValue, store.stateReason)
+	}
+}
+
+func TestWatchdogIncidentStateUpdateMapsNotFound(t *testing.T) {
+	store := &fakeWatchdogStore{stateErrors: []string{"Incident not found."}}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs/incidents/99/state", `{"state":"open"}`))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

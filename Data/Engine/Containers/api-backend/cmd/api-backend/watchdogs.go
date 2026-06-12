@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -27,6 +29,12 @@ type watchdogStore interface {
 	listWatchdogs(ctx context.Context, profile operatorProfile, filter watchdogListFilter) ([]map[string]any, error)
 	getWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) (map[string]any, bool, error)
 	listWatchdogIncidents(ctx context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error)
+	acknowledgeWatchdogIncident(ctx context.Context, profile operatorProfile, incidentID int64) (map[string]any, bool, error)
+	updateWatchdogIncidentState(ctx context.Context, profile operatorProfile, incidentID int64, state string, reason string) (map[string]any, []string, error)
+}
+
+type watchdogIncidentBroadcaster interface {
+	broadcastWatchdogIncidents(ctx context.Context, payload map[string]any) error
 }
 
 type watchdogListFilter struct {
@@ -36,8 +44,9 @@ type watchdogListFilter struct {
 }
 
 type watchdogIncidentFilter struct {
-	State  string
-	SiteID *int64
+	State      string
+	SiteID     *int64
+	IncidentID *int64
 }
 
 type watchdogRow struct {
@@ -86,9 +95,9 @@ type watchdogIncidentRow struct {
 	WatchdogDescription sql.NullString
 }
 
-func registerWatchdogRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+func registerWatchdogRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) {
 	mux.HandleFunc("/api/watchdogs", watchdogsRootHandler(auth, fallback))
-	mux.HandleFunc("/api/watchdogs/", watchdogsSubtreeHandler(auth, fallback))
+	mux.HandleFunc("/api/watchdogs/", watchdogsSubtreeHandler(auth, fallback, broadcaster))
 }
 
 func watchdogsRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -101,7 +110,7 @@ func watchdogsRootHandler(auth *authService, fallback http.Handler) http.Handler
 	}
 }
 
-func watchdogsSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func watchdogsSubtreeHandler(auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/watchdogs/"), "/"), "/")
 		if len(parts) == 1 && parts[0] == "metadata" && r.Method == http.MethodGet {
@@ -115,6 +124,16 @@ func watchdogsSubtreeHandler(auth *authService, fallback http.Handler) http.Hand
 		if len(parts) == 1 && parts[0] == "incidents" && r.Method == http.MethodGet {
 			watchdogIncidentsList(w, r, auth)
 			return
+		}
+		if len(parts) == 3 && parts[0] == "incidents" && r.Method == http.MethodPost {
+			switch parts[2] {
+			case "acknowledge":
+				watchdogIncidentAcknowledge(w, r, auth, broadcaster, parts[1])
+				return
+			case "state":
+				watchdogIncidentStateUpdate(w, r, auth, broadcaster, parts[1])
+				return
+			}
 		}
 		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodGet {
 			watchdogDetail(w, r, auth, parts[0])
@@ -186,6 +205,85 @@ func watchdogIncidentsList(w http.ResponseWriter, r *http.Request, auth *authSer
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func watchdogIncidentAcknowledge(w http.ResponseWriter, r *http.Request, auth *authService, broadcaster watchdogIncidentBroadcaster, incidentIDText string) {
+	profile, store, ok := watchdogRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	incidentID, err := parsePositivePathInt(incidentIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+	defer cancel()
+	incident, found, err := store.acknowledgeWatchdogIncident(ctx, profile, incidentID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	broadcastWatchdogIncidentRefresh(r.Context(), broadcaster, incident)
+	writeJSON(w, http.StatusOK, incident)
+}
+
+func watchdogIncidentStateUpdate(w http.ResponseWriter, r *http.Request, auth *authService, broadcaster watchdogIncidentBroadcaster, incidentIDText string) {
+	profile, store, ok := watchdogRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	incidentID, err := parsePositivePathInt(incidentIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	body := map[string]any{}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
+	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+	defer cancel()
+	incident, validationErrors, err := store.updateWatchdogIncidentState(
+		ctx,
+		profile,
+		incidentID,
+		firstText(cleanText(body["state"]), "open"),
+		cleanText(body["reason"]),
+	)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(validationErrors) > 0 {
+		if len(validationErrors) == 1 && validationErrors[0] == "Incident not found." {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": validationErrors})
+		return
+	}
+	if incident == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	broadcastWatchdogIncidentRefresh(r.Context(), broadcaster, incident)
+	writeJSON(w, http.StatusOK, incident)
+}
+
+func broadcastWatchdogIncidentRefresh(ctx context.Context, broadcaster watchdogIncidentBroadcaster, incident map[string]any) {
+	if broadcaster == nil || incident == nil {
+		return
+	}
+	payload := map[string]any{
+		"hostname":    cleanText(incident["hostname"]),
+		"watchdog_id": coerceInt64(incident["watchdog_id"]),
+	}
+	if err := broadcaster.broadcastWatchdogIncidents(ctx, payload); err != nil {
+		logDebug("watchdogs", "watchdog_incidents_changed broadcast failed: "+err.Error())
+	}
 }
 
 func watchdogRequestContext(w http.ResponseWriter, r *http.Request, auth *authService) (operatorProfile, watchdogStore, bool) {
@@ -343,6 +441,162 @@ func (s *postgresOperatorStore) listWatchdogIncidents(ctx context.Context, profi
 		return nil, err
 	}
 	return map[string]any{"items": items, "counts": counts}, nil
+}
+
+func (s *postgresOperatorStore) acknowledgeWatchdogIncident(ctx context.Context, profile operatorProfile, incidentID int64) (map[string]any, bool, error) {
+	_, found, err := s.findVisibleWatchdogIncident(ctx, profile, incidentID, "open")
+	if err != nil || !found {
+		return nil, found, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	now := time.Now().Unix()
+	username := firstText(cleanText(profile.Username), "Unknown")
+	result, err := conn.ExecContext(ctx, `
+		UPDATE engine.watchdog_incidents
+		   SET acknowledged_at=$1,
+		       acknowledged_by=$2,
+		       updated_at=$1
+		 WHERE id=$3
+	`, now, username, incidentID)
+	if err != nil {
+		return nil, false, err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return nil, false, nil
+	}
+	refreshed, refreshedFound, err := s.findVisibleWatchdogIncident(ctx, profile, incidentID, "open")
+	if err != nil {
+		return nil, false, err
+	}
+	if refreshedFound {
+		return refreshed, true, nil
+	}
+	return nil, false, nil
+}
+
+func (s *postgresOperatorStore) updateWatchdogIncidentState(ctx context.Context, profile operatorProfile, incidentID int64, state string, reason string) (map[string]any, []string, error) {
+	desiredState := normalizeIncidentMutationState(state)
+	if desiredState == "" {
+		return nil, []string{"Unsupported incident state transition."}, nil
+	}
+	target, found, err := s.findVisibleWatchdogIncident(ctx, profile, incidentID, "all")
+	if err != nil {
+		return nil, nil, err
+	}
+	if !found {
+		return nil, []string{"Incident not found."}, nil
+	}
+	currentState := strings.ToLower(cleanText(target["state"]))
+	if currentState == "resolved" {
+		return nil, []string{"Resolved incidents are historical records and cannot be reopened."}, nil
+	}
+	if currentState == desiredState {
+		return target, nil, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rollbackQuietly(tx)
+
+	watchdogID := coerceInt64(target["watchdog_id"])
+	hostname := cleanText(target["hostname"])
+	now := time.Now().Unix()
+	if desiredState == "open" {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM engine.watchdog_device_overrides
+			 WHERE watchdog_id=$1 AND LOWER(hostname)=LOWER($2)
+		`, watchdogID, hostname); err != nil {
+			return nil, nil, err
+		}
+	}
+	resolutionReason := ""
+	if desiredState == "suppressed" {
+		resolutionReason = cleanSingleLine(reason)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.watchdog_incidents
+		   SET state=$1,
+		       resolved_at=NULL,
+		       resolution_reason=$2,
+		       updated_at=$3
+		 WHERE id=$4
+	`, desiredState, resolutionReason, now, incidentID); err != nil {
+		return nil, nil, err
+	}
+
+	nextDeviceState := "triggered"
+	if desiredState == "suppressed" {
+		nextDeviceState = "suppressed"
+	}
+	if desiredState == "suppressed" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.watchdog_device_state
+			   SET state=$1,
+			       last_evaluated_at=GREATEST(COALESCE(last_evaluated_at, 0), $2),
+			       current_incident_id=$3,
+			       updated_at=$2
+			 WHERE watchdog_id=$4 AND LOWER(hostname)=LOWER($5)
+		`, nextDeviceState, now, incidentID, watchdogID, hostname); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.watchdog_device_state
+			   SET state=$1,
+			       clear_started_at=$2,
+			       last_evaluated_at=GREATEST(COALESCE(last_evaluated_at, 0), $3),
+			       current_incident_id=$4,
+			       updated_at=$3
+			 WHERE watchdog_id=$5 AND LOWER(hostname)=LOWER($6)
+		`, nextDeviceState, nil, now, incidentID, watchdogID, hostname); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+
+	refreshed, refreshedFound, err := s.findVisibleWatchdogIncident(ctx, profile, incidentID, desiredState)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !refreshedFound {
+		return nil, nil, nil
+	}
+	return refreshed, nil, nil
+}
+
+func (s *postgresOperatorStore) findVisibleWatchdogIncident(ctx context.Context, profile operatorProfile, incidentID int64, state string) (map[string]any, bool, error) {
+	payload, err := s.listWatchdogIncidents(ctx, profile, watchdogIncidentFilter{
+		State:      state,
+		IncidentID: &incidentID,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	items, _ := payload["items"].([]map[string]any)
+	if len(items) > 0 {
+		return items[0], true, nil
+	}
+	rawItems, _ := payload["items"].([]any)
+	for _, item := range rawItems {
+		if typed, ok := item.(map[string]any); ok {
+			return typed, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 func queryWatchdogRows(ctx context.Context, conn *sql.Conn, filter watchdogListFilter) ([]watchdogRow, error) {
@@ -595,6 +849,10 @@ func queryWatchdogIncidents(ctx context.Context, conn *sql.Conn, filter watchdog
 	if filter.SiteID != nil {
 		params = append(params, *filter.SiteID)
 		clauses = append(clauses, fmt.Sprintf("i.site_id = $%d", len(params)))
+	}
+	if filter.IncidentID != nil {
+		params = append(params, *filter.IncidentID)
+		clauses = append(clauses, fmt.Sprintf("i.id = $%d", len(params)))
 	}
 	if visibleWatchdogIDs != nil {
 		placeholders := []string{}
@@ -944,6 +1202,15 @@ func normalizeIncidentQueryState(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "open"
+	}
+}
+
+func normalizeIncidentMutationState(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "open", "suppressed":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
 	}
 }
 

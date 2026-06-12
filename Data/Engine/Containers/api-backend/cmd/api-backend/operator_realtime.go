@@ -156,6 +156,11 @@ func (h *operatorRealtimeHub) broadcastNotification(ctx context.Context, payload
 	return h.emit("borealis_notification", payload)
 }
 
+func (h *operatorRealtimeHub) broadcastWatchdogIncidents(ctx context.Context, payload map[string]any) error {
+	_ = ctx
+	return h.emit("watchdog_incidents_changed", payload)
+}
+
 func writeSSEEvent(w http.ResponseWriter, event operatorRealtimeEvent) error {
 	name := cleanText(event.Name)
 	if name == "" {
