@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnRuntime *vpnTunnelService, fallback http.Handler) {
 	_ = fallback
 	mux.HandleFunc("/api/internal/job-scheduler/credential/", internalSchedulerCredentialHandler(auth))
+	mux.HandleFunc("/api/internal/job-scheduler/service-account/", internalSchedulerServiceAccountHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/public-base-url", internalSchedulerPublicBaseURLHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
@@ -28,6 +30,10 @@ var errSchedulerCredentialResetRequired = errors.New("Stored credential secret m
 
 type internalSchedulerCredentialStore interface {
 	loadDecryptedSchedulerCredential(ctx context.Context, secret authSecretService, credentialID int64) (map[string]any, bool, error)
+}
+
+type internalSchedulerServiceAccountStore interface {
+	loadSchedulerServiceAccount(ctx context.Context, agentID string) (map[string]any, bool, error)
 }
 
 type internalSchedulerWorkItemStore interface {
@@ -79,6 +85,47 @@ func internalSchedulerCredentialHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"credential": credential})
+	}
+}
+
+func internalSchedulerServiceAccountHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		store, ok := auth.store.(internalSchedulerServiceAccountStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "service_account_store_unavailable"})
+			return
+		}
+		rawAgentID := strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/internal/job-scheduler/service-account/"), "/")
+		agentID, err := url.PathUnescape(rawAgentID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "service_account_not_found"})
+			return
+		}
+		agentID = strings.TrimSpace(agentID)
+		if agentID == "" {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "service_account_not_found"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		serviceAccount, found, err := store.loadSchedulerServiceAccount(ctx, agentID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "service_account_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"service_account": serviceAccount})
 	}
 }
 

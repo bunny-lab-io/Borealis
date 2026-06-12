@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
+from urllib.parse import quote
 
 import requests
 
@@ -141,6 +142,25 @@ def _fetch_credential(secret: str, credential_id: int) -> Dict[str, Any]:
     if not isinstance(credential, Mapping):
         raise RuntimeError("credential payload unavailable")
     return dict(credential)
+
+
+def _fetch_service_account(secret: str, agent_id: str) -> Optional[Dict[str, Any]]:
+    agent_key = str(agent_id or "").strip()
+    if not agent_key:
+        return None
+    try:
+        payload = _get_internal(
+            f"/api/internal/job-scheduler/service-account/{quote(agent_key, safe='')}",
+            secret=secret,
+            timeout=30.0,
+        )
+    except requests.HTTPError as exc:
+        response = getattr(exc, "response", None)
+        if response is not None and getattr(response, "status_code", None) == 404:
+            return None
+        raise
+    service_account = payload.get("service_account") if isinstance(payload.get("service_account"), Mapping) else None
+    return dict(service_account) if isinstance(service_account, Mapping) else None
 
 
 def _make_host_service_emitter(secret: str):
@@ -289,6 +309,7 @@ def _build_scheduler(settings, logger):
     job_scheduler.set_public_base_url_lookup(scheduler, lambda: _resolve_public_base_url(settings, secret))
     job_scheduler.set_online_lookup(scheduler, _make_online_lookup(db_factory, logger))
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
+    job_scheduler.set_service_account_fetcher(scheduler, lambda agent_id: _fetch_service_account(secret, agent_id))
     job_scheduler.set_vpn_session_lookup(scheduler, _make_vpn_session_lookup(secret))
     job_scheduler.set_vpn_session_prepare(scheduler, _make_vpn_session_prepare(secret))
     def _enqueue_onboarding(**kwargs):

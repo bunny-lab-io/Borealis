@@ -403,6 +403,42 @@ func (s *postgresOperatorStore) loadDecryptedSchedulerCredential(ctx context.Con
 	return credential, true, nil
 }
 
+func (s *postgresOperatorStore) loadSchedulerServiceAccount(ctx context.Context, agentID string) (map[string]any, bool, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, false, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, errors.Join(errOperatorStoreDown, err)
+	}
+	var row struct {
+		agentID           sql.NullString
+		username          sql.NullString
+		passwordEncrypted []byte
+	}
+	err = conn.QueryRowContext(ctx, `
+		SELECT agent_id, username, password_encrypted
+		  FROM engine.agent_service_account
+		 WHERE agent_id=$1
+	`, agentID).Scan(&row.agentID, &row.username, &row.passwordEncrypted)
+	closeErr := conn.Close()
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	if closeErr != nil {
+		return nil, false, closeErr
+	}
+	return map[string]any{
+		"agent_id": nullString(row.agentID),
+		"username": nullString(row.username),
+		"password": string(row.passwordEncrypted),
+	}, true, nil
+}
+
 func credentialSelectSQL() string {
 	return `
 		SELECT

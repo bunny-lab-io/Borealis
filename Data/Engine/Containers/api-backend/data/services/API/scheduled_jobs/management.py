@@ -23,7 +23,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from typing import TYPE_CHECKING, List, Mapping, Optional
 
 from flask import jsonify, request
@@ -339,6 +339,18 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
         credential = payload.get("credential") if isinstance(payload, Mapping) else None
         return dict(credential) if isinstance(credential, Mapping) else None
 
+    def _load_service_account(agent_id: str):
+        agent_key = str(agent_id or "").strip()
+        if not agent_key:
+            return None
+        payload = _internal_api_json(
+            app,
+            f"/api/internal/job-scheduler/service-account/{quote(agent_key, safe='')}",
+            timeout=30.0,
+        )
+        service_account = payload.get("service_account") if isinstance(payload, Mapping) else None
+        return dict(service_account) if isinstance(service_account, Mapping) else None
+
     def _scheduler_public_base_url() -> str:
         return str(public_base_url(adapters.context) or "").strip()
 
@@ -369,6 +381,7 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     job_scheduler.set_vpn_session_prepare(scheduler, _prepare_vpn_session_snapshot)
     job_scheduler.set_server_ansible_runner(scheduler, ansible_dispatcher.queue_run)
     job_scheduler.set_credential_fetcher(scheduler, _load_decrypted_credential)
+    job_scheduler.set_service_account_fetcher(scheduler, _load_service_account)
     job_scheduler.set_public_base_url_lookup(scheduler, _scheduler_public_base_url)
 
     def _enqueue_onboarding_run(**kwargs):

@@ -77,6 +77,22 @@ func (s *fakeInternalSchedulerCredentialStore) loadDecryptedSchedulerCredential(
 	return copyMap(s.credential), s.found, nil
 }
 
+type fakeInternalSchedulerServiceAccountStore struct {
+	*fakeOperatorStore
+	serviceAccount map[string]any
+	found          bool
+	err            error
+	agentSeen      string
+}
+
+func (s *fakeInternalSchedulerServiceAccountStore) loadSchedulerServiceAccount(_ context.Context, agentID string) (map[string]any, bool, error) {
+	s.agentSeen = agentID
+	if s.err != nil {
+		return nil, false, s.err
+	}
+	return copyMap(s.serviceAccount), s.found, nil
+}
+
 func TestInternalSchedulerCredentialReturnsDecryptedPayload(t *testing.T) {
 	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store := &fakeInternalSchedulerCredentialStore{
@@ -113,6 +129,42 @@ func TestInternalSchedulerCredentialReturnsDecryptedPayload(t *testing.T) {
 	credential := payload["credential"].(map[string]any)
 	if credential["password"] != "secret" || credential["username"] != "operator" {
 		t.Fatalf("unexpected credential payload %#v", credential)
+	}
+}
+
+func TestInternalSchedulerServiceAccountReturnsPayload(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerServiceAccountStore{
+		fakeOperatorStore: baseStore,
+		found:             true,
+		serviceAccount: map[string]any{
+			"agent_id": "agent-01",
+			"username": "svc-agent-01",
+			"password": "secret",
+		},
+	}
+	auth.store = store
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/service-account/agent-01", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.agentSeen != "agent-01" {
+		t.Fatalf("expected agent lookup, got %q", store.agentSeen)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	serviceAccount := payload["service_account"].(map[string]any)
+	if serviceAccount["username"] != "svc-agent-01" || serviceAccount["password"] != "secret" {
+		t.Fatalf("unexpected service account payload %#v", serviceAccount)
 	}
 }
 

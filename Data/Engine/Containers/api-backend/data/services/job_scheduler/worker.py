@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, Mapping, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -125,6 +126,23 @@ def _fetch_credential(secret: str, credential_id: int) -> Dict[str, Any]:
     if not isinstance(credential, Mapping):
         raise RuntimeError("credential payload unavailable")
     return dict(credential)
+
+
+def _fetch_service_account(secret: str, agent_id: str) -> Optional[Dict[str, Any]]:
+    agent_key = str(agent_id or "").strip()
+    if not agent_key:
+        return None
+    response = requests.get(
+        f"{_api_base_url()}/api/internal/job-scheduler/service-account/{quote(agent_key, safe='')}",
+        headers=_headers(secret),
+        timeout=30.0,
+    )
+    if response.status_code == 404:
+        return None
+    response.raise_for_status()
+    payload = response.json()
+    service_account = payload.get("service_account") if isinstance(payload, Mapping) else None
+    return dict(service_account) if isinstance(service_account, Mapping) else None
 
 
 def _get_internal(secret: str, path: str, *, timeout: float = 15.0) -> Dict[str, Any]:
@@ -369,6 +387,7 @@ def _build_worker_scheduler(settings, logger, db_factory, *, socket_runtime: Opt
     )
     secret = str(settings.secret_key or "")
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
+    job_scheduler.set_service_account_fetcher(scheduler, lambda agent_id: _fetch_service_account(secret, agent_id))
     job_scheduler.set_public_base_url_lookup(scheduler, lambda: _public_base_url(settings, secret))
     if socket_runtime is not None:
         def _emit_via_socket_runtime(hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:

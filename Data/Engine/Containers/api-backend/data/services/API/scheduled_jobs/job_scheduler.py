@@ -810,6 +810,7 @@ class JobScheduler(OnboardingSchedulerMixin):
         self._server_ansible_runner: Optional[Callable[..., str]] = None
         # Required for credential-backed execution; Go internal helper owns secret decryption.
         self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
+        self._service_account_fetcher: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None
         # Optional callback to resolve the Engine URL agents should enroll against.
         self._public_base_url_lookup: Optional[Callable[[], str]] = None
         # Optional callback to fetch active WireGuard sessions keyed by agent_id.
@@ -2088,6 +2089,9 @@ class JobScheduler(OnboardingSchedulerMixin):
     def set_credential_fetcher(self, fn: Optional[Callable[[int], Optional[Dict[str, Any]]]]):
         self._credential_fetcher = fn
 
+    def set_service_account_fetcher(self, fn: Optional[Callable[[str], Optional[Dict[str, Any]]]]):
+        self._service_account_fetcher = fn
+
     def set_public_base_url_lookup(self, fn: Optional[Callable[[], str]]):
         self._public_base_url_lookup = fn
 
@@ -2283,18 +2287,6 @@ class JobScheduler(OnboardingSchedulerMixin):
         conn.commit()
         conn.close()
 
-    def _decode_secret_blob(self, value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, memoryview):
-            value = value.tobytes()
-        if isinstance(value, bytes):
-            try:
-                return value.decode("utf-8")
-            except Exception:
-                return value.decode("utf-8", errors="replace")
-        return str(value)
-
     def _parse_metadata_json(self, value: Any) -> Dict[str, Any]:
         if isinstance(value, dict):
             return dict(value)
@@ -2357,34 +2349,22 @@ class JobScheduler(OnboardingSchedulerMixin):
         agent_key = str(agent_id or "").strip()
         if not agent_key:
             return None
-        conn = self._conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT agent_id, username, password_encrypted
-                  FROM agent_service_account
-                 WHERE agent_id=?
-                """,
-                (agent_key,),
-            )
-            row = cur.fetchone()
-            if not row:
+        if callable(self._service_account_fetcher):
+            try:
+                return self._service_account_fetcher(agent_key)
+            except Exception as exc:
+                self._log_event(
+                    "service account fetcher failed",
+                    level="ERROR",
+                    extra={"agent_id": agent_key, "error": str(exc)},
+                )
                 return None
-            return {
-                "agent_id": row[0] or "",
-                "username": row[1] or "",
-                "password": self._decode_secret_blob(row[2]),
-            }
-        except Exception as exc:
-            self._log_event(
-                "failed to load agent service account",
-                level="ERROR",
-                extra={"agent_id": agent_key, "error": str(exc)},
-            )
-            return None
-        finally:
-            conn.close()
+        self._log_event(
+            "service account fetcher unavailable",
+            level="ERROR",
+            extra={"agent_id": agent_key},
+        )
+        return None
 
     def _active_vpn_sessions(self) -> Dict[str, Dict[str, Any]]:
         if not callable(self._vpn_session_lookup):
@@ -6203,6 +6183,10 @@ def set_server_ansible_runner(scheduler: JobScheduler, fn: Callable[..., str]):
 
 def set_credential_fetcher(scheduler: JobScheduler, fn: Callable[[int], Optional[Dict[str, Any]]]):
     scheduler._credential_fetcher = fn
+
+
+def set_service_account_fetcher(scheduler: JobScheduler, fn: Callable[[str], Optional[Dict[str, Any]]]):
+    scheduler._service_account_fetcher = fn
 
 
 def set_public_base_url_lookup(scheduler: JobScheduler, fn: Callable[[], str]):

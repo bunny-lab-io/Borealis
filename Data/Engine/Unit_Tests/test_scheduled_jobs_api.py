@@ -215,6 +215,24 @@ def test_scheduler_credential_loader_requires_configured_fetcher(engine_harness:
     assert scheduler._load_credential(99) is None
 
 
+def test_scheduler_service_account_loader_requires_configured_fetcher(
+    engine_harness: EngineTestHarness,
+    monkeypatch,
+) -> None:
+    scheduler = scheduled_job_module.JobScheduler(
+        engine_harness.app,
+        SimpleNamespace(),
+        str(engine_harness.db_path),
+    )
+
+    def _unexpected_db_read():
+        raise AssertionError("service account fallback should not read database")
+
+    monkeypatch.setattr(scheduler, "_conn", _unexpected_db_read)
+
+    assert scheduler._load_service_account("agent-01") is None
+
+
 def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHarness) -> None:
     client, _scheduler = _scheduled_jobs_client(engine_harness)
 
