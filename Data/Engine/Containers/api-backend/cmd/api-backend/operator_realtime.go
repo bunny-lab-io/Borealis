@@ -161,6 +161,11 @@ func (h *operatorRealtimeHub) broadcastWatchdogIncidents(ctx context.Context, pa
 	return h.emit("watchdog_incidents_changed", payload)
 }
 
+func (h *operatorRealtimeHub) broadcastDeviceWatchdogs(ctx context.Context, payload map[string]any) error {
+	_ = ctx
+	return h.emit("device_watchdogs_changed", payload)
+}
+
 func writeSSEEvent(w http.ResponseWriter, event operatorRealtimeEvent) error {
 	name := cleanText(event.Name)
 	if name == "" {

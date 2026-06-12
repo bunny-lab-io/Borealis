@@ -7,7 +7,6 @@
 # - POST /api/watchdogs/preview (Token Authenticated) - Evaluates an unsaved watchdog definition against current inventory.
 # - POST /api/watchdogs (Token Authenticated) - Creates a watchdog policy.
 # - PUT /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Updates a watchdog policy.
-# - DELETE /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Deletes a watchdog policy.
 # - GET /api/devices/<device_id>/watchdogs (Token Authenticated) - Returns device-specific watchdog assignments, incidents, and overrides.
 # - POST /api/devices/<device_id>/watchdogs/overrides (Token Authenticated) - Creates, updates, or clears a per-device watchdog override.
 # ======================================================
@@ -98,16 +97,6 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if errors:
             return jsonify({"errors": errors}), 400
         return jsonify(record)
-
-    @blueprint.route("/api/watchdogs/<int:watchdog_id>", methods=["DELETE"])
-    def delete_watchdog(watchdog_id: int):
-        user, error = _require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        deleted = runtime.delete_watchdog(watchdog_id, user=user)
-        if not deleted:
-            return jsonify({"error": "not_found"}), 404
-        return jsonify({"status": "deleted"})
 
     @blueprint.route("/api/devices/<device_id>/watchdogs", methods=["GET"])
     def device_watchdogs(device_id: str):

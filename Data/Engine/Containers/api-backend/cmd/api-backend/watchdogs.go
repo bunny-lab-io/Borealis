@@ -31,10 +31,15 @@ type watchdogStore interface {
 	listWatchdogIncidents(ctx context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error)
 	acknowledgeWatchdogIncident(ctx context.Context, profile operatorProfile, incidentID int64) (map[string]any, bool, error)
 	updateWatchdogIncidentState(ctx context.Context, profile operatorProfile, incidentID int64, state string, reason string) (map[string]any, []string, error)
+	deleteWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) ([]string, bool, error)
 }
 
 type watchdogIncidentBroadcaster interface {
 	broadcastWatchdogIncidents(ctx context.Context, payload map[string]any) error
+}
+
+type watchdogDeviceBroadcaster interface {
+	broadcastDeviceWatchdogs(ctx context.Context, payload map[string]any) error
 }
 
 type watchdogListFilter struct {
@@ -139,6 +144,10 @@ func watchdogsSubtreeHandler(auth *authService, fallback http.Handler, broadcast
 			watchdogDetail(w, r, auth, parts[0])
 			return
 		}
+		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
+			watchdogDelete(w, r, auth, broadcaster, parts[0])
+			return
+		}
 		fallback.ServeHTTP(w, r)
 	}
 }
@@ -186,6 +195,34 @@ func watchdogDetail(w http.ResponseWriter, r *http.Request, auth *authService, w
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func watchdogDelete(w http.ResponseWriter, r *http.Request, auth *authService, broadcaster watchdogIncidentBroadcaster, watchdogIDText string) {
+	profile, store, ok := watchdogRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	watchdogID, err := parsePositivePathInt(watchdogIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+	defer cancel()
+	affectedHosts, found, err := store.deleteWatchdog(ctx, profile, watchdogID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	for _, hostname := range affectedHosts {
+		broadcastWatchdogRefresh(r.Context(), broadcaster, hostname, watchdogID)
+	}
+	broadcastWatchdogRefresh(r.Context(), broadcaster, "", watchdogID)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
 }
 
 func watchdogIncidentsList(w http.ResponseWriter, r *http.Request, auth *authService) {
@@ -277,12 +314,30 @@ func broadcastWatchdogIncidentRefresh(ctx context.Context, broadcaster watchdogI
 	if broadcaster == nil || incident == nil {
 		return
 	}
+	broadcastWatchdogRefresh(ctx, broadcaster, cleanText(incident["hostname"]), coerceInt64(incident["watchdog_id"]))
+}
+
+func broadcastWatchdogRefresh(ctx context.Context, broadcaster watchdogIncidentBroadcaster, hostname string, watchdogID int64) {
+	if broadcaster == nil {
+		return
+	}
 	payload := map[string]any{
-		"hostname":    cleanText(incident["hostname"]),
-		"watchdog_id": coerceInt64(incident["watchdog_id"]),
+		"hostname":    cleanText(hostname),
+		"watchdog_id": watchdogID,
+		"changed_at":  time.Now().Unix(),
 	}
 	if err := broadcaster.broadcastWatchdogIncidents(ctx, payload); err != nil {
 		logDebug("watchdogs", "watchdog_incidents_changed broadcast failed: "+err.Error())
+	}
+	if payload["hostname"] == "" {
+		return
+	}
+	deviceBroadcaster, ok := broadcaster.(watchdogDeviceBroadcaster)
+	if !ok {
+		return
+	}
+	if err := deviceBroadcaster.broadcastDeviceWatchdogs(ctx, payload); err != nil {
+		logDebug("watchdogs", "device_watchdogs_changed broadcast failed: "+err.Error())
 	}
 }
 
@@ -407,6 +462,50 @@ func (s *postgresOperatorStore) getWatchdog(ctx context.Context, profile operato
 		}
 	}
 	return nil, false, nil
+}
+
+func (s *postgresOperatorStore) deleteWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) ([]string, bool, error) {
+	existing, found, err := s.getWatchdog(ctx, profile, watchdogID)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	affectedHosts, err := loadWatchdogAffectedHosts(ctx, conn, coerceInt64(existing["id"]))
+	if err != nil {
+		return nil, false, err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rollbackQuietly(tx)
+	for _, statement := range []string{
+		"DELETE FROM engine.watchdog_targets WHERE watchdog_id=$1",
+		"DELETE FROM engine.watchdog_sites WHERE watchdog_id=$1",
+		"DELETE FROM engine.watchdog_device_overrides WHERE watchdog_id=$1",
+		"DELETE FROM engine.watchdog_device_state WHERE watchdog_id=$1",
+		"DELETE FROM engine.watchdog_incidents WHERE watchdog_id=$1",
+	} {
+		if _, err := tx.ExecContext(ctx, statement, watchdogID); err != nil {
+			return nil, false, err
+		}
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM engine.watchdogs WHERE id=$1", watchdogID)
+	if err != nil {
+		return nil, false, err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return nil, false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, false, err
+	}
+	return affectedHosts, true, nil
 }
 
 func (s *postgresOperatorStore) listWatchdogIncidents(ctx context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error) {
@@ -689,6 +788,43 @@ func loadWatchdogHydration(ctx context.Context, conn *sql.Conn, ids []int64) (ma
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	return allSiteIDs, siteLookup, targetLookup, openCounts, stateCounts, siteNames, nil
+}
+
+func loadWatchdogAffectedHosts(ctx context.Context, conn *sql.Conn, watchdogID int64) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT hostname
+		  FROM engine.watchdog_device_state
+		 WHERE watchdog_id=$1
+		UNION
+		SELECT hostname
+		  FROM engine.watchdog_incidents
+		 WHERE watchdog_id=$1
+		   AND state IN ('open', 'suppressed')
+	  ORDER BY hostname ASC
+	`, watchdogID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	hosts := []string{}
+	seen := map[string]struct{}{}
+	for rows.Next() {
+		var hostname sql.NullString
+		if err := rows.Scan(&hostname); err != nil {
+			return nil, err
+		}
+		cleaned := strings.TrimSpace(nullString(hostname))
+		if cleaned == "" {
+			continue
+		}
+		key := strings.ToLower(cleaned)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hosts = append(hosts, cleaned)
+	}
+	return hosts, rows.Err()
 }
 
 func loadAllSiteIDs(ctx context.Context, conn *sql.Conn) (map[int64]struct{}, error) {

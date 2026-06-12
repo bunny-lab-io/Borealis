@@ -36,6 +36,11 @@ type fakeWatchdogStore struct {
 	stateReason   string
 	stateIncident map[string]any
 	stateErrors   []string
+
+	deleteProfile operatorProfile
+	deleteID      int64
+	deleteHosts   []string
+	deleteFound   bool
 }
 
 func (s *fakeWatchdogStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -81,12 +86,24 @@ func (s *fakeWatchdogStore) updateWatchdogIncidentState(_ context.Context, profi
 	return s.stateIncident, s.stateErrors, nil
 }
 
+func (s *fakeWatchdogStore) deleteWatchdog(_ context.Context, profile operatorProfile, watchdogID int64) ([]string, bool, error) {
+	s.deleteProfile = profile
+	s.deleteID = watchdogID
+	return s.deleteHosts, s.deleteFound, nil
+}
+
 type fakeWatchdogIncidentBroadcaster struct {
-	payload map[string]any
+	incidentPayloads []map[string]any
+	devicePayloads   []map[string]any
 }
 
 func (b *fakeWatchdogIncidentBroadcaster) broadcastWatchdogIncidents(_ context.Context, payload map[string]any) error {
-	b.payload = copyMap(payload)
+	b.incidentPayloads = append(b.incidentPayloads, copyMap(payload))
+	return nil
+}
+
+func (b *fakeWatchdogIncidentBroadcaster) broadcastDeviceWatchdogs(_ context.Context, payload map[string]any) error {
+	b.devicePayloads = append(b.devicePayloads, copyMap(payload))
 	return nil
 }
 
@@ -186,6 +203,29 @@ func TestWatchdogDetailHandlerReturnsRecord(t *testing.T) {
 	}
 }
 
+func TestWatchdogDeleteUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		deleteHosts: []string{"host-1", "host-2"},
+		deleteFound: true,
+	}
+	broadcaster := &fakeWatchdogIncidentBroadcaster{}
+	recorder := httptest.NewRecorder()
+	watchdogTestMuxWithBroadcaster(store, broadcaster).ServeHTTP(recorder, watchdogRequest(http.MethodDelete, "/api/watchdogs/9"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deleteID != 9 {
+		t.Fatalf("unexpected delete id %d", store.deleteID)
+	}
+	if len(broadcaster.incidentPayloads) != 3 || len(broadcaster.devicePayloads) != 2 {
+		t.Fatalf("unexpected broadcast counts incident=%d device=%d", len(broadcaster.incidentPayloads), len(broadcaster.devicePayloads))
+	}
+	if broadcaster.incidentPayloads[2]["hostname"] != "" || broadcaster.incidentPayloads[2]["watchdog_id"] != int64(9) {
+		t.Fatalf("unexpected final incident broadcast %+v", broadcaster.incidentPayloads[2])
+	}
+}
+
 func TestWatchdogIncidentsHandlerPassesStateAndSite(t *testing.T) {
 	store := &fakeWatchdogStore{
 		incidentPayload: map[string]any{
@@ -219,8 +259,11 @@ func TestWatchdogIncidentAcknowledgeUsesGoRoute(t *testing.T) {
 	if store.ackID != 12 {
 		t.Fatalf("unexpected ack id %d", store.ackID)
 	}
-	if broadcaster.payload["hostname"] != "host-1" || broadcaster.payload["watchdog_id"] != int64(4) {
-		t.Fatalf("unexpected broadcast payload %+v", broadcaster.payload)
+	if len(broadcaster.incidentPayloads) != 1 || broadcaster.incidentPayloads[0]["hostname"] != "host-1" || broadcaster.incidentPayloads[0]["watchdog_id"] != int64(4) {
+		t.Fatalf("unexpected incident broadcast payloads %+v", broadcaster.incidentPayloads)
+	}
+	if len(broadcaster.devicePayloads) != 1 || broadcaster.devicePayloads[0]["hostname"] != "host-1" || broadcaster.devicePayloads[0]["watchdog_id"] != int64(4) {
+		t.Fatalf("unexpected device broadcast payloads %+v", broadcaster.devicePayloads)
 	}
 }
 
