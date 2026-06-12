@@ -11,6 +11,7 @@ import shutil
 import socket
 import sys
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,16 @@ def _scheduled_jobs_client_with_context(engine_harness: EngineTestHarness):
         sess["username"] = "admin"
         sess["role"] = "Admin"
     return client, context.scheduler, context
+
+
+def _standalone_scheduler(tmp_path: Path):
+    logger = SimpleNamespace(log=lambda *_args, **_kwargs: None)
+    return scheduled_job_module.JobScheduler(
+        SimpleNamespace(logger=logger),
+        SimpleNamespace(),
+        str(tmp_path / "scheduler.sqlite3"),
+        register_routes=False,
+    )
 
 
 class _MissingLastRowIdCursor:
@@ -231,6 +242,66 @@ def test_scheduler_service_account_loader_requires_configured_fetcher(
     monkeypatch.setattr(scheduler, "_conn", _unexpected_db_read)
 
     assert scheduler._load_service_account("agent-01") is None
+
+
+def test_scheduler_scheduled_run_requires_queue_dispatcher(tmp_path: Path, monkeypatch) -> None:
+    scheduler = _standalone_scheduler(tmp_path)
+
+    def _unexpected_direct_dispatch(*_args, **_kwargs):
+        raise AssertionError("scheduled run fallback should not execute inside api-backend")
+
+    monkeypatch.setattr(scheduler, "_dispatch_run_activities", _unexpected_direct_dispatch)
+    monkeypatch.setattr(scheduler, "_dispatch_shared_ansible", _unexpected_direct_dispatch)
+
+    dispatched = scheduler._enqueue_or_dispatch_scheduled_run(
+        job_id=1,
+        run_row_id=2,
+        scheduled_ts=1_700_000_000,
+        run_mode="system",
+        script_components=[{"name": "Test Script"}],
+        ansible_components=[],
+        credential_id=None,
+        use_service_account=False,
+    )
+
+    assert dispatched is False
+
+
+def test_scheduler_workflow_run_requires_queue_dispatcher(tmp_path: Path, monkeypatch) -> None:
+    scheduler = _standalone_scheduler(tmp_path)
+
+    def _unexpected_direct_dispatch(*_args, **_kwargs):
+        raise AssertionError("workflow run fallback should not execute inside api-backend")
+
+    monkeypatch.setattr(scheduler, "_dispatch_workflow_run", _unexpected_direct_dispatch)
+
+    dispatched = scheduler._enqueue_or_dispatch_workflow_run(
+        job_id=1,
+        run_row_id=2,
+        scheduled_ts=1_700_000_000,
+        workflow_component={"assembly_guid": "workflow-1"},
+        site_id=1,
+    )
+
+    assert dispatched is False
+
+
+def test_scheduler_onboarding_run_requires_queue_dispatcher(tmp_path: Path, monkeypatch) -> None:
+    scheduler = _standalone_scheduler(tmp_path)
+
+    def _unexpected_direct_dispatch(*_args, **_kwargs):
+        raise AssertionError("onboarding fallback should not execute inside api-backend")
+
+    monkeypatch.setattr(scheduler, "_run_onboarding_job", _unexpected_direct_dispatch)
+
+    scheduler._dispatch_onboarding_run(
+        job_id=1,
+        run_row_id=2,
+        scheduled_ts=1_700_000_000,
+        components=[{"kind": "device_onboarding"}],
+        targets=[],
+        credential_id=None,
+    )
 
 
 def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHarness) -> None:

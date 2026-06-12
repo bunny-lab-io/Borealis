@@ -823,13 +823,11 @@ class JobScheduler(OnboardingSchedulerMixin):
         self._workflow_run_launcher: Optional[Callable[..., Dict[str, Any]]] = None
         # Optional callback to validate a saved workflow document before jobs reference it.
         self._workflow_document_validator: Optional[Callable[..., List[str]]] = None
-        # Optional callback that moves onboarding execution into job-scheduler/site-workers.
+        # Required callback that moves onboarding execution into job-scheduler/site-workers.
         self._onboarding_run_dispatcher: Optional[Callable[..., Any]] = None
-        # Optional callbacks that move scheduled execution into queued worker items.
+        # Required callbacks that move scheduled execution into queued worker items.
         self._scheduled_run_dispatcher: Optional[Callable[..., Any]] = None
         self._scheduled_workflow_dispatcher: Optional[Callable[..., Any]] = None
-        self._onboarding_dispatch_lock = threading.Lock()
-        self._onboarding_running_runs: set[int] = set()
 
         # Ensure run-history table exists
         self._init_tables()
@@ -4914,57 +4912,13 @@ class JobScheduler(OnboardingSchedulerMixin):
             )
             return True
 
-        if shared_execution:
-            try:
-                component_index_int = int(component_index) if component_index is not None else 0
-            except Exception:
-                component_index_int = 0
-            component = ansible_components[component_index_int] if 0 <= component_index_int < len(ansible_components) else None
-            if not isinstance(component, dict):
-                return False
-            link = self._dispatch_shared_ansible(
-                job_id=int(job_id),
-                run_row_id=int(run_row_id),
-                scheduled_ts=int(scheduled_ts),
-                run_mode=run_mode,
-                component=component,
-                credential_id=credential_id,
-                use_service_account=bool(use_service_account),
-                target_row_ids=target_row_ids,
-            )
-            normalized_link = self._normalize_run_activity_link(
-                run_row_id=int(run_row_id),
-                link=link,
-                default_component_kind="ansible",
-                default_script_type="ansible",
-            )
-            if normalized_link:
-                self._persist_run_activity_links([normalized_link], created_at=_now_ts())
-                return True
-            return False
-
-        conn = self._conn()
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (int(run_row_id),))
-            row = cur.fetchone()
-        finally:
-            conn.close()
-        host = str(row[0] if row else "").strip()
-        if not host:
-            return False
-        return self._dispatch_run_activities(
+        self._log_event(
+            "scheduled run dispatcher unavailable",
             job_id=int(job_id),
-            run_row_id=int(run_row_id),
-            scheduled_ts=int(scheduled_ts),
-            hostname=host,
-            run_mode=run_mode,
-            script_components=script_components,
-            ansible_components=ansible_components,
-            credential_id=credential_id,
-            use_service_account=bool(use_service_account),
-            component_index=component_index,
+            run_id=int(run_row_id),
+            level="ERROR",
         )
+        return False
 
     def _enqueue_or_dispatch_workflow_run(
         self,
@@ -4985,14 +4939,13 @@ class JobScheduler(OnboardingSchedulerMixin):
                 task_link=self._run_task_link(job_id=int(job_id), run_id=int(run_row_id), kind="workflow"),
             )
             return True
-        self._dispatch_workflow_run(
+        self._log_event(
+            "scheduled workflow dispatcher unavailable",
             job_id=int(job_id),
-            run_row_id=int(run_row_id),
-            scheduled_ts=int(scheduled_ts),
-            workflow_component=workflow_component,
-            workflow_site_scope={"site_id": site_id},
+            run_id=int(run_row_id),
+            level="ERROR",
         )
-        return True
+        return False
 
     def _workflow_guid_from_component(self, workflow_component: Mapping[str, Any]) -> str:
         return str(

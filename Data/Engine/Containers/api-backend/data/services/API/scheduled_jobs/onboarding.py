@@ -24,7 +24,6 @@ import shlex
 import shutil
 import socket
 import tempfile
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -5513,30 +5512,36 @@ class OnboardingSchedulerMixin:
                 credential_id=credential_id,
             )
             return
-        with self._onboarding_dispatch_lock:
-            if int(run_row_id) in self._onboarding_running_runs:
-                return
-            self._onboarding_running_runs.add(int(run_row_id))
-
-        def _runner():
-            try:
-                self._run_onboarding_job(
-                    job_id=int(job_id),
-                    run_row_id=int(run_row_id),
-                    scheduled_ts=int(scheduled_ts),
-                    components=components,
-                    targets=targets,
-                    credential_id=credential_id,
-                )
-            finally:
-                with self._onboarding_dispatch_lock:
-                    self._onboarding_running_runs.discard(int(run_row_id))
-
-        threading.Thread(
-            target=_runner,
-            name=f"borealis-onboarding-run-{int(run_row_id)}",
-            daemon=True,
-        ).start()
+        self._log_event(
+            "onboarding dispatcher unavailable",
+            job_id=int(job_id),
+            run_id=int(run_row_id),
+            level="ERROR",
+        )
+        now = int(time.time())
+        conn = self._conn()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                UPDATE scheduled_job_runs
+                   SET status=?,
+                       finished_ts=?,
+                       updated_at=?,
+                       error=?
+                 WHERE id=?
+                """,
+                (
+                    RUN_STATUS_FAILED,
+                    now,
+                    now,
+                    "Onboarding run dispatcher is unavailable.",
+                    int(run_row_id),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     def _run_onboarding_job(
         self,
