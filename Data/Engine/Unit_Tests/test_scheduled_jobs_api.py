@@ -200,6 +200,21 @@ def test_onboarding_scope_target_normalization_and_site_scope(engine_harness: En
     assert manager.job_targets_fit_scope({"username": "site-user", "role": "User"}, scoped)
 
 
+def test_scheduler_credential_loader_requires_configured_fetcher(engine_harness: EngineTestHarness, monkeypatch) -> None:
+    scheduler = scheduled_job_module.JobScheduler(
+        engine_harness.app,
+        SimpleNamespace(),
+        str(engine_harness.db_path),
+    )
+
+    def _unexpected_db_read():
+        raise AssertionError("credential fallback should not read database")
+
+    monkeypatch.setattr(scheduler, "_conn", _unexpected_db_read)
+
+    assert scheduler._load_credential(99) is None
+
+
 def test_scheduled_jobs_api_creates_onboarding_job(engine_harness: EngineTestHarness) -> None:
     client, _scheduler = _scheduled_jobs_client(engine_harness)
 

@@ -808,7 +808,7 @@ class JobScheduler(OnboardingSchedulerMixin):
         self._emit_host_service_event: Optional[Callable[[str, str, str, Any], bool]] = None
         # Optional callback to execute Ansible directly from the server
         self._server_ansible_runner: Optional[Callable[..., str]] = None
-        # Optional callback to fetch stored credentials (with decrypted secrets)
+        # Required for credential-backed execution; Go internal helper owns secret decryption.
         self._credential_fetcher: Optional[Callable[[int], Optional[Dict[str, Any]]]] = None
         # Optional callback to resolve the Engine URL agents should enroll against.
         self._public_base_url_lookup: Optional[Callable[[], str]] = None
@@ -2346,62 +2346,12 @@ class JobScheduler(OnboardingSchedulerMixin):
                     extra={"credential_id": credential_id, "error": str(exc)},
                 )
                 return None
-
-        conn = self._conn()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    name,
-                    site_id,
-                    credential_type,
-                    connection_type,
-                    username,
-                    password_encrypted,
-                    private_key_encrypted,
-                    private_key_passphrase_encrypted,
-                    become_method,
-                    become_username,
-                    become_password_encrypted,
-                    metadata_json
-                  FROM credentials
-                 WHERE id=?
-                """,
-                (int(credential_id),),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-            metadata = {}
-            metadata = self._parse_metadata_json(row[12])
-            if credential_secret_reset_required(metadata):
-                raise AegisSecretResetRequiredError(CREDENTIAL_RESET_REQUIRED_MESSAGE)
-            return {
-                "id": int(row[0]),
-                "name": row[1] or "",
-                "site_id": row[2],
-                "credential_type": row[3] or "",
-                "connection_type": row[4] or "",
-                "username": row[5] or "",
-                "password": self._decode_secret_blob(row[6]),
-                "private_key": self._decode_secret_blob(row[7]),
-                "private_key_passphrase": self._decode_secret_blob(row[8]),
-                "become_method": row[9] or "",
-                "become_username": row[10] or "",
-                "become_password": self._decode_secret_blob(row[11]),
-                "metadata": metadata if isinstance(metadata, dict) else {},
-            }
-        except Exception as exc:
-            self._log_event(
-                "failed to load credential from database",
-                level="ERROR",
-                extra={"credential_id": credential_id, "error": str(exc)},
-            )
-            return None
-        finally:
-            conn.close()
+        self._log_event(
+            "credential fetcher unavailable",
+            level="ERROR",
+            extra={"credential_id": credential_id},
+        )
+        return None
 
     def _load_service_account(self, agent_id: str) -> Optional[Dict[str, Any]]:
         agent_key = str(agent_id or "").strip()
