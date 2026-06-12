@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnR
 	_ = fallback
 	mux.HandleFunc("/api/internal/job-scheduler/credential/", internalSchedulerCredentialHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/service-account/", internalSchedulerServiceAccountHandler(auth))
+	mux.HandleFunc("/api/internal/job-scheduler/online-hosts", internalSchedulerOnlineHostsHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/public-base-url", internalSchedulerPublicBaseURLHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/host-service-event", internalSchedulerHostServiceEventHandler(auth))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
@@ -34,6 +36,10 @@ type internalSchedulerCredentialStore interface {
 
 type internalSchedulerServiceAccountStore interface {
 	loadSchedulerServiceAccount(ctx context.Context, agentID string) (map[string]any, bool, error)
+}
+
+type internalSchedulerOnlineHostStore interface {
+	loadSchedulerOnlineHostnames(ctx context.Context, windowSeconds int64) ([]string, error)
 }
 
 type internalSchedulerWorkItemStore interface {
@@ -127,6 +133,64 @@ func internalSchedulerServiceAccountHandler(auth *authService) http.HandlerFunc 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"service_account": serviceAccount})
 	}
+}
+
+func internalSchedulerOnlineHostsHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		store, ok := auth.store.(internalSchedulerOnlineHostStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "online_host_store_unavailable"})
+			return
+		}
+		windowSeconds := coerceInt64(r.URL.Query().Get("window_seconds"))
+		if windowSeconds <= 0 {
+			windowSeconds = 300
+		}
+		if windowSeconds > 3600 {
+			windowSeconds = 3600
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		hostnames, err := store.loadSchedulerOnlineHostnames(ctx, windowSeconds)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"hostnames": schedulerHostnameVariants(hostnames)})
+	}
+}
+
+func schedulerHostnameVariants(hostnames []string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, raw := range hostnames {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		for _, variant := range []string{name, strings.ToUpper(name), strings.ToLower(name)} {
+			if variant == "" {
+				continue
+			}
+			if _, ok := seen[variant]; ok {
+				continue
+			}
+			seen[variant] = struct{}{}
+			out = append(out, variant)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	})
+	return out
 }
 
 func internalSchedulerPublicBaseURLHandler(auth *authService) http.HandlerFunc {

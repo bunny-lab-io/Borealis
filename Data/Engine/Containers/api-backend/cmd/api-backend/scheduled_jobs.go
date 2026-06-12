@@ -1345,6 +1345,53 @@ func loadOnlineHostnames(ctx context.Context, conn *sql.Conn) (map[string]bool, 
 	return online, rows.Err()
 }
 
+func (s *postgresOperatorStore) loadSchedulerOnlineHostnames(ctx context.Context, windowSeconds int64) ([]string, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = 300
+	}
+	threshold := time.Now().Unix() - windowSeconds
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	rows, err := conn.QueryContext(ctx, `
+		SELECT hostname
+		  FROM engine.devices
+		 WHERE last_seen IS NOT NULL
+		   AND last_seen >= $1
+		 ORDER BY LOWER(hostname) ASC
+	`, threshold)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	hostnames := []string{}
+	for rows.Next() {
+		var hostname sql.NullString
+		if err := rows.Scan(&hostname); err != nil {
+			_ = rows.Close()
+			_ = conn.Close()
+			return nil, err
+		}
+		if name := strings.TrimSpace(nullString(hostname)); name != "" {
+			hostnames = append(hostnames, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
+	return hostnames, nil
+}
+
 func loadOnboardingApprovalLookup(ctx context.Context, conn *sql.Conn, rows []onboardingTargetRow) (map[string]map[string]any, error) {
 	keys := []string{}
 	for _, row := range rows {

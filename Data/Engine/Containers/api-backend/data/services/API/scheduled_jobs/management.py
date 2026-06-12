@@ -231,46 +231,17 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     script_signer = adapters.script_signer
 
     def _online_hostnames_snapshot() -> List[str]:
-        """Return hostnames deemed online based on recent agent heartbeats."""
-        threshold = int(time.time()) - 300
-        conn = None
-        try:
-            conn = adapters.db_conn_factory()
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT hostname FROM devices WHERE last_seen IS NOT NULL AND last_seen >= ?",
-                (threshold,),
-            )
-            rows = cur.fetchall()
-        except Exception as exc:
-            adapters.service_log(
-                "scheduled_jobs",
-                f"online host snapshot lookup failed err={exc}",
-                level="ERROR",
-            )
-            rows = []
-        finally:
-            try:
-                if conn is not None:
-                    conn.close()
-            except Exception:
-                pass
-
-        seen = set()
-        hostnames: List[str] = []
-        for row in rows or []:
-            try:
-                raw = row[0] if isinstance(row, (list, tuple)) else row
-                name = str(raw or "").strip()
-            except Exception:
-                name = ""
-            if not name:
-                continue
-            for variant in (name, name.upper(), name.lower()):
-                if variant and variant not in seen:
-                    seen.add(variant)
-                    hostnames.append(variant)
-        return hostnames
+        payload = _internal_api_json(app, "/api/internal/job-scheduler/online-hosts", timeout=10.0)
+        raw_hostnames = payload.get("hostnames") if isinstance(payload, dict) else None
+        if not isinstance(raw_hostnames, list):
+            if payload:
+                adapters.service_log(
+                    "scheduled_jobs",
+                    "online host snapshot lookup returned invalid payload",
+                    level="ERROR",
+                )
+            return []
+        return [str(hostname).strip() for hostname in raw_hostnames if str(hostname).strip()]
 
     def _active_vpn_session_snapshot():
         payload = _internal_api_json(app, "/api/internal/job-scheduler/vpn-sessions", timeout=10.0)

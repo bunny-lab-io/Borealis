@@ -93,6 +93,21 @@ func (s *fakeInternalSchedulerServiceAccountStore) loadSchedulerServiceAccount(_
 	return copyMap(s.serviceAccount), s.found, nil
 }
 
+type fakeInternalSchedulerOnlineHostStore struct {
+	*fakeOperatorStore
+	hostnames  []string
+	err        error
+	windowSeen int64
+}
+
+func (s *fakeInternalSchedulerOnlineHostStore) loadSchedulerOnlineHostnames(_ context.Context, windowSeconds int64) ([]string, error) {
+	s.windowSeen = windowSeconds
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]string{}, s.hostnames...), nil
+}
+
 func TestInternalSchedulerCredentialReturnsDecryptedPayload(t *testing.T) {
 	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store := &fakeInternalSchedulerCredentialStore{
@@ -165,6 +180,37 @@ func TestInternalSchedulerServiceAccountReturnsPayload(t *testing.T) {
 	serviceAccount := payload["service_account"].(map[string]any)
 	if serviceAccount["username"] != "svc-agent-01" || serviceAccount["password"] != "secret" {
 		t.Fatalf("unexpected service account payload %#v", serviceAccount)
+	}
+}
+
+func TestInternalSchedulerOnlineHostsReturnsVariants(t *testing.T) {
+	auth, baseStore := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store := &fakeInternalSchedulerOnlineHostStore{
+		fakeOperatorStore: baseStore,
+		hostnames:         []string{"Lab-01"},
+	}
+	auth.store = store
+	mux := http.NewServeMux()
+	registerInternalSchedulerRoutes(mux, auth, nil, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/job-scheduler/online-hosts?window_seconds=120", nil)
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.windowSeen != 120 {
+		t.Fatalf("expected custom window, got %d", store.windowSeen)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	hostnames := payload["hostnames"].([]any)
+	if len(hostnames) != 3 || hostnames[0] != "Lab-01" || hostnames[1] != "LAB-01" || hostnames[2] != "lab-01" {
+		t.Fatalf("unexpected hostnames %#v", hostnames)
 	}
 }
 

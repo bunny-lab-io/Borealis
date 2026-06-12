@@ -230,36 +230,15 @@ def _make_vpn_session_prepare(secret: str):
     return _prepare
 
 
-def _make_online_lookup(db_factory, logger):
+def _make_online_lookup(secret: str, logger):
     def _lookup() -> Sequence[str]:
-        threshold = _now_ts() - 300
-        conn = db_factory()
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT hostname FROM devices WHERE last_seen IS NOT NULL AND last_seen >= ?",
-                (threshold,),
-            )
-            rows = cur.fetchall()
+            payload = _get_internal("/api/internal/job-scheduler/online-hosts", secret=secret, timeout=10.0)
         except Exception as exc:
             logger.error("online host snapshot lookup failed: %s", exc)
-            rows = []
-        finally:
-            conn.close()
-        seen = set()
-        hostnames = []
-        for row in rows or []:
-            try:
-                name = str(row[0] if isinstance(row, (list, tuple)) else row or "").strip()
-            except Exception:
-                name = ""
-            if not name:
-                continue
-            for variant in (name, name.upper(), name.lower()):
-                if variant and variant not in seen:
-                    seen.add(variant)
-                    hostnames.append(variant)
-        return hostnames
+            return []
+        hostnames = payload.get("hostnames") if isinstance(payload.get("hostnames"), list) else []
+        return [str(hostname).strip() for hostname in hostnames if str(hostname).strip()]
 
     return _lookup
 
@@ -307,7 +286,7 @@ def _build_scheduler(settings, logger):
     job_scheduler.set_host_service_emitter(scheduler, _make_host_service_emitter(secret))
     job_scheduler.set_workflow_run_launcher(scheduler, _make_workflow_launcher(secret))
     job_scheduler.set_public_base_url_lookup(scheduler, lambda: _resolve_public_base_url(settings, secret))
-    job_scheduler.set_online_lookup(scheduler, _make_online_lookup(db_factory, logger))
+    job_scheduler.set_online_lookup(scheduler, _make_online_lookup(secret, logger))
     job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
     job_scheduler.set_service_account_fetcher(scheduler, lambda agent_id: _fetch_service_account(secret, agent_id))
     job_scheduler.set_vpn_session_lookup(scheduler, _make_vpn_session_lookup(secret))
