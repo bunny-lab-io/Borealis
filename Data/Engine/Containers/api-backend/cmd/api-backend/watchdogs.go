@@ -42,6 +42,10 @@ type watchdogDeviceBroadcaster interface {
 	broadcastDeviceWatchdogs(ctx context.Context, payload map[string]any) error
 }
 
+type deviceWatchdogStore interface {
+	getDeviceWatchdogs(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error)
+}
+
 type watchdogListFilter struct {
 	ArchivedSet bool
 	Archived    bool
@@ -52,6 +56,7 @@ type watchdogIncidentFilter struct {
 	State      string
 	SiteID     *int64
 	IncidentID *int64
+	Hostname   string
 }
 
 type watchdogRow struct {
@@ -100,9 +105,97 @@ type watchdogIncidentRow struct {
 	WatchdogDescription sql.NullString
 }
 
+type watchdogDeviceStateRow struct {
+	WatchdogID        sql.NullInt64
+	DeviceGUID        sql.NullString
+	Hostname          sql.NullString
+	SiteID            sql.NullInt64
+	State             sql.NullString
+	Consecutive       sql.NullInt64
+	FirstMatchedAt    sql.NullInt64
+	ClearStartedAt    sql.NullInt64
+	LastEvaluatedAt   sql.NullInt64
+	LastMatchedAt     sql.NullInt64
+	LastSampleJSON    sql.NullString
+	CurrentIncidentID sql.NullInt64
+	LastActionAt      sql.NullInt64
+	UpdatedAt         sql.NullInt64
+}
+
+type watchdogDeviceOverrideRow struct {
+	WatchdogID sql.NullInt64
+	ID         sql.NullInt64
+	DeviceGUID sql.NullString
+	Hostname   sql.NullString
+	SiteID     sql.NullInt64
+	State      sql.NullString
+	Reason     sql.NullString
+	CreatedBy  sql.NullString
+	CreatedAt  sql.NullInt64
+	ExpiresAt  sql.NullInt64
+	UpdatedAt  sql.NullInt64
+}
+
+type watchdogCompactIncidentRow struct {
+	WatchdogID        sql.NullInt64
+	ID                sql.NullInt64
+	DeviceGUID        sql.NullString
+	Hostname          sql.NullString
+	SiteID            sql.NullInt64
+	Severity          sql.NullString
+	State             sql.NullString
+	Title             sql.NullString
+	Message           sql.NullString
+	SampleJSON        sql.NullString
+	RuleSummaryJSON   sql.NullString
+	ActionSummaryJSON sql.NullString
+	OpenedAt          sql.NullInt64
+	UpdatedAt         sql.NullInt64
+	ResolvedAt        sql.NullInt64
+	ResolutionReason  sql.NullString
+	AcknowledgedAt    sql.NullInt64
+	AcknowledgedBy    sql.NullString
+	TriggerCount      sql.NullInt64
+}
+
 func registerWatchdogRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) {
 	mux.HandleFunc("/api/watchdogs", watchdogsRootHandler(auth, fallback))
 	mux.HandleFunc("/api/watchdogs/", watchdogsSubtreeHandler(auth, fallback, broadcaster))
+}
+
+func deviceWatchdogsHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				unauthorizedAuthFailure().write(w)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		store, ok := auth.store.(deviceWatchdogStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "watchdogs_unavailable"})
+			return
+		}
+		ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+		defer cancel()
+		payload, found, err := store.getDeviceWatchdogs(ctx, profile, r.PathValue("device_id"))
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, payload)
+	}
 }
 
 func watchdogsRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -508,6 +601,115 @@ func (s *postgresOperatorStore) deleteWatchdog(ctx context.Context, profile oper
 	return affectedHosts, true, nil
 }
 
+func (s *postgresOperatorStore) getDeviceWatchdogs(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error) {
+	deviceRef, found, err := s.resolveWatchdogDeviceReference(ctx, profile, deviceID)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	hostname := cleanText(deviceRef["hostname"])
+	hostnameKey := strings.ToLower(hostname)
+	watchdogs, err := s.listWatchdogs(ctx, profile, watchdogListFilter{})
+	if err != nil {
+		return nil, false, err
+	}
+	devices, err := s.listDevices(ctx, profile, deviceListFilter{})
+	if err != nil {
+		return nil, false, err
+	}
+	filterMatches, err := s.watchdogFilterMatchesForDevice(ctx, profile, watchdogs, devices, hostnameKey)
+	if err != nil {
+		return nil, false, err
+	}
+
+	matchedWatchdogs := make([]map[string]any, 0, len(watchdogs))
+	for _, watchdog := range watchdogs {
+		if watchdogTargetsDevice(watchdog, devices, hostnameKey, filterMatches) {
+			matchedWatchdogs = append(matchedWatchdogs, watchdog)
+		}
+	}
+	watchdogIDs := make([]int64, 0, len(matchedWatchdogs))
+	for _, watchdog := range matchedWatchdogs {
+		if id := coerceInt64(watchdog["id"]); id > 0 {
+			watchdogIDs = append(watchdogIDs, id)
+		}
+	}
+	stateLookup, err := s.loadWatchdogDeviceStates(ctx, watchdogIDs, hostname)
+	if err != nil {
+		return nil, false, err
+	}
+	overrideLookup, err := s.loadWatchdogDeviceOverrides(ctx, watchdogIDs, hostname)
+	if err != nil {
+		return nil, false, err
+	}
+	compactIncidentLookup, err := s.loadWatchdogDeviceOpenIncidents(ctx, watchdogIDs, hostname)
+	if err != nil {
+		return nil, false, err
+	}
+	publicIncidents, err := s.listWatchdogIncidents(ctx, profile, watchdogIncidentFilter{State: "open", Hostname: hostname})
+	if err != nil {
+		return nil, false, err
+	}
+
+	assignments := make([]map[string]any, 0, len(matchedWatchdogs))
+	overrides := make([]map[string]any, 0, len(matchedWatchdogs))
+	for _, watchdog := range matchedWatchdogs {
+		watchdogID := coerceInt64(watchdog["id"])
+		state := stateLookup[watchdogID]
+		override := overrideLookup[watchdogID]
+		incident := compactIncidentLookup[watchdogID]
+		assignments = append(assignments, map[string]any{
+			"watchdog_id":       watchdogID,
+			"name":              cleanText(watchdog["name"]),
+			"description":       cleanText(watchdog["description"]),
+			"enabled":           boolDefault(watchdog["enabled"], false),
+			"severity":          normalizeWatchdogSeverity(cleanText(watchdog["severity"])),
+			"state":             firstText(cleanText(state["state"]), "normal"),
+			"last_evaluated_at": coerceInt64(state["last_evaluated_at"]),
+			"rule_summaries":    anySlice(watchdog["rule_summaries"]),
+			"action_summaries":  anySlice(watchdog["action_summaries"]),
+			"sample":            asStringAnyMap(state["last_sample"]),
+			"override":          nullableMap(override),
+			"active_incident":   nullableMap(incident),
+		})
+		if override != nil {
+			next := copyMap(override)
+			next["watchdog_id"] = watchdogID
+			next["watchdog_name"] = cleanText(watchdog["name"])
+			overrides = append(overrides, next)
+		}
+	}
+	incidents, _ := publicIncidents["items"].([]map[string]any)
+	return map[string]any{
+		"device":      deviceRef,
+		"assignments": assignments,
+		"incidents":   incidents,
+		"overrides":   overrides,
+	}, true, nil
+}
+
+func (s *postgresOperatorStore) resolveWatchdogDeviceReference(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error) {
+	raw := cleanText(deviceID)
+	if raw == "" {
+		return nil, false, nil
+	}
+	predicate := "LOWER(d.hostname) = LOWER($1)"
+	value := raw
+	if watchdogDeviceIDLooksGUID(raw) {
+		predicate = "UPPER(d.guid) = UPPER($1)"
+		value = firstText(normalizeCanonicalGUID(raw), raw)
+	}
+	row, found, err := s.lookupDeviceDetail(ctx, profile, predicate, value)
+	if err != nil || !found {
+		return nil, found, err
+	}
+	return map[string]any{
+		"device_guid": normalizeCanonicalGUID(nullString(row.GUID)),
+		"hostname":    cleanText(nullString(row.Hostname)),
+		"site_id":     nullableInt(row.SiteID),
+		"site_name":   cleanText(nullString(row.SiteName)),
+	}, true, nil
+}
+
 func (s *postgresOperatorStore) listWatchdogIncidents(ctx context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -827,6 +1029,173 @@ func loadWatchdogAffectedHosts(ctx context.Context, conn *sql.Conn, watchdogID i
 	return hosts, rows.Err()
 }
 
+func (s *postgresOperatorStore) loadWatchdogDeviceStates(ctx context.Context, watchdogIDs []int64, hostname string) (map[int64]map[string]any, error) {
+	result := map[int64]map[string]any{}
+	if len(watchdogIDs) == 0 || strings.TrimSpace(hostname) == "" {
+		return result, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	query, params := inClauseQuery(`
+		SELECT watchdog_id, device_guid, hostname, site_id, state, consecutive_matches,
+		       first_matched_at, clear_started_at, last_evaluated_at, last_matched_at,
+		       last_sample_json, current_incident_id, last_action_at, updated_at
+		  FROM engine.watchdog_device_state
+		 WHERE watchdog_id IN (%s)
+		   AND LOWER(hostname)=LOWER($`+strconv.Itoa(len(watchdogIDs)+1)+`)
+	  ORDER BY updated_at DESC, id DESC
+	`, watchdogIDs)
+	params = append(params, hostname)
+	rows, err := conn.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row watchdogDeviceStateRow
+		if err := rows.Scan(
+			&row.WatchdogID,
+			&row.DeviceGUID,
+			&row.Hostname,
+			&row.SiteID,
+			&row.State,
+			&row.Consecutive,
+			&row.FirstMatchedAt,
+			&row.ClearStartedAt,
+			&row.LastEvaluatedAt,
+			&row.LastMatchedAt,
+			&row.LastSampleJSON,
+			&row.CurrentIncidentID,
+			&row.LastActionAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		watchdogID := int64OrZero(row.WatchdogID)
+		if watchdogID > 0 {
+			if _, exists := result[watchdogID]; !exists {
+				result[watchdogID] = watchdogDeviceStatePayload(row)
+			}
+		}
+	}
+	return result, rows.Err()
+}
+
+func (s *postgresOperatorStore) loadWatchdogDeviceOverrides(ctx context.Context, watchdogIDs []int64, hostname string) (map[int64]map[string]any, error) {
+	result := map[int64]map[string]any{}
+	if len(watchdogIDs) == 0 || strings.TrimSpace(hostname) == "" {
+		return result, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	query, params := inClauseQuery(`
+		SELECT watchdog_id, id, device_guid, hostname, site_id, state, reason, created_by, created_at, expires_at, updated_at
+		  FROM engine.watchdog_device_overrides
+		 WHERE watchdog_id IN (%s)
+		   AND LOWER(hostname)=LOWER($`+strconv.Itoa(len(watchdogIDs)+1)+`)
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $`+strconv.Itoa(len(watchdogIDs)+2)+`)
+	  ORDER BY updated_at DESC, id DESC
+	`, watchdogIDs)
+	params = append(params, hostname, time.Now().Unix())
+	rows, err := conn.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row watchdogDeviceOverrideRow
+		if err := rows.Scan(
+			&row.WatchdogID,
+			&row.ID,
+			&row.DeviceGUID,
+			&row.Hostname,
+			&row.SiteID,
+			&row.State,
+			&row.Reason,
+			&row.CreatedBy,
+			&row.CreatedAt,
+			&row.ExpiresAt,
+			&row.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		watchdogID := int64OrZero(row.WatchdogID)
+		if watchdogID > 0 {
+			if _, exists := result[watchdogID]; !exists {
+				result[watchdogID] = watchdogDeviceOverridePayload(row)
+			}
+		}
+	}
+	return result, rows.Err()
+}
+
+func (s *postgresOperatorStore) loadWatchdogDeviceOpenIncidents(ctx context.Context, watchdogIDs []int64, hostname string) (map[int64]map[string]any, error) {
+	result := map[int64]map[string]any{}
+	if len(watchdogIDs) == 0 || strings.TrimSpace(hostname) == "" {
+		return result, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	query, params := inClauseQuery(`
+		SELECT watchdog_id, id, device_guid, hostname, site_id, severity, state, title, message,
+		       sample_json, rule_summary_json, action_summary_json, opened_at, updated_at,
+		       resolved_at, resolution_reason, acknowledged_at, acknowledged_by, trigger_count
+		  FROM engine.watchdog_incidents
+		 WHERE watchdog_id IN (%s)
+		   AND state='open'
+		   AND LOWER(hostname)=LOWER($`+strconv.Itoa(len(watchdogIDs)+1)+`)
+	  ORDER BY updated_at DESC, id DESC
+	`, watchdogIDs)
+	params = append(params, hostname)
+	rows, err := conn.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row watchdogCompactIncidentRow
+		if err := rows.Scan(
+			&row.WatchdogID,
+			&row.ID,
+			&row.DeviceGUID,
+			&row.Hostname,
+			&row.SiteID,
+			&row.Severity,
+			&row.State,
+			&row.Title,
+			&row.Message,
+			&row.SampleJSON,
+			&row.RuleSummaryJSON,
+			&row.ActionSummaryJSON,
+			&row.OpenedAt,
+			&row.UpdatedAt,
+			&row.ResolvedAt,
+			&row.ResolutionReason,
+			&row.AcknowledgedAt,
+			&row.AcknowledgedBy,
+			&row.TriggerCount,
+		); err != nil {
+			return nil, err
+		}
+		watchdogID := int64OrZero(row.WatchdogID)
+		if watchdogID > 0 {
+			if _, exists := result[watchdogID]; !exists {
+				result[watchdogID] = watchdogCompactIncidentPayload(row)
+			}
+		}
+	}
+	return result, rows.Err()
+}
+
 func loadAllSiteIDs(ctx context.Context, conn *sql.Conn) (map[int64]struct{}, error) {
 	rows, err := conn.QueryContext(ctx, "SELECT id FROM engine.sites")
 	if err != nil {
@@ -989,6 +1358,10 @@ func queryWatchdogIncidents(ctx context.Context, conn *sql.Conn, filter watchdog
 	if filter.IncidentID != nil {
 		params = append(params, *filter.IncidentID)
 		clauses = append(clauses, fmt.Sprintf("i.id = $%d", len(params)))
+	}
+	if strings.TrimSpace(filter.Hostname) != "" {
+		params = append(params, strings.TrimSpace(filter.Hostname))
+		clauses = append(clauses, fmt.Sprintf("LOWER(i.hostname) = LOWER($%d)", len(params)))
 	}
 	if visibleWatchdogIDs != nil {
 		placeholders := []string{}
@@ -1251,6 +1624,62 @@ func watchdogIncidentPayload(row watchdogIncidentRow, siteNames map[int64]string
 	return payload
 }
 
+func watchdogDeviceStatePayload(row watchdogDeviceStateRow) map[string]any {
+	return map[string]any{
+		"device_guid":         normalizeCanonicalGUID(nullString(row.DeviceGUID)),
+		"hostname":            strings.TrimSpace(nullString(row.Hostname)),
+		"site_id":             nullableInt(row.SiteID),
+		"state":               strings.ToLower(strings.TrimSpace(nullString(row.State))),
+		"consecutive_matches": int64OrZero(row.Consecutive),
+		"first_matched_at":    nullableInt(row.FirstMatchedAt),
+		"clear_started_at":    nullableInt(row.ClearStartedAt),
+		"last_evaluated_at":   int64OrZero(row.LastEvaluatedAt),
+		"last_matched_at":     nullableInt(row.LastMatchedAt),
+		"last_sample":         parseJSONObject(row.LastSampleJSON),
+		"current_incident_id": nullableInt(row.CurrentIncidentID),
+		"last_action_at":      nullableInt(row.LastActionAt),
+		"updated_at":          int64OrZero(row.UpdatedAt),
+	}
+}
+
+func watchdogDeviceOverridePayload(row watchdogDeviceOverrideRow) map[string]any {
+	return map[string]any{
+		"id":          int64OrZero(row.ID),
+		"device_guid": normalizeCanonicalGUID(nullString(row.DeviceGUID)),
+		"hostname":    strings.TrimSpace(nullString(row.Hostname)),
+		"site_id":     nullableInt(row.SiteID),
+		"state":       strings.ToLower(strings.TrimSpace(nullString(row.State))),
+		"reason":      strings.TrimSpace(nullString(row.Reason)),
+		"created_by":  strings.TrimSpace(nullString(row.CreatedBy)),
+		"created_at":  int64OrZero(row.CreatedAt),
+		"expires_at":  nullableInt(row.ExpiresAt),
+		"updated_at":  int64OrZero(row.UpdatedAt),
+	}
+}
+
+func watchdogCompactIncidentPayload(row watchdogCompactIncidentRow) map[string]any {
+	return map[string]any{
+		"id":                int64OrZero(row.ID),
+		"device_guid":       normalizeCanonicalGUID(nullString(row.DeviceGUID)),
+		"hostname":          strings.TrimSpace(nullString(row.Hostname)),
+		"site_id":           nullableInt(row.SiteID),
+		"severity":          normalizeWatchdogSeverity(nullString(row.Severity)),
+		"state":             strings.ToLower(strings.TrimSpace(nullString(row.State))),
+		"title":             strings.TrimSpace(nullString(row.Title)),
+		"message":           strings.TrimSpace(nullString(row.Message)),
+		"sample":            parseJSONObject(row.SampleJSON),
+		"rule_summary":      parseJSONArray(row.RuleSummaryJSON),
+		"action_summary":    parseJSONArray(row.ActionSummaryJSON),
+		"opened_at":         int64OrZero(row.OpenedAt),
+		"updated_at":        int64OrZero(row.UpdatedAt),
+		"resolved_at":       nullableInt(row.ResolvedAt),
+		"resolution_reason": strings.TrimSpace(nullString(row.ResolutionReason)),
+		"acknowledged_at":   nullableInt(row.AcknowledgedAt),
+		"acknowledged_by":   strings.TrimSpace(nullString(row.AcknowledgedBy)),
+		"trigger_count":     int64WithDefault(row.TriggerCount, 1),
+	}
+}
+
 func watchdogVisibleToProfile(item map[string]any, allSiteIDs map[int64]struct{}, allowedSiteIDs []int64) bool {
 	if allowedSiteIDs == nil {
 		return true
@@ -1263,6 +1692,97 @@ func watchdogVisibleToProfile(item map[string]any, allSiteIDs map[int64]struct{}
 		}
 	}
 	return true
+}
+
+func (s *postgresOperatorStore) watchdogFilterMatchesForDevice(ctx context.Context, profile operatorProfile, watchdogs []map[string]any, devices []map[string]any, hostnameKey string) (map[int64]bool, error) {
+	filterIDs := []int64{}
+	seen := map[int64]struct{}{}
+	for _, watchdog := range watchdogs {
+		for _, rawTarget := range anySlice(watchdog["targets"]) {
+			target := asStringAnyMap(rawTarget)
+			filterID := watchdogTargetFilterID(target)
+			if filterID <= 0 {
+				continue
+			}
+			if _, ok := seen[filterID]; ok {
+				continue
+			}
+			seen[filterID] = struct{}{}
+			filterIDs = append(filterIDs, filterID)
+		}
+	}
+	result := map[int64]bool{}
+	if len(filterIDs) == 0 || hostnameKey == "" {
+		return result, nil
+	}
+	records, err := s.loadDeviceFilters(ctx, filterIDs, false)
+	if err != nil {
+		return nil, err
+	}
+	allSiteIDs, err := s.allSiteIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, filterID := range filterIDs {
+		record := records[filterID]
+		if record == nil {
+			continue
+		}
+		visible, err := s.filterRecordVisibleToProfileWithAll(ctx, profile, record, allSiteIDs)
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			continue
+		}
+		for _, device := range matchFilterDevices(record, devices) {
+			if strings.EqualFold(cleanText(device["hostname"]), hostnameKey) {
+				result[filterID] = true
+				break
+			}
+		}
+	}
+	return result, nil
+}
+
+func watchdogTargetsDevice(watchdog map[string]any, devices []map[string]any, hostnameKey string, filterMatches map[int64]bool) bool {
+	if hostnameKey == "" {
+		return false
+	}
+	deviceGUID := ""
+	for _, device := range devices {
+		if strings.EqualFold(cleanText(device["hostname"]), hostnameKey) {
+			deviceGUID = normalizeCanonicalGUID(firstPresentAny(device["guid"], device["agent_guid"], device["device_guid"]))
+			break
+		}
+	}
+	for _, rawTarget := range anySlice(watchdog["targets"]) {
+		target := asStringAnyMap(rawTarget)
+		if filterID := watchdogTargetFilterID(target); filterID > 0 {
+			if filterMatches[filterID] {
+				return true
+			}
+			continue
+		}
+		targetHostname := strings.ToLower(cleanText(target["hostname"]))
+		if targetHostname != "" && targetHostname == hostnameKey {
+			return true
+		}
+		targetGUID := normalizeCanonicalGUID(firstPresentAny(target["device_guid"], target["guid"]))
+		if targetGUID != "" && deviceGUID != "" && strings.EqualFold(targetGUID, deviceGUID) {
+			return true
+		}
+	}
+	return false
+}
+
+func watchdogTargetFilterID(target map[string]any) int64 {
+	kind := strings.ToLower(firstText(cleanText(target["kind"]), cleanText(target["type"])))
+	filterID := coerceInt64(firstPresentAny(target["filter_id"], target["id"]))
+	if kind == "filter" || filterID > 0 && cleanText(target["filter_id"]) != "" {
+		return filterID
+	}
+	return 0
 }
 
 func watchdogAppliesToSite(item map[string]any, allSiteIDs map[int64]struct{}, siteID int64) bool {
@@ -1350,6 +1870,20 @@ func normalizeIncidentMutationState(value string) string {
 	}
 }
 
+func watchdogDeviceIDLooksGUID(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, ch := range value {
+		if ch == '-' || ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f' || ch >= 'A' && ch <= 'F' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func watchdogEmptyIncidentCounts() map[string]int64 {
 	return map[string]int64{"open": 0, "suppressed": 0, "resolved": 0}
 }
@@ -1390,6 +1924,13 @@ func asStringAnyMap(value any) map[string]any {
 		return typed
 	}
 	return map[string]any{}
+}
+
+func nullableMap(value map[string]any) any {
+	if value == nil {
+		return nil
+	}
+	return value
 }
 
 func coerceInt64Slice(value any) []int64 {

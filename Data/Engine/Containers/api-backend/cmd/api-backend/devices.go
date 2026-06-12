@@ -82,6 +82,7 @@ type deviceRow struct {
 func registerDeviceRoutes(mux *http.ServeMux, auth *authService, runtime devicePurgeRuntime) {
 	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
+	mux.HandleFunc("GET /api/devices/{device_id}/watchdogs", deviceWatchdogsHandler(auth))
 	mux.HandleFunc("GET /api/devices/{guid}", deviceByGUIDHandler(auth))
 	mux.HandleFunc("POST /api/devices/{guid}/purge", devicePurgeHandler(auth, runtime))
 	mux.HandleFunc("PUT /api/devices/{guid}/agent-release-channel", deviceAgentReleaseChannelHandler(auth))

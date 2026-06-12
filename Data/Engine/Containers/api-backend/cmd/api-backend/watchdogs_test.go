@@ -41,6 +41,11 @@ type fakeWatchdogStore struct {
 	deleteID      int64
 	deleteHosts   []string
 	deleteFound   bool
+
+	deviceWatchdogProfile operatorProfile
+	deviceWatchdogID      string
+	deviceWatchdogPayload map[string]any
+	deviceWatchdogFound   bool
 }
 
 func (s *fakeWatchdogStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -92,6 +97,12 @@ func (s *fakeWatchdogStore) deleteWatchdog(_ context.Context, profile operatorPr
 	return s.deleteHosts, s.deleteFound, nil
 }
 
+func (s *fakeWatchdogStore) getDeviceWatchdogs(_ context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error) {
+	s.deviceWatchdogProfile = profile
+	s.deviceWatchdogID = deviceID
+	return s.deviceWatchdogPayload, s.deviceWatchdogFound, nil
+}
+
 type fakeWatchdogIncidentBroadcaster struct {
 	incidentPayloads []map[string]any
 	devicePayloads   []map[string]any
@@ -134,6 +145,12 @@ func watchdogTestMux(store *fakeWatchdogStore) *http.ServeMux {
 func watchdogTestMuxWithBroadcaster(store *fakeWatchdogStore, broadcaster watchdogIncidentBroadcaster) *http.ServeMux {
 	mux := http.NewServeMux()
 	registerWatchdogRoutes(mux, testWatchdogAuth(store), http.NotFoundHandler(), broadcaster)
+	return mux
+}
+
+func deviceWatchdogTestMux(store *fakeWatchdogStore) *http.ServeMux {
+	mux := http.NewServeMux()
+	registerDeviceRoutes(mux, testWatchdogAuth(store), devicePurgeRuntime{})
 	return mux
 }
 
@@ -241,6 +258,27 @@ func TestWatchdogIncidentsHandlerPassesStateAndSite(t *testing.T) {
 	}
 	if store.incidentFilter.State != "all" || store.incidentFilter.SiteID == nil || *store.incidentFilter.SiteID != 3 {
 		t.Fatalf("unexpected incident filter %+v", store.incidentFilter)
+	}
+}
+
+func TestDeviceWatchdogsHandlerUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		deviceWatchdogPayload: map[string]any{
+			"device":      map[string]any{"hostname": "LAB-OPERATOR-01"},
+			"assignments": []map[string]any{{"watchdog_id": int64(7)}},
+			"incidents":   []map[string]any{},
+			"overrides":   []map[string]any{},
+		},
+		deviceWatchdogFound: true,
+	}
+	recorder := httptest.NewRecorder()
+	deviceWatchdogTestMux(store).ServeHTTP(recorder, watchdogRequest(http.MethodGet, "/api/devices/LAB-OPERATOR-01/watchdogs"))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.deviceWatchdogID != "LAB-OPERATOR-01" {
+		t.Fatalf("unexpected device id %q", store.deviceWatchdogID)
 	}
 }
 
