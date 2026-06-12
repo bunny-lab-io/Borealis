@@ -34,6 +34,10 @@ type watchdogStore interface {
 	deleteWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) ([]string, bool, error)
 }
 
+type watchdogPreviewStore interface {
+	previewWatchdog(ctx context.Context, profile operatorProfile, body map[string]any) (map[string]any, []string, error)
+}
+
 type watchdogIncidentBroadcaster interface {
 	broadcastWatchdogIncidents(ctx context.Context, payload map[string]any) error
 }
@@ -211,6 +215,10 @@ func watchdogsRootHandler(auth *authService, fallback http.Handler) http.Handler
 func watchdogsSubtreeHandler(auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/watchdogs/"), "/"), "/")
+		if len(parts) == 1 && parts[0] == "preview" && r.Method == http.MethodPost {
+			watchdogPreview(w, r, auth)
+			return
+		}
 		if len(parts) == 1 && parts[0] == "metadata" && r.Method == http.MethodGet {
 			if _, failure := requireUser(r.Context(), auth, r); failure != nil {
 				failure.write(w)
@@ -243,6 +251,37 @@ func watchdogsSubtreeHandler(auth *authService, fallback http.Handler, broadcast
 		}
 		fallback.ServeHTTP(w, r)
 	}
+}
+
+func watchdogPreview(w http.ResponseWriter, r *http.Request, auth *authService) {
+	profile, err := auth.currentProfile(r.Context(), r)
+	if err != nil {
+		if isUnauthorizedAuthError(err) {
+			unauthorizedAuthFailure().write(w)
+			return
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+		return
+	}
+	store, ok := auth.store.(watchdogPreviewStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "watchdogs_unavailable"})
+		return
+	}
+	body := map[string]any{}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, validationErrors, err := store.previewWatchdog(ctx, profile, body)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(validationErrors) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": validationErrors})
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func watchdogList(w http.ResponseWriter, r *http.Request, auth *authService) {

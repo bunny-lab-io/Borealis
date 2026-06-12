@@ -42,6 +42,11 @@ type fakeWatchdogStore struct {
 	deleteHosts   []string
 	deleteFound   bool
 
+	previewProfile operatorProfile
+	previewBody    map[string]any
+	previewPayload map[string]any
+	previewErrors  []string
+
 	deviceWatchdogProfile operatorProfile
 	deviceWatchdogID      string
 	deviceWatchdogPayload map[string]any
@@ -95,6 +100,12 @@ func (s *fakeWatchdogStore) deleteWatchdog(_ context.Context, profile operatorPr
 	s.deleteProfile = profile
 	s.deleteID = watchdogID
 	return s.deleteHosts, s.deleteFound, nil
+}
+
+func (s *fakeWatchdogStore) previewWatchdog(_ context.Context, profile operatorProfile, body map[string]any) (map[string]any, []string, error) {
+	s.previewProfile = profile
+	s.previewBody = body
+	return s.previewPayload, s.previewErrors, nil
 }
 
 func (s *fakeWatchdogStore) getDeviceWatchdogs(_ context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error) {
@@ -204,6 +215,71 @@ func TestWatchdogMetadataHandlerReturnsEditorOptions(t *testing.T) {
 	}
 	if len(payload["rule_types"].([]any)) == 0 || len(payload["action_types"].([]any)) == 0 {
 		t.Fatalf("unexpected metadata payload %+v", payload)
+	}
+}
+
+func TestWatchdogPreviewHandlerUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		previewPayload: map[string]any{
+			"devices":       []map[string]any{{"hostname": "LAB-OPERATOR-01"}},
+			"device_count":  int64(1),
+			"matched_count": int64(1),
+		},
+	}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs/preview", `{"name":"Preview","targets":[{"kind":"all_devices"}]}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.previewProfile.Username != "operator" {
+		t.Fatalf("expected operator profile, got %#v", store.previewProfile)
+	}
+	if store.previewBody["name"] != "Preview" {
+		t.Fatalf("expected preview body to reach store, got %#v", store.previewBody)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	if payload["device_count"] != float64(1) || payload["matched_count"] != float64(1) {
+		t.Fatalf("unexpected preview payload %#v", payload)
+	}
+}
+
+func TestWatchdogPreviewHandlerReturnsValidationErrors(t *testing.T) {
+	store := &fakeWatchdogStore{previewErrors: []string{"At least one watchdog rule is required."}}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs/preview", `{}`))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWatchdogPreviewEvaluatesOfflineRule(t *testing.T) {
+	record := map[string]any{
+		"criteria": map[string]any{
+			"match_mode": "all",
+			"rules": []any{
+				map[string]any{"id": "offline", "type": "device_offline", "offline_after_seconds": int64(60)},
+			},
+		},
+		"match_mode":         "all",
+		"boot_grace_seconds": int64(0),
+	}
+	device := map[string]any{
+		"hostname":  "LAB-OPERATOR-01",
+		"last_seen": time.Now().Unix() - 600,
+	}
+
+	evaluation := evaluateWatchdogPreviewDevice(record, device, nil)
+	if !boolDefault(evaluation["matched"], false) || evaluation["state"] != "triggered" {
+		t.Fatalf("expected triggered match, got %#v", evaluation)
+	}
+	results := anySlice(evaluation["rule_results"])
+	if len(results) != 1 || !boolDefault(asStringAnyMap(results[0])["matched"], false) {
+		t.Fatalf("expected matched rule result, got %#v", results)
 	}
 }
 

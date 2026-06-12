@@ -4,7 +4,6 @@
 #              Engine-native watchdog runtime.
 #
 # API Endpoints (if applicable):
-# - POST /api/watchdogs/preview (Token Authenticated) - Evaluates an unsaved watchdog definition against current inventory.
 # - POST /api/watchdogs (Token Authenticated) - Creates a watchdog policy.
 # - PUT /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Updates a watchdog policy.
 # - POST /api/devices/<device_id>/watchdogs/overrides (Token Authenticated) - Creates, updates, or clears a per-device watchdog override.
@@ -61,18 +60,6 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
 
     def _require_user() -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
         return auth.require_user()
-
-    @blueprint.route("/api/watchdogs/preview", methods=["POST"])
-    def watchdog_preview():
-        user, error = _require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        payload = request.get_json(silent=True) or {}
-        record = runtime._normalize_watchdog_record(payload, username=(user or {}).get("username") or "Unknown")
-        validation = runtime._validate_watchdog_record(record, user=user)
-        if validation:
-            return jsonify({"errors": validation}), 400
-        return jsonify(runtime.evaluate_preview(record))
 
     @blueprint.route("/api/watchdogs", methods=["POST"])
     def create_watchdog():
