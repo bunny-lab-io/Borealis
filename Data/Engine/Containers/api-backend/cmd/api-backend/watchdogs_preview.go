@@ -1409,6 +1409,19 @@ func sortWatchdogPreviewDevices(devices []map[string]any) []map[string]any {
 func watchdogPreviewSiteIDs(raw any) []int64 {
 	ids := []int64{}
 	seen := map[int64]struct{}{}
+	if typed, ok := raw.([]int64); ok {
+		for _, parsed := range typed {
+			if parsed <= 0 {
+				continue
+			}
+			if _, exists := seen[parsed]; exists {
+				continue
+			}
+			seen[parsed] = struct{}{}
+			ids = append(ids, parsed)
+		}
+		return ids
+	}
 	for _, item := range anySlice(raw) {
 		value := item
 		if typed, ok := item.(map[string]any); ok {

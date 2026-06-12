@@ -21,6 +21,13 @@ type fakeWatchdogStore struct {
 	detailID      int64
 	detail        map[string]any
 
+	saveProfile operatorProfile
+	saveHasID   bool
+	saveID      int64
+	saveBody    map[string]any
+	savePayload map[string]any
+	saveErrors  []string
+
 	incidentProfile operatorProfile
 	incidentFilter  watchdogIncidentFilter
 	incidentPayload map[string]any
@@ -80,6 +87,16 @@ func (s *fakeWatchdogStore) getWatchdog(_ context.Context, profile operatorProfi
 	s.detailProfile = profile
 	s.detailID = watchdogID
 	return s.detail, s.detail != nil, nil
+}
+
+func (s *fakeWatchdogStore) saveWatchdog(_ context.Context, profile operatorProfile, watchdogID *int64, body map[string]any) (map[string]any, []string, error) {
+	s.saveProfile = profile
+	s.saveBody = body
+	if watchdogID != nil {
+		s.saveHasID = true
+		s.saveID = *watchdogID
+	}
+	return s.savePayload, s.saveErrors, nil
 }
 
 func (s *fakeWatchdogStore) listWatchdogIncidents(_ context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error) {
@@ -300,6 +317,44 @@ func TestWatchdogPreviewEvaluatesOfflineRule(t *testing.T) {
 	}
 }
 
+func TestNormalizeWatchdogSaveRecordPreservesExistingScopeAndActions(t *testing.T) {
+	existing := map[string]any{
+		"id":       int64(7),
+		"name":     "Existing Watchdog",
+		"site_ids": []int64{2, 3},
+		"criteria": map[string]any{
+			"match_mode": "all",
+			"rules": []any{
+				map[string]any{"id": "offline", "type": "device_offline", "offline_after_seconds": int64(120)},
+			},
+		},
+		"actions": map[string]any{
+			"actions": []any{
+				map[string]any{"id": "svc", "type": "service_control", "action": "restart", "service_name": "Spooler"},
+			},
+		},
+		"targets": []any{
+			map[string]any{"kind": "device", "hostname": "LAB-OPERATOR-01", "site_id": int64(2)},
+		},
+		"created_at": int64(1700000000),
+	}
+
+	record := normalizeWatchdogSaveRecord(map[string]any{"description": "Updated"}, existing, "operator")
+
+	siteIDs := coerceInt64Slice(record["site_ids"])
+	if len(siteIDs) != 2 || siteIDs[0] != 2 || siteIDs[1] != 3 {
+		t.Fatalf("expected existing site ids to survive update, got %#v", record["site_ids"])
+	}
+	actions := anySlice(asStringAnyMap(record["actions"])["actions"])
+	if len(actions) != 1 || asStringAnyMap(actions[0])["service_name"] != "Spooler" {
+		t.Fatalf("unexpected actions %#v", record["actions"])
+	}
+	targets := anySlice(record["targets"])
+	if len(targets) != 1 || asStringAnyMap(targets[0])["kind"] != "device" {
+		t.Fatalf("unexpected targets %#v", record["targets"])
+	}
+}
+
 func TestWatchdogDetailHandlerReturnsRecord(t *testing.T) {
 	store := &fakeWatchdogStore{detail: map[string]any{"id": int64(9), "name": "Watchdog"}}
 	recorder := httptest.NewRecorder()
@@ -310,6 +365,60 @@ func TestWatchdogDetailHandlerReturnsRecord(t *testing.T) {
 	}
 	if store.detailID != 9 {
 		t.Fatalf("unexpected detail id %d", store.detailID)
+	}
+}
+
+func TestWatchdogCreateHandlerUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		savePayload: map[string]any{"id": int64(11), "name": "Created Watchdog"},
+	}
+	broadcaster := &fakeWatchdogIncidentBroadcaster{}
+	recorder := httptest.NewRecorder()
+	watchdogTestMuxWithBroadcaster(store, broadcaster).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs", `{"name":"Created Watchdog"}`))
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.saveHasID || store.saveProfile.Username != "operator" || store.saveBody["name"] != "Created Watchdog" {
+		t.Fatalf("unexpected save call hasID=%v profile=%#v body=%#v", store.saveHasID, store.saveProfile, store.saveBody)
+	}
+	if len(broadcaster.incidentPayloads) != 1 || broadcaster.incidentPayloads[0]["watchdog_id"] != int64(11) {
+		t.Fatalf("unexpected broadcasts %+v", broadcaster.incidentPayloads)
+	}
+}
+
+func TestWatchdogUpdateHandlerUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		savePayload: map[string]any{"id": int64(9), "name": "Updated Watchdog"},
+	}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPut, "/api/watchdogs/9", `{"name":"Updated Watchdog"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !store.saveHasID || store.saveID != 9 || store.saveBody["name"] != "Updated Watchdog" {
+		t.Fatalf("unexpected save call hasID=%v id=%d body=%#v", store.saveHasID, store.saveID, store.saveBody)
+	}
+}
+
+func TestWatchdogSaveHandlerReturnsValidationErrors(t *testing.T) {
+	store := &fakeWatchdogStore{saveErrors: []string{"At least one watchdog rule is required."}}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs", `{}`))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWatchdogSaveHandlerMapsNotFound(t *testing.T) {
+	store := &fakeWatchdogStore{saveErrors: []string{"Watchdog not found."}}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPut, "/api/watchdogs/99", `{"name":"Missing"}`))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -460,15 +569,5 @@ func TestWatchdogIncidentStateUpdateMapsNotFound(t *testing.T) {
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestWatchdogMutationsFallBack(t *testing.T) {
-	store := &fakeWatchdogStore{}
-	recorder := httptest.NewRecorder()
-	watchdogTestMux(store).ServeHTTP(recorder, watchdogRequest(http.MethodPost, "/api/watchdogs"))
-
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("expected fallback 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }

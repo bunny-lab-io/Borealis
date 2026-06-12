@@ -28,6 +28,7 @@ const (
 type watchdogStore interface {
 	listWatchdogs(ctx context.Context, profile operatorProfile, filter watchdogListFilter) ([]map[string]any, error)
 	getWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) (map[string]any, bool, error)
+	saveWatchdog(ctx context.Context, profile operatorProfile, watchdogID *int64, body map[string]any) (map[string]any, []string, error)
 	listWatchdogIncidents(ctx context.Context, profile operatorProfile, filter watchdogIncidentFilter) (map[string]any, error)
 	acknowledgeWatchdogIncident(ctx context.Context, profile operatorProfile, incidentID int64) (map[string]any, bool, error)
 	updateWatchdogIncidentState(ctx context.Context, profile operatorProfile, incidentID int64, state string, reason string) (map[string]any, []string, error)
@@ -164,7 +165,7 @@ type watchdogCompactIncidentRow struct {
 }
 
 func registerWatchdogRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) {
-	mux.HandleFunc("/api/watchdogs", watchdogsRootHandler(auth, fallback))
+	mux.HandleFunc("/api/watchdogs", watchdogsRootHandler(auth, fallback, broadcaster))
 	mux.HandleFunc("/api/watchdogs/", watchdogsSubtreeHandler(auth, fallback, broadcaster))
 }
 
@@ -248,10 +249,14 @@ func deviceWatchdogOverrideHandler(auth *authService, broadcaster watchdogIncide
 	}
 }
 
-func watchdogsRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
+func watchdogsRootHandler(auth *authService, fallback http.Handler, broadcaster watchdogIncidentBroadcaster) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.TrimRight(r.URL.Path, "/") == "/api/watchdogs" {
 			watchdogList(w, r, auth)
+			return
+		}
+		if r.Method == http.MethodPost && strings.TrimRight(r.URL.Path, "/") == "/api/watchdogs" {
+			watchdogSave(w, r, auth, broadcaster, nil, http.StatusCreated)
 			return
 		}
 		fallback.ServeHTTP(w, r)
@@ -289,6 +294,15 @@ func watchdogsSubtreeHandler(auth *authService, fallback http.Handler, broadcast
 		}
 		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodGet {
 			watchdogDetail(w, r, auth, parts[0])
+			return
+		}
+		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodPut {
+			watchdogID, err := parsePositivePathInt(parts[0])
+			if err != nil {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+				return
+			}
+			watchdogSave(w, r, auth, broadcaster, &watchdogID, http.StatusOK)
 			return
 		}
 		if len(parts) == 1 && parts[0] != "" && r.Method == http.MethodDelete {
@@ -373,6 +387,36 @@ func watchdogDetail(w http.ResponseWriter, r *http.Request, auth *authService, w
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func watchdogSave(w http.ResponseWriter, r *http.Request, auth *authService, broadcaster watchdogIncidentBroadcaster, watchdogID *int64, status int) {
+	profile, store, ok := watchdogRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	body := map[string]any{}
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+	defer cancel()
+	item, validationErrors, err := store.saveWatchdog(ctx, profile, watchdogID, body)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if len(validationErrors) > 0 {
+		if len(validationErrors) == 1 && validationErrors[0] == "Watchdog not found." {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": validationErrors})
+		return
+	}
+	if item == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
+		return
+	}
+	broadcastWatchdogRefresh(r.Context(), broadcaster, "", coerceInt64(item["id"]))
+	writeJSON(w, status, item)
 }
 
 func watchdogDelete(w http.ResponseWriter, r *http.Request, auth *authService, broadcaster watchdogIncidentBroadcaster, watchdogIDText string) {
@@ -640,6 +684,398 @@ func (s *postgresOperatorStore) getWatchdog(ctx context.Context, profile operato
 		}
 	}
 	return nil, false, nil
+}
+
+func (s *postgresOperatorStore) saveWatchdog(ctx context.Context, profile operatorProfile, watchdogID *int64, body map[string]any) (map[string]any, []string, error) {
+	payload := copyMap(body)
+	existing := map[string]any{}
+	if watchdogID != nil {
+		if *watchdogID <= 0 {
+			return nil, []string{"Watchdog not found."}, nil
+		}
+		current, found, err := s.getWatchdog(ctx, profile, *watchdogID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !found {
+			return nil, []string{"Watchdog not found."}, nil
+		}
+		existing = current
+		payload["id"] = *watchdogID
+	}
+	record := normalizeWatchdogSaveRecord(payload, existing, firstText(cleanText(profile.Username), "Unknown"))
+	validationErrors, err := s.validateWatchdogPreviewRecord(ctx, profile, record)
+	if err != nil || len(validationErrors) > 0 {
+		return nil, validationErrors, err
+	}
+	savedID, err := s.persistWatchdog(ctx, record)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, []string{"Watchdog not found."}, nil
+		}
+		if isUniqueViolation(err) {
+			return nil, []string{"A watchdog with this name already exists."}, nil
+		}
+		return nil, nil, err
+	}
+	refreshed, found, err := s.getWatchdog(ctx, profile, savedID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !found {
+		return nil, []string{"Watchdog not found."}, nil
+	}
+	return refreshed, nil, nil
+}
+
+func (s *postgresOperatorStore) persistWatchdog(ctx context.Context, record map[string]any) (int64, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollbackQuietly(tx)
+
+	watchdogID := coerceInt64(record["id"])
+	payload := []any{
+		cleanSingleLine(cleanText(record["name"])),
+		cleanSingleLine(cleanText(record["description"])),
+		boolInt(boolDefault(record["archived"], false)),
+		boolInt(boolDefault(record["enabled"], true)),
+		normalizeWatchdogSeverity(cleanText(record["severity"])),
+		normalizeWatchdogMatchMode(cleanText(record["match_mode"])),
+		normalizeWatchdogSiteMode(cleanText(record["site_mode"])),
+		mustJSONString(firstPresentAny(record["criteria"], map[string]any{"rules": []any{}, "match_mode": "all"})),
+		mustJSONString(firstPresentAny(record["actions"], map[string]any{"actions": []any{}})),
+		maxInt(watchdogSaveInt(record, nil, "evaluation_interval_seconds", watchdogDefaultEvalSeconds), 30),
+		maxInt(watchdogSaveInt(record, nil, "cooldown_seconds", watchdogDefaultCooldownSeconds), 0),
+		maxInt(watchdogSaveInt(record, nil, "auto_resolve_after_seconds", watchdogDefaultAutoResolve), 0),
+		maxInt(watchdogSaveInt(record, nil, "min_consecutive_matches", watchdogDefaultMinMatches), 1),
+		maxInt(watchdogSaveInt(record, nil, "boot_grace_seconds", watchdogDefaultBootGrace), 0),
+		cleanText(record["last_edited_by"]),
+		coerceInt64(record["created_at"]),
+		coerceInt64(record["updated_at"]),
+		watchdogNullableInt64(record["last_evaluated_at"]),
+		coerceInt64(record["target_device_count"]),
+	}
+	if watchdogID <= 0 {
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO engine.watchdogs (
+				name, description, archived, enabled, severity, match_mode, site_mode,
+				criteria_json, actions_json, evaluation_interval_seconds, cooldown_seconds,
+				auto_resolve_after_seconds, min_consecutive_matches, boot_grace_seconds,
+				last_edited_by, created_at, updated_at, last_evaluated_at, target_device_count
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			RETURNING id
+		`, payload...).Scan(&watchdogID)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		args := append(payload, watchdogID)
+		result, err := tx.ExecContext(ctx, `
+			UPDATE engine.watchdogs
+			   SET name=$1,
+			       description=$2,
+			       archived=$3,
+			       enabled=$4,
+			       severity=$5,
+			       match_mode=$6,
+			       site_mode=$7,
+			       criteria_json=$8,
+			       actions_json=$9,
+			       evaluation_interval_seconds=$10,
+			       cooldown_seconds=$11,
+			       auto_resolve_after_seconds=$12,
+			       min_consecutive_matches=$13,
+			       boot_grace_seconds=$14,
+			       last_edited_by=$15,
+			       created_at=$16,
+			       updated_at=$17,
+			       last_evaluated_at=$18,
+			       target_device_count=$19
+			 WHERE id=$20
+		`, args...)
+		if err != nil {
+			return 0, err
+		}
+		if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+			return 0, sql.ErrNoRows
+		}
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.watchdog_sites WHERE watchdog_id=$1", watchdogID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.watchdog_targets WHERE watchdog_id=$1", watchdogID); err != nil {
+		return 0, err
+	}
+	for _, siteID := range coerceInt64Slice(record["site_ids"]) {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO engine.watchdog_sites (watchdog_id, site_id)
+			VALUES ($1, $2)
+			ON CONFLICT DO NOTHING
+		`, watchdogID, siteID); err != nil {
+			return 0, err
+		}
+	}
+	now := time.Now().Unix()
+	for _, rawTarget := range anySlice(record["targets"]) {
+		target := asStringAnyMap(rawTarget)
+		if len(target) == 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO engine.watchdog_targets (watchdog_id, kind, target_json, created_at)
+			VALUES ($1, $2, $3, $4)
+		`, watchdogID, watchdogSaveTargetKind(target), mustJSONString(target), now); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return watchdogID, nil
+}
+
+func normalizeWatchdogSaveRecord(payload map[string]any, existing map[string]any, username string) map[string]any {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if existing == nil {
+		existing = map[string]any{}
+	}
+	now := time.Now().Unix()
+	criteria := normalizeWatchdogSaveCriteria(payload, existing)
+	createdAt := coerceInt64(existing["created_at"])
+	if createdAt <= 0 {
+		createdAt = now
+	}
+	name := cleanSingleLine(firstText(cleanText(payload["name"]), cleanText(existing["name"])))
+	if name == "" {
+		name = "Unnamed Watchdog"
+	}
+	return map[string]any{
+		"id":                          coerceInt64(firstPresentAny(payload["id"], existing["id"])),
+		"name":                        name,
+		"description":                 cleanSingleLine(firstText(cleanText(payload["description"]), cleanText(existing["description"]))),
+		"archived":                    watchdogSaveBool(payload, existing, "archived", false),
+		"enabled":                     watchdogSaveBool(payload, existing, "enabled", true),
+		"severity":                    normalizeWatchdogSeverity(cleanText(watchdogSaveFirstPresent(payload, existing, "severity"))),
+		"site_mode":                   normalizeWatchdogSiteMode(cleanText(watchdogSaveFirstPresent(payload, existing, "site_mode"))),
+		"site_ids":                    watchdogPreviewSiteIDs(watchdogSaveFirstPresent(payload, existing, "site_ids", "sites", "site_scope_values")),
+		"criteria":                    criteria,
+		"match_mode":                  criteria["match_mode"],
+		"actions":                     normalizeWatchdogSaveActions(payload, existing),
+		"targets":                     normalizeWatchdogTargetsForSave(watchdogSaveFirstPresent(payload, existing, "targets")),
+		"evaluation_interval_seconds": maxInt(watchdogSaveInt(payload, existing, "evaluation_interval_seconds", watchdogDefaultEvalSeconds), 30),
+		"cooldown_seconds":            maxInt(watchdogSaveInt(payload, existing, "cooldown_seconds", watchdogDefaultCooldownSeconds), 0),
+		"auto_resolve_after_seconds":  maxInt(watchdogSaveInt(payload, existing, "auto_resolve_after_seconds", watchdogDefaultAutoResolve), 0),
+		"min_consecutive_matches":     maxInt(watchdogSaveInt(payload, existing, "min_consecutive_matches", watchdogDefaultMinMatches), 1),
+		"boot_grace_seconds":          maxInt(watchdogSaveInt(payload, existing, "boot_grace_seconds", watchdogDefaultBootGrace), 0),
+		"last_edited_by":              firstText(cleanText(username), cleanText(existing["last_edited_by"]), "Unknown"),
+		"created_at":                  createdAt,
+		"updated_at":                  now,
+		"last_evaluated_at":           watchdogNullableInt64(existing["last_evaluated_at"]),
+		"target_device_count":         coerceInt64(existing["target_device_count"]),
+	}
+}
+
+func normalizeWatchdogSaveCriteria(payload map[string]any, existing map[string]any) map[string]any {
+	payloadCriteria, hasPayloadCriteria := payload["criteria"]
+	criteriaSource := map[string]any{}
+	if hasPayloadCriteria {
+		criteriaSource = asStringAnyMap(payloadCriteria)
+	} else {
+		criteriaSource = asStringAnyMap(existing["criteria"])
+	}
+	rulesInput := criteriaSource["rules"]
+	if _, hasRules := payload["rules"]; hasRules {
+		rulesInput = payload["rules"]
+	}
+	rules := make([]any, 0, len(anySlice(rulesInput)))
+	for index, raw := range anySlice(rulesInput) {
+		rule := normalizeWatchdogPreviewRule(index, asStringAnyMap(raw))
+		if rule != nil {
+			rules = append(rules, rule)
+		}
+		if len(rules) >= 24 {
+			break
+		}
+	}
+	matchInput := firstPresentAny(payload["match_mode"], criteriaSource["match_mode"], existing["match_mode"])
+	if hasPayloadCriteria {
+		matchInput = firstPresentAny(criteriaSource["match_mode"], payload["match_mode"], existing["match_mode"])
+	}
+	return map[string]any{
+		"match_mode": normalizeWatchdogMatchMode(cleanText(matchInput)),
+		"rules":      rules,
+	}
+}
+
+func normalizeWatchdogSaveActions(payload map[string]any, existing map[string]any) map[string]any {
+	actionSource := map[string]any{}
+	if raw, ok := payload["actions"]; ok {
+		actionSource = asStringAnyMap(raw)
+	} else {
+		actionSource = asStringAnyMap(existing["actions"])
+	}
+	entries := actionSource["actions"]
+	if raw, ok := payload["action_list"]; ok {
+		entries = raw
+	}
+	actions := make([]any, 0, len(anySlice(entries)))
+	for index, raw := range anySlice(entries) {
+		action := normalizeWatchdogSaveAction(index, asStringAnyMap(raw))
+		if action != nil {
+			actions = append(actions, action)
+		}
+	}
+	return map[string]any{"actions": actions}
+}
+
+func normalizeWatchdogSaveAction(index int, raw map[string]any) map[string]any {
+	actionType := strings.ToLower(cleanText(raw["type"]))
+	switch actionType {
+	case "notification", "service_control", "assembly", "do_nothing":
+	default:
+		return nil
+	}
+	base := map[string]any{
+		"id":      watchdogSaveID(index, raw["id"], "action"),
+		"type":    actionType,
+		"enabled": boolDefault(raw["enabled"], true),
+	}
+	switch actionType {
+	case "notification":
+		variant := normalizeWatchdogSeverity(firstText(cleanText(raw["variant"]), cleanText(raw["severity"]), "warning"))
+		base["variant"] = variant
+		base["title"] = cleanSingleLine(cleanText(raw["title"]))
+		base["message_template"] = cleanText(raw["message_template"])
+		return base
+	case "do_nothing":
+		return base
+	case "service_control":
+		action := normalizeServiceActionValue(raw["action"])
+		serviceName := cleanSingleLine(firstText(cleanText(raw["service_name"]), cleanText(raw["name"])))
+		if action == "" || serviceName == "" {
+			return nil
+		}
+		base["action"] = action
+		base["service_name"] = serviceName
+		return base
+	case "assembly":
+		assemblyGUID := strings.ToLower(cleanText(firstPresentAny(raw["assembly_guid"], raw["assemblyGuid"])))
+		if assemblyGUID == "" {
+			return nil
+		}
+		runMode := strings.ToLower(firstText(cleanText(raw["run_mode"]), "system"))
+		if runMode != "system" && runMode != "currentuser" {
+			runMode = "system"
+		}
+		executionContext := strings.ToLower(firstText(cleanText(raw["execution_context"]), "local"))
+		if executionContext != "local" && executionContext != "ssh" && executionContext != "winrm" {
+			executionContext = "local"
+		}
+		base["assembly_guid"] = assemblyGUID
+		base["run_mode"] = runMode
+		base["execution_context"] = executionContext
+		base["variable_values"] = asStringAnyMap(raw["variable_values"])
+		return base
+	default:
+		return nil
+	}
+}
+
+func normalizeWatchdogTargetsForSave(raw any) []any {
+	normalized := normalizeScheduledTargetsForSave(raw)
+	targets := make([]any, 0, len(normalized))
+	for _, entry := range normalized {
+		if host, ok := entry.(string); ok {
+			host = cleanText(host)
+			if host == "" {
+				continue
+			}
+			targets = append(targets, map[string]any{"kind": "device", "hostname": host, "device_guid": "", "site_id": nil, "site_name": ""})
+			continue
+		}
+		item := asStringAnyMap(entry)
+		if len(item) == 0 {
+			continue
+		}
+		target := copyMap(item)
+		target["kind"] = watchdogSaveTargetKind(target)
+		targets = append(targets, target)
+	}
+	return targets
+}
+
+func watchdogSaveTargetKind(target map[string]any) string {
+	kind := strings.ToLower(firstText(cleanText(target["kind"]), cleanText(target["type"])))
+	if kind == "filter" || watchdogTargetFilterID(target) > 0 {
+		return "filter"
+	}
+	if kind == "all_devices" || boolDefault(target["all_devices"], false) {
+		return "all_devices"
+	}
+	if kind == "" {
+		return "device"
+	}
+	return kind
+}
+
+func watchdogSaveFirstPresent(payload map[string]any, existing map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := payload[key]; ok {
+			if present := firstPresentAny(value); present != nil {
+				return present
+			}
+		}
+	}
+	for _, key := range keys {
+		if value, ok := existing[key]; ok {
+			if present := firstPresentAny(value); present != nil {
+				return present
+			}
+		}
+	}
+	return nil
+}
+
+func watchdogSaveBool(payload map[string]any, existing map[string]any, key string, fallback bool) bool {
+	if value, ok := payload[key]; ok {
+		return boolDefault(value, fallback)
+	}
+	if value, ok := existing[key]; ok {
+		return boolDefault(value, fallback)
+	}
+	return fallback
+}
+
+func watchdogSaveInt(payload map[string]any, existing map[string]any, key string, fallback int) int {
+	if value, ok := payload[key]; ok {
+		return int(coerceInt64(value))
+	}
+	if existing != nil {
+		if value, ok := existing[key]; ok {
+			return int(coerceInt64(value))
+		}
+	}
+	return fallback
+}
+
+func watchdogSaveID(index int, value any, prefix string) string {
+	text := cleanText(value)
+	if text == "" {
+		return fmt.Sprintf("%s-%d", prefix, index+1)
+	}
+	if len(text) > 120 {
+		return text[:120]
+	}
+	return text
 }
 
 func (s *postgresOperatorStore) deleteWatchdog(ctx context.Context, profile operatorProfile, watchdogID int64) ([]string, bool, error) {

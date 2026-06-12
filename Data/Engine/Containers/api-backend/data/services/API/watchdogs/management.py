@@ -1,22 +1,18 @@
 # ======================================================
 # Data\Engine\services\API\watchdogs\management.py
-# Description: Watchdog policy and incident API endpoints backed by the
-#              Engine-native watchdog runtime.
+# Description: Watchdog runtime bootstrap retained for background evaluation.
 #
-# API Endpoints (if applicable):
-# - POST /api/watchdogs (Token Authenticated) - Creates a watchdog policy.
-# - PUT /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Updates a watchdog policy.
+# API Endpoints (if applicable): None
 # ======================================================
 
 """Watchdog policy and incident API registration for the Borealis Engine."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING
 
-from flask import Blueprint, Flask, jsonify, request
+from flask import Flask
 
-from ...auth import RequestAuthContext
 from .runtime import WatchdogRuntimeService
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -46,41 +42,4 @@ def ensure_watchdog_runtime(app: Flask, adapters: "EngineServiceAdapters") -> Wa
 
 
 def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
-    runtime = ensure_watchdog_runtime(app, adapters)
-    auth = RequestAuthContext(
-        app=app,
-        dev_mode_manager=adapters.dev_mode_manager,
-        config=adapters.config,
-        logger=adapters.context.logger,
-        db_conn_factory=adapters.db_conn_factory,
-        aegis_cipher_service=adapters.aegis_cipher_service,
-    )
-    blueprint = Blueprint("watchdogs", __name__)
-
-    def _require_user() -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
-        return auth.require_user()
-
-    @blueprint.route("/api/watchdogs", methods=["POST"])
-    def create_watchdog():
-        user, error = _require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        payload = request.get_json(silent=True) or {}
-        record, errors = runtime.save_watchdog(payload, user=user)
-        if errors:
-            return jsonify({"errors": errors}), 400
-        return jsonify(record), 201
-
-    @blueprint.route("/api/watchdogs/<int:watchdog_id>", methods=["PUT"])
-    def update_watchdog(watchdog_id: int):
-        user, error = _require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        payload = request.get_json(silent=True) or {}
-        payload["id"] = watchdog_id
-        record, errors = runtime.save_watchdog(payload, user=user)
-        if errors:
-            return jsonify({"errors": errors}), 400
-        return jsonify(record)
-
-    app.register_blueprint(blueprint)
+    ensure_watchdog_runtime(app, adapters)
