@@ -4,7 +4,7 @@ This software bill of materials inventories direct, repo-declared, bundled, cont
 
 Repeated entries are intentional when multiple Engine containers install the same requirement file or use the same runtime package. Python requirement files are currently unpinned, so exact resolved versions can change between installs. Explicitly pinned script, Go, Node, and container versions are called out below.
 
-Primary sources:
+**Primary Sources**:
 
 - `Data/Agent/go.mod`
 - `Data/Agent/build-agent.sh`
@@ -36,7 +36,7 @@ Primary sources:
 Use `shared-engine` for dependencies that support host deployment, build orchestration, or cross-container service management rather than one container runtime.
 
 | Service | Dependency | License |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | api-backend | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
