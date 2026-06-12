@@ -36,6 +36,16 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 ## Interacting with the Codebase
 - When making changes to the codebase, do not attempt to build code via npm or vite from staging source under `Data/Agent`, `Data/Engine`, or `Data/Engine/Containers/*/data`; changes of that nature need to take place in runtime folders, and it is best to defer to the operator / developer to re-deploy the agent or engine to detect errors with page formatting, etc.
 
+## Working on Repository Issues
+- When being asked to work on issues on Gitea or Github, you are to read the issue to understand the context of it, then open a pull request named "issue/<appropriate-dashed-name>, and also make a repo branch with the same name to work from.
+- All issue-related work will be operated on within the repo branch created for the issue.
+- When the work is complete, you will tell the operator "ISSUE RESOLVED: Merge Pull Request?", and if they respond with anything like yes, affirmative, okay, etc, you will close down the issue, then merge the pull request into the `main` branch, then you will delete the remote branch associated with the pull request, as well as delete the local branch associated with the pull request, then swich the active branch in the local workspace to `main` and sync all changes to bring it up-to-date with all of the recently-merged changes.
+- If there are merge conflicts, you will work with the oeprator/developer to identify them, and ask them for permission to resolve the conflict gracefully.
+- In summary, when the operator tells you to work on an issue, you will create a PR, then a branch for the PR, work from the branch, then ask the operator for permission to merge the PR, then cleanup the local and remote branches, then reconcile any merge conflicts that arise from bringing the local workspace up-to-date afterwards.
+- Every issue has to have a corresponding pull request, no exceptions, no matter how small the request is.
+- If the issue is an ongoing issue, you will continue to work from the same pull request until the issue is resolved, regardless of the number of commits.
+- If the developer tells you to merge the pull request early, be sure to confirm with them by saying "PR MERGE REQUESTED: Are you sure?", and if they say anything to the effect of yes, then you will merge the PR before the originally-tasked work is completed, but urge the developer to finish their changes before merging the PR if doing so will leave the codebase in a broken state. (Dont let the developer merge changes before they are stable/safe)
+
 ## Unit Testing
 - For codebase changes, use `Docs/index.md` to find unit testing guidance before choosing validation.
 - Use `Engine_Unit_Tests.sh`, `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh`, and `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1` as the unit test entrypoints.
