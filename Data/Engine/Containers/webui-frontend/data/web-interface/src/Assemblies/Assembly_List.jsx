@@ -86,6 +86,7 @@ const BOREALIS_BLUE = "#58a6ff";
 const DARKER_GRAY = "#9aa3ad";
 const AURORA_REPOSITORY_URL = "https://github.com/bunny-lab-io/Aurora";
 const PAGE_SIZE = 25;
+const AUTO_SIZE_COLUMNS = ["path"];
 const ASSEMBLY_TYPE_FILTER_OPTIONS = [
   { key: "applications", label: "Applications", match: "applications" },
   { key: "playbooks", label: "Playbooks", match: "playbooks" },
@@ -474,7 +475,7 @@ const PathCellRenderer = React.memo(function PathCellRenderer(props) {
   const meta = data.typeKey ? TYPE_METADATA[data.typeKey] : null;
   const Icon = meta?.Icon;
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 1.1, minWidth: 0 }}>
+    <Box sx={{ display: "inline-flex", alignItems: "center", gap: 1.1, width: "max-content" }}>
       {Icon ? <Icon sx={{ fontSize: 19, color: BOREALIS_BLUE, flexShrink: 0 }} /> : null}
       <Typography
         component="span"
@@ -482,8 +483,6 @@ const PathCellRenderer = React.memo(function PathCellRenderer(props) {
           fontSize: 13,
           color: DARKER_GRAY,
           whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
         }}
       >
         {data.pathDisplay || ""}
@@ -724,6 +723,8 @@ export default function AssemblyList() {
   const navigate = useNavigate();
   const { role } = useAuth();
   const gridRef = useRef(null);
+  const gridApiRef = useRef(null);
+  const autoSizeHandleRef = useRef(null);
   const initialRows = Array.isArray(loaderData?.rows) ? loaderData.rows : [];
   const initialCatalogStatus =
     loaderData?.catalogStatus && typeof loaderData.catalogStatus === "object"
@@ -1175,6 +1176,56 @@ export default function AssemblyList() {
     api.paginationGoToFirstPage();
   }, [assemblyOsFilterMode, assemblyTypeFilterMode]);
 
+  const autoSizeColumns = useCallback(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api || loading || !filteredRows.length) return;
+
+    const doSize = () => {
+      autoSizeHandleRef.current = null;
+      const liveApi = gridApiRef.current || gridRef.current?.api || api;
+      if (!liveApi) return;
+      if (typeof liveApi.isDestroyed === "function" && liveApi.isDestroyed()) return;
+      try {
+        liveApi.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
+      } catch {
+        /* grid may not be ready during initial mount/unmount */
+      }
+    };
+
+    if (autoSizeHandleRef.current != null) {
+      if (typeof cancelAnimationFrame === "function") {
+        cancelAnimationFrame(autoSizeHandleRef.current);
+      } else {
+        clearTimeout(autoSizeHandleRef.current);
+      }
+      autoSizeHandleRef.current = null;
+    }
+
+    if (typeof requestAnimationFrame === "function") {
+      autoSizeHandleRef.current = requestAnimationFrame(doSize);
+    } else {
+      autoSizeHandleRef.current = setTimeout(doSize, 0);
+    }
+  }, [filteredRows, loading]);
+
+  useEffect(() => {
+    autoSizeColumns();
+  }, [autoSizeColumns]);
+
+  useEffect(() => {
+    return () => {
+      if (autoSizeHandleRef.current != null) {
+        if (typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(autoSizeHandleRef.current);
+        } else {
+          clearTimeout(autoSizeHandleRef.current);
+        }
+        autoSizeHandleRef.current = null;
+      }
+      gridApiRef.current = null;
+    };
+  }, []);
+
   const gridContext = useMemo(
     () => ({
       openRow,
@@ -1417,6 +1468,7 @@ export default function AssemblyList() {
         minWidth: 110,
         width: 110,
         flex: 0,
+        cellClass: "auto-col-tight",
         sortable: true,
         resizable: false,
       },
@@ -1426,8 +1478,9 @@ export default function AssemblyList() {
         headerName: "Name",
         valueGetter: (params) => params?.data?.name || "",
         cellRenderer: NameCellRenderer,
-        minWidth: 450,
+        minWidth: 240,
         flex: 1,
+        cellClass: "auto-col-tight",
         sort: "asc",
         sortable: true,
         comparator: compareAssemblyNames,
@@ -1443,6 +1496,7 @@ export default function AssemblyList() {
         minWidth: 300,
         width: 300,
         flex: 0,
+        cellClass: "auto-col-tight",
         sortable: true,
         filter: "agTextColumnFilter",
         resizable: true,
@@ -1456,6 +1510,7 @@ export default function AssemblyList() {
         sortable: false,
         filter: false,
         resizable: false,
+        cellClass: "auto-col-tight",
         cellRenderer: OfficialUpdateCellRenderer,
       },
     ],
@@ -1742,11 +1797,23 @@ export default function AssemblyList() {
               "& .ag-icon": {
                 fontFamily: iconFontFamily,
               },
-              "& .ag-cell": {
+              "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
                 display: "flex",
                 alignItems: "center",
-                paddingTop: "8px",
-                paddingBottom: "8px",
+                justifyContent: "flex-start",
+                textAlign: "left",
+                padding: "8px 12px 8px 18px",
+              },
+              "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                padding: 0,
+              },
+              "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+                paddingLeft: "12px",
+                paddingRight: "9px",
               },
               "& .ag-row-selected": {
                 backgroundColor: "rgba(125,211,252,0.2) !important",
@@ -1785,6 +1852,13 @@ export default function AssemblyList() {
               paginationPageSize={PAGE_SIZE}
               paginationPageSizeSelector={[25, 50, 100]}
               animateRows
+              onGridReady={(params) => {
+                gridApiRef.current = params.api;
+                autoSizeColumns();
+              }}
+              onFirstDataRendered={autoSizeColumns}
+              onRowDataUpdated={autoSizeColumns}
+              onPaginationChanged={autoSizeColumns}
               onRowDoubleClicked={handleRowDoubleClicked}
               onCellContextMenu={handleCellContextMenu}
               getRowId={(params) =>
