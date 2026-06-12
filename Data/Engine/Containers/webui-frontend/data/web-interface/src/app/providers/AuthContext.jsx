@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
-import { EMPTY_BOOTSTRAP_STATE, normalizeBootstrapState } from "../utils/bootstrap.js";
+import { EMPTY_BOOTSTRAP_STATE, engineLoadingBootstrapState, normalizeBootstrapState } from "../utils/bootstrap.js";
 import { sha512 } from "../utils/crypto.js";
 import { postAppNotification } from "../utils/notifications.js";
 import {
@@ -99,7 +99,7 @@ export function AuthProvider({ children }) {
     try {
       const response = await fetch("/api/bootstrap/state", { credentials: "include" });
       if (!response.ok) {
-        const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+        const fallback = engineLoadingBootstrapState();
         setBootstrapState(fallback);
         return fallback;
       }
@@ -108,7 +108,7 @@ export function AuthProvider({ children }) {
       setBootstrapState(normalized);
       return normalized;
     } catch {
-      const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+      const fallback = engineLoadingBootstrapState();
       setBootstrapState(fallback);
       return fallback;
     }

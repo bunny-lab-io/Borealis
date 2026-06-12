@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect } from "react";
-import { Box, CircularProgress } from "@mui/material";
+import { Box, CircularProgress, Typography } from "@mui/material";
 import { useLocation, useNavigate } from "react-router-dom";
 import Login from "../../Login.jsx";
 import BootstrapEntry from "./BootstrapEntry.jsx";
@@ -22,6 +22,41 @@ function resolvePostLoginTarget(location) {
   return APP_PATHS.sites;
 }
 
+function EngineLoadingScreen() {
+  return (
+    <Box
+      role="status"
+      sx={{
+        width: "100vw",
+        height: "100vh",
+        display: "grid",
+        placeItems: "center",
+        background: "#040711",
+      }}
+    >
+      <Box
+        sx={{
+          display: "grid",
+          justifyItems: "center",
+          gap: 1.5,
+        }}
+      >
+        <CircularProgress />
+        <Typography
+          variant="body2"
+          sx={{
+            color: "var(--text-dim)",
+            fontWeight: 700,
+            letterSpacing: 0,
+          }}
+        >
+          Engine Loading...
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
+
 export default function LoginRoute() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -33,6 +68,22 @@ export default function LoginRoute() {
     }
   }, [bootstrapState, isAuthenticated, location, navigate, ready]);
 
+  useEffect(() => {
+    if (!ready || String(bootstrapState?.phase || "") !== "loading") return undefined;
+
+    let cancelled = false;
+    const intervalId = window.setInterval(async () => {
+      if (!cancelled) {
+        await refreshBootstrapState();
+      }
+    }, 2500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [bootstrapState, ready, refreshBootstrapState]);
+
   const handleLogin = useCallback(
     async (payload) => {
       await login(payload);
@@ -41,20 +92,8 @@ export default function LoginRoute() {
     [location, login, navigate]
   );
 
-  if (!ready) {
-    return (
-      <Box
-        sx={{
-          width: "100vw",
-          height: "100vh",
-          display: "grid",
-          placeItems: "center",
-          background: "#040711",
-        }}
-      >
-        <CircularProgress />
-      </Box>
-    );
+  if (!ready || String(bootstrapState?.phase || "") === "loading") {
+    return <EngineLoadingScreen />;
   }
 
   if (bootstrapState?.phase && bootstrapState.phase !== "login_required") {
