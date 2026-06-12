@@ -51,6 +51,12 @@ type fakeWatchdogStore struct {
 	deviceWatchdogID      string
 	deviceWatchdogPayload map[string]any
 	deviceWatchdogFound   bool
+
+	overrideProfile  operatorProfile
+	overrideDeviceID string
+	overrideBody     map[string]any
+	overridePayload  map[string]any
+	overrideErrors   []string
 }
 
 func (s *fakeWatchdogStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -114,6 +120,13 @@ func (s *fakeWatchdogStore) getDeviceWatchdogs(_ context.Context, profile operat
 	return s.deviceWatchdogPayload, s.deviceWatchdogFound, nil
 }
 
+func (s *fakeWatchdogStore) upsertDeviceWatchdogOverride(_ context.Context, profile operatorProfile, deviceID string, body map[string]any) (map[string]any, []string, error) {
+	s.overrideProfile = profile
+	s.overrideDeviceID = deviceID
+	s.overrideBody = body
+	return s.overridePayload, s.overrideErrors, nil
+}
+
 type fakeWatchdogIncidentBroadcaster struct {
 	incidentPayloads []map[string]any
 	devicePayloads   []map[string]any
@@ -160,8 +173,12 @@ func watchdogTestMuxWithBroadcaster(store *fakeWatchdogStore, broadcaster watchd
 }
 
 func deviceWatchdogTestMux(store *fakeWatchdogStore) *http.ServeMux {
+	return deviceWatchdogTestMuxWithBroadcaster(store, nil)
+}
+
+func deviceWatchdogTestMuxWithBroadcaster(store *fakeWatchdogStore, broadcaster watchdogIncidentBroadcaster) *http.ServeMux {
 	mux := http.NewServeMux()
-	registerDeviceRoutes(mux, testWatchdogAuth(store), devicePurgeRuntime{})
+	registerDeviceRoutes(mux, testWatchdogAuth(store), devicePurgeRuntime{}, broadcaster)
 	return mux
 }
 
@@ -355,6 +372,46 @@ func TestDeviceWatchdogsHandlerUsesGoRoute(t *testing.T) {
 	}
 	if store.deviceWatchdogID != "LAB-OPERATOR-01" {
 		t.Fatalf("unexpected device id %q", store.deviceWatchdogID)
+	}
+}
+
+func TestDeviceWatchdogOverrideHandlerUsesGoRoute(t *testing.T) {
+	store := &fakeWatchdogStore{
+		overridePayload: map[string]any{
+			"device":      map[string]any{"hostname": "LAB-OPERATOR-01"},
+			"assignments": []map[string]any{{"watchdog_id": int64(7), "state": "suppressed"}},
+			"incidents":   []map[string]any{},
+			"overrides":   []map[string]any{{"watchdog_id": int64(7), "state": "suppressed"}},
+		},
+	}
+	broadcaster := &fakeWatchdogIncidentBroadcaster{}
+	recorder := httptest.NewRecorder()
+	deviceWatchdogTestMuxWithBroadcaster(store, broadcaster).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/devices/LAB-OPERATOR-01/watchdogs/overrides", `{"watchdog_id":7,"state":"suppressed","reason":"maintenance"}`))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.overrideDeviceID != "LAB-OPERATOR-01" || store.overrideProfile.Username != "operator" {
+		t.Fatalf("unexpected override call device=%q profile=%#v", store.overrideDeviceID, store.overrideProfile)
+	}
+	if coerceInt64(store.overrideBody["watchdog_id"]) != 7 || store.overrideBody["reason"] != "maintenance" {
+		t.Fatalf("unexpected override body %#v", store.overrideBody)
+	}
+	if len(broadcaster.incidentPayloads) != 1 || broadcaster.incidentPayloads[0]["hostname"] != "LAB-OPERATOR-01" || broadcaster.incidentPayloads[0]["watchdog_id"] != int64(7) {
+		t.Fatalf("unexpected incident broadcasts %+v", broadcaster.incidentPayloads)
+	}
+	if len(broadcaster.devicePayloads) != 1 || broadcaster.devicePayloads[0]["hostname"] != "LAB-OPERATOR-01" || broadcaster.devicePayloads[0]["watchdog_id"] != int64(7) {
+		t.Fatalf("unexpected device broadcasts %+v", broadcaster.devicePayloads)
+	}
+}
+
+func TestDeviceWatchdogOverrideHandlerReturnsValidationErrors(t *testing.T) {
+	store := &fakeWatchdogStore{overrideErrors: []string{"Watchdog not found."}}
+	recorder := httptest.NewRecorder()
+	deviceWatchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/devices/LAB-OPERATOR-01/watchdogs/overrides", `{"watchdog_id":99}`))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

@@ -6,7 +6,6 @@
 # API Endpoints (if applicable):
 # - POST /api/watchdogs (Token Authenticated) - Creates a watchdog policy.
 # - PUT /api/watchdogs/<int:watchdog_id> (Token Authenticated) - Updates a watchdog policy.
-# - POST /api/devices/<device_id>/watchdogs/overrides (Token Authenticated) - Creates, updates, or clears a per-device watchdog override.
 # ======================================================
 
 """Watchdog policy and incident API registration for the Borealis Engine."""
@@ -83,16 +82,5 @@ def register_management(app: Flask, adapters: "EngineServiceAdapters") -> None:
         if errors:
             return jsonify({"errors": errors}), 400
         return jsonify(record)
-
-    @blueprint.route("/api/devices/<device_id>/watchdogs/overrides", methods=["POST"])
-    def update_device_watchdog_override(device_id: str):
-        user, error = _require_user()
-        if error:
-            return jsonify(error[0]), error[1]
-        payload = request.get_json(silent=True) or {}
-        result, errors = runtime.upsert_device_override(device_id, payload, user=user)
-        if errors:
-            return jsonify({"errors": errors}), 400
-        return jsonify(result)
 
     app.register_blueprint(blueprint)

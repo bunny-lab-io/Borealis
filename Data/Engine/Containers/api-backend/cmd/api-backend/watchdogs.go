@@ -48,6 +48,7 @@ type watchdogDeviceBroadcaster interface {
 
 type deviceWatchdogStore interface {
 	getDeviceWatchdogs(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error)
+	upsertDeviceWatchdogOverride(ctx context.Context, profile operatorProfile, deviceID string, body map[string]any) (map[string]any, []string, error)
 }
 
 type watchdogListFilter struct {
@@ -198,6 +199,51 @@ func deviceWatchdogsHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 			return
 		}
+		writeJSON(w, http.StatusOK, payload)
+	}
+}
+
+func deviceWatchdogOverrideHandler(auth *authService, broadcaster watchdogIncidentBroadcaster) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				unauthorizedAuthFailure().write(w)
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		store, ok := auth.store.(deviceWatchdogStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "watchdogs_unavailable"})
+			return
+		}
+		body := map[string]any{}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
+		ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
+		defer cancel()
+		payload, validationErrors, err := store.upsertDeviceWatchdogOverride(ctx, profile, r.PathValue("device_id"), body)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		if len(validationErrors) > 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"errors": validationErrors})
+			return
+		}
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		hostname := cleanText(r.PathValue("device_id"))
+		if device := asStringAnyMap(payload["device"]); len(device) > 0 {
+			hostname = firstText(cleanText(device["hostname"]), hostname)
+		}
+		broadcastWatchdogRefresh(r.Context(), broadcaster, hostname, coerceInt64(firstPresentAny(body["watchdog_id"], body["id"])))
 		writeJSON(w, http.StatusOK, payload)
 	}
 }
@@ -724,6 +770,170 @@ func (s *postgresOperatorStore) getDeviceWatchdogs(ctx context.Context, profile 
 		"incidents":   incidents,
 		"overrides":   overrides,
 	}, true, nil
+}
+
+func (s *postgresOperatorStore) upsertDeviceWatchdogOverride(ctx context.Context, profile operatorProfile, deviceID string, body map[string]any) (map[string]any, []string, error) {
+	deviceRef, found, err := s.resolveWatchdogDeviceReference(ctx, profile, deviceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !found {
+		return nil, []string{"Device not found."}, nil
+	}
+	watchdogID := coerceInt64(firstPresentAny(body["watchdog_id"], body["id"]))
+	if watchdogID <= 0 {
+		return nil, []string{"Watchdog not found."}, nil
+	}
+	watchdog, found, err := s.getWatchdog(ctx, profile, watchdogID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !found {
+		return nil, []string{"Watchdog not found."}, nil
+	}
+
+	clearOverride := boolDefault(body["clear"], false)
+	state := normalizeWatchdogDeviceOverrideState(cleanText(body["state"]))
+	if state == "" {
+		state = "suppressed"
+	}
+	reason := cleanSingleLine(firstText(cleanText(body["reason"]), fmt.Sprintf("Temporarily %s by operator.", state)))
+	now := time.Now().Unix()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer func() {
+		if conn != nil {
+			_ = conn.Close()
+		}
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rollbackQuietly(tx)
+
+	hostname := cleanText(deviceRef["hostname"])
+	if clearOverride {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM engine.watchdog_device_overrides
+			 WHERE watchdog_id=$1 AND LOWER(hostname)=LOWER($2)
+		`, watchdogID, hostname); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		expiresAt := normalizeWatchdogOverrideTimestamp(body["expires_at"])
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO engine.watchdog_device_overrides (
+				watchdog_id, device_guid, hostname, site_id, state, reason, created_by,
+				created_at, expires_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`,
+			watchdogID,
+			normalizeCanonicalGUID(deviceRef["device_guid"]),
+			hostname,
+			watchdogNullableInt64(deviceRef["site_id"]),
+			state,
+			reason,
+			firstText(cleanText(profile.Username), "Unknown"),
+			now,
+			expiresAt,
+			now,
+		); err != nil {
+			return nil, nil, err
+		}
+		if err := upsertWatchdogOverrideStateTx(ctx, tx, watchdogID, watchdog, deviceRef, state, reason, now); err != nil {
+			return nil, nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	if err := conn.Close(); err != nil {
+		return nil, nil, err
+	}
+	conn = nil
+	refreshed, refreshedFound, err := s.getDeviceWatchdogs(ctx, profile, hostname)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !refreshedFound {
+		return nil, []string{"Device not found."}, nil
+	}
+	return refreshed, nil, nil
+}
+
+func upsertWatchdogOverrideStateTx(ctx context.Context, tx *sql.Tx, watchdogID int64, watchdog map[string]any, deviceRef map[string]any, state string, reason string, now int64) error {
+	hostname := cleanText(deviceRef["hostname"])
+	var incidentID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		  FROM engine.watchdog_incidents
+		 WHERE watchdog_id=$1
+		   AND LOWER(hostname)=LOWER($2)
+		   AND state IN ('open', 'suppressed')
+	  ORDER BY updated_at DESC, id DESC
+		 LIMIT 1
+	`, watchdogID, hostname).Scan(&incidentID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if incidentID.Valid {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.watchdog_incidents
+			   SET state='suppressed',
+			       resolved_at=NULL,
+			       resolution_reason=$1,
+			       updated_at=$2
+			 WHERE id=$3
+		`, state, now, incidentID.Int64); err != nil {
+			return err
+		}
+	}
+
+	var lastActionAt sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT last_action_at
+		  FROM engine.watchdog_device_state
+		 WHERE watchdog_id=$1 AND LOWER(hostname)=LOWER($2)
+	  ORDER BY updated_at DESC, id DESC
+		 LIMIT 1
+	`, watchdogID, hostname).Scan(&lastActionAt); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	sampleJSON, err := json.Marshal(map[string]any{
+		"override": map[string]any{
+			"watchdog_id": watchdogID,
+			"state":       state,
+			"reason":      reason,
+			"hostname":    hostname,
+			"watchdog":    cleanText(watchdog["name"]),
+		},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO engine.watchdog_device_state (
+			watchdog_id, device_guid, hostname, site_id, state, consecutive_matches,
+			first_matched_at, clear_started_at, last_evaluated_at, last_matched_at,
+			last_sample_json, current_incident_id, last_action_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 0, NULL, NULL, $6, NULL, $7, $8, $9, $6)
+		ON CONFLICT(watchdog_id, hostname) DO UPDATE SET
+			device_guid=EXCLUDED.device_guid,
+			site_id=EXCLUDED.site_id,
+			state=EXCLUDED.state,
+			consecutive_matches=EXCLUDED.consecutive_matches,
+			first_matched_at=EXCLUDED.first_matched_at,
+			clear_started_at=EXCLUDED.clear_started_at,
+			last_evaluated_at=EXCLUDED.last_evaluated_at,
+			last_matched_at=EXCLUDED.last_matched_at,
+			last_sample_json=EXCLUDED.last_sample_json,
+			current_incident_id=EXCLUDED.current_incident_id,
+			last_action_at=EXCLUDED.last_action_at,
+			updated_at=EXCLUDED.updated_at
+	`, watchdogID, normalizeCanonicalGUID(deviceRef["device_guid"]), hostname, watchdogNullableInt64(deviceRef["site_id"]), state, now, string(sampleJSON), nullableSQLInt64(incidentID), nullableSQLInt64(lastActionAt))
+	return err
 }
 
 func (s *postgresOperatorStore) resolveWatchdogDeviceReference(ctx context.Context, profile operatorProfile, deviceID string) (map[string]any, bool, error) {
@@ -1942,6 +2152,62 @@ func parseOptionalPositiveInt64(value string) *int64 {
 		return nil
 	}
 	return &parsed
+}
+
+func normalizeWatchdogDeviceOverrideState(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "suppressed", "disabled":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return ""
+	}
+}
+
+func normalizeWatchdogOverrideTimestamp(value any) any {
+	if value == nil || cleanText(value) == "" || strings.EqualFold(cleanText(value), "null") {
+		return nil
+	}
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			return parsed
+		}
+	}
+	text := cleanText(value)
+	if parsed, err := time.Parse(time.RFC3339, strings.ReplaceAll(text, "Z", "+00:00")); err == nil {
+		return parsed.Unix()
+	}
+	prefix := text
+	if len(prefix) > 19 {
+		prefix = prefix[:19]
+	}
+	if parsed, err := time.ParseInLocation("2006-01-02T15:04:05", prefix, time.Local); err == nil {
+		return parsed.Unix()
+	}
+	if parsed, ok := int64Value(text); ok {
+		return parsed
+	}
+	return nil
+}
+
+func watchdogNullableInt64(value any) any {
+	if parsed, ok := int64Value(value); ok {
+		return parsed
+	}
+	return nil
+}
+
+func nullableSQLInt64(value sql.NullInt64) any {
+	if value.Valid {
+		return value.Int64
+	}
+	return nil
 }
 
 func int64WithDefault(value sql.NullInt64, fallback int64) int64 {
