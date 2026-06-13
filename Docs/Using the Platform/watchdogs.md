@@ -67,14 +67,14 @@ Actions can track incidents only, send Engine toast notifications, control Windo
 
     ### Source map
 
-    - API: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/management.py`
-    - Runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
+    - API and runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs.go`
+    - Evaluator/remediation runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs_runtime.go`
     - UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Automation/Watchdogs/`
     - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
 
     ### Runtime behavior
 
-    - `WatchdogRuntimeService` runs a background evaluator loop.
+    - Go `watchdogRuntime` runs a background evaluator loop.
     - Saving a watchdog triggers immediate evaluation.
     - Runtime data uses `watchdogs`, `watchdog_sites`, `watchdog_targets`, `watchdog_device_overrides`, `watchdog_device_state`, and `watchdog_incidents`.
     - Socket events `watchdog_incidents_changed` and `device_watchdogs_changed` refresh relevant UI surfaces.

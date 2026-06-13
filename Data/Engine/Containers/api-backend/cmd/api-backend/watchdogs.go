@@ -416,6 +416,16 @@ func watchdogSave(w http.ResponseWriter, r *http.Request, auth *authService, bro
 		return
 	}
 	broadcastWatchdogRefresh(r.Context(), broadcaster, "", coerceInt64(item["id"]))
+	if pgStore, ok := auth.store.(*postgresOperatorStore); ok {
+		runtime := &watchdogRuntime{auth: auth, store: pgStore, realtime: runtimeRealtimeFromBroadcaster(broadcaster)}
+		go func(watchdogID int64) {
+			ctx, cancel := watchdogRuntimeContext(context.Background(), auth)
+			defer cancel()
+			if err := runtime.evaluateWatchdogByID(ctx, watchdogID); err != nil {
+				logDebug("watchdogs", fmt.Sprintf("post-save evaluation failed for watchdog %d: %v", watchdogID, err))
+			}
+		}(coerceInt64(item["id"]))
+	}
 	writeJSON(w, status, item)
 }
 

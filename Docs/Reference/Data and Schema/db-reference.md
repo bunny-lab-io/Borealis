@@ -629,7 +629,7 @@ finally:
     - Columns: `id`, `name`, `description`, `archived`, `enabled`, `severity`, `match_mode`, `site_mode`, `criteria_json`, `actions_json`, `evaluation_interval_seconds`, `cooldown_seconds`, `auto_resolve_after_seconds`, `min_consecutive_matches`, `boot_grace_seconds`, `last_edited_by`, `created_at`, `updated_at`, `last_evaluated_at`.
     - Used by:
     - `/api/watchdogs*`.
-    - `WatchdogRuntimeService`.
+    - Go `watchdogRuntime`.
     - Notes:
     - Watchdog definitions are saved independently from runtime state and incident history.
     - Saving a watchdog immediately triggers a fresh evaluation pass.

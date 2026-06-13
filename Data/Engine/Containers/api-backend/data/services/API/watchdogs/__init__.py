@@ -5,8 +5,8 @@
 # API Endpoints (if applicable): None
 # ======================================================
 
-"""Watchdog API exports for the Borealis Engine."""
+"""Watchdog API compatibility exports for the Borealis Engine."""
 
-from .management import ensure_watchdog_runtime, register_management
+from .management import register_management
 
-__all__ = ["ensure_watchdog_runtime", "register_management"]
+__all__ = ["register_management"]

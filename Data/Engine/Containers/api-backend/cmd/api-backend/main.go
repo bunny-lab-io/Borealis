@@ -142,6 +142,7 @@ func main() {
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, proxy)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", proxy)
+	startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),

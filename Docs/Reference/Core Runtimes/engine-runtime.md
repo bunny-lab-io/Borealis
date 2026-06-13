@@ -139,8 +139,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
 
     ### Watchdog evaluator runtime
-    - `EngineContext.watchdog_runtime` owns the Borealis-native watchdog evaluator.
-    - Registration and bootstrap happen in `Data/Engine/Containers/api-backend/data/server.py` after the primary API, WebUI, and Socket.IO registrars.
+    - Go `watchdogRuntime` owns Borealis-native watchdog evaluation and remediation.
+    - Registration and bootstrap happen in `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` after route registration.
     - The evaluator loop periodically checks enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
     - Immediate evaluation still happens on watchdog save and device-override updates so operator changes become visible without waiting for the scheduler tick.
     - On startup, the runtime purges any lingering resolved incidents that belong to offline-only watchdogs before the evaluator loop begins.

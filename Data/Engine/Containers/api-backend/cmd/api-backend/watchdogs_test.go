@@ -571,3 +571,35 @@ func TestWatchdogIncidentStateUpdateMapsNotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestWatchdogRuntimeRulesAreOfflineOnly(t *testing.T) {
+	if !watchdogRuntimeRulesAreOfflineOnly(map[string]any{"rules": []any{
+		map[string]any{"type": "device_offline"},
+		map[string]any{"type": "device_offline"},
+	}}) {
+		t.Fatalf("expected offline-only rules to be detected")
+	}
+	if watchdogRuntimeRulesAreOfflineOnly(map[string]any{"rules": []any{
+		map[string]any{"type": "device_offline"},
+		map[string]any{"type": "cpu_usage_percent"},
+	}}) {
+		t.Fatalf("expected mixed rules to skip offline-only purge")
+	}
+	if watchdogRuntimeRulesAreOfflineOnly(map[string]any{"rules": []any{}}) {
+		t.Fatalf("expected empty rules to skip offline-only purge")
+	}
+}
+
+func TestWatchdogRuntimeCooldownGate(t *testing.T) {
+	record := map[string]any{"cooldown_seconds": int64(300)}
+	last := int64(1000)
+	if watchdogRuntimeShouldRunActions(record, &last, 1200) {
+		t.Fatalf("expected cooldown to block action dispatch")
+	}
+	if !watchdogRuntimeShouldRunActions(record, &last, 1300) {
+		t.Fatalf("expected cooldown boundary to allow action dispatch")
+	}
+	if !watchdogRuntimeShouldRunActions(map[string]any{"cooldown_seconds": int64(0)}, &last, 1001) {
+		t.Fatalf("expected zero cooldown to allow action dispatch")
+	}
+}
