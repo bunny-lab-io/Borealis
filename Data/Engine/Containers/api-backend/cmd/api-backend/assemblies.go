@@ -37,6 +37,13 @@ type assemblyStore interface {
 	importAssembly(ctx context.Context, payload map[string]any) (map[string]any, int, error)
 }
 
+type assemblyCatalogStore interface {
+	assemblyStore
+	listOfficialCatalogState(ctx context.Context) (map[string]officialCatalogState, error)
+	upsertOfficialCatalogState(ctx context.Context, state officialCatalogState) error
+	deleteOfficialCatalogState(ctx context.Context, assemblyGUID string) error
+}
+
 type assemblyListFilter struct {
 	Domain       string
 	AssemblyType string
@@ -156,7 +163,7 @@ func assembliesRootHandler(auth *authService, fallback http.Handler, legacyURL *
 		switch r.Method {
 		case http.MethodGet:
 			if assemblyTruthy(r.URL.Query().Get("refresh_catalog")) || assemblyTruthy(r.URL.Query().Get("force_catalog_refresh")) {
-				fallback.ServeHTTP(w, r)
+				assemblyCatalogRefresh(w, r, auth, legacyURL)
 				return
 			}
 			assemblyList(w, r, auth)
@@ -184,11 +191,19 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 			return
 		}
 		if len(parts) == 2 && parts[0] == "official" && parts[1] == "update-all" {
-			fallback.ServeHTTP(w, r)
+			if r.Method != http.MethodPost {
+				writeMethodNotAllowed(w, http.MethodPost)
+				return
+			}
+			assemblyCatalogUpdateAll(w, r, auth, legacyURL)
 			return
 		}
 		if len(parts) == 2 && parts[1] == "official-update" {
-			fallback.ServeHTTP(w, r)
+			if r.Method != http.MethodPost {
+				writeMethodNotAllowed(w, http.MethodPost)
+				return
+			}
+			assemblyCatalogUpdateOne(w, r, auth, legacyURL, parts[0])
 			return
 		}
 		if len(parts) == 2 && parts[1] == "export" && r.Method == http.MethodGet {
