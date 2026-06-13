@@ -133,6 +133,7 @@ func main() {
 	registerDirectoryRoutes(mux, auth, proxy)
 	registerCredentialRoutes(mux, auth, proxy)
 	registerAssemblyRoutes(mux, auth, proxy, cfg.LegacyURL)
+	registerQuickRunRoutes(mux, auth, operatorRealtime)
 	registerAdminDeviceRoutes(mux, auth)
 	registerWorkflowRoutes(mux, auth, proxy)
 	registerWatchdogRoutes(mux, auth, proxy, operatorRealtime)
