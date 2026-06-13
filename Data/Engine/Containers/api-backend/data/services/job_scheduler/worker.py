@@ -27,7 +27,6 @@ from .queue import (
     WORK_STATUS_SUCCEEDED,
     WORK_KIND_ONBOARDING_RUN,
     WORK_KIND_SCHEDULED_RUN,
-    WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     WORKER_STATUS_IDLE,
     WORKER_STATUS_RUNNING,
     claim_next_work_item,
@@ -394,7 +393,7 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
                 "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
             }
         ]
-    if kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and job_id > 0:
+    if kind == WORK_KIND_SCHEDULED_RUN and job_id > 0:
         task_link = payload.get("task_link") if isinstance(payload.get("task_link"), Mapping) else {}
         if task_link:
             return [dict(task_link)]
@@ -771,17 +770,6 @@ def _execute_work_item(
         item_kind = str(item.get("kind") or "")
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
-        elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
-            payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-            run_id = int(payload.get("run_id") or item.get("run_id") or 0)
-            scheduler._dispatch_workflow_run(
-                job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                run_row_id=run_id,
-                scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                workflow_component=dict(payload.get("workflow_component") or {}),
-                workflow_site_scope=dict(payload.get("workflow_site_scope") or {}),
-            )
-            final_status = _wait_for_scheduled_run_completion(db_factory, run_id=run_id, logger=logger)
         elif item_kind == WORK_KIND_SCHEDULED_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
             run_id = int(payload.get("run_id") or item.get("run_id") or 0)
@@ -1011,7 +999,7 @@ def main() -> None:
                 kind = str((entry.get("item") or {}).get("kind") or "")
                 if kind == WORK_KIND_ONBOARDING_RUN:
                     onboarding_count += 1
-                elif kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
+                elif kind == WORK_KIND_SCHEDULED_RUN:
                     scheduled_count += 1
             lanes = []
             if onboarding_count:
@@ -1038,7 +1026,7 @@ def main() -> None:
                 if LANE_ONBOARDING in claim_lanes:
                     claim_kinds.append(WORK_KIND_ONBOARDING_RUN)
                 if LANE_SCHEDULED_JOB in claim_lanes:
-                    claim_kinds.extend([WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN])
+                    claim_kinds.append(WORK_KIND_SCHEDULED_RUN)
                 task_links = []
                 conn = db_factory()
                 try:
@@ -1058,7 +1046,7 @@ def main() -> None:
                         current_lanes = list(active_lanes)
                         if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
                             current_lanes.append(LANE_ONBOARDING)
-                        if item_kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
+                        if item_kind == WORK_KIND_SCHEDULED_RUN and LANE_SCHEDULED_JOB not in current_lanes:
                             current_lanes.append(LANE_SCHEDULED_JOB)
                         heartbeat_worker(
                             conn,

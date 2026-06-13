@@ -10,6 +10,7 @@ from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
     WORK_KIND_AGENT_MAINTENANCE_RUN,
     WORK_KIND_SCHEDULED_RUN,
+    WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     WORK_STATUS_QUEUED,
     WORK_STATUS_RUNNING,
     WORKER_ROUTE_STATUS_ACTIVE,
@@ -22,6 +23,7 @@ from Data.Engine.services.job_scheduler.queue import (
     claim_next_work_item,
     enqueue_agent_maintenance_run,
     enqueue_scheduled_run,
+    enqueue_scheduled_workflow_run,
     ensure_job_scheduler_tables,
     expire_stale_leases,
     list_worker_routes,
@@ -113,10 +115,18 @@ def test_claim_next_work_item_filters_kinds_for_site_worker(tmp_path: Path) -> N
             branch="main",
             event_payload={"operation_id": "op-filtered"},
         )
-        enqueue_scheduled_run(
+        workflow_id = enqueue_scheduled_workflow_run(
             conn,
             job_id=92,
             run_id=9201,
+            scheduled_ts=now,
+            site_id=7,
+            workflow_component={"assembly_guid": "wf-123", "name": "Workflow"},
+        )
+        enqueue_scheduled_run(
+            conn,
+            job_id=93,
+            run_id=9301,
             scheduled_ts=now,
             site_id=7,
             run_mode="system",
@@ -139,6 +149,8 @@ def test_claim_next_work_item_filters_kinds_for_site_worker(tmp_path: Path) -> N
         cur = conn.cursor()
         cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (maintenance_id,))
         assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_AGENT_MAINTENANCE_RUN)
+        cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (workflow_id,))
+        assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_SCHEDULED_WORKFLOW_RUN)
     finally:
         conn.close()
 

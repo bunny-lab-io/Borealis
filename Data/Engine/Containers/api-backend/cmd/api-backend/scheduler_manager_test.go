@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -113,5 +114,53 @@ func TestSchedulerManagerAgentMaintenanceErrorText(t *testing.T) {
 	got := schedulerAgentMaintenanceError("LAB-01", "no_response", nil)
 	if !strings.Contains(got, "did not acknowledge") {
 		t.Fatalf("unexpected error text %q", got)
+	}
+}
+
+func TestSchedulerManagerRunsScheduledWorkflowWorkItem(t *testing.T) {
+	var received map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/internal/job-scheduler/workflow/start" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"run_id": 77})
+	}))
+	defer server.Close()
+
+	manager := &goSchedulerManager{
+		apiBase:    server.URL,
+		secret:     []byte("test-secret"),
+		httpClient: server.Client(),
+	}
+	item := schedulerWorkItem{
+		Kind:  schedulerKindScheduledWorkflowRun,
+		JobID: sql.NullInt64{Int64: 44, Valid: true},
+		RunID: sql.NullInt64{Int64: 55, Valid: true},
+		Payload: map[string]any{
+			"scheduled_ts": int64(1700000000),
+			"workflow_component": map[string]any{
+				"assembly_guid": "wf-123",
+				"name":          "Nightly Workflow",
+				"id":            "node-1",
+			},
+			"workflow_site_scope": map[string]any{"site_id": 7},
+		},
+	}
+
+	if err := manager.runGlobalWorkItem(context.Background(), item); err != nil {
+		t.Fatalf("run global workflow item: %v", err)
+	}
+	if received["workflow_guid"] != "wf-123" || received["source_type"] != "scheduled_job" {
+		t.Fatalf("unexpected workflow payload %#v", received)
+	}
+	metadata, ok := received["source_metadata"].(map[string]any)
+	if !ok || metadata["scheduled_job_id"] == nil || metadata["scheduled_job_run_id"] == nil {
+		t.Fatalf("missing source metadata %#v", received)
 	}
 }

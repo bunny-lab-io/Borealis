@@ -632,7 +632,7 @@ func (m *goSchedulerManager) enqueueWorkItem(ctx context.Context, kind string, p
 }
 
 func (m *goSchedulerManager) processGlobalScheduledWork(ctx context.Context) error {
-	item, err := m.claimNextWorkItem(ctx, 0, []string{schedulerLaneScheduledJob}, "job-scheduler", 300)
+	item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindScheduledWorkflowRun}, "job-scheduler", 300)
 	if err != nil || item == nil {
 		return err
 	}
