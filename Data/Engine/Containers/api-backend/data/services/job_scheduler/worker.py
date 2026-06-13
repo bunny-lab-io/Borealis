@@ -6,57 +6,27 @@ import os
 import threading
 import time
 from typing import Any, Dict, Mapping, Optional
-from urllib.parse import quote
 
 import requests
 
 from Data.Engine import database
 from Data.Engine.config import initialise_engine_logger, load_runtime_config
 from Data.Engine.db import dbapi as sqlite3
-from Data.Engine.security import signing
 from Data.Engine.services.ansible import EngineAnsibleRunner
-from Data.Engine.services.assemblies.service import AssemblyRuntimeService
-from Data.Engine.assembly_management import initialise_assembly_runtime
-from Data.Engine.services.API.scheduled_jobs import job_scheduler
-from Data.Engine.services.remote_ops.worker_bridge import host_service_event_allows_pending
 
 from .queue import (
-    LANE_ONBOARDING,
-    WORK_STATUS_FAILED,
-    WORK_STATUS_SUCCEEDED,
-    WORK_KIND_ONBOARDING_RUN,
     WORKER_STATUS_IDLE,
     WORKER_STATUS_RUNNING,
-    claim_next_work_item,
-    complete_work_item,
-    heartbeat_work_item,
     heartbeat_worker,
     register_worker,
-    requeue_work_item,
     site_worker_remote_desktop_port,
     site_worker_remote_ops_port,
     stop_worker,
 )
-from .runtime_settings import load_site_worker_settings
 from .security import INTERNAL_TOKEN_HEADER, internal_token
 from .worker_socket import SiteWorkerSocketRuntime
 
-DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
-DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
-DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 30
-TRANSIENT_RUN_RETRY_REASONS = {
-    "wireguard_unavailable",
-    "wireguard_session_not_ready",
-    job_scheduler.RESOLUTION_REASON_WIREGUARD_NOT_READY,
-    job_scheduler.RESOLUTION_REASON_REMOTE_PREFLIGHT_FAILED,
-}
 LANE_AGENT_SOCKETS = "agent_sockets"
-
-
-class _WorkerApp:
-    def __init__(self, *, logger, secret_key: str) -> None:
-        self.logger = logger
-        self.secret_key = secret_key
 
 
 class _NoopSocketIO:
@@ -71,26 +41,6 @@ class _NoopSocketIO:
 
 def _now_ts() -> int:
     return int(time.time())
-
-
-def _non_negative_float_env(name: str, default: float) -> float:
-    raw = str(os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return max(0.0, float(raw))
-    except Exception:
-        return default
-
-
-def _positive_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return max(1, int(raw))
-    except Exception:
-        return default
 
 
 def _db_factory(database_url: str):
@@ -108,136 +58,11 @@ def _headers(secret: str) -> Dict[str, str]:
     return {INTERNAL_TOKEN_HEADER: internal_token(secret)}
 
 
-def _fetch_credential(secret: str, credential_id: int) -> Dict[str, Any]:
-    response = requests.get(
-        f"{_api_base_url()}/api/internal/job-scheduler/credential/{int(credential_id)}",
-        headers=_headers(secret),
-        timeout=30.0,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    credential = payload.get("credential") if isinstance(payload, Mapping) else None
-    if not isinstance(credential, Mapping):
-        raise RuntimeError("credential payload unavailable")
-    return dict(credential)
-
-
-def _fetch_service_account(secret: str, agent_id: str) -> Optional[Dict[str, Any]]:
-    agent_key = str(agent_id or "").strip()
-    if not agent_key:
-        return None
-    response = requests.get(
-        f"{_api_base_url()}/api/internal/job-scheduler/service-account/{quote(agent_key, safe='')}",
-        headers=_headers(secret),
-        timeout=30.0,
-    )
-    if response.status_code == 404:
-        return None
-    response.raise_for_status()
-    payload = response.json()
-    service_account = payload.get("service_account") if isinstance(payload, Mapping) else None
-    return dict(service_account) if isinstance(service_account, Mapping) else None
-
-
 def _get_internal(secret: str, path: str, *, timeout: float = 15.0) -> Dict[str, Any]:
     response = requests.get(f"{_api_base_url()}{path}", headers=_headers(secret), timeout=timeout)
     response.raise_for_status()
     payload = response.json()
     return dict(payload or {}) if isinstance(payload, Mapping) else {}
-
-
-def _post_internal(secret: str, path: str, payload: Mapping[str, Any], *, timeout: float = 15.0) -> Dict[str, Any]:
-    response = requests.post(f"{_api_base_url()}{path}", headers=_headers(secret), json=dict(payload or {}), timeout=timeout)
-    response.raise_for_status()
-    parsed = response.json()
-    return dict(parsed or {}) if isinstance(parsed, Mapping) else {}
-
-
-def _pending_host_event_ttl_seconds() -> int:
-    return _positive_int_env("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", 180)
-
-
-def _emit_or_queue_socket_runtime_event(
-    socket_runtime: SiteWorkerSocketRuntime,
-    hostname: str,
-    service_mode: str,
-    event_name: str,
-    payload: Mapping[str, Any],
-) -> tuple[bool, str]:
-    try:
-        if socket_runtime.emit_host_service_event(hostname, service_mode, event_name, dict(payload or {})):
-            return True, "emitted"
-    except Exception:
-        return False, "error"
-    return _queue_socket_runtime_event(socket_runtime, hostname, service_mode, event_name, payload)
-
-
-def _queue_socket_runtime_event(
-    socket_runtime: SiteWorkerSocketRuntime,
-    hostname: str,
-    service_mode: str,
-    event_name: str,
-    payload: Mapping[str, Any],
-) -> tuple[bool, str]:
-    if not host_service_event_allows_pending(event_name):
-        return False, "missing_socket"
-    queue_event = getattr(socket_runtime, "queue_host_service_event", None)
-    if not callable(queue_event):
-        return False, "missing_socket"
-    try:
-        if queue_event(
-            hostname,
-            service_mode,
-            event_name,
-            dict(payload or {}),
-            ttl_seconds=_pending_host_event_ttl_seconds(),
-        ):
-            return True, "queued"
-    except Exception:
-        return False, "error"
-    return False, "missing_socket"
-
-
-def _host_service_event_payload(hostname: str, service_mode: str, event_name: str, payload: Any) -> Dict[str, Any]:
-    request_payload: Dict[str, Any] = {
-        "hostname": hostname,
-        "service_mode": service_mode,
-        "event_name": event_name,
-        "payload": payload,
-    }
-    if host_service_event_allows_pending(event_name):
-        request_payload["allow_pending"] = True
-        request_payload["pending_ttl_seconds"] = _pending_host_event_ttl_seconds()
-    return request_payload
-
-
-def _positive_ints(values) -> list[int]:
-    results = []
-    for value in values or []:
-        try:
-            parsed = int(value)
-        except Exception:
-            continue
-        if parsed > 0:
-            results.append(parsed)
-    return results
-
-
-def _public_base_url(settings, secret: str) -> str:
-    try:
-        response = requests.get(
-            f"{_api_base_url()}/api/internal/job-scheduler/public-base-url",
-            headers=_headers(secret),
-            timeout=10.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        value = str(payload.get("public_base_url") or "").strip() if isinstance(payload, Mapping) else ""
-        if value:
-            return value
-    except Exception:
-        pass
-    return str(settings.public_base_url or "").strip()
 
 
 def _service_log(logger):
@@ -270,137 +95,15 @@ def _remote_ops_route_metadata(*, worker_guid: str, host: str, port: int, remote
     }
 
 
-def _build_worker_scheduler(settings, logger, db_factory, *, socket_runtime: Optional[SiteWorkerSocketRuntime] = None):
-    assembly_cache = initialise_assembly_runtime(logger=logger, config=settings.as_dict())
-    assembly_cache.reload()
-    assembly_runtime = AssemblyRuntimeService(assembly_cache, logger=logger)
-    try:
-        script_signer = signing.load_signer()
-    except Exception:
-        script_signer = None
-    scheduler = job_scheduler.register(
-        _WorkerApp(logger=logger, secret_key=settings.secret_key),
-        _NoopSocketIO(),
-        db_factory,
-        script_signer=script_signer,
-        service_logger=_service_log(logger),
-        assembly_runtime=assembly_runtime,
-        register_routes=False,
-    )
-    secret = str(settings.secret_key or "")
-    job_scheduler.set_credential_fetcher(scheduler, lambda credential_id: _fetch_credential(secret, int(credential_id)))
-    job_scheduler.set_service_account_fetcher(scheduler, lambda agent_id: _fetch_service_account(secret, agent_id))
-    job_scheduler.set_public_base_url_lookup(scheduler, lambda: _public_base_url(settings, secret))
-    if socket_runtime is not None:
-        def _emit_via_socket_runtime(hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
-            delivered, _delivery = _emit_or_queue_socket_runtime_event(
-                socket_runtime,
-                hostname,
-                service_mode,
-                event_name,
-                payload if isinstance(payload, Mapping) else {"payload": payload},
-            )
-            return delivered
-
-        job_scheduler.set_host_service_emitter(scheduler, _emit_via_socket_runtime)
-    else:
-        def _emit_via_internal_api(hostname: str, service_mode: str, event_name: str, payload: Any) -> bool:
-            return bool(
-                _post_internal(
-                    secret,
-                    "/api/internal/job-scheduler/host-service-event",
-                    _host_service_event_payload(hostname, service_mode, event_name, payload),
-                    timeout=20.0,
-                ).get("emitted")
-            )
-
-        job_scheduler.set_host_service_emitter(
-            scheduler,
-            _emit_via_internal_api,
-        )
-    job_scheduler.set_workflow_run_launcher(
-        scheduler,
-        lambda **kwargs: _post_internal(secret, "/api/internal/job-scheduler/workflow/start", kwargs, timeout=30.0),
-    )
-    job_scheduler.set_vpn_session_lookup(
-        scheduler,
-        lambda: dict(_get_internal(secret, "/api/internal/job-scheduler/vpn-sessions", timeout=15.0).get("sessions") or {}),
-    )
-    job_scheduler.set_vpn_session_prepare(
-        scheduler,
-        lambda agent_ids, required_ports=None: dict(
-            _post_internal(
-                secret,
-                "/api/internal/job-scheduler/vpn-prepare",
-                {
-                    "agent_ids": [str(item) for item in (agent_ids or []) if str(item).strip()],
-                    "required_ports": _positive_ints(required_ports or []),
-                },
-                timeout=90.0,
-            ).get("sessions") or {}
-        ),
-    )
+def _attach_ansible_runner(socket_runtime: SiteWorkerSocketRuntime, logger, db_factory) -> None:
     ansible_runner = EngineAnsibleRunner(
         socketio=_NoopSocketIO(),
         db_conn_factory=db_factory,
         service_log=_service_log(logger),
         logger=logger.getChild("ansible.runner"),
     )
-    if socket_runtime is not None and hasattr(socket_runtime, "set_ansible_runner"):
+    if hasattr(socket_runtime, "set_ansible_runner"):
         socket_runtime.set_ansible_runner(ansible_runner)
-    job_scheduler.set_server_ansible_runner(scheduler, ansible_runner.queue_run)
-    return scheduler
-
-
-def _run_onboarding_item(scheduler, item: Mapping[str, Any]) -> str:
-    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-    scheduler._run_onboarding_job(
-        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-        run_row_id=int(payload.get("run_id") or item.get("run_id") or 0),
-        scheduled_ts=int(payload.get("scheduled_ts") or 0),
-        components=list(payload.get("components") or []),
-        targets=list(payload.get("targets") or []),
-        credential_id=payload.get("credential_id"),
-    )
-    run_id = int(payload.get("run_id") or item.get("run_id") or 0)
-    conn = scheduler._conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT status, error FROM scheduled_job_runs WHERE id=?", (run_id,))
-        row = cur.fetchone()
-    finally:
-        conn.close()
-    status = str((row[0] if row else "") or "").strip()
-    if status in {job_scheduler.RUN_STATUS_FAILED, job_scheduler.RUN_STATUS_TIMED_OUT, job_scheduler.RUN_STATUS_EXPIRED}:
-        return WORK_STATUS_FAILED
-    return WORK_STATUS_SUCCEEDED
-
-
-def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
-    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-    job_id = int(payload.get("job_id") or item.get("job_id") or 0)
-    run_id = int(payload.get("run_id") or item.get("run_id") or 0)
-    kind = str(item.get("kind") or "")
-    if kind == WORK_KIND_ONBOARDING_RUN and job_id > 0:
-        return [
-            {
-                "kind": "onboarding_run",
-                "label": f"Onboarding Job {job_id}",
-                "job_id": job_id,
-                "run_id": run_id,
-                "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
-            }
-        ]
-    return []
-
-
-def _site_worker_scheduled_concurrency() -> int:
-    try:
-        settings = load_site_worker_settings()
-        value = int(settings.get("scheduled_task_concurrency_limit") or 5)
-    except Exception:
-        value = 5
-    return min(32, max(1, value))
 
 
 def _agent_online_window_seconds() -> int:
@@ -427,16 +130,6 @@ def _online_site_device_count(secret: str, *, site_id: int, window_seconds: Opti
         return max(0, int(counts.get(str(int(site_id))) or 0))
     except Exception:
         return 0
-
-
-def _active_task_links(active_items: Dict[int, Dict[str, Any]], active_lock: threading.Lock) -> list[Dict[str, Any]]:
-    with active_lock:
-        links: list[Dict[str, Any]] = []
-        for entry in active_items.values():
-            for link in entry.get("task_links") or []:
-                if isinstance(link, Mapping):
-                    links.append(dict(link))
-        return links
 
 
 def _agent_socket_task_links(connected_device_count: int) -> list[Dict[str, Any]]:
@@ -472,352 +165,6 @@ def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int, onl
     if (connected_device_count > 0 or online_device_count > 0) and LANE_AGENT_SOCKETS not in current:
         current.append(LANE_AGENT_SOCKETS)
     return current
-
-
-def _work_status_for_scheduled_run(status: str) -> str:
-    normalized = str(status or "").strip()
-    if normalized in {
-        job_scheduler.RUN_STATUS_FAILED,
-        job_scheduler.RUN_STATUS_EXPIRED,
-        job_scheduler.RUN_STATUS_TIMED_OUT,
-    }:
-        return WORK_STATUS_FAILED
-    return WORK_STATUS_SUCCEEDED
-
-
-def _transient_run_retry_max_attempts() -> int:
-    return _positive_int_env(
-        "BOREALIS_SITE_WORKER_TRANSIENT_RUN_RETRY_ATTEMPTS",
-        DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS,
-    )
-
-
-def _transient_scheduled_run_skip_reason(db_factory, *, run_id: int) -> str:
-    conn = db_factory()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT status, skip_reason, error
-              FROM scheduled_job_runs
-             WHERE id=?
-            """,
-            (int(run_id),),
-        )
-        row = cur.fetchone()
-        if not row:
-            return ""
-        try:
-            status = str(row["status"] or "").strip()
-            skip_reason = str(row["skip_reason"] or "").strip()
-            error = str(row["error"] or "").strip()
-        except Exception:
-            status = str(row[0] or "").strip()
-            skip_reason = str(row[1] or "").strip() if len(row) > 1 else ""
-            error = str(row[2] or "").strip() if len(row) > 2 else ""
-        cur.execute(
-            """
-            SELECT resolution_reason
-              FROM scheduled_job_run_targets
-             WHERE run_id=?
-               AND resolution_status=?
-            """,
-            (int(run_id), job_scheduler.RESOLUTION_STATUS_SKIPPED),
-        )
-        target_reasons = {
-            str(reason_row[0] or "").strip().lower()
-            for reason_row in (cur.fetchall() or [])
-            if reason_row and str(reason_row[0] or "").strip()
-        }
-    finally:
-        conn.close()
-    if status != job_scheduler.RUN_STATUS_SKIPPED:
-        return ""
-    if skip_reason != job_scheduler.SKIP_REASON_NO_ELIGIBLE_TARGETS:
-        return ""
-    if target_reasons.intersection(TRANSIENT_RUN_RETRY_REASONS):
-        return ",".join(sorted(target_reasons.intersection(TRANSIENT_RUN_RETRY_REASONS)))
-    error_lower = error.lower()
-    if "wireguard session is unavailable" in error_lower or "wireguard session is not ready" in error_lower:
-        return "wireguard_session_not_ready"
-    return ""
-
-
-def _transient_scheduled_run_retry_reason(db_factory, *, run_id: int, attempt_count: int) -> str:
-    if int(attempt_count or 0) >= _transient_run_retry_max_attempts():
-        return ""
-    return _transient_scheduled_run_skip_reason(db_factory, run_id=run_id)
-
-
-def _reset_scheduled_run_for_retry(conn, *, run_id: int, reason: str) -> None:
-    now = _now_ts()
-    retry_message = f"Retrying after transient worker preparation failure: {reason}"
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE scheduled_job_runs
-           SET status=?,
-               finished_ts=NULL,
-               skip_reason='',
-               error=?,
-               updated_at=?
-         WHERE id=?
-        """,
-        (job_scheduler.RUN_STATUS_PENDING, retry_message[:512], now, int(run_id)),
-    )
-    placeholders = ",".join("?" for _ in TRANSIENT_RUN_RETRY_REASONS)
-    cur.execute(
-        f"""
-        UPDATE scheduled_job_run_targets
-           SET resolution_status=?,
-               resolution_reason=''
-         WHERE run_id=?
-           AND resolution_reason IN ({placeholders})
-        """,
-        (
-            job_scheduler.RESOLUTION_STATUS_PENDING,
-            int(run_id),
-            *sorted(TRANSIENT_RUN_RETRY_REASONS),
-        ),
-    )
-
-
-def _fail_scheduled_run_after_transient_retries(conn, *, run_id: int, reason: str, attempt_count: int) -> str:
-    now = _now_ts()
-    max_attempts = _transient_run_retry_max_attempts()
-    message = (
-        f"Transient worker preparation failed after {int(attempt_count or 0)} attempts "
-        f"(max {max_attempts}): {reason}"
-    )
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE scheduled_job_runs
-           SET status=?,
-               finished_ts=?,
-               skip_reason='',
-               error=?,
-               updated_at=?
-         WHERE id=?
-        """,
-        (job_scheduler.RUN_STATUS_FAILED, now, message[:512], now, int(run_id)),
-    )
-    placeholders = ",".join("?" for _ in TRANSIENT_RUN_RETRY_REASONS)
-    cur.execute(
-        f"""
-        UPDATE scheduled_job_run_targets
-           SET resolution_status=?
-         WHERE run_id=?
-           AND resolution_reason IN ({placeholders})
-        """,
-        (
-            job_scheduler.RESOLUTION_STATUS_UNRESOLVED,
-            int(run_id),
-            *sorted(TRANSIENT_RUN_RETRY_REASONS),
-        ),
-    )
-    return message
-
-
-def _wait_for_scheduled_run_completion(
-    db_factory,
-    *,
-    run_id: int,
-    logger,
-    poll_seconds: Optional[float] = None,
-) -> str:
-    if int(run_id or 0) <= 0:
-        return WORK_STATUS_FAILED
-    poll_interval = poll_seconds
-    if poll_interval is None:
-        poll_interval = _non_negative_float_env(
-            "BOREALIS_SITE_WORKER_RUN_WAIT_POLL_SECONDS",
-            DEFAULT_RUN_WAIT_POLL_SECONDS,
-        )
-    poll_interval = max(0.1, float(poll_interval or DEFAULT_RUN_WAIT_POLL_SECONDS))
-    last_status = ""
-    while True:
-        conn = db_factory()
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT status, finished_ts, error
-                  FROM scheduled_job_runs
-                 WHERE id=?
-                """,
-                (int(run_id),),
-            )
-            row = cur.fetchone()
-        finally:
-            conn.close()
-        if not row:
-            logger.error("scheduled run disappeared while site-worker waited run_id=%s", run_id)
-            return WORK_STATUS_FAILED
-        try:
-            status = str(row["status"] or "").strip()
-            finished_ts = row["finished_ts"]
-            error_text = str(row["error"] or "").strip()
-        except Exception:
-            status = str(row[0] or "").strip()
-            finished_ts = row[1]
-            error_text = str(row[2] or "").strip() if len(row) > 2 else ""
-        if status and status != last_status:
-            logger.info("waiting for scheduled run completion run_id=%s status=%s", run_id, status)
-            last_status = status
-        if status in job_scheduler.TERMINAL_RUN_STATUSES:
-            return _work_status_for_scheduled_run(status)
-        if finished_ts is not None and status not in {job_scheduler.RUN_STATUS_PENDING, job_scheduler.RUN_STATUS_RUNNING}:
-            return _work_status_for_scheduled_run(status)
-        if finished_ts is not None and error_text:
-            return WORK_STATUS_FAILED
-        time.sleep(poll_interval)
-
-
-def _heartbeat_until(
-    stop_event: threading.Event,
-    db_factory,
-    *,
-    worker_guid: str,
-    work_id: int,
-    task_links: list[Dict[str, Any]],
-    task_links_getter=None,
-    logger=None,
-) -> None:
-    while not stop_event.wait(20.0):
-        visible_links = task_links_getter() if callable(task_links_getter) else task_links
-        conn = db_factory()
-        try:
-            heartbeat_work_item(conn, work_id=int(work_id), lease_owner=worker_guid, lease_seconds=300)
-            conn.commit()
-        except Exception as exc:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            if logger is not None:
-                logger.warning("work item heartbeat failed work_id=%s err=%s", work_id, exc)
-        finally:
-            conn.close()
-        conn = db_factory()
-        try:
-            heartbeat_worker(
-                conn,
-                worker_guid=worker_guid,
-                status=WORKER_STATUS_RUNNING,
-                lanes=[LANE_ONBOARDING],
-                task_links=visible_links,
-            )
-            conn.commit()
-        except Exception as exc:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            if logger is not None:
-                logger.warning("worker heartbeat failed worker_guid=%s err=%s", worker_guid, exc)
-        finally:
-            conn.close()
-
-
-def _execute_work_item(
-    settings,
-    logger,
-    db_factory,
-    *,
-    worker_guid: str,
-    item: Mapping[str, Any],
-    task_links_getter=None,
-    socket_runtime: Optional[SiteWorkerSocketRuntime] = None,
-) -> None:
-    scheduler = _build_worker_scheduler(settings, logger, db_factory, socket_runtime=socket_runtime)
-    error = ""
-    final_status = WORK_STATUS_FAILED
-    retry_reason = ""
-    retry_exhausted_reason = ""
-    retry_attempt_count = int(item.get("attempt_count") or 0)
-    stop_event = threading.Event()
-    task_links = _work_item_links(item)
-    heartbeat = threading.Thread(
-        target=_heartbeat_until,
-        args=(stop_event, db_factory),
-        kwargs={
-            "worker_guid": worker_guid,
-            "work_id": int(item["id"]),
-            "task_links": task_links,
-            "task_links_getter": task_links_getter,
-            "logger": logger,
-        },
-        daemon=True,
-    )
-    heartbeat.start()
-    try:
-        item_kind = str(item.get("kind") or "")
-        if item_kind == WORK_KIND_ONBOARDING_RUN:
-            final_status = _run_onboarding_item(scheduler, item)
-        else:
-            error = f"unsupported work kind {item.get('kind')}"
-    except Exception as exc:
-        error = str(exc)
-        logger.exception("work item failed")
-    finally:
-        stop_event.set()
-        heartbeat.join(timeout=5.0)
-    conn = db_factory()
-    try:
-        if retry_reason:
-            retry_delay = _positive_int_env(
-                "BOREALIS_SITE_WORKER_TRANSIENT_RUN_RETRY_DELAY_SECONDS",
-                DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS,
-            )
-            run_id_for_retry = int((item.get("payload") or {}).get("run_id") or item.get("run_id") or 0)
-            _reset_scheduled_run_for_retry(conn, run_id=run_id_for_retry, reason=retry_reason)
-            requeue_work_item(
-                conn,
-                work_id=int(item["id"]),
-                delay_seconds=retry_delay,
-                error=f"requeued transient scheduled run: {retry_reason}",
-            )
-            logger.warning(
-                "requeued transient scheduled run work_id=%s run_id=%s reason=%s delay_seconds=%s",
-                item.get("id"),
-                run_id_for_retry,
-                retry_reason,
-                retry_delay,
-            )
-        elif retry_exhausted_reason:
-            run_id_for_retry = int((item.get("payload") or {}).get("run_id") or item.get("run_id") or 0)
-            error = _fail_scheduled_run_after_transient_retries(
-                conn,
-                run_id=run_id_for_retry,
-                reason=retry_exhausted_reason,
-                attempt_count=retry_attempt_count,
-            )
-            complete_work_item(conn, work_id=int(item["id"]), status=WORK_STATUS_FAILED, error=error)
-            logger.error(
-                "failed transient scheduled run after retries work_id=%s run_id=%s reason=%s attempts=%s",
-                item.get("id"),
-                run_id_for_retry,
-                retry_exhausted_reason,
-                retry_attempt_count,
-            )
-        else:
-            complete_work_item(conn, work_id=int(item["id"]), status=final_status, error=error)
-        conn.commit()
-    finally:
-        conn.close()
-    conn = db_factory()
-    try:
-        heartbeat_worker(
-            conn,
-            worker_guid=worker_guid,
-            status=WORKER_STATUS_RUNNING,
-            lanes=[],
-            task_links=task_links_getter() if callable(task_links_getter) else task_links,
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def main() -> None:
@@ -858,6 +205,7 @@ def main() -> None:
         logger=logger.getChild("remote_ops"),
         service_log=_service_log(logger),
     )
+    _attach_ansible_runner(socket_runtime, logger, db_factory)
     socket_runtime.start()
     conn = db_factory()
     try:
@@ -880,12 +228,6 @@ def main() -> None:
     finally:
         conn.close()
     idle_since = None
-    claimed_count = 0
-    active_items: Dict[int, Dict[str, Any]] = {}
-    active_lock = threading.Lock()
-
-    def active_links() -> list[Dict[str, Any]]:
-        return _active_task_links(active_items, active_lock)
 
     def connected_device_count() -> int:
         try:
@@ -896,118 +238,8 @@ def main() -> None:
     def online_device_count(_conn: sqlite3.Connection) -> int:
         return _online_site_device_count(secret, site_id=site_id)
 
-    def visible_links() -> list[Dict[str, Any]]:
-        count = connected_device_count()
-        return active_links() + _agent_socket_task_links(count)
-
-    def visible_links_for_conn(conn: sqlite3.Connection) -> list[Dict[str, Any]]:
-        socket_count = connected_device_count()
-        online_count = online_device_count(conn) if socket_count <= 0 else 0
-        return active_links() + _agent_socket_task_links(socket_count) + _agent_online_task_links(online_count)
-
-    def visible_lanes(lanes: list[str], conn: sqlite3.Connection) -> list[str]:
-        socket_count = connected_device_count()
-        online_count = online_device_count(conn) if socket_count <= 0 else 0
-        return _lanes_with_agent_sockets(lanes, socket_count, online_count)
-
-    def prune_active_items() -> None:
-        with active_lock:
-            finished_ids = [work_id for work_id, entry in active_items.items() if not entry["thread"].is_alive()]
-            for work_id in finished_ids:
-                active_items.pop(work_id, None)
-
-    def active_lane_state() -> tuple[int, int, list[str]]:
-        with active_lock:
-            onboarding_count = 0
-            for entry in active_items.values():
-                kind = str((entry.get("item") or {}).get("kind") or "")
-                if kind == WORK_KIND_ONBOARDING_RUN:
-                    onboarding_count += 1
-            lanes = []
-            if onboarding_count:
-                lanes.append(LANE_ONBOARDING)
-            return 0, onboarding_count, lanes
-
     try:
         while True:
-            prune_active_items()
-            _active_scheduled, active_onboarding, active_lanes = active_lane_state()
-            claim_lanes = []
-            if active_onboarding <= 0:
-                claim_lanes = [LANE_ONBOARDING]
-
-            item = None
-            if claim_lanes:
-                claim_kinds = []
-                if LANE_ONBOARDING in claim_lanes:
-                    claim_kinds.append(WORK_KIND_ONBOARDING_RUN)
-                task_links = []
-                conn = db_factory()
-                try:
-                    item = claim_next_work_item(
-                        conn,
-                        site_id=site_id,
-                        lanes=claim_lanes,
-                        lease_owner=worker_guid,
-                        lease_seconds=300,
-                        kinds=claim_kinds,
-                    )
-                    if item:
-                        claimed_count += 1
-                        idle_since = None
-                        task_links = _work_item_links(item)
-                        item_kind = str(item.get("kind") or "")
-                        current_lanes = list(active_lanes)
-                        if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
-                            current_lanes.append(LANE_ONBOARDING)
-                        heartbeat_worker(
-                            conn,
-                            worker_guid=worker_guid,
-                            status=WORKER_STATUS_RUNNING,
-                            lanes=visible_lanes(current_lanes, conn),
-                            task_links=visible_links_for_conn(conn) + task_links,
-                            claimed_count=claimed_count,
-                        )
-                    conn.commit()
-                finally:
-                    conn.close()
-                if item:
-                    thread = threading.Thread(
-                        target=_execute_work_item,
-                        kwargs={
-                            "settings": settings,
-                            "logger": logger,
-                            "db_factory": db_factory,
-                            "worker_guid": worker_guid,
-                            "item": item,
-                            "task_links_getter": visible_links,
-                            "socket_runtime": socket_runtime,
-                        },
-                        daemon=True,
-                    )
-                    with active_lock:
-                        active_items[int(item["id"])] = {"thread": thread, "item": item, "task_links": task_links}
-                    thread.start()
-
-            prune_active_items()
-            active_scheduled, active_onboarding, active_lanes = active_lane_state()
-            if active_scheduled or active_onboarding:
-                conn = db_factory()
-                try:
-                    heartbeat_worker(
-                        conn,
-                        worker_guid=worker_guid,
-                        status=WORKER_STATUS_RUNNING,
-                        lanes=visible_lanes(active_lanes, conn),
-                        task_links=visible_links_for_conn(conn),
-                        claimed_count=claimed_count,
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
-                time.sleep(1.0 if active_scheduled < scheduled_concurrency else 3.0)
-                continue
-
             agent_device_count = connected_device_count()
             conn = db_factory()
             try:
@@ -1023,7 +255,7 @@ def main() -> None:
                     lanes=_lanes_with_agent_sockets([], agent_device_count, online_device_total),
                     task_links=_agent_socket_task_links(agent_device_count) + _agent_online_task_links(online_device_total),
                     idle_since=None if online_device_total > 0 else idle_since,
-                    claimed_count=claimed_count,
+                    claimed_count=0,
                 )
                 conn.commit()
             finally:
@@ -1033,10 +265,6 @@ def main() -> None:
                 return
             time.sleep(3.0)
     finally:
-        with active_lock:
-            active_threads = [entry["thread"] for entry in active_items.values()]
-        for thread in active_threads:
-            thread.join(timeout=5.0)
         conn = db_factory()
         try:
             stop_worker(conn, worker_guid=worker_guid)

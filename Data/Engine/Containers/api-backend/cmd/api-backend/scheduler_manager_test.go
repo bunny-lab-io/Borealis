@@ -40,6 +40,31 @@ func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	}
 }
 
+func TestSchedulerManagerOnboardingScopeEntries(t *testing.T) {
+	entries := schedulerOnboardingScopeEntries([]any{
+		map[string]any{"kind": "onboarding_scope", "entries": "10.0.0.10, lab-host\n10.0.0.10"},
+		map[string]any{"type": "onboarding_scope", "scope": []any{"win-host:5985", "192.168.10.0/30"}},
+		map[string]any{"kind": "onboarding_scope", "targets": []string{"[2001:db8::1]:2222"}},
+	})
+	expected := []string{"10.0.0.10", "lab-host", "win-host:5985", "192.168.10.0/30", "[2001:db8::1]:2222"}
+	if len(entries) != len(expected) {
+		t.Fatalf("unexpected entries %#v", entries)
+	}
+	for i := range expected {
+		if entries[i] != expected[i] {
+			t.Fatalf("entry %d expected %q got %q", i, expected[i], entries[i])
+		}
+	}
+	host, port := schedulerOnboardingEntryEndpoint("win-host:5985", 22)
+	if host != "win-host" || port != 5985 {
+		t.Fatalf("unexpected endpoint host=%q port=%d", host, port)
+	}
+	host, port = schedulerOnboardingEntryEndpoint("[2001:db8::1]:2222", 22)
+	if host != "2001:db8::1" || port != 2222 {
+		t.Fatalf("unexpected IPv6 endpoint host=%q port=%d", host, port)
+	}
+}
+
 func TestSchedulerManagerExpirationParser(t *testing.T) {
 	cases := map[string]int64{"30m": 1800, "1h": 3600, "2d": 172800, "45": 2700}
 	for input, expected := range cases {
