@@ -26,7 +26,6 @@ from .queue import (
     WORK_STATUS_FAILED,
     WORK_STATUS_SUCCEEDED,
     WORK_KIND_ONBOARDING_RUN,
-    WORK_KIND_AGENT_MAINTENANCE_RUN,
     WORK_KIND_SCHEDULED_RUN,
     WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     WORKER_STATUS_IDLE,
@@ -48,8 +47,6 @@ from .worker_socket import SiteWorkerSocketRuntime
 DEFAULT_RUN_WAIT_POLL_SECONDS = 2.0
 DEFAULT_TRANSIENT_RUN_RETRY_ATTEMPTS = 8
 DEFAULT_TRANSIENT_RUN_RETRY_DELAY_SECONDS = 30
-DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS = 180
-DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS = 2.0
 TRANSIENT_RUN_RETRY_REASONS = {
     "wireguard_unavailable",
     "wireguard_session_not_ready",
@@ -163,23 +160,6 @@ def _pending_host_event_ttl_seconds() -> int:
     return _positive_int_env("BOREALIS_SITE_WORKER_PENDING_EVENT_TTL_SECONDS", 180)
 
 
-def _agent_maintenance_socket_wait_seconds() -> int:
-    return _positive_int_env(
-        "BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS",
-        DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS,
-    )
-
-
-def _agent_maintenance_socket_wait_poll_seconds() -> float:
-    return max(
-        0.05,
-        _non_negative_float_env(
-            "BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS",
-            DEFAULT_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS,
-        ),
-    )
-
-
 def _emit_or_queue_socket_runtime_event(
     socket_runtime: SiteWorkerSocketRuntime,
     hostname: str,
@@ -219,81 +199,6 @@ def _queue_socket_runtime_event(
     except Exception:
         return False, "error"
     return False, "missing_socket"
-
-
-def _socket_response_status(response: Any) -> str:
-    if isinstance(response, Mapping):
-        return str(response.get("status") or response.get("state") or "").strip().lower()
-    return ""
-
-
-def _socket_response_detail(response: Any) -> str:
-    if isinstance(response, Mapping):
-        for key in ("detail", "message", "error"):
-            value = str(response.get(key) or "").strip()
-            if value:
-                return value
-        return str(dict(response))
-    if response is None:
-        return ""
-    return str(response).strip()
-
-
-def _call_or_queue_socket_runtime_event(
-    socket_runtime: SiteWorkerSocketRuntime,
-    hostname: str,
-    service_mode: str,
-    event_name: str,
-    payload: Mapping[str, Any],
-    *,
-    timeout: float = 30.0,
-    allow_pending: bool = True,
-) -> tuple[bool, str, Any]:
-    """Call registered Agent sockets; queue allowlisted events only while socket is absent."""
-
-    has_socket = False
-    has_socket_fn = getattr(socket_runtime, "has_host_service_socket", None)
-    if callable(has_socket_fn):
-        try:
-            has_socket = bool(has_socket_fn(hostname, service_mode))
-        except Exception:
-            has_socket = False
-
-    call_event = getattr(socket_runtime, "call_host_service_event", None)
-    if has_socket and callable(call_event):
-        try:
-            response = call_event(hostname, service_mode, event_name, dict(payload or {}), timeout=max(0.5, float(timeout)))
-        except Exception:
-            return False, "error", None
-        if response is None:
-            if allow_pending:
-                queued, queue_state = _queue_socket_runtime_event(
-                    socket_runtime,
-                    hostname,
-                    service_mode,
-                    event_name,
-                    payload,
-                )
-                if queued:
-                    return True, "queued_after_no_response", None
-                if queue_state == "error":
-                    return False, "error", None
-            return False, "no_response", None
-        if _socket_response_status(response) == "error":
-            return False, "agent_error", response
-        return True, "called", response
-
-    if not allow_pending:
-        return False, "missing_socket", None
-
-    delivered, delivery_state = _emit_or_queue_socket_runtime_event(
-        socket_runtime,
-        hostname,
-        service_mode,
-        event_name,
-        payload,
-    )
-    return delivered, delivery_state, None
 
 
 def _host_service_event_payload(hostname: str, service_mode: str, event_name: str, payload: Any) -> Dict[str, Any]:
@@ -489,7 +394,7 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
                 "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
             }
         ]
-    if kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and job_id > 0:
+    if kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and job_id > 0:
         task_link = payload.get("task_link") if isinstance(payload.get("task_link"), Mapping) else {}
         if task_link:
             return [dict(task_link)]
@@ -583,182 +488,6 @@ def _lanes_with_agent_sockets(lanes: list[str], connected_device_count: int, onl
     if (connected_device_count > 0 or online_device_count > 0) and LANE_AGENT_SOCKETS not in current:
         current.append(LANE_AGENT_SOCKETS)
     return current
-
-
-def _update_agent_maintenance_run(
-    db_factory,
-    *,
-    run_id: int,
-    status: str,
-    stdout: str = "",
-    stderr: str = "",
-) -> None:
-    now = _now_ts()
-    finished = now if status in {"Success", "Failed", "Skipped"} else None
-    conn = db_factory()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE scheduled_job_runs
-               SET status=?,
-                   updated_at=?,
-                   finished_ts=COALESCE(?, finished_ts),
-                   error=?
-             WHERE id=?
-            """,
-            (status, now, finished, stderr[:512], int(run_id)),
-        )
-        cur.execute(
-            """
-            UPDATE scheduled_job_run_targets
-               SET resolution_status=?,
-                   resolution_reason=?
-             WHERE run_id=?
-            """,
-            ("eligible" if status != "Failed" else "unresolved", stderr[:512], int(run_id)),
-        )
-        cur.execute(
-            """
-            SELECT s.activity_id
-              FROM scheduled_job_run_activity s
-             WHERE s.run_id=?
-             LIMIT 1
-            """,
-            (int(run_id),),
-        )
-        row = cur.fetchone()
-        if row and row[0]:
-            from Data.Engine.services.activity_history import update_activity_history_row
-
-            update_activity_history_row(
-                conn,
-                int(row[0]),
-                status=status,
-                stdout=stdout,
-                stderr=stderr,
-                append_output=True,
-                updated_at=now,
-                finished_at=finished,
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def _run_agent_maintenance_item(
-    settings,
-    db_factory,
-    item: Mapping[str, Any],
-    *,
-    socket_runtime: Optional[SiteWorkerSocketRuntime] = None,
-    logger: Any = None,
-) -> str:
-    payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-    run_id = int(payload.get("run_id") or item.get("run_id") or 0)
-    hostname = str(payload.get("hostname") or "").strip()
-    operation_id = str(payload.get("operation_id") or "").strip()
-    event_payload = payload.get("event_payload") if isinstance(payload.get("event_payload"), Mapping) else {}
-    if not run_id or not hostname or not operation_id or not event_payload:
-        raise RuntimeError("agent maintenance work item payload incomplete")
-    service_mode = str(payload.get("service_mode") or "system")
-    event_name = str(payload.get("event_name") or "agent_maintenance_request")
-    agent_response: Any = None
-    if socket_runtime is not None:
-        wait_stdout = (
-            f"Site worker waiting for Agent {service_mode or 'system'} socket "
-            f"operation_id={operation_id} action={payload.get('action') or '-'} "
-            f"release_channel={payload.get('release_channel') or '-'} branch={payload.get('branch') or '-'}\n"
-        )
-        _update_agent_maintenance_run(db_factory, run_id=run_id, status="Running", stdout=wait_stdout)
-        if logger is not None:
-            try:
-                logger.info(
-                    "agent maintenance waiting for socket | run=%s host=%s operation_id=%s service_mode=%s",
-                    run_id,
-                    hostname,
-                    operation_id,
-                    service_mode,
-                )
-            except Exception:
-                pass
-        emitted = False
-        delivery_state = "missing_socket"
-        wait_deadline = time.monotonic() + float(_agent_maintenance_socket_wait_seconds())
-        poll_seconds = _agent_maintenance_socket_wait_poll_seconds()
-        while True:
-            remaining = max(0.0, wait_deadline - time.monotonic())
-            emitted, delivery_state, agent_response = _call_or_queue_socket_runtime_event(
-                socket_runtime,
-                hostname,
-                service_mode,
-                event_name,
-                dict(event_payload),
-                timeout=min(30.0, max(0.5, remaining or 0.5)),
-                allow_pending=False,
-            )
-            if emitted or delivery_state in {"agent_error", "error"}:
-                break
-            remaining = wait_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(poll_seconds, max(0.05, remaining)))
-    else:
-        response = _post_internal(
-            str(settings.secret_key or ""),
-            "/api/internal/job-scheduler/host-service-event",
-            _host_service_event_payload(hostname, service_mode, event_name, dict(event_payload)),
-            timeout=30.0,
-        )
-        emitted = bool(response.get("emitted"))
-        delivery_state = "emitted_or_queued" if emitted else "missing_socket"
-    if not emitted:
-        if delivery_state == "agent_error":
-            detail = _socket_response_detail(agent_response) or "Agent rejected the maintenance request."
-            error = f"Agent rejected maintenance request for host {hostname}: {detail}"
-        elif delivery_state == "no_response":
-            error = f"Agent did not acknowledge maintenance request for host {hostname} before timeout."
-        elif delivery_state == "error":
-            error = f"Site worker could not dispatch agent maintenance for host {hostname}."
-        else:
-            error = f"No system agent socket is registered for host {hostname}; unable to dispatch agent maintenance."
-        if logger is not None:
-            try:
-                logger.warning(
-                    "agent maintenance dispatch failed | run=%s host=%s state=%s error=%s",
-                    run_id,
-                    hostname,
-                    delivery_state,
-                    error,
-                )
-            except Exception:
-                pass
-        _update_agent_maintenance_run(db_factory, run_id=run_id, status="Failed", stderr=error)
-        raise RuntimeError(error)
-    verb = "queued" if delivery_state.startswith("queued") else "delivered" if delivery_state == "called" else "emitted"
-    response_status = _socket_response_status(agent_response) if agent_response is not None else ""
-    stdout = (
-        f"Site worker {verb} agent maintenance operation_id={operation_id} "
-        f"action={payload.get('action') or '-'} release_channel={payload.get('release_channel') or '-'} "
-        f"branch={payload.get('branch') or '-'}\n"
-    )
-    if response_status:
-        stdout += f"Agent response status={response_status}\n"
-    if logger is not None:
-        try:
-            logger.info(
-                "agent maintenance dispatch %s | run=%s host=%s operation_id=%s action=%s response=%s",
-                verb,
-                run_id,
-                hostname,
-                operation_id,
-                payload.get("action") or "-",
-                response_status or "-",
-            )
-        except Exception:
-            pass
-    _update_agent_maintenance_run(db_factory, run_id=run_id, status="Running", stdout=stdout)
-    return WORK_STATUS_SUCCEEDED
 
 
 def _work_status_for_scheduled_run(status: str) -> str:
@@ -1042,14 +771,6 @@ def _execute_work_item(
         item_kind = str(item.get("kind") or "")
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
-        elif item_kind == WORK_KIND_AGENT_MAINTENANCE_RUN:
-            final_status = _run_agent_maintenance_item(
-                settings,
-                db_factory,
-                item,
-                socket_runtime=socket_runtime,
-                logger=logger,
-            )
         elif item_kind == WORK_KIND_SCHEDULED_WORKFLOW_RUN:
             payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
             run_id = int(payload.get("run_id") or item.get("run_id") or 0)
@@ -1290,7 +1011,7 @@ def main() -> None:
                 kind = str((entry.get("item") or {}).get("kind") or "")
                 if kind == WORK_KIND_ONBOARDING_RUN:
                     onboarding_count += 1
-                elif kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
+                elif kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN}:
                     scheduled_count += 1
             lanes = []
             if onboarding_count:
@@ -1313,6 +1034,11 @@ def main() -> None:
 
             item = None
             if claim_lanes:
+                claim_kinds = []
+                if LANE_ONBOARDING in claim_lanes:
+                    claim_kinds.append(WORK_KIND_ONBOARDING_RUN)
+                if LANE_SCHEDULED_JOB in claim_lanes:
+                    claim_kinds.extend([WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN])
                 task_links = []
                 conn = db_factory()
                 try:
@@ -1322,6 +1048,7 @@ def main() -> None:
                         lanes=claim_lanes,
                         lease_owner=worker_guid,
                         lease_seconds=300,
+                        kinds=claim_kinds,
                     )
                     if item:
                         claimed_count += 1
@@ -1331,7 +1058,7 @@ def main() -> None:
                         current_lanes = list(active_lanes)
                         if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
                             current_lanes.append(LANE_ONBOARDING)
-                        if item_kind in {WORK_KIND_AGENT_MAINTENANCE_RUN, WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
+                        if item_kind in {WORK_KIND_SCHEDULED_RUN, WORK_KIND_SCHEDULED_WORKFLOW_RUN} and LANE_SCHEDULED_JOB not in current_lanes:
                             current_lanes.append(LANE_SCHEDULED_JOB)
                         heartbeat_worker(
                             conn,

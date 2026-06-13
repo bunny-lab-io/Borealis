@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSchedulerManagerComputeNextRunMatchesPythonIntervals(t *testing.T) {
@@ -67,5 +72,46 @@ func TestSchedulerManagerSiteWorkerImageMatch(t *testing.T) {
 	}
 	if schedulerSiteWorkerImageMatches(map[string]any{"configured_image": "site-worker:old", "image": "site-worker:old"}, "site-worker:new") {
 		t.Fatalf("stale configured image should not match")
+	}
+}
+
+func TestSchedulerManagerCallsSiteWorkerHostService(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/call" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["event_name"] != "agent_maintenance_request" {
+			t.Fatalf("unexpected body %#v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called":   true,
+			"response": map[string]any{"status": "ok", "operation_id": "op-1"},
+		})
+	}))
+	defer worker.Close()
+
+	manager := &goSchedulerManager{secret: []byte("test-secret"), httpClient: worker.Client()}
+	response, state, err := manager.callSiteWorkerHostService(context.Background(), routeForTestWorker(t, worker.URL), map[string]any{
+		"hostname":     "LAB-OPERATOR-01",
+		"service_mode": "system",
+		"event_name":   "agent_maintenance_request",
+		"payload":      map[string]any{"operation_id": "op-1"},
+	}, time.Second)
+	if err != nil || state != "called" || response["status"] != "ok" {
+		t.Fatalf("unexpected call response state=%s response=%#v err=%v", state, response, err)
+	}
+}
+
+func TestSchedulerManagerAgentMaintenanceErrorText(t *testing.T) {
+	got := schedulerAgentMaintenanceError("LAB-01", "no_response", nil)
+	if !strings.Contains(got, "did not acknowledge") {
+		t.Fatalf("unexpected error text %q", got)
 	}
 }

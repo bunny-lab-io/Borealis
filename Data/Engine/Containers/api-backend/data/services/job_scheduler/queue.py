@@ -721,28 +721,38 @@ def claim_next_work_item(
     lanes: Sequence[str],
     lease_owner: str,
     lease_seconds: int = 300,
+    kinds: Optional[Sequence[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
     lanes_norm = [str(lane or "").strip() for lane in lanes if str(lane or "").strip()]
     if not lanes_norm:
         return None
-    placeholders = ",".join("?" for _ in lanes_norm)
+    kinds_norm = [str(kind or "").strip() for kind in (kinds or []) if str(kind or "").strip()]
+    lane_placeholders = ",".join("?" for _ in lanes_norm)
+    kind_filter = ""
+    kind_params: List[str] = []
+    if kinds_norm:
+        kind_placeholders = ",".join("?" for _ in kinds_norm)
+        kind_filter = f"AND kind IN ({kind_placeholders})"
+        kind_params = kinds_norm
     select_sql = f"""
         SELECT id
           FROM job_scheduler_work_items
          WHERE site_id=?
-           AND lane IN ({placeholders})
+           AND lane IN ({lane_placeholders})
+           {kind_filter}
            AND status=?
            AND available_at<=?
          ORDER BY priority DESC, available_at ASC, id ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED
     """
+    claim_params = [int(site_id), *lanes_norm, *kind_params, WORK_STATUS_QUEUED, now]
     cur = conn.cursor()
     try:
         cur.execute("BEGIN")
-        cur.execute(select_sql, [int(site_id), *lanes_norm, WORK_STATUS_QUEUED, now])
+        cur.execute(select_sql, claim_params)
     except Exception:
         try:
             conn.rollback()
@@ -755,13 +765,14 @@ def claim_next_work_item(
             SELECT id
               FROM job_scheduler_work_items
              WHERE site_id=?
-               AND lane IN ({placeholders})
+               AND lane IN ({lane_placeholders})
+               {kind_filter}
                AND status=?
                AND available_at<=?
              ORDER BY priority DESC, available_at ASC, id ASC
              LIMIT 1
             """,
-            [int(site_id), *lanes_norm, WORK_STATUS_QUEUED, now],
+            claim_params,
         )
     row = cur.fetchone()
     if not row:

@@ -16,6 +16,7 @@ const (
 	schedulerKindOnboardingRun        = "onboarding_run"
 	schedulerKindScheduledRun         = "scheduled_run"
 	schedulerKindScheduledWorkflowRun = "scheduled_workflow_run"
+	schedulerKindAgentMaintenanceRun  = "agent_maintenance_run"
 )
 
 type schedulerWorkItemInsert struct {

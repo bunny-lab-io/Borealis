@@ -8,6 +8,8 @@ from Data.Engine.services.API.scheduled_jobs import job_scheduler
 from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
+    WORK_KIND_AGENT_MAINTENANCE_RUN,
+    WORK_KIND_SCHEDULED_RUN,
     WORK_STATUS_QUEUED,
     WORK_STATUS_RUNNING,
     WORKER_ROUTE_STATUS_ACTIVE,
@@ -18,6 +20,7 @@ from Data.Engine.services.job_scheduler.queue import (
     WORKER_STATUS_STOPPED,
     active_worker_route_for_site,
     claim_next_work_item,
+    enqueue_agent_maintenance_run,
     enqueue_scheduled_run,
     ensure_job_scheduler_tables,
     expire_stale_leases,
@@ -91,6 +94,53 @@ def _work_item_row(conn, work_id: int):
         (int(work_id),),
     )
     return cur.fetchone()
+
+
+def test_claim_next_work_item_filters_kinds_for_site_worker(tmp_path: Path) -> None:
+    conn = _connect_queue_db(tmp_path)
+    now = int(time.time())
+    try:
+        maintenance_id = enqueue_agent_maintenance_run(
+            conn,
+            job_id=91,
+            run_id=9101,
+            scheduled_ts=now,
+            site_id=7,
+            hostname="LAB-OPERATOR-01",
+            operation_id="op-filtered",
+            action="update_now",
+            release_channel="stable",
+            branch="main",
+            event_payload={"operation_id": "op-filtered"},
+        )
+        enqueue_scheduled_run(
+            conn,
+            job_id=92,
+            run_id=9201,
+            scheduled_ts=now,
+            site_id=7,
+            run_mode="system",
+            script_components=[{"name": "Script"}],
+            ansible_components=[],
+            credential_id=None,
+        )
+        conn.commit()
+
+        item = claim_next_work_item(
+            conn,
+            site_id=7,
+            lanes=[LANE_SCHEDULED_JOB],
+            lease_owner="worker-1",
+            kinds=[WORK_KIND_SCHEDULED_RUN],
+        )
+        assert item is not None
+        assert item["kind"] == WORK_KIND_SCHEDULED_RUN
+
+        cur = conn.cursor()
+        cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (maintenance_id,))
+        assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_AGENT_MAINTENANCE_RUN)
+    finally:
+        conn.close()
 
 
 def _seed_transient_skipped_run(conn, *, run_id: int = 42) -> None:

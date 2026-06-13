@@ -169,6 +169,9 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		if err := m.processGlobalScheduledWork(ctx); err != nil {
 			log.Printf("failed to process global scheduled work: %v", err)
 		}
+		if err := m.processAgentMaintenanceWork(ctx); err != nil {
+			log.Printf("failed to process agent maintenance work: %v", err)
+		}
 		if err := m.refreshServiceSnapshots(ctx); err != nil {
 			log.Printf("failed to refresh service snapshots: %v", err)
 		}
@@ -679,6 +682,268 @@ func (m *goSchedulerManager) runGlobalWorkItem(ctx context.Context, item schedul
 	}
 }
 
+func (m *goSchedulerManager) processAgentMaintenanceWork(ctx context.Context) error {
+	leaseSeconds := int64(schedulerAgentMaintenanceSocketWaitSeconds() + 120)
+	for i := 0; i < envInt("BOREALIS_AGENT_MAINTENANCE_MANAGER_BATCH", 4, 1, 32); i++ {
+		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindAgentMaintenanceRun}, "job-scheduler", leaseSeconds)
+		if err != nil || item == nil {
+			return err
+		}
+		claimed := *item
+		go func() {
+			status := workStatusSucceeded
+			errorText := ""
+			if err := m.runAgentMaintenanceWorkItem(ctx, claimed); err != nil {
+				status = workStatusFailed
+				errorText = err.Error()
+			}
+			if err := m.completeWorkItem(ctx, claimed.ID, status, errorText); err != nil {
+				log.Printf("failed to complete agent maintenance work item id=%d: %v", claimed.ID, err)
+			}
+		}()
+	}
+	return nil
+}
+
+func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, item schedulerWorkItem) error {
+	payload := item.Payload
+	runID := firstPositiveInt64(coerceInt64(payload["run_id"]), nullInt(item.RunID))
+	hostname := cleanText(payload["hostname"])
+	operationID := cleanText(payload["operation_id"])
+	eventPayload := schedulerAnyMap(payload["event_payload"])
+	if runID <= 0 || hostname == "" || operationID == "" || len(eventPayload) == 0 {
+		err := errors.New("agent maintenance work item payload incomplete")
+		_ = m.updateAgentMaintenanceRunStatus(ctx, runID, "Failed", "", err.Error())
+		return err
+	}
+	serviceMode := firstText(cleanText(payload["service_mode"]), "system")
+	eventName := firstText(cleanText(payload["event_name"]), "agent_maintenance_request")
+	action := cleanText(payload["action"])
+	releaseChannel := cleanText(payload["release_channel"])
+	branch := cleanText(payload["branch"])
+	waitText := fmt.Sprintf(
+		"Job scheduler waiting for Agent %s socket operation_id=%s action=%s release_channel=%s branch=%s\n",
+		firstText(serviceMode, "system"),
+		operationID,
+		firstText(action, "-"),
+		firstText(releaseChannel, "-"),
+		firstText(branch, "-"),
+	)
+	if err := m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", waitText, ""); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(time.Duration(schedulerAgentMaintenanceSocketWaitSeconds()) * time.Second)
+	pollDelay := schedulerAgentMaintenanceSocketWaitPoll()
+	var lastState string
+	var lastErr error
+	var response map[string]any
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		callTimeout := remaining
+		if callTimeout > 30*time.Second {
+			callTimeout = 30 * time.Second
+		}
+		snapshot, status, err := m.store.loadDeviceProcessContext(ctx, operatorProfile{Username: "job-scheduler", Role: "Admin"}, hostname)
+		if err != nil || snapshot.Route == nil {
+			lastState = "site_worker_unavailable"
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = fmt.Errorf("site worker unavailable status=%d", status)
+			}
+		} else {
+			body := map[string]any{
+				"hostname":        firstText(snapshot.Hostname, hostname),
+				"service_mode":    serviceMode,
+				"event_name":      eventName,
+				"timeout_seconds": callTimeout.Seconds(),
+				"payload":         eventPayload,
+			}
+			response, lastState, lastErr = m.callSiteWorkerHostService(ctx, snapshot.Route, body, callTimeout+2*time.Second)
+			if lastErr == nil {
+				break
+			}
+			if lastState == "agent_error" || lastState == "invalid_agent_response" {
+				break
+			}
+		}
+		if time.Until(deadline) <= 0 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(minDuration(pollDelay, maxDuration(50*time.Millisecond, time.Until(deadline)))):
+		}
+	}
+	if lastErr != nil {
+		errorText := schedulerAgentMaintenanceError(hostname, lastState, lastErr)
+		_ = m.updateAgentMaintenanceRunStatus(ctx, runID, "Failed", "", errorText)
+		return errors.New(errorText)
+	}
+	responseStatus := strings.ToLower(cleanText(response["status"]))
+	stdout := fmt.Sprintf(
+		"Job scheduler delivered agent maintenance operation_id=%s action=%s release_channel=%s branch=%s\n",
+		operationID,
+		firstText(action, "-"),
+		firstText(releaseChannel, "-"),
+		firstText(branch, "-"),
+	)
+	if responseStatus != "" {
+		stdout += "Agent response status=" + responseStatus + "\n"
+	}
+	return m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", stdout, "")
+}
+
+func schedulerAgentMaintenanceSocketWaitSeconds() int {
+	return envInt("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_SECONDS", 180, 1, 3600)
+}
+
+func schedulerAgentMaintenanceSocketWaitPoll() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("BOREALIS_AGENT_MAINTENANCE_SOCKET_WAIT_POLL_SECONDS"))
+	if raw == "" {
+		return 2 * time.Second
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0.05 {
+		return 2 * time.Second
+	}
+	return time.Duration(value * float64(time.Second))
+}
+
+func schedulerAgentMaintenanceError(hostname string, state string, err error) string {
+	detail := ""
+	if err != nil {
+		detail = strings.TrimSpace(err.Error())
+	}
+	switch state {
+	case "agent_error":
+		return fmt.Sprintf("Agent rejected maintenance request for host %s: %s", hostname, firstText(detail, "Agent rejected the maintenance request."))
+	case "no_response":
+		return fmt.Sprintf("Agent did not acknowledge maintenance request for host %s before timeout.", hostname)
+	case "site_worker_unavailable":
+		return fmt.Sprintf("No active site-worker route is available for host %s.", hostname)
+	default:
+		return fmt.Sprintf("Job scheduler could not dispatch agent maintenance for host %s: %s", hostname, firstText(detail, state))
+	}
+}
+
+func (m *goSchedulerManager) callSiteWorkerHostService(ctx context.Context, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, string, error) {
+	target := workerInternalURL(route, "/remote-ops/host-service/call")
+	if target == "" {
+		return nil, "site_worker_unavailable", errors.New("site worker unavailable")
+	}
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, "invalid_request", err
+	}
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target, bytes.NewReader(raw))
+	if err != nil {
+		return nil, "worker_request_failed", err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(internalTokenHeader, goInternalToken(m.secret))
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, "site_worker_unavailable", err
+	}
+	defer resp.Body.Close()
+	var payload map[string]any
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
+		return nil, "invalid_worker_response", err
+	}
+	if resp.StatusCode >= 400 {
+		state := firstText(cleanText(payload["error"]), "worker_error")
+		return nil, state, errors.New(firstText(cleanText(payload["message"]), state))
+	}
+	if !boolFromAny(payload["called"]) {
+		return nil, "no_response", errors.New("agent did not answer")
+	}
+	response := schedulerAnyMap(payload["response"])
+	if len(response) == 0 {
+		return nil, "invalid_agent_response", errors.New("invalid agent response")
+	}
+	if strings.EqualFold(cleanText(response["status"]), "error") {
+		return response, "agent_error", errors.New(firstText(cleanText(response["detail"]), cleanText(response["message"]), cleanText(response["error"]), "agent_error"))
+	}
+	return response, "called", nil
+}
+
+func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context, runID int64, status string, stdout string, stderr string) error {
+	if runID <= 0 {
+		return nil
+	}
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	now := time.Now().Unix()
+	var finished any
+	if stringInSet(status, "Success", "Failed", "Skipped") {
+		finished = now
+	}
+	errorText := truncateString(stderr, 512)
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackQuietly(tx)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_runs
+		   SET status=$1, updated_at=$2, finished_ts=COALESCE($3, finished_ts), error=$4
+		 WHERE id=$5
+	`, status, now, finished, errorText, runID); err != nil {
+		return err
+	}
+	resolutionStatus := "eligible"
+	if status == "Failed" {
+		resolutionStatus = "unresolved"
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_run_targets
+		   SET resolution_status=$1, resolution_reason=$2
+		 WHERE run_id=$3
+	`, resolutionStatus, errorText, runID); err != nil {
+		return err
+	}
+	var activityID sql.NullInt64
+	err = tx.QueryRowContext(ctx, `
+		SELECT activity_id
+		  FROM engine.scheduled_job_run_activity
+		 WHERE run_id=$1
+		 ORDER BY id ASC
+		 LIMIT 1
+	`, runID).Scan(&activityID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if activityID.Valid && activityID.Int64 > 0 {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE engine.activity_history
+			   SET status=$1,
+			       stdout=COALESCE(stdout, '') || $2,
+			       stderr=COALESCE(stderr, '') || $3,
+			       updated_at=$4,
+			       finished_at=COALESCE($5, finished_at)
+			 WHERE id=$6
+		`, status, stdout, stderr, now, finished, activityID.Int64); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (m *goSchedulerManager) processServiceAction(ctx context.Context) error {
 	item, err := m.claimNextWorkItem(ctx, 0, []string{schedulerLaneServiceAction}, "job-scheduler", 300)
 	if err != nil || item == nil {
@@ -805,6 +1070,83 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 		 LIMIT 1
 		 FOR UPDATE SKIP LOCKED
 	`, siteID, pq.Array(lanes), workStatusQueued, now)
+	if err != nil {
+		return nil, err
+	}
+	var workID int64
+	if rows.Next() {
+		if err := rows.Scan(&workID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if workID <= 0 {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	lease := now + maxInt64(leaseSeconds, 30)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.job_scheduler_work_items
+		   SET status=$1, lease_owner=$2, lease_expires_at=$3, heartbeat_at=$4,
+		       worker_guid=$5, container_name=NULL, attempt_count=attempt_count+1,
+		       started_at=COALESCE(started_at, $6), updated_at=$7
+		 WHERE id=$8
+	`, workStatusRunning, leaseOwner, lease, now, leaseOwner, now, now, workID); err != nil {
+		return nil, err
+	}
+	var item schedulerWorkItem
+	var payloadRaw sql.NullString
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, kind, site_id, lane, job_id, run_id, payload_json, attempt_count
+		  FROM engine.job_scheduler_work_items
+		 WHERE id=$1
+	`, workID).Scan(&item.ID, &item.Kind, &item.SiteID, &item.Lane, &item.JobID, &item.RunID, &payloadRaw, &item.AttemptCount)
+	if err != nil {
+		return nil, err
+	}
+	item.Payload = schedulerJSONMap(payloadRaw)
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []string, leaseOwner string, leaseSeconds int64) (*schedulerWorkItem, error) {
+	normalizedKinds := []string{}
+	for _, kind := range kinds {
+		if cleaned := strings.TrimSpace(kind); cleaned != "" {
+			normalizedKinds = append(normalizedKinds, cleaned)
+		}
+	}
+	if len(normalizedKinds) == 0 {
+		return nil, nil
+	}
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackQuietly(tx)
+	now := time.Now().Unix()
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id
+		  FROM engine.job_scheduler_work_items
+		 WHERE kind = ANY($1)
+		   AND status=$2
+		   AND available_at <= $3
+		 ORDER BY priority DESC, available_at ASC, id ASC
+		 LIMIT 1
+		 FOR UPDATE SKIP LOCKED
+	`, pq.Array(normalizedKinds), workStatusQueued, now)
 	if err != nil {
 		return nil, err
 	}
@@ -1792,6 +2134,22 @@ func int64sToAnyList(values []int64) []any {
 		out = append(out, value)
 	}
 	return out
+}
+
+func firstPositiveInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func schedulerNullInt64Ptr(value sql.NullInt64) *int64 {
