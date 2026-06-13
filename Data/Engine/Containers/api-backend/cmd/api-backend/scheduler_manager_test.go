@@ -164,3 +164,26 @@ func TestSchedulerManagerRunsScheduledWorkflowWorkItem(t *testing.T) {
 		t.Fatalf("missing source metadata %#v", received)
 	}
 }
+
+func TestSchedulerExecutionHelpersNormalizeScheduledPayloads(t *testing.T) {
+	if got := scheduledAnsibleRelPath(`ops\ping.yml`); got != "Ansible_Playbooks/ops/ping.yml" {
+		t.Fatalf("unexpected ansible rel path %q", got)
+	}
+	if got := scheduledEndpointPort("lab-host.example:5986"); got != 5986 {
+		t.Fatalf("unexpected endpoint port %d", got)
+	}
+	overrides := scheduledComponentVariableOverrides(map[string]any{
+		"variable_values": map[string]any{"Token": "explicit"},
+		"variables": []any{
+			map[string]any{"name": "Token", "value": "ignored"},
+			map[string]any{"name": "Region", "value": "us-west"},
+		},
+	})
+	if overrides["Token"] != "explicit" || overrides["Region"] != "us-west" {
+		t.Fatalf("unexpected overrides %#v", overrides)
+	}
+	metadata := scheduledActivityMetadata(12, 34, 56, "script", "Patch", "asm-1")
+	if metadata["scheduled_job_id"] != int64(12) || metadata["scheduled_job_run_id"] != int64(34) || metadata["assembly_guid"] != "asm-1" {
+		t.Fatalf("unexpected metadata %#v", metadata)
+	}
+}

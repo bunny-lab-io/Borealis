@@ -7,8 +7,10 @@ from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
 from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import (
+    LANE_ONBOARDING,
     LANE_SCHEDULED_JOB,
     WORK_KIND_AGENT_MAINTENANCE_RUN,
+    WORK_KIND_ONBOARDING_RUN,
     WORK_KIND_SCHEDULED_RUN,
     WORK_KIND_SCHEDULED_WORKFLOW_RUN,
     WORK_STATUS_QUEUED,
@@ -22,6 +24,7 @@ from Data.Engine.services.job_scheduler.queue import (
     active_worker_route_for_site,
     claim_next_work_item,
     enqueue_agent_maintenance_run,
+    enqueue_onboarding_run,
     enqueue_scheduled_run,
     enqueue_scheduled_workflow_run,
     ensure_job_scheduler_tables,
@@ -123,7 +126,7 @@ def test_claim_next_work_item_filters_kinds_for_site_worker(tmp_path: Path) -> N
             site_id=7,
             workflow_component={"assembly_guid": "wf-123", "name": "Workflow"},
         )
-        enqueue_scheduled_run(
+        scheduled_id = enqueue_scheduled_run(
             conn,
             job_id=93,
             run_id=9301,
@@ -134,23 +137,49 @@ def test_claim_next_work_item_filters_kinds_for_site_worker(tmp_path: Path) -> N
             ansible_components=[],
             credential_id=None,
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+                id INTEGER PRIMARY KEY,
+                status TEXT,
+                started_ts INTEGER,
+                updated_at INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO scheduled_job_runs(id, status, started_ts, updated_at) VALUES(?, ?, ?, ?)",
+            (9401, "Pending", None, now),
+        )
+        enqueue_onboarding_run(
+            conn,
+            job_id=94,
+            run_id=9401,
+            scheduled_ts=now,
+            site_id=7,
+            components=[],
+            targets=[],
+            credential_id=None,
+        )
         conn.commit()
 
         item = claim_next_work_item(
             conn,
             site_id=7,
-            lanes=[LANE_SCHEDULED_JOB],
+            lanes=[LANE_ONBOARDING],
             lease_owner="worker-1",
-            kinds=[WORK_KIND_SCHEDULED_RUN],
+            kinds=[WORK_KIND_ONBOARDING_RUN],
         )
         assert item is not None
-        assert item["kind"] == WORK_KIND_SCHEDULED_RUN
+        assert item["kind"] == WORK_KIND_ONBOARDING_RUN
 
         cur = conn.cursor()
         cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (maintenance_id,))
         assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_AGENT_MAINTENANCE_RUN)
         cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (workflow_id,))
         assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_SCHEDULED_WORKFLOW_RUN)
+        cur.execute("SELECT status, kind FROM job_scheduler_work_items WHERE id=?", (scheduled_id,))
+        assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_SCHEDULED_RUN)
     finally:
         conn.close()
 

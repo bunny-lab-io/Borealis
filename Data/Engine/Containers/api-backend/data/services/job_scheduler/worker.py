@@ -22,11 +22,9 @@ from Data.Engine.services.remote_ops.worker_bridge import host_service_event_all
 
 from .queue import (
     LANE_ONBOARDING,
-    LANE_SCHEDULED_JOB,
     WORK_STATUS_FAILED,
     WORK_STATUS_SUCCEEDED,
     WORK_KIND_ONBOARDING_RUN,
-    WORK_KIND_SCHEDULED_RUN,
     WORKER_STATUS_IDLE,
     WORKER_STATUS_RUNNING,
     claim_next_work_item,
@@ -393,19 +391,6 @@ def _work_item_links(item: Mapping[str, Any]) -> list[Dict[str, Any]]:
                 "path": f"/jobs/onboarding/{job_id}?tab=discovered_devices",
             }
         ]
-    if kind == WORK_KIND_SCHEDULED_RUN and job_id > 0:
-        task_link = payload.get("task_link") if isinstance(payload.get("task_link"), Mapping) else {}
-        if task_link:
-            return [dict(task_link)]
-        return [
-            {
-                "kind": kind,
-                "label": f"Scheduled Job {job_id}",
-                "job_id": job_id,
-                "run_id": run_id,
-                "path": f"/jobs/{job_id}?tab=job_history",
-            }
-        ]
     return []
 
 
@@ -720,7 +705,7 @@ def _heartbeat_until(
                 conn,
                 worker_guid=worker_guid,
                 status=WORKER_STATUS_RUNNING,
-                lanes=[LANE_ONBOARDING, LANE_SCHEDULED_JOB],
+                lanes=[LANE_ONBOARDING],
                 task_links=visible_links,
             )
             conn.commit()
@@ -770,66 +755,6 @@ def _execute_work_item(
         item_kind = str(item.get("kind") or "")
         if item_kind == WORK_KIND_ONBOARDING_RUN:
             final_status = _run_onboarding_item(scheduler, item)
-        elif item_kind == WORK_KIND_SCHEDULED_RUN:
-            payload = item.get("payload") if isinstance(item.get("payload"), Mapping) else {}
-            run_id = int(payload.get("run_id") or item.get("run_id") or 0)
-            if bool(payload.get("shared_execution")):
-                ansible_components = list(payload.get("ansible_components") or [])
-                try:
-                    component_index = int(payload.get("component_index")) if payload.get("component_index") is not None else 0
-                except Exception:
-                    component_index = 0
-                component = ansible_components[component_index] if 0 <= component_index < len(ansible_components) else None
-                if isinstance(component, Mapping):
-                    link = scheduler._dispatch_shared_ansible(
-                        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                        run_row_id=run_id,
-                        scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                        run_mode=str(payload.get("run_mode") or "system"),
-                        component=dict(component),
-                        credential_id=payload.get("credential_id"),
-                        use_service_account=bool(payload.get("use_service_account")),
-                        target_row_ids=list(payload.get("target_row_ids") or []),
-                    )
-                    normalized_link = scheduler._normalize_run_activity_link(
-                        run_row_id=run_id,
-                        link=link,
-                        default_component_kind="ansible",
-                        default_script_type="ansible",
-                    )
-                    if normalized_link:
-                        scheduler._persist_run_activity_links([normalized_link], created_at=_now_ts())
-            else:
-                conn_lookup = scheduler._conn()
-                try:
-                    cur_lookup = conn_lookup.cursor()
-                    cur_lookup.execute("SELECT target_hostname FROM scheduled_job_runs WHERE id=?", (run_id,))
-                    row = cur_lookup.fetchone()
-                finally:
-                    conn_lookup.close()
-                host = str(row[0] if row else "").strip()
-                if host:
-                    scheduler._dispatch_run_activities(
-                        job_id=int(payload.get("job_id") or item.get("job_id") or 0),
-                        run_row_id=run_id,
-                        scheduled_ts=int(payload.get("scheduled_ts") or 0),
-                        hostname=host,
-                        run_mode=str(payload.get("run_mode") or "system"),
-                        script_components=list(payload.get("script_components") or []),
-                        ansible_components=list(payload.get("ansible_components") or []),
-                        credential_id=payload.get("credential_id"),
-                        use_service_account=bool(payload.get("use_service_account")),
-                        component_index=payload.get("component_index"),
-                    )
-            final_status = _wait_for_scheduled_run_completion(db_factory, run_id=run_id, logger=logger)
-            if final_status == WORK_STATUS_SUCCEEDED:
-                retry_reason = _transient_scheduled_run_retry_reason(
-                    db_factory,
-                    run_id=run_id,
-                    attempt_count=retry_attempt_count,
-                )
-                if not retry_reason and retry_attempt_count >= _transient_run_retry_max_attempts():
-                    retry_exhausted_reason = _transient_scheduled_run_skip_reason(db_factory, run_id=run_id)
         else:
             error = f"unsupported work kind {item.get('kind')}"
     except Exception as exc:
@@ -993,40 +918,29 @@ def main() -> None:
 
     def active_lane_state() -> tuple[int, int, list[str]]:
         with active_lock:
-            scheduled_count = 0
             onboarding_count = 0
             for entry in active_items.values():
                 kind = str((entry.get("item") or {}).get("kind") or "")
                 if kind == WORK_KIND_ONBOARDING_RUN:
                     onboarding_count += 1
-                elif kind == WORK_KIND_SCHEDULED_RUN:
-                    scheduled_count += 1
             lanes = []
             if onboarding_count:
                 lanes.append(LANE_ONBOARDING)
-            if scheduled_count:
-                lanes.append(LANE_SCHEDULED_JOB)
-            return scheduled_count, onboarding_count, lanes
+            return 0, onboarding_count, lanes
 
     try:
         while True:
             prune_active_items()
-            scheduled_concurrency = _site_worker_scheduled_concurrency()
-            active_scheduled, active_onboarding, active_lanes = active_lane_state()
+            _active_scheduled, active_onboarding, active_lanes = active_lane_state()
             claim_lanes = []
             if active_onboarding <= 0:
-                if active_scheduled <= 0:
-                    claim_lanes = [LANE_ONBOARDING, LANE_SCHEDULED_JOB]
-                elif active_scheduled < scheduled_concurrency:
-                    claim_lanes = [LANE_SCHEDULED_JOB]
+                claim_lanes = [LANE_ONBOARDING]
 
             item = None
             if claim_lanes:
                 claim_kinds = []
                 if LANE_ONBOARDING in claim_lanes:
                     claim_kinds.append(WORK_KIND_ONBOARDING_RUN)
-                if LANE_SCHEDULED_JOB in claim_lanes:
-                    claim_kinds.append(WORK_KIND_SCHEDULED_RUN)
                 task_links = []
                 conn = db_factory()
                 try:
@@ -1046,8 +960,6 @@ def main() -> None:
                         current_lanes = list(active_lanes)
                         if item_kind == WORK_KIND_ONBOARDING_RUN and LANE_ONBOARDING not in current_lanes:
                             current_lanes.append(LANE_ONBOARDING)
-                        if item_kind == WORK_KIND_SCHEDULED_RUN and LANE_SCHEDULED_JOB not in current_lanes:
-                            current_lanes.append(LANE_SCHEDULED_JOB)
                         heartbeat_worker(
                             conn,
                             worker_guid=worker_guid,

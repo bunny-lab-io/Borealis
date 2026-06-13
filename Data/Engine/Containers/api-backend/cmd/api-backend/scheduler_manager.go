@@ -169,6 +169,9 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		if err := m.processGlobalScheduledWork(ctx); err != nil {
 			log.Printf("failed to process global scheduled work: %v", err)
 		}
+		if err := m.processScheduledRunWork(ctx); err != nil {
+			log.Printf("failed to process scheduled run work: %v", err)
+		}
 		if err := m.processAgentMaintenanceWork(ctx); err != nil {
 			log.Printf("failed to process agent maintenance work: %v", err)
 		}
