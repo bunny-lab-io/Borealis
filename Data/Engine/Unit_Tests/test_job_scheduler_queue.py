@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
-from types import SimpleNamespace
 
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.API.scheduled_jobs import job_scheduler
-from Data.Engine.services.job_scheduler import manager as scheduler_manager
 from Data.Engine.services.job_scheduler import runtime_settings as site_worker_runtime_settings
 from Data.Engine.services.job_scheduler.queue import (
     LANE_SCHEDULED_JOB,
@@ -81,52 +78,6 @@ def _seed_running_site_work(conn, *, worker_guid: str = "worker-1", site_id: int
     assert item is not None
     assert item["status"] == WORK_STATUS_RUNNING
     return int(item["id"])
-
-
-def test_service_action_recreates_only_site_worker_containers(monkeypatch) -> None:
-    calls = []
-
-    def fake_run(args, **_kwargs):
-        calls.append(list(args))
-        if list(args[:3]) == ["/usr/bin/docker", "inspect", "site-worker-worker-1"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    [
-                        {
-                            "Name": "/site-worker-worker-1",
-                            "Config": {
-                                "Labels": {
-                                    "borealis.role": "site-worker",
-                                    "borealis.worker_guid": "worker-1",
-                                }
-                            },
-                        }
-                    ]
-                ),
-                stderr="",
-            )
-        if list(args[:3]) == ["/usr/bin/docker", "stop", "site-worker-worker-1"]:
-            return SimpleNamespace(returncode=0, stdout="site-worker-worker-1\n", stderr="")
-        raise AssertionError(f"unexpected docker call: {args!r}")
-
-    monkeypatch.setattr(scheduler_manager.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else "")
-    monkeypatch.setattr(scheduler_manager.subprocess, "run", fake_run)
-
-    result = scheduler_manager._run_service_action(
-        {
-            "service_key": "site-worker",
-            "action": {
-                "action": "recreate",
-                "container_name": "site-worker-worker-1",
-                "worker_guid": "worker-1",
-            },
-        },
-        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
-    )
-
-    assert result == "site-worker-worker-1"
-    assert ["/usr/bin/docker", "stop", "site-worker-worker-1"] in calls
 
 
 def _work_item_row(conn, work_id: int):
@@ -399,92 +350,6 @@ def test_site_worker_remote_desktop_port_is_deterministic(monkeypatch) -> None:
     assert first == second
     assert 62000 <= first < 62100
     assert 62000 <= other < 62100
-
-
-def test_spawn_site_worker_mounts_traefik_config_for_route_files(tmp_path: Path, monkeypatch) -> None:
-    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
-
-    project_root = tmp_path / "Borealis"
-    dynamic_dir = project_root / "Engine" / "Services" / "traefik-edge" / "config" / "dynamic"
-    db_path = tmp_path / "queue.sqlite3"
-    monkeypatch.setenv("BOREALIS_PROJECT_ROOT", str(project_root))
-    monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
-    monkeypatch.setattr(job_scheduler_manager.shutil, "which", lambda name: "/usr/bin/docker" if name == "docker" else None)
-    calls = []
-
-    def _run(args, **_kwargs):
-        calls.append(list(args))
-        return SimpleNamespace(returncode=0, stdout="site-worker-container\n", stderr="")
-
-    monkeypatch.setattr(job_scheduler_manager.subprocess, "run", _run)
-    monkeypatch.setattr(job_scheduler_manager, "_worker_image", lambda: "borealis-engine/site-worker:test")
-
-    def _factory():
-        conn = sqlite3.connect(str(db_path))
-        ensure_job_scheduler_tables(conn)
-        return conn
-
-    logger = SimpleNamespace(info=lambda *_args, **_kwargs: None, error=lambda *_args, **_kwargs: None)
-    job_scheduler_manager._spawn_site_worker(_factory, site_id=12, logger=logger)
-
-    assert calls
-    docker_args = calls[0]
-    mount = f"{project_root}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config"
-    assert mount in docker_args
-    assert "borealis.site_worker_image=borealis-engine/site-worker:test" in docker_args
-    assert list(dynamic_dir.glob("site-worker-*.yml"))
-
-
-def test_site_worker_reconcile_filters_stale_worker_image(monkeypatch) -> None:
-    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
-
-    stopped = []
-    monkeypatch.setattr(job_scheduler_manager, "_worker_image", lambda: "borealis-engine/site-worker:new")
-    monkeypatch.setattr(job_scheduler_manager, "_stop_site_worker_container", lambda name, logger: stopped.append(name) or True)
-    logger = SimpleNamespace(info=lambda *_args, **_kwargs: None, warning=lambda *_args, **_kwargs: None)
-
-    current = job_scheduler_manager._filter_current_site_worker_snapshots(
-        [
-            {"container_name": "site-worker-old", "image": "borealis-engine/site-worker:old", "worker_guid": "old"},
-            {
-                "container_name": "site-worker-old-configured",
-                "image": "borealis-engine/site-worker:new",
-                "configured_image": "borealis-engine/site-worker:old",
-                "worker_guid": "old-configured",
-            },
-            {"container_name": "site-worker-new", "image": "borealis-engine/site-worker:new", "worker_guid": "new"},
-        ],
-        logger,
-    )
-
-    assert stopped == ["site-worker-old", "site-worker-old-configured"]
-    assert [row["worker_guid"] for row in current] == ["new"]
-
-
-def test_online_site_worker_helpers_count_recent_site_devices(tmp_path: Path, monkeypatch) -> None:
-    from Data.Engine.services.job_scheduler import manager as job_scheduler_manager
-    from Data.Engine.services.job_scheduler import worker as site_worker
-
-    now = int(time.time())
-    conn = _connect_queue_db(tmp_path)
-    try:
-        conn.execute("CREATE TABLE devices(guid TEXT PRIMARY KEY, hostname TEXT, last_seen INTEGER, status TEXT)")
-        conn.execute("CREATE TABLE device_sites(device_hostname TEXT PRIMARY KEY, site_id INTEGER)")
-        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-1", "LAB-ONE", now - 30, "active"))
-        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-2", "LAB-TWO", now - 900, "active"))
-        conn.execute("INSERT INTO devices(guid, hostname, last_seen, status) VALUES(?, ?, ?, ?)", ("guid-3", "LAB-THREE", now - 30, "purged"))
-        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("lab-one", 7))
-        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("LAB-TWO", 8))
-        conn.execute("INSERT INTO device_sites(device_hostname, site_id) VALUES(?, ?)", ("LAB-THREE", 9))
-        conn.commit()
-
-        monkeypatch.setenv("BOREALIS_AGENT_ONLINE_WINDOW_SECONDS", "300")
-
-        assert job_scheduler_manager._online_site_ids(conn, now_ts=now, window_seconds=300) == [7]
-        assert site_worker._online_site_device_count(conn, site_id=7, now_ts=now) == 1
-        assert site_worker._online_site_device_count(conn, site_id=8, now_ts=now) == 0
-    finally:
-        conn.close()
 
 
 def test_worker_route_upsert_recovers_missing_registry_row_for_live_worker(tmp_path: Path, monkeypatch) -> None:

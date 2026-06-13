@@ -1294,7 +1294,7 @@ PY
 prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
-    api-backend)
+    api-backend|job-scheduler)
       log_status "${service}" "Building Go binary" "${C_YELLOW}"
       BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
         "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1

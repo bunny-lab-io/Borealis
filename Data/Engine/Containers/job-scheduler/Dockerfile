@@ -38,9 +38,10 @@ COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 RUN mkdir -p /opt/Borealis/Data/Engine/Containers
 COPY Data/Engine/Containers/compose.yaml /opt/Borealis/Data/Engine/Containers/compose.yaml
 COPY Data/Agent /opt/Borealis/Data/Agent
+COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 COPY Data/Engine/Containers/job-scheduler/entrypoint.sh /usr/local/bin/borealis-job-scheduler
 COPY Data/Engine/Containers/job-scheduler/healthcheck.sh /usr/local/bin/borealis-job-scheduler-healthcheck
 
-RUN chmod +x /usr/local/bin/borealis-job-scheduler /usr/local/bin/borealis-job-scheduler-healthcheck
+RUN chmod +x /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-job-scheduler /usr/local/bin/borealis-job-scheduler-healthcheck
 
 ENTRYPOINT ["/usr/local/bin/borealis-job-scheduler"]

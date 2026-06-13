@@ -63,6 +63,13 @@ func main() {
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
+	if schedulerManagerMode() {
+		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
+			log.Fatalf("Go job-scheduler manager exited: %v", err)
+		}
+		return
+	}
+
 	state := &legacyState{}
 	legacyCmd, err := startLegacyBackend(cfg, state)
 	if err != nil {
@@ -206,6 +213,18 @@ func main() {
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
+}
+
+func schedulerManagerMode() bool {
+	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+	if role == "job-scheduler" || role == "scheduler-manager" {
+		return true
+	}
+	if len(os.Args) > 1 {
+		arg := strings.ToLower(strings.TrimSpace(os.Args[1]))
+		return arg == "job-scheduler" || arg == "scheduler-manager"
+	}
+	return false
 }
 
 func loadConfig() (gatewayConfig, error) {

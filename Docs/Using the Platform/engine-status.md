@@ -57,7 +57,7 @@ The React Flow canvas uses left-to-right topology:
 
     - Engine Status UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Engine_Status.jsx`
     - Worker queue: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
-    - Scheduler manager: `Data/Engine/Containers/api-backend/data/services/job_scheduler/manager.py`
+    - Scheduler manager: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`
     - Site worker: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`
 
     ### Runtime behavior

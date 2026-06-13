@@ -41,4 +41,5 @@ export PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Ag
 
 cd /opt/Borealis
 python -m Data.Engine.services.ansible.collections
-exec python -m Data.Engine.services.job_scheduler.manager
+export BOREALIS_PROCESS_ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
+exec /usr/local/bin/borealis-api-backend-go job-scheduler
