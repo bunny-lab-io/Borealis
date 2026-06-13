@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -20,6 +21,10 @@ type workflowStore interface {
 	listWorkflowWebhooks(ctx context.Context, workflowGUID string) ([]map[string]any, error)
 	createWorkflowWebhook(ctx context.Context, workflowGUID string, profile operatorProfile) (map[string]any, error)
 	deleteWorkflowWebhook(ctx context.Context, workflowGUID string, webhookID int64) (bool, error)
+	startWorkflowRun(ctx context.Context, req workflowStartRequest) (workflowStartResult, int, error)
+	workflowEditorAccess(ctx context.Context, profile operatorProfile, workflowGUID string) (map[string]any, int, error)
+	resolveWorkflowRun(ctx context.Context, runID int64, requestedStatus string, actor string) (map[string]any, int, error)
+	triggerWorkflowWebhook(ctx context.Context, opaqueToken string) (workflowStartResult, int, error)
 }
 
 type workflowRunRow struct {
@@ -104,16 +109,32 @@ func registerWorkflowRoutes(mux *http.ServeMux, auth *authService, fallback http
 func workflowRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := workflowPathParts(r.URL.Path)
+		if len(parts) == 1 && parts[0] == "run" && r.Method == http.MethodPost {
+			workflowRunStart(w, r, auth)
+			return
+		}
 		if len(parts) == 2 && parts[0] == "runs" && r.Method == http.MethodGet {
 			workflowRunByID(w, r, auth, parts[1])
+			return
+		}
+		if len(parts) == 3 && parts[0] == "runs" && parts[2] == "resolve" && r.Method == http.MethodPost {
+			workflowRunResolve(w, r, auth, parts[1])
 			return
 		}
 		if len(parts) == 4 && parts[0] == "runs" && parts[2] == "nodes" && r.Method == http.MethodGet {
 			workflowNodeRunByID(w, r, auth, parts[1], parts[3])
 			return
 		}
+		if len(parts) == 2 && parts[0] == "webhooks" && r.Method == http.MethodPost {
+			workflowWebhookTrigger(w, r, auth, parts[1])
+			return
+		}
 		if len(parts) == 2 && parts[1] == "runs" && r.Method == http.MethodGet {
 			workflowRunsByGUID(w, r, auth, parts[0])
+			return
+		}
+		if len(parts) == 2 && parts[1] == "editor-access" && r.Method == http.MethodGet {
+			workflowEditorAccessByGUID(w, r, auth, parts[0])
 			return
 		}
 		if len(parts) == 2 && parts[1] == "webhooks" {
@@ -132,6 +153,163 @@ func workflowRootHandler(auth *authService, fallback http.Handler) http.HandlerF
 			return
 		}
 		fallback.ServeHTTP(w, r)
+	}
+}
+
+func workflowRunStart(w http.ResponseWriter, r *http.Request, auth *authService) {
+	_, store, profile, ok := workflowRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	var body map[string]any
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+		return
+	}
+	workflowGUID := assemblyCoerceGUID(firstNonEmptyAny(body["workflow_guid"], body["workflowGuid"]))
+	if workflowGUID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "workflow_guid is required"})
+		return
+	}
+	sourceMetadata := mapStringAny(body["source_metadata"])
+	sourceMetadata["workflow_guid"] = workflowGUID
+	sourceMetadata["created_by"] = workflowCreatedBy(profile)
+	ctx, cancel := workflowTimeoutContext(r.Context(), auth)
+	defer cancel()
+	result, status, err := store.startWorkflowRun(ctx, workflowStartRequest{
+		WorkflowGUID:     workflowGUID,
+		SourceType:       "manual",
+		SourceMetadata:   sourceMetadata,
+		CreatedBy:        workflowCreatedBy(profile),
+		ExecuteAsync:     true,
+		RunnerProfile:    profile,
+		Auth:             auth,
+		OperatorRealtime: nil,
+	})
+	if err != nil {
+		writeJSON(w, status, workflowErrorPayload(err, status))
+		return
+	}
+	if result.ShouldExecute {
+		go executeWorkflowRunBackground(auth, result.RunID, profile)
+	}
+	writeJSON(w, status, result.Payload)
+}
+
+func workflowEditorAccessByGUID(w http.ResponseWriter, r *http.Request, auth *authService, workflowGUID string) {
+	_, store, profile, ok := workflowRequestContext(w, r, auth)
+	if !ok {
+		return
+	}
+	workflowGUID = assemblyCoerceGUID(workflowGUID)
+	if workflowGUID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "workflow_guid is required"})
+		return
+	}
+	ctx, cancel := workflowTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.workflowEditorAccess(ctx, profile, workflowGUID)
+	if err != nil {
+		writeJSON(w, status, workflowErrorPayload(err, status))
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func workflowRunResolve(w http.ResponseWriter, r *http.Request, auth *authService, runIDText string) {
+	identity, failure := requireAdmin(r.Context(), auth, r)
+	if failure != nil {
+		failure.write(w)
+		return
+	}
+	store, ok := auth.store.(workflowStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "workflows_unavailable"})
+		return
+	}
+	runID, err := parsePositivePathInt(runIDText)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	var body map[string]any
+	if r.Body != nil {
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body)
+	}
+	ctx, cancel := workflowTimeoutContext(r.Context(), auth)
+	defer cancel()
+	payload, status, err := store.resolveWorkflowRun(ctx, runID, cleanText(body["status"]), workflowCreatedBy(operatorProfile{Username: identity.Username, Role: identity.Role}))
+	if err != nil {
+		writeJSON(w, status, workflowErrorPayload(err, status))
+		return
+	}
+	writeJSON(w, status, payload)
+}
+
+func workflowWebhookTrigger(w http.ResponseWriter, r *http.Request, auth *authService, opaqueToken string) {
+	store, ok := auth.store.(workflowStore)
+	if !ok {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "workflows_unavailable"})
+		return
+	}
+	opaqueToken = strings.TrimSpace(opaqueToken)
+	if opaqueToken == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+		return
+	}
+	ctx, cancel := workflowTimeoutContext(r.Context(), auth)
+	defer cancel()
+	result, status, err := store.triggerWorkflowWebhook(ctx, opaqueToken)
+	if err != nil {
+		writeJSON(w, status, workflowErrorPayload(err, status))
+		return
+	}
+	if result.ShouldExecute {
+		go executeWorkflowRunBackground(auth, result.RunID, operatorProfile{Username: "Webhook", Role: "Admin"})
+	}
+	writeJSON(w, status, result.Payload)
+}
+
+func internalWorkflowStartHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method_not_allowed"})
+			return
+		}
+		if !validInternalSchedulerRequest(auth, r) {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		store, ok := auth.store.(workflowStore)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workflow_runtime_unavailable"})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json"})
+			return
+		}
+		sourceMetadata := mapStringAny(body["source_metadata"])
+		ctx, cancel := workflowTimeoutContext(r.Context(), auth)
+		defer cancel()
+		result, status, err := store.startWorkflowRun(ctx, workflowStartRequest{
+			WorkflowGUID:   assemblyCoerceGUID(body["workflow_guid"]),
+			SourceType:     firstText(strings.ToLower(cleanText(body["source_type"])), "scheduled_job"),
+			SourceMetadata: sourceMetadata,
+			CreatedBy:      firstText(cleanText(body["created_by"]), "scheduler"),
+			ExecuteAsync:   true,
+			RunnerProfile:  operatorProfile{Username: "job-scheduler", Role: "Admin"},
+			Auth:           auth,
+		})
+		if err != nil {
+			writeJSON(w, status, workflowErrorPayload(err, status))
+			return
+		}
+		if result.ShouldExecute {
+			go executeWorkflowRunBackground(auth, result.RunID, operatorProfile{Username: "job-scheduler", Role: "Admin"})
+		}
+		writeJSON(w, status, result.Payload)
 	}
 }
 

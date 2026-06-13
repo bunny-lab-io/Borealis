@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -37,6 +38,23 @@ type fakeWorkflowStore struct {
 	deleteGUID string
 	deleteID   int64
 	deleted    bool
+
+	startReq    workflowStartRequest
+	startResult workflowStartResult
+
+	editorGUID    string
+	editorProfile operatorProfile
+	editorPayload map[string]any
+	editorStatus  int
+
+	resolveID      int64
+	resolveStatus  string
+	resolveActor   string
+	resolvePayload map[string]any
+	resolveCode    int
+
+	triggerToken  string
+	triggerResult workflowStartResult
 }
 
 func (s *fakeWorkflowStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
@@ -103,6 +121,59 @@ func (s *fakeWorkflowStore) deleteWorkflowWebhook(_ context.Context, workflowGUI
 		return false, s.storeErr
 	}
 	return s.deleted, nil
+}
+
+func (s *fakeWorkflowStore) startWorkflowRun(_ context.Context, req workflowStartRequest) (workflowStartResult, int, error) {
+	s.startReq = req
+	if s.storeErr != nil {
+		return workflowStartResult{}, http.StatusInternalServerError, s.storeErr
+	}
+	if s.startResult.Payload == nil {
+		s.startResult = workflowStartResult{Payload: map[string]any{"started": true, "run": map[string]any{"id": int64(9)}}, RunID: 9, ShouldExecute: false}
+	}
+	return s.startResult, http.StatusOK, nil
+}
+
+func (s *fakeWorkflowStore) workflowEditorAccess(_ context.Context, profile operatorProfile, workflowGUID string) (map[string]any, int, error) {
+	s.editorProfile = profile
+	s.editorGUID = workflowGUID
+	if s.storeErr != nil {
+		return nil, http.StatusInternalServerError, s.storeErr
+	}
+	if s.editorStatus == 0 {
+		s.editorStatus = http.StatusOK
+	}
+	if s.editorPayload == nil {
+		s.editorPayload = map[string]any{"allowed": true, "hidden_devices": []map[string]any{}, "hidden_filters": []map[string]any{}, "message": ""}
+	}
+	return s.editorPayload, s.editorStatus, nil
+}
+
+func (s *fakeWorkflowStore) resolveWorkflowRun(_ context.Context, runID int64, requestedStatus string, actor string) (map[string]any, int, error) {
+	s.resolveID = runID
+	s.resolveStatus = requestedStatus
+	s.resolveActor = actor
+	if s.storeErr != nil {
+		return nil, http.StatusInternalServerError, s.storeErr
+	}
+	if s.resolveCode == 0 {
+		s.resolveCode = http.StatusOK
+	}
+	if s.resolvePayload == nil {
+		s.resolvePayload = map[string]any{"resolved": true, "status": "Failed"}
+	}
+	return s.resolvePayload, s.resolveCode, nil
+}
+
+func (s *fakeWorkflowStore) triggerWorkflowWebhook(_ context.Context, opaqueToken string) (workflowStartResult, int, error) {
+	s.triggerToken = opaqueToken
+	if s.storeErr != nil {
+		return workflowStartResult{}, http.StatusInternalServerError, s.storeErr
+	}
+	if s.triggerResult.Payload == nil {
+		s.triggerResult = workflowStartResult{Payload: map[string]any{"started": true, "run": map[string]any{"id": int64(10)}}, RunID: 10, ShouldExecute: false}
+	}
+	return s.triggerResult, http.StatusOK, nil
 }
 
 func testWorkflowAuth(store *fakeWorkflowStore) *authService {
@@ -264,6 +335,71 @@ func TestWorkflowWebhookHandlersAttachURLsAndMutate(t *testing.T) {
 	}
 }
 
+func TestWorkflowStartEditorResolveAndTriggerRoutes(t *testing.T) {
+	store := &fakeWorkflowStore{}
+	mux := workflowTestMux(store)
+
+	startRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(startRecorder, workflowJSONRequest(http.MethodPost, "/api/workflows/run", `{"workflow_guid":"flow-1","source_metadata":{"ticket":"INC1"}}`))
+	if startRecorder.Code != http.StatusOK {
+		t.Fatalf("expected start 200, got %d body=%s", startRecorder.Code, startRecorder.Body.String())
+	}
+	if store.startReq.WorkflowGUID != "flow-1" || store.startReq.SourceType != "manual" || store.startReq.SourceMetadata["ticket"] != "INC1" {
+		t.Fatalf("unexpected start req %#v", store.startReq)
+	}
+
+	editorRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(editorRecorder, workflowRequest(http.MethodGet, "/api/workflows/flow-1/editor-access"))
+	if editorRecorder.Code != http.StatusOK {
+		t.Fatalf("expected editor 200, got %d body=%s", editorRecorder.Code, editorRecorder.Body.String())
+	}
+	if store.editorGUID != "flow-1" || store.editorProfile.Username != "operator" {
+		t.Fatalf("unexpected editor args guid=%q profile=%+v", store.editorGUID, store.editorProfile)
+	}
+
+	resolveRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(resolveRecorder, workflowJSONRequest(http.MethodPost, "/api/workflows/runs/42/resolve", `{"status":"Timed Out"}`))
+	if resolveRecorder.Code != http.StatusOK {
+		t.Fatalf("expected resolve 200, got %d body=%s", resolveRecorder.Code, resolveRecorder.Body.String())
+	}
+	if store.resolveID != 42 || store.resolveStatus != "Timed Out" || !strings.Contains(store.resolveActor, "operator") {
+		t.Fatalf("unexpected resolve args id=%d status=%q actor=%q", store.resolveID, store.resolveStatus, store.resolveActor)
+	}
+
+	triggerRecorder := httptest.NewRecorder()
+	mux.ServeHTTP(triggerRecorder, httptest.NewRequest(http.MethodPost, "/api/workflows/webhooks/token-1", nil))
+	if triggerRecorder.Code != http.StatusOK {
+		t.Fatalf("expected trigger 200, got %d body=%s", triggerRecorder.Code, triggerRecorder.Body.String())
+	}
+	if store.triggerToken != "token-1" {
+		t.Fatalf("unexpected trigger token %q", store.triggerToken)
+	}
+}
+
+func TestInternalWorkflowStartRouteUsesInternalToken(t *testing.T) {
+	store := &fakeWorkflowStore{}
+	auth := testWorkflowAuth(store)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/internal/job-scheduler/workflow/start", internalWorkflowStartHandler(auth))
+
+	unauthorized := httptest.NewRecorder()
+	mux.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodPost, "/api/internal/job-scheduler/workflow/start", strings.NewReader(`{}`)))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", unauthorized.Code)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/api/internal/job-scheduler/workflow/start", strings.NewReader(`{"workflow_guid":"flow-2","source_type":"scheduled_job","source_metadata":{"scheduled_job_run_id":7}}`))
+	request.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.startReq.WorkflowGUID != "flow-2" || store.startReq.SourceType != "scheduled_job" || store.startReq.CreatedBy != "scheduler" {
+		t.Fatalf("unexpected internal start req %#v", store.startReq)
+	}
+}
+
 func TestWorkflowHandlersReportStoreErrors(t *testing.T) {
 	store := &fakeWorkflowStore{storeErr: errors.New("database offline")}
 	recorder := httptest.NewRecorder()
@@ -272,4 +408,11 @@ func TestWorkflowHandlersReportStoreErrors(t *testing.T) {
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("expected store error response, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+func workflowJSONRequest(method string, path string, body string) *http.Request {
+	request := workflowRequest(method, path)
+	request.Body = io.NopCloser(strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	return request
 }

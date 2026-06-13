@@ -27,6 +27,7 @@ func registerInternalSchedulerRoutes(mux *http.ServeMux, auth *authService, vpnR
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-sessions", internalSchedulerVPNSessionsHandler(auth, vpnRuntime))
 	mux.HandleFunc("/api/internal/job-scheduler/vpn-prepare", internalSchedulerVPNPrepareHandler(auth, vpnRuntime))
 	mux.HandleFunc("/api/internal/job-scheduler/work-items", internalSchedulerWorkItemsHandler(auth))
+	mux.HandleFunc("/api/internal/job-scheduler/workflow/start", internalWorkflowStartHandler(auth))
 }
 
 var errSchedulerCredentialResetRequired = errors.New("Stored credential secret material was reset. Edit and save the credential before enabling jobs that use it.")
