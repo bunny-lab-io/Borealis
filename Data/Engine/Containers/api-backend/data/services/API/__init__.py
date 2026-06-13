@@ -325,10 +325,10 @@ def _register_watchdogs(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
     from .assemblies.cache_bridge import register_cache_bridge
+    from .assemblies.catalog_routes import register_official_catalog_routes
     from .assemblies.execution import register_execution
-    from .assemblies.management import register_assemblies
 
-    register_assemblies(app, adapters)
+    register_official_catalog_routes(app, adapters)
     register_execution(app, adapters)
     register_cache_bridge(app, adapters)
 
