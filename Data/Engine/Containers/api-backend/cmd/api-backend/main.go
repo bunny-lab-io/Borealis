@@ -132,6 +132,7 @@ func main() {
 	registerUserSiteAssignmentRoutes(mux, auth, proxy)
 	registerDirectoryRoutes(mux, auth, proxy)
 	registerCredentialRoutes(mux, auth, proxy)
+	registerAssemblyRoutes(mux, auth, proxy, cfg.LegacyURL)
 	registerAdminDeviceRoutes(mux, auth)
 	registerWorkflowRoutes(mux, auth, proxy)
 	registerWatchdogRoutes(mux, auth, proxy, operatorRealtime)

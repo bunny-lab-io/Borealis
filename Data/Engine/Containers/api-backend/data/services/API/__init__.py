@@ -324,11 +324,13 @@ def _register_watchdogs(app: Flask, adapters: EngineServiceAdapters) -> None:
 
 
 def _register_assemblies(app: Flask, adapters: EngineServiceAdapters) -> None:
+    from .assemblies.cache_bridge import register_cache_bridge
     from .assemblies.execution import register_execution
     from .assemblies.management import register_assemblies
 
     register_assemblies(app, adapters)
     register_execution(app, adapters)
+    register_cache_bridge(app, adapters)
 
 
 def _register_server(app: Flask, adapters: EngineServiceAdapters) -> None:

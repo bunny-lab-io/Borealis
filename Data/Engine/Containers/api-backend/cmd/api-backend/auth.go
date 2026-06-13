@@ -73,6 +73,7 @@ type authService struct {
 	store         operatorStore
 	bootstrapGate operatorAuthGate
 	aegis         authSecretService
+	devMode       *goDevModeManager
 	timeout       time.Duration
 }
 
@@ -139,6 +140,7 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 			legacyAegis: legacyAegis,
 		},
 		aegis:   aegis,
+		devMode: newGoDevModeManager(),
 		timeout: cfg.AuthTimeout,
 	}, closeStore, nil
 }
