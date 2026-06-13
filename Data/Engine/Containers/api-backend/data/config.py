@@ -755,7 +755,6 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
             "server",
             "assemblies",
             "workflows",
-            "scheduled_jobs",
             "notifications",
         )
 

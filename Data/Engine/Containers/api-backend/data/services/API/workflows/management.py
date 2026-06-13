@@ -28,7 +28,7 @@ from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...auth import RequestAuthContext, UserSiteAccessManager
 from ...auth.secrets import require_app_secret
-from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 from ...workflows import WorkflowRuntimeService
 
 if TYPE_CHECKING:  # pragma: no cover - typing aide
@@ -252,8 +252,43 @@ def ensure_workflow_runtime(app: "Flask", adapters: "EngineServiceAdapters") -> 
     return runtime
 
 
+def _register_internal_job_scheduler_workflow_route(
+    app: "Flask",
+    adapters: "EngineServiceAdapters",
+) -> None:
+    if getattr(app, "_borealis_job_scheduler_internal_routes", False):
+        return
+
+    def _internal_error(message: str, status: int = 500):
+        return jsonify({"error": message}), status
+
+    def _require_internal():
+        try:
+            secret = require_app_secret(app)
+        except Exception:
+            return False
+        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
+
+    @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])
+    def _internal_job_scheduler_workflow_start():
+        if not _require_internal():
+            return _internal_error("unauthorized", 401)
+        runtime = getattr(adapters.context, "workflow_runtime", None)
+        if runtime is None or not hasattr(runtime, "start_run"):
+            return _internal_error("workflow_runtime_unavailable", 503)
+        body = request.get_json(silent=True) or {}
+        try:
+            result = runtime.start_run(**body)
+        except Exception as exc:
+            return _internal_error(str(exc), 500)
+        return jsonify(result if isinstance(result, dict) else {"result": result})
+
+    setattr(app, "_borealis_job_scheduler_internal_routes", True)
+
+
 def register_management(app: "Flask", adapters: "EngineServiceAdapters") -> None:
     runtime = ensure_workflow_runtime(app, adapters)
+    _register_internal_job_scheduler_workflow_route(app, adapters)
     site_access = UserSiteAccessManager(adapters.db_conn_factory, logger=adapters.context.logger)
     auth = RequestAuthContext(
         app=app,

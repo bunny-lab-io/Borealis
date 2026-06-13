@@ -26,14 +26,12 @@ import urllib.request
 from urllib.parse import quote, urlsplit
 from typing import TYPE_CHECKING, List, Mapping, Optional
 
-from flask import jsonify, request
-
 from ...ansible.worker_dispatch import WorkerAnsibleDispatcher
 from ...assemblies.service import AssemblyRuntimeService
 from ...aegis_cipher import AegisDataCorruptionError, AegisLockedError, AegisSecretResetRequiredError
 from ....public_endpoints import public_base_url
 from ...auth.secrets import require_app_secret
-from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
+from ...job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 from ..workflows import management as workflows_management
 from . import job_scheduler
 
@@ -405,7 +403,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     workflow_runtime = workflows_management.ensure_workflow_runtime(app, adapters)
     job_scheduler.set_workflow_run_launcher(scheduler, workflow_runtime.start_run)
     job_scheduler.set_workflow_document_validator(scheduler, workflow_runtime.validate_saved_workflow)
-    _register_internal_job_scheduler_routes(app, adapters)
     if _scheduler_loop_enabled():
         scheduler.start()
     else:
@@ -413,40 +410,6 @@ def ensure_scheduler(app: "Flask", adapters: "EngineServiceAdapters"):
     adapters.context.scheduler = scheduler
     adapters.service_log("scheduled_jobs", "engine scheduler initialised", level="INFO")
     return scheduler
-
-
-def _register_internal_job_scheduler_routes(
-    app: "Flask",
-    adapters: "EngineServiceAdapters",
-) -> None:
-    if getattr(app, "_borealis_job_scheduler_internal_routes", False):
-        return
-
-    def _internal_error(message: str, status: int = 500):
-        return jsonify({"error": message}), status
-
-    def _require_internal():
-        try:
-            secret = require_app_secret(app)
-        except Exception:
-            return False
-        return validate_internal_token(secret, request.headers.get(INTERNAL_TOKEN_HEADER))
-
-    @app.route("/api/internal/job-scheduler/workflow/start", methods=["POST"])
-    def _internal_job_scheduler_workflow_start():
-        if not _require_internal():
-            return _internal_error("unauthorized", 401)
-        runtime = getattr(adapters.context, "workflow_runtime", None)
-        if runtime is None or not hasattr(runtime, "start_run"):
-            return _internal_error("workflow_runtime_unavailable", 503)
-        body = request.get_json(silent=True) or {}
-        try:
-            result = runtime.start_run(**body)
-        except Exception as exc:
-            return _internal_error(str(exc), 500)
-        return jsonify(result if isinstance(result, dict) else {"result": result})
-
-    setattr(app, "_borealis_job_scheduler_internal_routes", True)
 
 
 def get_scheduler(adapters: "EngineServiceAdapters"):

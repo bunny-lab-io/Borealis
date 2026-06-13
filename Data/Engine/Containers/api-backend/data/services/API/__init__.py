@@ -39,7 +39,6 @@ DEFAULT_API_GROUPS: Sequence[str] = (
     "server",
     "assemblies",
     "workflows",
-    "scheduled_jobs",
     "notifications",
     "watchdogs",
 )

@@ -79,7 +79,6 @@ def _build_runtime_config() -> Dict[str, Any]:
             "server",
             "assemblies",
             "workflows",
-            "scheduled_jobs",
             "notifications",
         )
 
