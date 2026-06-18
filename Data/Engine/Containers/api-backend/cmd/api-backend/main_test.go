@@ -977,6 +977,28 @@ func TestEnvDurationSecondsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestSchedulerModeDetectionSeparatesManagerAndHealthcheck(t *testing.T) {
+	originalArgs := os.Args
+	t.Cleanup(func() { os.Args = originalArgs })
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "")
+	os.Args = []string{"api-backend", "job-scheduler"}
+	if !schedulerManagerMode() || schedulerHealthcheckMode() {
+		t.Fatalf("expected job-scheduler arg to select manager only")
+	}
+
+	os.Args = []string{"api-backend", "job-scheduler-healthcheck"}
+	if schedulerManagerMode() || !schedulerHealthcheckMode() {
+		t.Fatalf("expected job-scheduler-healthcheck arg to select healthcheck only")
+	}
+
+	os.Args = []string{"api-backend"}
+	t.Setenv("BOREALIS_PROCESS_ROLE", "scheduler-healthcheck")
+	if schedulerManagerMode() || !schedulerHealthcheckMode() {
+		t.Fatalf("expected scheduler-healthcheck role to select healthcheck only")
+	}
+}
+
 func TestHealthAndStatusHandlersReportGoBackend(t *testing.T) {
 	cfg := gatewayConfig{ListenHost: "127.0.0.1", ListenPort: "5000"}
 	recorder := httptest.NewRecorder()

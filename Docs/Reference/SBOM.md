@@ -79,41 +79,11 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
 | api-backend | Tesseract OCR | [Apache-2.0](https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE) |
 | api-backend | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
-| job-scheduler | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
+| job-scheduler | Debian container base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines plus package licenses](https://www.debian.org/legal/licenses/) |
+| job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | job-scheduler | Docker CLI (`docker-ce-cli`, site-worker container launcher) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
 | job-scheduler | Docker Compose plugin (Engine service orchestration helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
 | job-scheduler | Docker Buildx plugin / BuildKit (container image rebuild helper) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
-| job-scheduler | Flask | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| job-scheduler | flask-cors | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | Flask-SocketIO | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | eventlet | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | cryptography | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
-| job-scheduler | PyJWT | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | pyotp | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | qrcode | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
-| job-scheduler | webauthn | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
-| job-scheduler | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
-| job-scheduler | requests | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| job-scheduler | aiohttp | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
-| job-scheduler | python-socketio | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | websockets | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| job-scheduler | packaging | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
-| job-scheduler | regex | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
-| job-scheduler | SQLAlchemy | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | alembic | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | psycopg (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
-| job-scheduler | ldap3 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
-| job-scheduler | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
-| job-scheduler | ansible-core | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
-| job-scheduler | ansible-runner | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| job-scheduler | jmespath | [MIT](https://spdx.org/licenses/MIT.html) |
-| job-scheduler | pywinrm (`pywinrm[credssp]`) | [MIT](https://github.com/diyan/pywinrm/blob/master/LICENSE) |
-| job-scheduler | pypsrp (`pypsrp[credssp]`) | [MIT](https://github.com/jborean93/pypsrp/blob/master/LICENSE) |
-| job-scheduler | Impacket | [Apache-2.0](https://github.com/fortra/impacket/blob/master/LICENSE) |
-| job-scheduler | ansible.windows collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE) |
-| job-scheduler | ansible.posix collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE) |
-| job-scheduler | community.general collection | [GPL-3.0-or-later](https://github.com/ansible-collections/community.general/blob/main/COPYING) |
-| job-scheduler | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |
 | remote-desktop-guacd | Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
 | remote-desktop-guacd | Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |

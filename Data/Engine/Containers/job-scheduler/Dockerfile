@@ -1,21 +1,11 @@
-FROM python:3.12-slim-bookworm
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        bash \
         ca-certificates \
         curl \
-        git \
         gnupg \
-        iproute2 \
-        openssh-client \
-        procps \
-        rsync \
-        sshpass \
-        wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
 RUN install -m 0755 -d /etc/apt/keyrings \
@@ -29,15 +19,8 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/engine-requirements.txt
-COPY Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt /tmp/engine-worker-requirements.txt
-RUN python -m pip install --upgrade pip \
-    && python -m pip install -r /tmp/engine-worker-requirements.txt
-
-COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 RUN mkdir -p /opt/Borealis/Data/Engine/Containers
 COPY Data/Engine/Containers/compose.yaml /opt/Borealis/Data/Engine/Containers/compose.yaml
-COPY Data/Agent /opt/Borealis/Data/Agent
 COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 COPY Data/Engine/Containers/job-scheduler/entrypoint.sh /usr/local/bin/borealis-job-scheduler
 COPY Data/Engine/Containers/job-scheduler/healthcheck.sh /usr/local/bin/borealis-job-scheduler-healthcheck

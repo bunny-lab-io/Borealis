@@ -42,6 +42,14 @@ func main() {
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
+	if schedulerHealthcheckMode() {
+		if err := runGoJobSchedulerHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("Go job-scheduler healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if schedulerManagerMode() {
 		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
 			log.Fatalf("Go job-scheduler manager exited: %v", err)
@@ -169,6 +177,20 @@ func schedulerManagerMode() bool {
 	if len(os.Args) > 1 {
 		arg := strings.ToLower(strings.TrimSpace(os.Args[1]))
 		return arg == "job-scheduler" || arg == "scheduler-manager"
+	}
+	return false
+}
+
+func schedulerHealthcheckMode() bool {
+	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+	if role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck" {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		normalized := strings.ToLower(strings.TrimSpace(arg))
+		if normalized == "job-scheduler-healthcheck" || normalized == "scheduler-healthcheck" {
+			return true
+		}
 	}
 	return false
 }

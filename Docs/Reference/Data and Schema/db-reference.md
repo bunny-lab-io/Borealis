@@ -299,7 +299,7 @@ finally:
 
     - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
     - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
-    - Scheduler database behavior: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+    - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
     - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`
     - Bundled official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/`

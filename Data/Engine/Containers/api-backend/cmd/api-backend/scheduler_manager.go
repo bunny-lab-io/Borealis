@@ -103,6 +103,28 @@ func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
 	return manager.run(ctx)
 }
 
+func runGoJobSchedulerHealthcheck(ctx context.Context, cfg gatewayConfig) error {
+	store, closeStore, err := openOperatorStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeStore()
+	pgStore, ok := store.(*postgresOperatorStore)
+	if !ok {
+		return errors.New("postgres store required")
+	}
+	manager := &goSchedulerManager{
+		cfg:   cfg,
+		store: pgStore,
+	}
+	if err := manager.ensureTables(ctx); err != nil {
+		return err
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return pgStore.db.PingContext(pingCtx)
+}
+
 func (m *goSchedulerManager) run(ctx context.Context) error {
 	if err := m.ensureTables(ctx); err != nil {
 		return err

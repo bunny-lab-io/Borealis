@@ -18,8 +18,8 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 | `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
 | `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | `127.0.0.1:8000` |
-| `api-backend` | `borealis-engine-api-backend` | Flask API, Socket.IO, live operator sessions, VNC WebSocket proxy, workflow/runtime APIs | `127.0.0.1:5000`, VNC WS `127.0.0.1:4823` |
-| `job-scheduler` | `borealis-engine-job-scheduler` | Scheduled tick loop, Postgres work leases, service actions, ephemeral site-worker lifecycle | Internal only |
+| `api-backend` | `borealis-engine-api-backend` | Go API backend, live operator sessions, VNC session broker, workflow/runtime APIs | `127.0.0.1:5000` |
+| `job-scheduler` | `borealis-engine-job-scheduler` | Go scheduler-manager mode from the api-backend binary, scheduled tick loop, Postgres work leases, service actions, ephemeral site-worker lifecycle | Internal only |
 | `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
 Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
