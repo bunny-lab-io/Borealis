@@ -78,6 +78,31 @@ func TestSchedulerManagerExpirationParser(t *testing.T) {
 	}
 }
 
+func TestSchedulerRunTimeoutFallsBackToOrphanTimeout(t *testing.T) {
+	orphan := int64(3600)
+	if got := scheduledRunTimeoutSeconds("no_expire", "", orphan); got == nil || *got != orphan {
+		t.Fatalf("expected orphan fallback %d, got %v", orphan, got)
+	}
+	if got := scheduledRunTimeoutSeconds("1h", "", orphan); got == nil || *got != 3600 {
+		t.Fatalf("expected explicit expiration, got %v", got)
+	}
+	if got := scheduledRunTimeoutSeconds("no_expire", "workflow", orphan); got != nil {
+		t.Fatalf("workflow runs should not use script orphan timeout, got %v", got)
+	}
+	if got := scheduledRunTimeoutSeconds("no_expire", "", 0); got != nil {
+		t.Fatalf("disabled orphan timeout should stay disabled, got %v", got)
+	}
+}
+
+func TestDurationForOperator(t *testing.T) {
+	cases := map[int64]string{45: "45s", 1800: "30m", 7200: "2h", 172800: "2d"}
+	for seconds, expected := range cases {
+		if got := durationForOperator(seconds); got != expected {
+			t.Fatalf("duration %d expected %q got %q", seconds, expected, got)
+		}
+	}
+}
+
 func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
 	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
 	content := schedulerRouteYAML(route)

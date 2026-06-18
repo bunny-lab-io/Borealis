@@ -491,6 +491,32 @@ func (s *vpnTunnelService) requestAgentStart(ctx context.Context, agentID string
 	return payload
 }
 
+func (s *vpnTunnelService) requestRemoteShellRestart(ctx context.Context, agentID string, reason string) bool {
+	agentID = cleanText(agentID)
+	if agentID == "" || s == nil || s.auth == nil {
+		return false
+	}
+	device, route := s.lookupDeviceRouteByAgentID(ctx, agentID)
+	if device.AgentID == "" || route == nil {
+		return false
+	}
+	result, _, workerErr := emitWorkerHostServiceEvent(ctx, s.auth, route, remoteShellRestartEventBody(device, agentID, reason), 6*time.Second)
+	return workerErr == nil && boolFromAny(result["emitted"])
+}
+
+func remoteShellRestartEventBody(device remoteOpsSessionDevice, agentID string, reason string) map[string]any {
+	agentID = cleanText(agentID)
+	restartReason := firstText(cleanText(reason), "remote_shell_backend_unreachable")
+	return map[string]any{
+		"hostname":            device.Hostname,
+		"service_mode":        serviceModeFromAgentID(agentID),
+		"event_name":          "remote_shell_restart",
+		"payload":             map[string]any{"agent_id": agentID, "reason": restartReason},
+		"allow_pending":       true,
+		"pending_ttl_seconds": 60,
+	}
+}
+
 func (s *vpnTunnelService) recordAgentReady(agentID string, tunnelID string, allowedPorts []int, reason string, serviceState string, virtualIP string) map[string]any {
 	agentID = cleanText(agentID)
 	tunnelID = cleanText(tunnelID)

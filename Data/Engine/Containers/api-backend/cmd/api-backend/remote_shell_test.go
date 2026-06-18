@@ -89,3 +89,18 @@ func TestRemoteShellEstablishIssuesSessionAndConnectsTunnel(t *testing.T) {
 		t.Fatalf("unexpected token capabilities %+v", caps)
 	}
 }
+
+func TestRemoteShellRestartEventTargetsSystemAgent(t *testing.T) {
+	body := remoteShellRestartEventBody(remoteOpsSessionDevice{Hostname: "LAB-OPERATOR-01"}, "LAB-OPERATOR-01_SYSTEM", "")
+
+	if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "remote_shell_restart" {
+		t.Fatalf("unexpected restart event envelope %#v", body)
+	}
+	if body["allow_pending"] != true || body["pending_ttl_seconds"] != 60 {
+		t.Fatalf("unexpected pending controls %#v", body)
+	}
+	payload := body["payload"].(map[string]any)
+	if payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" || payload["reason"] != "remote_shell_backend_unreachable" {
+		t.Fatalf("unexpected restart payload %#v", payload)
+	}
+}

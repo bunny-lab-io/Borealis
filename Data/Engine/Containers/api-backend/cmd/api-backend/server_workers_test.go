@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -91,5 +92,50 @@ func TestServerWorkerRecreateRequiresAdmin(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden || store.workerGUID != "" {
 		t.Fatalf("unexpected status=%d worker_guid=%q", recorder.Code, store.workerGUID)
+	}
+}
+
+func TestScheduledRunWorkPayloadCarriesSiteScopedTask(t *testing.T) {
+	payload := scheduledRunWorkPayload(scheduledRunWorkRow{
+		RunID:          sql.NullInt64{Int64: 1200, Valid: true},
+		JobID:          sql.NullInt64{Int64: 140, Valid: true},
+		SiteID:         sql.NullInt64{Int64: 1, Valid: true},
+		TargetHostname: sql.NullString{String: "LAB-OPERATOR-01", Valid: true},
+		Status:         sql.NullString{String: scheduledStatusRunning, Valid: true},
+		StartedAt:      sql.NullInt64{Int64: 1700000000, Valid: true},
+		UpdatedAt:      sql.NullInt64{Int64: 1700000005, Valid: true},
+	})
+
+	if payload["id"] != "scheduled-run:1200" || payload["kind"] != schedulerKindScheduledRun {
+		t.Fatalf("unexpected identity payload %#v", payload)
+	}
+	if payload["site_id"].(int64) != 1 || payload["job_id"].(int64) != 140 || payload["run_id"].(int64) != 1200 {
+		t.Fatalf("unexpected ids %#v", payload)
+	}
+	if payload["status"] != scheduledStatusRunning || payload["target_count"].(int64) != 1 {
+		t.Fatalf("unexpected status/count %#v", payload)
+	}
+	link, ok := payload["task_link"].(map[string]any)
+	if !ok || link["job_id"].(int64) != 140 || link["run_id"].(int64) != 1200 {
+		t.Fatalf("unexpected task link %#v", payload["task_link"])
+	}
+}
+
+func TestFilterScheduledDispatchWorkPrefersRunState(t *testing.T) {
+	workItems := []map[string]any{
+		{"id": int64(1026), "kind": schedulerKindScheduledRun, "run_id": int64(1204), "status": workStatusSucceeded},
+		{"id": int64(9000), "kind": schedulerKindServiceAction, "run_id": int64(1204), "status": workStatusSucceeded},
+		{"id": int64(1027), "kind": schedulerKindScheduledRun, "run_id": int64(1205), "status": workStatusQueued},
+	}
+	scheduledRuns := []map[string]any{
+		{"id": "scheduled-run:1204", "kind": schedulerKindScheduledRun, "run_id": int64(1204), "status": scheduledStatusSuccess},
+	}
+
+	filtered := filterScheduledDispatchWork(workItems, scheduledRuns)
+	if len(filtered) != 2 {
+		t.Fatalf("expected dispatch duplicate removed, got %#v", filtered)
+	}
+	if filtered[0]["kind"] != schedulerKindServiceAction || filtered[1]["run_id"].(int64) != 1205 {
+		t.Fatalf("unexpected filtered rows %#v", filtered)
 	}
 }

@@ -305,6 +305,9 @@ func (m *goSchedulerManager) tickOnce(ctx context.Context) error {
 	if err := m.expireRunningScheduledRuns(ctx, now); err != nil {
 		log.Printf("scheduled run expiration scan failed: %v", err)
 	}
+	if err := m.reconcileScheduledTerminalActivities(ctx, now); err != nil {
+		log.Printf("scheduled activity reconciliation failed: %v", err)
+	}
 	if err := m.purgeOldScheduledRuns(ctx, now); err != nil {
 		log.Printf("scheduled run history purge failed: %v", err)
 	}
@@ -1819,8 +1822,10 @@ func (m *goSchedulerManager) expireRunningScheduledRuns(ctx context.Context, now
 		ID        int64
 		StartedTS int64
 		Seconds   int64
+		Message   string
 	}
 	candidates := []expiringRun{}
+	orphanTimeout := scheduledRunOrphanTimeoutSeconds()
 	for rows.Next() {
 		var id, started sql.NullInt64
 		var expiration, componentKind sql.NullString
@@ -1831,23 +1836,120 @@ func (m *goSchedulerManager) expireRunningScheduledRuns(ctx context.Context, now
 		if strings.EqualFold(nullString(componentKind), "workflow") || !id.Valid || !started.Valid {
 			continue
 		}
-		seconds := schedulerParseExpiration(nullString(expiration))
+		seconds := scheduledRunTimeoutSeconds(nullString(expiration), nullString(componentKind), orphanTimeout)
 		if seconds == nil {
 			continue
 		}
 		if started.Int64+*seconds <= now {
-			candidates = append(candidates, expiringRun{ID: id.Int64, StartedTS: started.Int64, Seconds: *seconds})
+			candidates = append(candidates, expiringRun{
+				ID:        id.Int64,
+				StartedTS: started.Int64,
+				Seconds:   *seconds,
+				Message:   fmt.Sprintf("Scheduled run timed out after %s without Agent completion.", durationForOperator(*seconds)),
+			})
 		}
 	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
 	for _, candidate := range candidates {
-		if _, err := conn.ExecContext(ctx, `UPDATE engine.scheduled_job_runs SET status=$1, finished_ts=$2, updated_at=$3 WHERE id=$4`, scheduledStatusTimedOut, now, now, candidate.ID); err != nil {
+		if err := markScheduledRunTerminalTx(ctx, conn, candidate.ID, scheduledStatusTimedOut, now, candidate.Message); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+func scheduledRunOrphanTimeoutSeconds() int64 {
+	raw := strings.TrimSpace(os.Getenv("BOREALIS_SCHEDULED_RUN_ORPHAN_TIMEOUT_SECONDS"))
+	if raw == "0" {
+		return 0
+	}
+	return int64(envInt("BOREALIS_SCHEDULED_RUN_ORPHAN_TIMEOUT_SECONDS", 3600, 60, 604800))
+}
+
+func scheduledRunTimeoutSeconds(expiration string, componentKind string, orphanTimeout int64) *int64 {
+	if strings.EqualFold(strings.TrimSpace(componentKind), "workflow") {
+		return nil
+	}
+	if seconds := schedulerParseExpiration(expiration); seconds != nil {
+		return seconds
+	}
+	if orphanTimeout <= 0 {
+		return nil
+	}
+	value := orphanTimeout
+	return &value
+}
+
+func (m *goSchedulerManager) reconcileScheduledTerminalActivities(ctx context.Context, now int64) error {
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, `
+		UPDATE engine.activity_history AS h
+		   SET status=r.status,
+		       stderr=CASE
+		           WHEN COALESCE(NULLIF(h.stderr, ''), '') = '' THEN COALESCE(NULLIF(r.error, ''), h.stderr, '')
+		           ELSE h.stderr
+		       END,
+		       updated_at=$1,
+		       finished_at=COALESCE(h.finished_at, r.finished_ts, $2)
+		  FROM engine.scheduled_job_run_activity AS s
+		  JOIN engine.scheduled_job_runs AS r ON r.id=s.run_id
+		 WHERE h.id=s.activity_id
+		   AND LOWER(COALESCE(h.status, '')) IN ('queued','running','pending','created','started','in_progress')
+		   AND LOWER(COALESCE(r.status, '')) IN ('success','warning','failed','expired','timed out','skipped')
+	`, now, now)
+	return err
+}
+
+func markScheduledRunTerminalTx(ctx context.Context, conn *sql.Conn, runID int64, status string, now int64, message string) error {
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollbackQuietly(tx)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_runs
+		   SET status=$1, finished_ts=$2, updated_at=$3, error=COALESCE(NULLIF(error, ''), $4)
+		 WHERE id=$5
+	`, status, now, now, truncateString(message, 512), runID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.scheduled_job_run_targets
+		   SET resolution_status=CASE
+		           WHEN COALESCE(NULLIF(resolution_status, ''), '') = '' THEN $1
+		           ELSE resolution_status
+		       END,
+		       resolution_reason=CASE
+		           WHEN COALESCE(NULLIF(resolution_reason, ''), '') = '' THEN $2
+		           ELSE resolution_reason
+		       END
+		 WHERE run_id=$3
+	`, schedulerResolutionUnresolved, truncateString(message, 512), runID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE engine.activity_history AS h
+		   SET status=$1,
+		       stderr=CASE
+		           WHEN COALESCE(NULLIF(h.stderr, ''), '') = '' THEN $2
+		           ELSE h.stderr
+		       END,
+		       updated_at=$3,
+		       finished_at=COALESCE(h.finished_at, $4)
+		  FROM engine.scheduled_job_run_activity AS s
+		 WHERE s.activity_id=h.id
+		   AND s.run_id=$5
+		   AND LOWER(COALESCE(h.status, '')) IN ('queued','running','pending','created','started','in_progress')
+	`, status, truncateString(message, 2000), now, now, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) purgeOldScheduledRuns(ctx context.Context, now int64) error {
@@ -2120,6 +2222,22 @@ func schedulerParseExpiration(value string) *int64 {
 
 func scheduledTerminalStatus(status string) bool {
 	return stringInSet(status, scheduledStatusSuccess, scheduledStatusWarning, scheduledStatusFailed, scheduledStatusExpired, scheduledStatusTimedOut, scheduledStatusSkipped)
+}
+
+func durationForOperator(seconds int64) string {
+	if seconds <= 0 {
+		return "0s"
+	}
+	if seconds%86400 == 0 {
+		return strconv.FormatInt(seconds/86400, 10) + "d"
+	}
+	if seconds%3600 == 0 {
+		return strconv.FormatInt(seconds/3600, 10) + "h"
+	}
+	if seconds%60 == 0 {
+		return strconv.FormatInt(seconds/60, 10) + "m"
+	}
+	return strconv.FormatInt(seconds, 10) + "s"
 }
 
 func schedulerOnboardingSiteID(targets []any) int64 {

@@ -74,6 +74,20 @@ type workItemRow struct {
 	Error         sql.NullString
 }
 
+type scheduledRunWorkRow struct {
+	RunID          sql.NullInt64
+	JobID          sql.NullInt64
+	SiteID         sql.NullInt64
+	TargetHostname sql.NullString
+	Status         sql.NullString
+	Error          sql.NullString
+	StartedAt      sql.NullInt64
+	FinishedAt     sql.NullInt64
+	UpdatedAt      sql.NullInt64
+	TargetCount    sql.NullInt64
+	ComponentKind  sql.NullString
+}
+
 func registerServerWorkerRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
 	mux.HandleFunc("/api/server/workers", serverWorkersHandler(auth))
 	mux.HandleFunc("/api/server/workers/", serverWorkerSubtreeHandler(auth))
@@ -159,11 +173,25 @@ func (s *postgresOperatorStore) serverWorkerPayload(ctx context.Context, history
 		conn.Close()
 		return nil, err
 	}
+	activeScheduledRunWork, err := listWorkerScheduledRunWork(ctx, conn, true, historySeconds)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	activeWork = filterScheduledDispatchWork(activeWork, activeScheduledRunWork)
+	activeWork = append(activeWork, activeScheduledRunWork...)
 	recentWork, err := listWorkerRecentWork(ctx, conn, historySeconds)
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	recentScheduledRunWork, err := listWorkerScheduledRunWork(ctx, conn, false, historySeconds)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	recentWork = filterScheduledDispatchWork(recentWork, recentScheduledRunWork)
+	recentWork = append(recentWork, recentScheduledRunWork...)
 	siteNames, siteRows, siteDeviceCounts, siteOnlineDeviceCounts, jobNames, err := collectWorkerReferenceData(ctx, conn, rows, activeWork, recentWork)
 	_ = conn.Close()
 	if err != nil {
@@ -539,6 +567,131 @@ func listWorkerRecentWork(ctx context.Context, conn *sql.Conn, historySeconds in
 		})
 	}
 	return results, rows.Err()
+}
+
+func listWorkerScheduledRunWork(ctx context.Context, conn *sql.Conn, activeOnly bool, historySeconds int) ([]map[string]any, error) {
+	params := []any{}
+	where := ""
+	if activeOnly {
+		where = "WHERE r.status=$1"
+		params = append(params, scheduledStatusRunning)
+	} else {
+		cutoff := time.Now().Unix() - int64(maxInt(historySeconds, 0))
+		where = `
+			WHERE r.status IN ($1,$2,$3,$4,$5,$6)
+			  AND COALESCE(r.finished_ts, r.updated_at, r.started_ts, r.scheduled_ts, 0) >= $7
+		`
+		params = append(params,
+			scheduledStatusSuccess,
+			scheduledStatusWarning,
+			scheduledStatusFailed,
+			scheduledStatusExpired,
+			scheduledStatusTimedOut,
+			scheduledStatusSkipped,
+			cutoff,
+		)
+	}
+	rows, err := conn.QueryContext(ctx, `
+		SELECT r.id, r.job_id, COALESCE(MIN(t.site_id), 0) AS site_id,
+		       r.target_hostname, r.status, r.error, r.started_ts, r.finished_ts,
+		       r.updated_at, COUNT(t.id) AS target_count, r.component_kind
+		  FROM engine.scheduled_job_runs AS r
+	 LEFT JOIN engine.scheduled_job_run_targets AS t ON t.run_id=r.id
+		`+where+`
+	  GROUP BY r.id, r.job_id, r.target_hostname, r.status, r.error, r.started_ts, r.finished_ts, r.updated_at, r.component_kind
+	  ORDER BY COALESCE(r.finished_ts, r.updated_at, r.started_ts, r.scheduled_ts, 0) DESC, r.id DESC
+	`, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := []map[string]any{}
+	for rows.Next() {
+		var row scheduledRunWorkRow
+		if err := rows.Scan(
+			&row.RunID,
+			&row.JobID,
+			&row.SiteID,
+			&row.TargetHostname,
+			&row.Status,
+			&row.Error,
+			&row.StartedAt,
+			&row.FinishedAt,
+			&row.UpdatedAt,
+			&row.TargetCount,
+			&row.ComponentKind,
+		); err != nil {
+			return nil, err
+		}
+		results = append(results, scheduledRunWorkPayload(row))
+	}
+	return results, rows.Err()
+}
+
+func scheduledRunWorkPayload(row scheduledRunWorkRow) map[string]any {
+	runID := nullInt(row.RunID)
+	jobID := nullInt(row.JobID)
+	targetCount := nullInt(row.TargetCount)
+	if targetCount <= 0 && cleanText(nullString(row.TargetHostname)) != "" {
+		targetCount = 1
+	}
+	taskType := "Assembly"
+	kind := schedulerKindScheduledRun
+	switch strings.ToLower(cleanText(nullString(row.ComponentKind))) {
+	case "workflow":
+		taskType = "Workflow"
+		kind = schedulerKindScheduledWorkflowRun
+	case "ansible":
+		taskType = "Playbook"
+	}
+	return map[string]any{
+		"id":             "scheduled-run:" + strconv.FormatInt(runID, 10),
+		"kind":           kind,
+		"site_id":        nullableInt(row.SiteID),
+		"lane":           schedulerLaneScheduledJob,
+		"job_id":         nullableInt(row.JobID),
+		"run_id":         nullableInt(row.RunID),
+		"target_id":      nil,
+		"status":         nullString(row.Status),
+		"lease_owner":    "",
+		"worker_guid":    "",
+		"container_name": "",
+		"attempt_count":  int64(0),
+		"heartbeat_at":   nullableInt(row.UpdatedAt),
+		"started_at":     nullableInt(row.StartedAt),
+		"finished_at":    nullableInt(row.FinishedAt),
+		"updated_at":     nullableInt(row.UpdatedAt),
+		"task_link":      schedulerTaskLink(jobID, runID, "scheduled_job"),
+		"target_count":   targetCount,
+		"task_type":      taskType,
+		"error":          nullString(row.Error),
+	}
+}
+
+func filterScheduledDispatchWork(workItems []map[string]any, scheduledRunWork []map[string]any) []map[string]any {
+	if len(workItems) == 0 || len(scheduledRunWork) == 0 {
+		return workItems
+	}
+	canonicalRunIDs := map[int64]bool{}
+	for _, item := range scheduledRunWork {
+		if runID := coerceInt64(item["run_id"]); runID > 0 {
+			canonicalRunIDs[runID] = true
+		}
+	}
+	if len(canonicalRunIDs) == 0 {
+		return workItems
+	}
+	filtered := make([]map[string]any, 0, len(workItems))
+	for _, item := range workItems {
+		kind := strings.ToLower(cleanText(item["kind"]))
+		runID := coerceInt64(item["run_id"])
+		if runID > 0 && canonicalRunIDs[runID] && (kind == schedulerKindScheduledRun || kind == schedulerKindScheduledWorkflowRun) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
 }
 
 func collectWorkerReferenceData(ctx context.Context, conn *sql.Conn, collections ...[]map[string]any) (map[int64]string, []map[string]any, map[int64]int64, map[int64]int64, map[int64]string, error) {

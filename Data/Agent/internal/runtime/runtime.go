@@ -336,6 +336,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vpn_tunnel_stop", a.wireguard.HandleStop)
 		socket.On("vpn_tunnel_activity", a.wireguard.HandleActivity)
 	}
+	if a.remoteShell != nil {
+		socket.On("remote_shell_restart", a.handleRemoteShellRestart)
+	}
 	if a.vnc != nil {
 		socket.On("vnc_start", a.vnc.HandleStart)
 		socket.On("vnc_stop", a.vnc.HandleStop)

@@ -61,6 +61,8 @@ const iconFontFamily = '"Quartz Regular"';
 
 const WORKER_HISTORY_SECONDS = 300;
 const WORKER_REMOVE_SECONDS = 30;
+const TASK_REMOVE_SECONDS = 60;
+const SITE_WORKER_REFRESH_MS = 15000;
 const BASE_ROW_HEIGHT = 56;
 const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
 const DEFAULT_INSTALL_BRANCH = "main";
@@ -459,8 +461,12 @@ function workStatusBucket(status) {
   if (normalized === "running") return "running";
   if (["queued", "pending", "reassigning"].includes(normalized)) return "pending";
   if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "skipped";
-  if (["failed", "lost", "error", "timed_out", "timeout"].includes(normalized)) return "failed";
+  if (["failed", "lost", "error", "timed_out", "timed out", "timeout"].includes(normalized)) return "failed";
   return "pending";
+}
+
+function isTerminalTaskBucket(bucket) {
+  return ["success", "failed", "skipped"].includes(String(bucket || "").trim().toLowerCase());
 }
 
 function statusRank(status) {
@@ -544,7 +550,15 @@ function jobNameForWork(work) {
   return String(work?.job_name || taskLink?.job_name || taskLink?.name || taskLink?.label || "").trim();
 }
 
-function buildTaskGroupsByWorker(payload) {
+function taskActivitySeconds(work) {
+  return Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || work?.created_at || 0);
+}
+
+function taskCountdownSecondsLabel(seconds) {
+  return `${Math.max(0, Math.ceil(Number(seconds || 0)))}s`;
+}
+
+export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
   const byWorker = new Map();
   const seen = new Set();
   const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
@@ -558,11 +572,16 @@ function buildTaskGroupsByWorker(payload) {
         .map((value) => String(value || "").trim())
         .filter(Boolean)
     );
+    const siteId = Number(work?.site_id || 0);
+    if (Number.isFinite(siteId) && siteId > 0) {
+      keys.add(`site:${siteId}`);
+    }
     if (!keys.size) return;
     const bucket = workStatusBucket(work?.status);
     const jobId = jobIdForWork(work);
     const jobName = jobNameForWork(work);
     const jobKey = jobId ? `job:${jobId}` : `work:${work?.kind || "task"}:${work?.id || identity}`;
+    const activitySeconds = taskActivitySeconds(work);
     keys.forEach((key) => {
       const workerGroups = byWorker.get(key) || new Map();
       const group = workerGroups.get(jobKey) || {
@@ -573,12 +592,21 @@ function buildTaskGroupsByWorker(payload) {
         path: jobPathForWork(work, jobId),
         counts: emptyTaskCounts(),
         first_started_at: Number(work?.started_at || work?.created_at || 0),
-        last_activity_at: Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || 0),
+        last_activity_at: activitySeconds,
+        terminal_last_activity_at: 0,
+        has_active_work: false,
+        expires_at: null,
+        removal_remaining_seconds: null,
         rank: statusRank(work?.status),
       };
       const counts = group.counts;
       counts[bucket] = Number(counts[bucket] || 0) + 1;
       counts.total_tasks = Number(counts.total_tasks || 0) + 1;
+      if (isTerminalTaskBucket(bucket)) {
+        group.terminal_last_activity_at = Math.max(Number(group.terminal_last_activity_at || 0), activitySeconds);
+      } else {
+        group.has_active_work = true;
+      }
       group.rank = Math.min(Number(group.rank ?? 5), statusRank(work?.status));
       group.first_started_at = Math.min(
         Number(group.first_started_at || work?.started_at || work?.created_at || 0),
@@ -586,7 +614,7 @@ function buildTaskGroupsByWorker(payload) {
       );
       group.last_activity_at = Math.max(
         Number(group.last_activity_at || 0),
-        Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || 0)
+        activitySeconds
       );
       if (!group.job_name && jobName) group.job_name = jobName;
       if (!group.path) group.path = jobPathForWork(work, jobId);
@@ -599,13 +627,28 @@ function buildTaskGroupsByWorker(payload) {
   byWorker.forEach((groups, key) => {
     normalized.set(
       key,
-      Array.from(groups.values()).sort((left, right) => {
-        if (left.rank !== right.rank) return left.rank - right.rank;
-        if (Number(left.job_id || 0) && Number(right.job_id || 0) && Number(left.job_id) !== Number(right.job_id)) {
-          return Number(left.job_id) - Number(right.job_id);
-        }
-        return Number(right.last_activity_at || 0) - Number(left.last_activity_at || 0);
-      })
+      Array.from(groups.values())
+        .map((group) => {
+          const terminalAt = Number(group.terminal_last_activity_at || 0);
+          if (!group.has_active_work && terminalAt > 0) {
+            const expiresAt = terminalAt + TASK_REMOVE_SECONDS;
+            const remaining = expiresAt - Number(nowSeconds || 0);
+            return {
+              ...group,
+              expires_at: expiresAt,
+              removal_remaining_seconds: Math.max(0, remaining),
+            };
+          }
+          return group;
+        })
+        .filter((group) => Number(group.expires_at || 0) <= 0 || Number(group.removal_remaining_seconds || 0) > 0)
+        .sort((left, right) => {
+          if (left.rank !== right.rank) return left.rank - right.rank;
+          if (Number(left.job_id || 0) && Number(right.job_id || 0) && Number(left.job_id) !== Number(right.job_id)) {
+            return Number(left.job_id) - Number(right.job_id);
+          }
+          return Number(right.last_activity_at || 0) - Number(left.last_activity_at || 0);
+        })
     );
   });
   return normalized;
@@ -637,7 +680,7 @@ function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSe
 
 function buildWorkerRowsBySite(payload, nowSeconds) {
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
-  const taskGroupsByWorker = buildTaskGroupsByWorker(payload);
+  const taskGroupsByWorker = buildTaskGroupsByWorker(payload, nowSeconds);
   const idleTtlSeconds = Math.max(300, Number(payload?.worker_idle_ttl_seconds || 300));
   const newestActiveBySite = new Map();
   workers.forEach((worker) => {
@@ -687,6 +730,7 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
       const taskGroups =
         (workerGuid && taskGroupsByWorker.get(workerGuid)) ||
         (containerName && taskGroupsByWorker.get(containerName)) ||
+        taskGroupsByWorker.get(`site:${siteId}`) ||
         [];
       const connectedDevices = connectedDeviceCount(worker);
       const deviceCounts = deviceConnectionBreakdown(
@@ -975,6 +1019,31 @@ function TaskResultsBar({ counts }) {
   );
 }
 
+function TaskExpiryCountdown({ group }) {
+  const expiresAt = Number(group?.expires_at || 0);
+  const remaining = Math.max(0, Math.ceil(Number(group?.removal_remaining_seconds || 0)));
+  if (expiresAt <= 0 || remaining <= 0) return null;
+  return (
+    <Box sx={{ mt: 0.12, minWidth: 0, width: "100%" }}>
+      <Typography
+        component="span"
+        sx={{
+          color: "rgba(148,163,184,0.72)",
+          fontSize: "0.68rem",
+          fontWeight: 500,
+          lineHeight: 1.15,
+          textAlign: "left",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {taskCountdownSecondsLabel(remaining)}
+      </Typography>
+    </Box>
+  );
+}
+
 function SiteWorkerContainerCell(params) {
   const row = params?.data || {};
   const onRecreate = params?.context?.onRecreate;
@@ -1147,48 +1216,53 @@ function AssignedTasksCell(params) {
             minWidth: 0,
           }}
         >
-          <Tooltip title={group.job_name || group.label || ""} placement="top-start" arrow>
-            <Box
-              component="button"
-              type="button"
-              disabled={!group.path}
-              onMouseDown={stopGridRowSelectionEvent}
-              onClick={(event) => {
-                stopGridRowSelectionEvent(event);
-                if (group.path && navigate) navigate(String(group.path));
-              }}
-              sx={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "flex-start",
-                p: 0,
-                border: 0,
-                background: "transparent",
-                color: BOREALIS_LINK_COLOR,
-                cursor: group.path ? "pointer" : "default",
-                font: "inherit",
-                fontSize: "0.8rem",
-                fontWeight: 700,
-                lineHeight: 1.4,
-                textDecoration: "none",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                transition: "color 160ms ease",
-                "&:hover": group.path
-                  ? {
-                      color: BOREALIS_LINK_HOVER_COLOR,
-                      textDecoration: "underline",
-                    }
-                  : undefined,
-                "&:disabled": {
-                  opacity: 0.72,
-                },
-              }}
-            >
-              {group.label}
-            </Box>
-          </Tooltip>
+          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
+            <Tooltip title={group.job_name || group.label || ""} placement="top-start" arrow>
+              <Box
+                component="button"
+                type="button"
+                disabled={!group.path}
+                onMouseDown={stopGridRowSelectionEvent}
+                onClick={(event) => {
+                  stopGridRowSelectionEvent(event);
+                  if (group.path && navigate) navigate(String(group.path));
+                }}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  width: "100%",
+                  maxWidth: "100%",
+                  p: 0,
+                  border: 0,
+                  background: "transparent",
+                  color: BOREALIS_LINK_COLOR,
+                  cursor: group.path ? "pointer" : "default",
+                  font: "inherit",
+                  fontSize: "0.8rem",
+                  fontWeight: 700,
+                  lineHeight: 1.4,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  transition: "color 160ms ease",
+                  "&:hover": group.path
+                    ? {
+                        color: BOREALIS_LINK_HOVER_COLOR,
+                        textDecoration: "underline",
+                      }
+                    : undefined,
+                  "&:disabled": {
+                    opacity: 0.72,
+                  },
+                }}
+              >
+                {group.label}
+              </Box>
+            </Tooltip>
+            <TaskExpiryCountdown group={group} />
+          </Box>
           <TaskResultsBar counts={group.counts || emptyTaskCounts()} />
         </Box>
       ))}
@@ -1529,6 +1603,7 @@ export default function SiteList() {
   const [rows, setRows] = useState(() => initialRows);
   const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => initialSiteWorkerPayload);
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
@@ -1556,6 +1631,7 @@ export default function SiteList() {
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
+  const siteWorkerRefreshInFlightRef = useRef(false);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
     icon: "locationcity",
@@ -1568,8 +1644,8 @@ export default function SiteList() {
     [notify]
   );
   const displayRows = useMemo(
-    () => mergeSiteWorkerRows(rows, siteWorkerPayload, Math.floor(Date.now() / 1000)),
-    [rows, siteWorkerPayload]
+    () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
+    [nowSeconds, rows, siteWorkerPayload]
   );
 
   const handleOpenDevicesForSite = useCallback(
@@ -1713,6 +1789,35 @@ export default function SiteList() {
     setInstallServerUrl(initialInstallServerUrl);
     setLoadError(String(loaderData?.initialError || ""));
   }, [initialInstallServerUrl, initialRows, initialSiteWorkerPayload, loaderData]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setNowSeconds(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshSiteWorkerPayload = async () => {
+      if (siteWorkerRefreshInFlightRef.current) return;
+      siteWorkerRefreshInFlightRef.current = true;
+      try {
+        const workerPayload = await fetchSiteWorkerPayloadBrowser();
+        if (active && workerPayload && typeof workerPayload === "object" && Object.keys(workerPayload).length > 0) {
+          setSiteWorkerPayload(workerPayload);
+        }
+      } finally {
+        siteWorkerRefreshInFlightRef.current = false;
+      }
+    };
+    const intervalId = setInterval(refreshSiteWorkerPayload, SITE_WORKER_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+      siteWorkerRefreshInFlightRef.current = false;
+    };
+  }, []);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
