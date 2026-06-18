@@ -59,7 +59,7 @@ func TestShellSessionPingPongAndBashStdout(t *testing.T) {
 	var logs []string
 	session := newShellSession(agentConn, "10.255.0.1:12345", "bash", "/bin/sh", func(format string, args ...any) {
 		logs = append(logs, strings.TrimSpace(format))
-	}, nil)
+	}, nil, nil)
 	go session.start()
 	defer session.close()
 
@@ -97,6 +97,118 @@ func TestShellSessionPingPongAndBashStdout(t *testing.T) {
 		}
 	}
 	t.Fatalf("did not receive expected stdout; logs=%#v", logs)
+}
+
+func TestShellSessionReadyPingDoesNotStartProcess(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("/bin/sh unavailable")
+	}
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	_ = engineConn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	ready := make(chan struct{}, 1)
+	session := newShellSession(agentConn, "10.255.0.1:12345", "bash", "/bin/sh", nil, nil, func(*shellSession) {
+		ready <- struct{}{}
+	})
+	go session.start()
+	defer session.close()
+
+	reader := bufio.NewReader(engineConn)
+	writeJSON(t, engineConn, map[string]any{
+		"type":       "ping",
+		"ping_id":    "ready-1",
+		"session_id": "session-1",
+		"reason":     "ready",
+	})
+	pong := readJSON(t, reader)
+	if pong["type"] != "pong" || pong["ping_id"] != "ready-1" {
+		t.Fatalf("unexpected pong payload: %#v", pong)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("session was not activated by ready ping")
+	}
+	session.procMu.Lock()
+	proc := session.proc
+	session.procMu.Unlock()
+	if proc != nil {
+		t.Fatalf("ready ping started shell process pid=%d", proc.Process.Pid)
+	}
+}
+
+func TestTCPProbeDoesNotReplaceActiveSession(t *testing.T) {
+	activeAgent, activeEngine := net.Pipe()
+	defer activeEngine.Close()
+	active := newShellSession(activeAgent, "10.255.0.1:11111", "bash", "/bin/sh", nil, nil, nil)
+	defer active.close()
+
+	manager := &Manager{}
+	manager.session = active
+
+	probeAgent, probeEngine := net.Pipe()
+	probe := newShellSession(probeAgent, "10.255.0.1:22222", "bash", "/bin/sh", nil, manager.onSessionClosed, manager.activateSession)
+	go probe.start()
+	_ = probeEngine.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && !probe.isClosed() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !probe.isClosed() {
+		t.Fatal("probe session did not close")
+	}
+	manager.sessionMu.Lock()
+	current := manager.session
+	manager.sessionMu.Unlock()
+	if current != active {
+		t.Fatal("probe connection replaced active shell session")
+	}
+	if active.isClosed() {
+		t.Fatal("probe connection closed active shell session")
+	}
+}
+
+func TestReadySessionReplacesActiveSession(t *testing.T) {
+	activeAgent, activeEngine := net.Pipe()
+	defer activeEngine.Close()
+	active := newShellSession(activeAgent, "10.255.0.1:11111", "bash", "/bin/sh", nil, nil, nil)
+	defer active.close()
+
+	manager := &Manager{}
+	manager.session = active
+
+	agentConn, engineConn := net.Pipe()
+	defer engineConn.Close()
+	_ = engineConn.SetDeadline(time.Now().Add(2 * time.Second))
+	session := newShellSession(agentConn, "10.255.0.1:22222", "bash", "/bin/sh", nil, manager.onSessionClosed, manager.activateSession)
+	go session.start()
+	defer session.close()
+
+	reader := bufio.NewReader(engineConn)
+	writeJSON(t, engineConn, map[string]any{
+		"type":       "ping",
+		"ping_id":    "ready-1",
+		"session_id": "session-1",
+		"reason":     "ready",
+	})
+	_ = readJSON(t, reader)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		manager.sessionMu.Lock()
+		current := manager.session
+		manager.sessionMu.Unlock()
+		if current == session {
+			if !active.isClosed() {
+				t.Fatal("ready session did not close prior active session")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("ready session did not become active")
 }
 
 func writeJSON(t *testing.T, conn net.Conn, payload map[string]any) {
