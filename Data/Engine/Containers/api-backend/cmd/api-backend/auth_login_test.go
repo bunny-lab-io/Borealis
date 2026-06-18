@@ -11,9 +11,7 @@ import (
 )
 
 type authLoginTestGate struct {
-	state        map[string]any
-	setupCalled  bool
-	unlockCalled bool
+	state map[string]any
 }
 
 func (g *authLoginTestGate) operatorAuthAllowed(_ context.Context) (bool, error) {
@@ -22,18 +20,6 @@ func (g *authLoginTestGate) operatorAuthAllowed(_ context.Context) (bool, error)
 
 func (g *authLoginTestGate) bootstrapState(_ context.Context) (map[string]any, error) {
 	return copyMap(g.state), nil
-}
-
-func (g *authLoginTestGate) bootstrapAegisSetup(_ context.Context, _ string) (map[string]any, int, error) {
-	g.setupCalled = true
-	g.state = map[string]any{"phase": bootstrapPhaseLoginRequired, "configured": true, "locked": false}
-	return map[string]any{"status": "ok"}, http.StatusOK, nil
-}
-
-func (g *authLoginTestGate) bootstrapAegisUnlock(_ context.Context, _ string) (map[string]any, int, error) {
-	g.unlockCalled = true
-	g.state = map[string]any{"phase": bootstrapPhaseLoginRequired, "configured": true, "locked": false}
-	return map[string]any{"status": "ok"}, http.StatusOK, nil
 }
 
 type authLoginTestAegis struct {
@@ -202,7 +188,7 @@ func TestAuthLoginMFASetupVerifiesSignedPendingToken(t *testing.T) {
 	}
 }
 
-func TestBootstrapAegisUnlockBridgesLegacyAndGoState(t *testing.T) {
+func TestBootstrapAegisUnlockUpdatesGoState(t *testing.T) {
 	gate := &authLoginTestGate{state: map[string]any{"phase": bootstrapPhaseAegisUnlockRequired, "configured": true, "locked": true}}
 	aegis := &authLoginTestAegis{}
 	auth := newAuthLoginTestService(&authLoginTestStore{}, gate, aegis)
@@ -213,9 +199,6 @@ func TestBootstrapAegisUnlockBridgesLegacyAndGoState(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !gate.unlockCalled {
-		t.Fatal("expected legacy unlock bridge call")
 	}
 	if aegis.unlockedCipher != "test-cipher" {
 		t.Fatalf("expected Go Aegis unlock, got %q", aegis.unlockedCipher)

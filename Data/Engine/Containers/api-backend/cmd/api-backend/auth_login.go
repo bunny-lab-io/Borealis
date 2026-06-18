@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha512"
 	"database/sql"
@@ -21,11 +20,6 @@ const (
 
 type bootstrapStateReader interface {
 	bootstrapState(ctx context.Context) (map[string]any, error)
-}
-
-type bootstrapAegisLifecycle interface {
-	bootstrapAegisSetup(ctx context.Context, cipherText string) (map[string]any, int, error)
-	bootstrapAegisUnlock(ctx context.Context, cipherText string) (map[string]any, int, error)
 }
 
 type authLoginStore interface {
@@ -66,21 +60,21 @@ func bootstrapStateHandler(auth *authService) http.HandlerFunc {
 }
 
 func bootstrapAegisSetupHandler(auth *authService) http.HandlerFunc {
-	return bootstrapAegisLifecycleHandler(auth, bootstrapPhaseAegisSetupRequired, func(ctx context.Context, lifecycle bootstrapAegisLifecycle, cipherText string) (map[string]any, int, error) {
-		return lifecycle.bootstrapAegisSetup(ctx, cipherText)
+	return bootstrapAegisLifecycleHandler(auth, bootstrapPhaseAegisSetupRequired, func(ctx context.Context, cipherText string) (map[string]any, error) {
+		return auth.aegis.setupWithCipher(ctx, cipherText)
 	})
 }
 
 func bootstrapAegisUnlockHandler(auth *authService) http.HandlerFunc {
-	return bootstrapAegisLifecycleHandler(auth, bootstrapPhaseAegisUnlockRequired, func(ctx context.Context, lifecycle bootstrapAegisLifecycle, cipherText string) (map[string]any, int, error) {
-		return lifecycle.bootstrapAegisUnlock(ctx, cipherText)
+	return bootstrapAegisLifecycleHandler(auth, bootstrapPhaseAegisUnlockRequired, func(ctx context.Context, cipherText string) (map[string]any, error) {
+		return auth.aegis.unlockWithCipher(ctx, cipherText)
 	})
 }
 
 func bootstrapAegisLifecycleHandler(
 	auth *authService,
 	requiredPhase string,
-	call func(context.Context, bootstrapAegisLifecycle, string) (map[string]any, int, error),
+	call func(context.Context, string) (map[string]any, error),
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -115,35 +109,14 @@ func bootstrapAegisLifecycleHandler(
 			writeJSON(w, http.StatusConflict, payload)
 			return
 		}
-		lifecycle, ok := auth.bootstrapGate.(bootstrapAegisLifecycle)
-		if !ok || lifecycle == nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_lifecycle_unavailable"})
-			return
-		}
 		if auth.aegis == nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "aegis_store_unavailable"})
 			return
 		}
-		legacyPayload, status, err := call(ctx, lifecycle, cipherText)
+		_, err = call(ctx, cipherText)
 		if err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"error":   "aegis_lifecycle_unavailable",
-				"message": err.Error(),
-			})
-			return
-		}
-		if status < 200 || status > 299 {
-			if legacyPayload == nil {
-				legacyPayload = map[string]any{"error": "invalid_request"}
-			}
-			writeJSON(w, status, legacyPayload)
-			return
-		}
-		if _, err := auth.aegis.unlockWithCipher(ctx, cipherText); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]any{
-				"error":   "aegis_go_unlock_failed",
-				"message": err.Error(),
-			})
+			payload, status, _ := aegisErrorPayload(err)
+			writeJSON(w, status, payload)
 			return
 		}
 		nextState, err := currentBootstrapState(ctx, auth)
@@ -167,7 +140,7 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
 		}
-		raw, body, ok := readAuthJSONRaw(w, r)
+		_, body, ok := readAuthJSONRaw(w, r)
 		if !ok {
 			return
 		}
@@ -195,7 +168,7 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 		}
 		store, ok := auth.store.(authLoginStore)
 		if !ok || auth.aegis == nil {
-			proxyWithRawBody(w, r, fallback, raw)
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "auth_store_unavailable"})
 			return
 		}
 		row, found, err := store.loadLoginRow(ctx, username)
@@ -254,7 +227,7 @@ func authMFAVerifyHandler(auth *authService, fallback http.Handler) http.Handler
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
 		}
-		raw, body, ok := readAuthJSONRaw(w, r)
+		_, body, ok := readAuthJSONRaw(w, r)
 		if !ok {
 			return
 		}
@@ -280,7 +253,7 @@ func authMFAVerifyHandler(auth *authService, fallback http.Handler) http.Handler
 		}
 		pending, err := auth.verifier.signedPayload(pendingToken, mfaPendingMaxAge)
 		if err != nil {
-			proxyWithRawBody(w, r, fallback, raw)
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_session"})
 			return
 		}
 		if cleanText(pending["typ"]) != mfaPendingTokenType {
@@ -595,16 +568,6 @@ func readAuthJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string
 		body = map[string]any{}
 	}
 	return raw, body, true
-}
-
-func proxyWithRawBody(w http.ResponseWriter, r *http.Request, fallback http.Handler, raw []byte) {
-	if fallback == nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "legacy api-backend unavailable"})
-		return
-	}
-	r.Body = io.NopCloser(bytes.NewReader(raw))
-	r.ContentLength = int64(len(raw))
-	fallback.ServeHTTP(w, r)
 }
 
 func sha512Hex(value string) string {

@@ -282,7 +282,7 @@ func internalWorkflowStartHandler(auth *authService) http.HandlerFunc {
 		}
 		store, ok := auth.store.(workflowStore)
 		if !ok {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workflow_runtime_unavailable"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "workflow_store_unavailable"})
 			return
 		}
 		var body map[string]any

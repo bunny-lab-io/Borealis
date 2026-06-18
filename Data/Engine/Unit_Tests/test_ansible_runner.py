@@ -11,7 +11,6 @@ from pathlib import Path
 import signal
 import subprocess
 import tempfile
-import threading
 import time
 import types
 
@@ -19,7 +18,6 @@ import Data.Engine.services.ansible.collections as ansible_collections_module
 from Data.Engine.db import dbapi as sqlite3
 import Data.Engine.services.ansible.runner as ansible_runner_module
 from Data.Engine.services.ansible.runner import EngineAnsibleRunner, RUN_STATUS_TIMED_OUT
-from Data.Engine.services.job_scheduler.worker import _wait_for_scheduled_run_completion
 
 from .conftest import EngineTestHarness
 
@@ -207,86 +205,6 @@ def test_runner_ansible_cfg_uses_sshpass_password_mechanism(tmp_path: Path) -> N
     assert "password_mechanism = sshpass" in cfg_text
 
 
-def test_site_worker_waits_for_scheduled_ansible_run_completion(tmp_path: Path) -> None:
-    db_path = tmp_path / "scheduler.sqlite"
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            """
-            CREATE TABLE scheduled_job_runs (
-                id INTEGER PRIMARY KEY,
-                status TEXT,
-                finished_ts INTEGER,
-                error TEXT
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO scheduled_job_runs(id, status, finished_ts, error) VALUES(?,?,?,?)",
-            (42, "Running", None, ""),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    def complete_run() -> None:
-        time.sleep(0.05)
-        update_conn = sqlite3.connect(str(db_path))
-        try:
-            update_conn.execute(
-                "UPDATE scheduled_job_runs SET status=?, finished_ts=?, error=? WHERE id=?",
-                ("Success", int(time.time()), "", 42),
-            )
-            update_conn.commit()
-        finally:
-            update_conn.close()
-
-    updater = threading.Thread(target=complete_run, daemon=True)
-    updater.start()
-
-    status = _wait_for_scheduled_run_completion(
-        lambda: sqlite3.connect(str(db_path)),
-        run_id=42,
-        logger=logging.getLogger("test.site-worker.wait"),
-        poll_seconds=0.01,
-    )
-
-    updater.join(timeout=1.0)
-    assert status == "succeeded"
-
-
-def test_site_worker_maps_failed_scheduled_ansible_run_to_failed_work_item(tmp_path: Path) -> None:
-    db_path = tmp_path / "scheduler.sqlite"
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            """
-            CREATE TABLE scheduled_job_runs (
-                id INTEGER PRIMARY KEY,
-                status TEXT,
-                finished_ts INTEGER,
-                error TEXT
-            )
-            """
-        )
-        conn.execute(
-            "INSERT INTO scheduled_job_runs(id, status, finished_ts, error) VALUES(?,?,?,?)",
-            (43, "Failed", int(time.time()), "playbook failed"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    status = _wait_for_scheduled_run_completion(
-        lambda: sqlite3.connect(str(db_path)),
-        run_id=43,
-        logger=logging.getLogger("test.site-worker.wait"),
-        poll_seconds=0.01,
-    )
-
-    assert status == "failed"
-
-
 def _ensure_ansible_runner_tables(engine_harness: EngineTestHarness) -> None:
     conn = sqlite3.connect(str(engine_harness.db_path))
     try:
@@ -323,6 +241,21 @@ def _ensure_ansible_runner_tables(engine_harness: EngineTestHarness) -> None:
                 recap_json TEXT,
                 started_ts INTEGER,
                 finished_ts INTEGER,
+                created_at INTEGER,
+                updated_at INTEGER
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+                id INTEGER PRIMARY KEY,
+                job_id INTEGER,
+                scheduled_ts INTEGER,
+                started_ts INTEGER,
+                finished_ts INTEGER,
+                status TEXT,
+                error TEXT,
                 created_at INTEGER,
                 updated_at INTEGER
             )

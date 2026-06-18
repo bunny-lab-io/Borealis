@@ -400,6 +400,62 @@ func TestInternalWorkflowStartRouteUsesInternalToken(t *testing.T) {
 	}
 }
 
+func TestWorkflowAnsibleLocalTargetSpecsUseEngineInventory(t *testing.T) {
+	store := &postgresOperatorStore{}
+	specs, runtimeFiles, err := store.workflowAnsibleTargetSpecs(context.Background(), nil, "local", []map[string]any{{
+		"hostname": workflowEngineHost,
+		"site_id":  int64(7),
+	}}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeFiles) != 0 || len(specs) != 1 {
+		t.Fatalf("unexpected specs=%#v runtime=%#v", specs, runtimeFiles)
+	}
+	spec := specs[0].(map[string]any)
+	hostVars := spec["host_vars"].(map[string]any)
+	if spec["hostname"] != workflowEngineHost || spec["inventory_hostname"] != workflowEngineHost || spec["site_id"] != int64(7) || hostVars["ansible_connection"] != "local" {
+		t.Fatalf("unexpected local spec %#v", spec)
+	}
+}
+
+func TestWorkflowApplySSHCredentialHostVars(t *testing.T) {
+	hostVars := map[string]any{}
+	workflowApplySSHCredentialHostVars(hostVars, map[string]any{
+		"username":        "ops",
+		"password":        "secret",
+		"become_method":   "sudo",
+		"become_username": "root",
+		"become_password": "become-secret",
+	}, "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh")
+
+	if hostVars["ansible_user"] != "ops" || hostVars["ansible_password"] != "secret" || hostVars["ansible_ssh_password_mechanism"] != "sshpass" {
+		t.Fatalf("missing ssh auth vars %#v", hostVars)
+	}
+	if hostVars["ansible_ssh_private_key_file"] != "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh" || !strings.Contains(cleanText(hostVars["ansible_ssh_extra_args"]), "PreferredAuthentications") {
+		t.Fatalf("missing private-key vars %#v", hostVars)
+	}
+	if hostVars["ansible_become"] != true || hostVars["ansible_become_method"] != "sudo" || hostVars["ansible_become_user"] != "root" || hostVars["ansible_become_password"] != "become-secret" {
+		t.Fatalf("missing become vars %#v", hostVars)
+	}
+}
+
+func TestWorkflowValidateSubworkflowRejectsAncestor(t *testing.T) {
+	doc := map[string]any{
+		"nodes": []any{
+			map[string]any{"id": "trigger", "type": workflowNodeTriggerManual},
+			map[string]any{"id": "child", "type": workflowNodeExecuteWorkflow, "data": map[string]any{"workflow_guid": "parent-flow"}},
+		},
+		"edges": []any{
+			map[string]any{"source": "trigger", "target": "child", "sourceHandle": "action", "targetHandle": "trigger"},
+		},
+	}
+	errs := workflowValidateDocument("parent-flow", doc, "manual", map[string]any{"workflow_ancestry": []any{"root-flow"}})
+	if len(errs) == 0 || !strings.Contains(strings.Join(errs, "\n"), "ancestor workflow") {
+		t.Fatalf("expected ancestor validation error, got %#v", errs)
+	}
+}
+
 func TestWorkflowHandlersReportStoreErrors(t *testing.T) {
 	store := &fakeWorkflowStore{storeErr: errors.New("database offline")}
 	recorder := httptest.NewRecorder()

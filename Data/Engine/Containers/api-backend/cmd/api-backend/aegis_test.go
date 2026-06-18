@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 )
@@ -82,33 +81,5 @@ func TestAegisStatusHandlerProviderFailure(t *testing.T) {
 
 	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "aegis_status_unavailable") {
 		t.Fatalf("expected status failure, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-}
-
-func TestLegacyAegisStatusProviderUsesInternalToken(t *testing.T) {
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-	var gotToken string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/internal/aegis/status" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		gotToken = r.Header.Get(internalTokenHeader)
-		writeJSON(w, http.StatusOK, map[string]any{"configured": true, "locked": false})
-	}))
-	defer server.Close()
-	baseURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	payload, err := (&legacyAegisStatusProvider{baseURL: baseURL, auth: auth, client: server.Client()}).aegisStatus(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotToken != goInternalToken(auth.verifier.secret) {
-		t.Fatalf("unexpected internal token %q", gotToken)
-	}
-	if payload["configured"] != true || payload["locked"] != false {
-		t.Fatalf("unexpected payload %+v", payload)
 	}
 }

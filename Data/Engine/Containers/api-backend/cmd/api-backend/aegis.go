@@ -2,14 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
 )
 
 type aegisStatusProvider interface {
@@ -18,12 +13,6 @@ type aegisStatusProvider interface {
 
 type goAegisStatusProvider struct {
 	auth *authService
-}
-
-type legacyAegisStatusProvider struct {
-	baseURL *url.URL
-	auth    *authService
-	client  *http.Client
 }
 
 func registerAegisRoutes(mux *http.ServeMux, auth *authService) {
@@ -74,43 +63,6 @@ func (p *goAegisStatusProvider) aegisStatus(ctx context.Context) (map[string]any
 	return p.auth.aegis.status(ctx)
 }
 
-func (p *legacyAegisStatusProvider) aegisStatus(ctx context.Context) (map[string]any, error) {
-	if p == nil || p.baseURL == nil || p.auth == nil || p.auth.verifier == nil || len(p.auth.verifier.secret) == 0 {
-		return nil, errors.New("aegis status provider unavailable")
-	}
-	client := p.client
-	if client == nil {
-		client = &http.Client{Timeout: 3 * time.Second}
-	}
-	target := p.baseURL.ResolveReference(&url.URL{Path: "/api/internal/aegis/status"})
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set(internalTokenHeader, goInternalToken(p.auth.verifier.secret))
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 32<<10))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("legacy aegis status returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	return payload, nil
-}
-
 func aegisSetupHandler(auth *authService) http.HandlerFunc {
 	return aegisLifecyclePostHandler(auth, func(ctx context.Context, body map[string]any) (map[string]any, error) {
 		if auth == nil || auth.aegis == nil {
@@ -129,13 +81,6 @@ func aegisUnlockHandler(auth *authService) http.HandlerFunc {
 		if err != nil {
 			return nil, err
 		}
-		if gate, ok := auth.bootstrapGate.(*goBootstrapGate); ok && gate.legacyAegis != nil {
-			if legacyPayload, status, err := gate.legacyAegis.bootstrapAegisUnlock(ctx, cleanText(body["cipher"])); err != nil {
-				return nil, err
-			} else if status < 200 || status > 299 {
-				return legacyPayload, fmt.Errorf("%w: python Aegis unlock bridge returned HTTP %d", errAegisInvalidRequest, status)
-			}
-		}
 		return payload, nil
 	})
 }
@@ -149,13 +94,6 @@ func aegisRotateHandler(auth *authService) http.HandlerFunc {
 		payload, err := auth.aegis.rotateWithCipher(ctx, cleanText(body["current_cipher"]), newCipher)
 		if err != nil {
 			return nil, err
-		}
-		if gate, ok := auth.bootstrapGate.(*goBootstrapGate); ok && gate.legacyAegis != nil {
-			if legacyPayload, status, err := gate.legacyAegis.bootstrapAegisUnlock(ctx, newCipher); err != nil {
-				return nil, err
-			} else if status < 200 || status > 299 {
-				return legacyPayload, fmt.Errorf("%w: python Aegis unlock bridge returned HTTP %d", errAegisInvalidRequest, status)
-			}
 		}
 		return payload, nil
 	})

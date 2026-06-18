@@ -149,12 +149,12 @@ func (m *goDevModeManager) pruneLocked() {
 	}
 }
 
-func registerAssemblyRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler, legacyURL *url.URL) {
-	mux.HandleFunc("/api/assemblies", assembliesRootHandler(auth, fallback, legacyURL))
-	mux.HandleFunc("/api/assemblies/", assembliesSubtreeHandler(auth, fallback, legacyURL))
+func registerAssemblyRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
+	mux.HandleFunc("/api/assemblies", assembliesRootHandler(auth, fallback))
+	mux.HandleFunc("/api/assemblies/", assembliesSubtreeHandler(auth, fallback))
 }
 
-func assembliesRootHandler(auth *authService, fallback http.Handler, legacyURL *url.URL) http.HandlerFunc {
+func assembliesRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimRight(r.URL.Path, "/") != "/api/assemblies" {
 			fallback.ServeHTTP(w, r)
@@ -163,19 +163,19 @@ func assembliesRootHandler(auth *authService, fallback http.Handler, legacyURL *
 		switch r.Method {
 		case http.MethodGet:
 			if assemblyTruthy(r.URL.Query().Get("refresh_catalog")) || assemblyTruthy(r.URL.Query().Get("force_catalog_refresh")) {
-				assemblyCatalogRefresh(w, r, auth, legacyURL)
+				assemblyCatalogRefresh(w, r, auth)
 				return
 			}
 			assemblyList(w, r, auth)
 		case http.MethodPost:
-			assemblyCreate(w, r, auth, legacyURL)
+			assemblyCreate(w, r, auth)
 		default:
 			proxyFallbackOrMethodNotAllowed(w, r, fallback, strings.Join([]string{http.MethodGet, http.MethodPost}, ", "))
 		}
 	}
 }
 
-func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyURL *url.URL) http.HandlerFunc {
+func assembliesSubtreeHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		parts := assemblyPathParts(r.URL.Path)
 		if len(parts) == 2 && parts[0] == "dev-mode" && parts[1] == "switch" && r.Method == http.MethodPost {
@@ -183,11 +183,11 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 			return
 		}
 		if len(parts) == 2 && parts[0] == "dev-mode" && parts[1] == "write" && r.Method == http.MethodPost {
-			assemblyDevModeWrite(w, r, auth, legacyURL)
+			assemblyDevModeWrite(w, r, auth)
 			return
 		}
 		if len(parts) == 1 && parts[0] == "import" && r.Method == http.MethodPost {
-			assemblyImport(w, r, auth, legacyURL)
+			assemblyImport(w, r, auth)
 			return
 		}
 		if len(parts) == 2 && parts[0] == "official" && parts[1] == "update-all" {
@@ -195,7 +195,7 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 				writeMethodNotAllowed(w, http.MethodPost)
 				return
 			}
-			assemblyCatalogUpdateAll(w, r, auth, legacyURL)
+			assemblyCatalogUpdateAll(w, r, auth)
 			return
 		}
 		if len(parts) == 2 && parts[1] == "official-update" {
@@ -203,7 +203,7 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 				writeMethodNotAllowed(w, http.MethodPost)
 				return
 			}
-			assemblyCatalogUpdateOne(w, r, auth, legacyURL, parts[0])
+			assemblyCatalogUpdateOne(w, r, auth, parts[0])
 			return
 		}
 		if len(parts) == 2 && parts[1] == "export" && r.Method == http.MethodGet {
@@ -211,7 +211,7 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 			return
 		}
 		if len(parts) == 2 && parts[1] == "clone" && r.Method == http.MethodPost {
-			assemblyClone(w, r, auth, legacyURL, parts[0])
+			assemblyClone(w, r, auth, parts[0])
 			return
 		}
 		if len(parts) == 1 && parts[0] != "" {
@@ -219,9 +219,9 @@ func assembliesSubtreeHandler(auth *authService, fallback http.Handler, legacyUR
 			case http.MethodGet:
 				assemblyDetail(w, r, auth, parts[0])
 			case http.MethodPut:
-				assemblyUpdate(w, r, auth, legacyURL, parts[0])
+				assemblyUpdate(w, r, auth, parts[0])
 			case http.MethodDelete:
-				assemblyDelete(w, r, auth, legacyURL, parts[0])
+				assemblyDelete(w, r, auth, parts[0])
 			default:
 				proxyFallbackOrMethodNotAllowed(w, r, fallback, strings.Join([]string{http.MethodGet, http.MethodPut, http.MethodDelete}, ", "))
 			}
@@ -280,7 +280,7 @@ func assemblyDetail(w http.ResponseWriter, r *http.Request, auth *authService, a
 	writeJSON(w, http.StatusOK, item)
 }
 
-func assemblyCreate(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL) {
+func assemblyCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
 	profile, store, ok := assemblyRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -304,11 +304,10 @@ func assemblyCreate(w http.ResponseWriter, r *http.Request, auth *authService, l
 		writeJSON(w, statusOrDefault(status, http.StatusBadRequest), map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, statusOrDefault(status, http.StatusCreated), item)
 }
 
-func assemblyUpdate(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL, assemblyGUID string) {
+func assemblyUpdate(w http.ResponseWriter, r *http.Request, auth *authService, assemblyGUID string) {
 	profile, store, ok := assemblyRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -337,11 +336,10 @@ func assemblyUpdate(w http.ResponseWriter, r *http.Request, auth *authService, l
 		writeJSON(w, statusOrDefault(status, http.StatusBadRequest), map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, statusOrDefault(status, http.StatusOK), item)
 }
 
-func assemblyDelete(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL, assemblyGUID string) {
+func assemblyDelete(w http.ResponseWriter, r *http.Request, auth *authService, assemblyGUID string) {
 	profile, store, ok := assemblyRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -366,11 +364,10 @@ func assemblyDelete(w http.ResponseWriter, r *http.Request, auth *authService, l
 		writeJSON(w, statusOrDefault(status, http.StatusBadRequest), map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, statusOrDefault(status, http.StatusAccepted), payload)
 }
 
-func assemblyClone(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL, assemblyGUID string) {
+func assemblyClone(w http.ResponseWriter, r *http.Request, auth *authService, assemblyGUID string) {
 	profile, store, ok := assemblyRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -394,11 +391,10 @@ func assemblyClone(w http.ResponseWriter, r *http.Request, auth *authService, le
 		writeJSON(w, statusOrDefault(status, http.StatusBadRequest), map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, statusOrDefault(status, http.StatusCreated), item)
 }
 
-func assemblyImport(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL) {
+func assemblyImport(w http.ResponseWriter, r *http.Request, auth *authService) {
 	profile, store, ok := assemblyRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -422,7 +418,6 @@ func assemblyImport(w http.ResponseWriter, r *http.Request, auth *authService, l
 		writeJSON(w, statusOrDefault(status, http.StatusBadRequest), map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, statusOrDefault(status, http.StatusCreated), item)
 }
 
@@ -474,7 +469,7 @@ func assemblyDevModeSwitch(w http.ResponseWriter, r *http.Request, auth *authSer
 	writeJSON(w, http.StatusOK, map[string]any{"dev_mode": enabled})
 }
 
-func assemblyDevModeWrite(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL) {
+func assemblyDevModeWrite(w http.ResponseWriter, r *http.Request, auth *authService) {
 	profile, failure := requireAdmin(r.Context(), auth, r)
 	if failure != nil {
 		failure.write(w)
@@ -492,9 +487,6 @@ func assemblyDevModeWrite(w http.ResponseWriter, r *http.Request, auth *authServ
 		})
 		return
 	}
-	ctx, cancel := requestTimeout(r.Context(), auth)
-	defer cancel()
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "flush")
 	_ = profile
 	writeJSON(w, http.StatusOK, map[string]any{"status": "flushed"})
 }
@@ -570,33 +562,6 @@ func assemblyPathParts(pathText string) []string {
 		parts = append(parts, decoded)
 	}
 	return parts
-}
-
-func notifyLegacyAssemblyCache(ctx context.Context, auth *authService, legacyURL *url.URL, action string) error {
-	if auth == nil || auth.verifier == nil || legacyURL == nil {
-		return nil
-	}
-	path := "/api/internal/assemblies/cache/reload"
-	if action == "flush" {
-		path = "/api/internal/assemblies/cache/flush"
-	}
-	target := *legacyURL
-	target.Path = path
-	target.RawQuery = ""
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.String(), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("legacy assembly cache %s failed: %s", action, resp.Status)
-	}
-	return nil
 }
 
 func (s *postgresOperatorStore) listAssemblies(ctx context.Context, filter assemblyListFilter) ([]map[string]any, []map[string]any, error) {

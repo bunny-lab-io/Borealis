@@ -125,7 +125,7 @@ func testAssemblyAuth(store *fakeAssemblyStore) *authService {
 
 func assemblyTestMux(store *fakeAssemblyStore, fallback http.Handler) *http.ServeMux {
 	mux := http.NewServeMux()
-	registerAssemblyRoutes(mux, testAssemblyAuth(store), fallback, nil)
+	registerAssemblyRoutes(mux, testAssemblyAuth(store), fallback)
 	return mux
 }
 
@@ -283,7 +283,7 @@ func TestAssemblyCommunityImportAllowedAfterDevMode(t *testing.T) {
 	store := &fakeAssemblyStore{}
 	auth := testAssemblyAuth(store)
 	mux := http.NewServeMux()
-	registerAssemblyRoutes(mux, auth, http.NotFoundHandler(), nil)
+	registerAssemblyRoutes(mux, auth, http.NotFoundHandler())
 
 	enable := httptest.NewRecorder()
 	mux.ServeHTTP(enable, assemblyRequest(http.MethodPost, "/api/assemblies/dev-mode/switch", `{"enabled":true}`))

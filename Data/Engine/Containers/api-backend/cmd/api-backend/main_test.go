@@ -9,7 +9,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -957,12 +956,12 @@ func testAuthServiceWithStore(profile operatorProfile) (*authService, *fakeOpera
 }
 
 func TestSetEnvReplacesExistingValue(t *testing.T) {
-	env := setEnv([]string{"PATH=/bin", "BOREALIS_ENGINE_PORT=5000"}, "BOREALIS_ENGINE_PORT", "5001")
+	env := setEnv([]string{"PATH=/bin", "BOREALIS_ENGINE_PORT=5000"}, "BOREALIS_ENGINE_PORT", "5055")
 	got := strings.Join(env, "\n")
 	if strings.Count(got, "BOREALIS_ENGINE_PORT=") != 1 {
 		t.Fatalf("expected one BOREALIS_ENGINE_PORT entry, got %q", got)
 	}
-	if !strings.Contains(got, "BOREALIS_ENGINE_PORT=5001") {
+	if !strings.Contains(got, "BOREALIS_ENGINE_PORT=5055") {
 		t.Fatalf("expected replaced port, got %q", got)
 	}
 }
@@ -978,56 +977,19 @@ func TestEnvDurationSecondsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestHealthHandlerReportsHealthyLegacyBackend(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
-			t.Fatalf("unexpected legacy path %s", r.URL.Path)
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, HealthTimeout: time.Second}
-	state := &legacyState{}
-
+func TestHealthAndStatusHandlersReportGoBackend(t *testing.T) {
+	cfg := gatewayConfig{ListenHost: "127.0.0.1", ListenPort: "5000"}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/health", nil)
-	healthHandler(cfg, state).ServeHTTP(recorder, request)
+	healthHandler(cfg).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"backend":"go"`) || strings.Contains(recorder.Body.String(), "legacy") {
+		t.Fatalf("unexpected health response code=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if !state.snapshot().Healthy {
-		t.Fatalf("expected state marked healthy")
-	}
-}
 
-func TestHealthHandlerReportsUnhealthyLegacyBackend(t *testing.T) {
-	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer legacy.Close()
-
-	legacyURL, err := url.Parse(legacy.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg := gatewayConfig{LegacyURL: legacyURL, HealthTimeout: time.Second}
-	state := &legacyState{}
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/health", nil)
-	healthHandler(cfg, state).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if state.snapshot().Healthy {
-		t.Fatalf("expected state marked unhealthy")
+	statusRecorder := httptest.NewRecorder()
+	statusHandler(cfg).ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/api/system/go-backend/status", nil))
+	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), `"status":"running"`) || strings.Contains(statusRecorder.Body.String(), "legacy") {
+		t.Fatalf("unexpected status response code=%d body=%s", statusRecorder.Code, statusRecorder.Body.String())
 	}
 }
 

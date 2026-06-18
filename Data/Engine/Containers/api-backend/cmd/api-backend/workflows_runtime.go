@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,6 +130,7 @@ func (s *postgresOperatorStore) startWorkflowRun(ctx context.Context, req workfl
 	if sourceMetadata == nil {
 		sourceMetadata = map[string]any{}
 	}
+	sourceMetadata["workflow_guid"] = req.WorkflowGUID
 	now := time.Now().Unix()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -810,9 +813,7 @@ func (s *postgresOperatorStore) executeWorkflowNode(ctx context.Context, auth *a
 	case workflowNodeExecuteAssembly:
 		return s.executeWorkflowAssembly(ctx, auth, runID, nodeRunID, node, input, profile)
 	case workflowNodeExecuteWorkflow:
-		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "subworkflow_runtime_pending_go_port"}, map[string]any{})
-		_ = s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Execute Subworkflow nodes will be enabled after scheduler runtime port completes.", nil)
-		return output, nil
+		return s.executeWorkflowSubworkflow(ctx, auth, runID, nodeRunID, node, input, sourceMetadata, profile)
 	default:
 		return nil, fmt.Errorf("Unsupported executable node type '%s'.", cleanText(node["type"]))
 	}
@@ -882,8 +883,7 @@ func (s *postgresOperatorStore) executeWorkflowAssembly(ctx context.Context, aut
 		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Workflow assemblies must be executed with Execute Subworkflow nodes.", nil)
 	}
 	if strings.EqualFold(cleanText(item["assembly_type"]), "ansible") || strings.EqualFold(cleanText(item["assembly_subtype"]), "ansible") {
-		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "ansible_runtime_pending_go_port"}, map[string]any{})
-		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Workflow Ansible node execution will be enabled after scheduler runtime port completes.", nil)
+		return s.executeWorkflowAnsibleAssembly(ctx, auth, runID, nodeRunID, node, input, item, profile, assemblyGUID)
 	}
 	targets := workflowExtractTargetsFromInput(input)
 	if len(targets) == 0 {
@@ -937,6 +937,211 @@ func (s *postgresOperatorStore) executeWorkflowAssembly(ctx context.Context, aut
 	jobOutput := workflowBuildJobOutput(waited, targets, skipped)
 	output := workflowOutput(status, map[string]any{"results": waited, "job_output": jobOutput}, map[string]any{"skipped_targets": skipped, "execution_mode": runMode, "requested_targets": targets}, map[string]any{"activity_ids": workflowActivityIDs(waited)})
 	return output, s.finalizeWorkflowNode(ctx, nodeRunID, status, input, output, nil, "", map[string]any{"count": len(waited), "status": status})
+}
+
+func (s *postgresOperatorStore) executeWorkflowAnsibleAssembly(ctx context.Context, auth *authService, runID int64, nodeRunID int64, node map[string]any, input map[string]any, item map[string]any, profile operatorProfile, assemblyGUID string) (map[string]any, error) {
+	transport := normalizeScheduledAnsibleTransport(workflowNodeExecutionMode(node))
+	if !stringInSet(transport, "local", "ssh", "winrm") {
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "unsupported_ansible_execution_mode"}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Ansible workflow nodes require execution mode local, ssh, or winrm.", nil)
+	}
+	payload := quickRunPayloadMap(item)
+	if payload == nil {
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "assembly_payload_unavailable"}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Selected Ansible assembly payload could not be loaded.", nil)
+	}
+	relPath := firstText(scheduledAnsibleRelPath(quickRunItemPath(item)), "Ansible_Playbooks/workflow-node-playbook.yml")
+	doc := quickRunLoadAssemblyDocument(relPath, "ansible", payload)
+	targets := workflowExtractTargetsFromInput(input)
+	if len(targets) == 0 {
+		targets = workflowNodeTargetDefinitionTargets(node)
+	}
+	devices, err := s.listDevices(ctx, profile, deviceListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	targets = workflowResolveDeviceEntries(targets, devices)
+	active, skipped := workflowClassifyTargets(targets, transport)
+	if transport != "local" && len(active) == 0 {
+		status := workflowStatusWarning
+		output := workflowOutput(status, map[string]any{"results": []any{}, "job_output": workflowBuildJobOutput(nil, targets, skipped)}, map[string]any{"reason": "no_active_targets", "skipped_targets": skipped, "execution_mode": transport}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, status, input, output, nil, "", map[string]any{"count": 0, "status": status})
+	}
+
+	data := mapStringAny(node["data"])
+	credentialID := coerceInt64Ptr(firstNonEmptyAny(data["credential_id"], data["credentialId"]))
+	useServiceAccount := boolFromAny(firstNonEmptyAny(data["use_service_account"], data["useServiceAccount"]))
+	targetSpecs, runtimeFiles, err := s.workflowAnsibleTargetSpecs(ctx, auth, transport, active, credentialID, useServiceAccount)
+	if err != nil {
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "ansible_target_resolution_failed"}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, err.Error(), nil)
+	}
+
+	friendlyName := firstText(cleanText(doc["name"]), cleanText(item["display_name"]), cleanText(item["name"]), "Workflow Playbook")
+	metadata := map[string]any{
+		"assembly_source":  "workflow_run",
+		"workflow_run_id":  runID,
+		"workflow_node_id": cleanText(node["id"]),
+		"component_kind":   "ansible",
+		"component_name":   friendlyName,
+		"assembly_guid":    assemblyGUID,
+	}
+	activityID, err := s.insertQuickRunActivity(ctx, workflowEngineHost, relPath, friendlyName, "ansible", workflowStatusRunning, metadata)
+	if err != nil {
+		return nil, err
+	}
+	childJobID, err := s.createWorkflowChildJob(ctx, workflowChildJobInsert{
+		WorkflowRunID:     runID,
+		WorkflowNodeRunID: nodeRunID,
+		ChildKind:         "ansible",
+		ChildIdentifier:   strconv.FormatInt(activityID, 10),
+		ActivityID:        activityID,
+		TargetHostname:    workflowEngineHost,
+		ComponentGUID:     assemblyGUID,
+		ComponentName:     friendlyName,
+		ComponentKind:     "ansible",
+		Status:            workflowStatusRunning,
+		Payload:           map[string]any{"execution_mode": transport},
+	})
+	if err != nil {
+		_ = s.markQuickRunActivityFailed(ctx, activityID, err.Error())
+		return nil, err
+	}
+
+	route, err := s.watchdogAnsibleRoute(ctx, int64PtrOrNil(workflowAnsibleRouteSiteID(targetSpecs)))
+	if err != nil {
+		_ = s.markQuickRunActivityFailed(ctx, activityID, err.Error())
+		_ = s.updateWorkflowChildJob(ctx, childJobID, workflowChildJobUpdate{Status: workflowStatusFailed, StderrSummary: err.Error(), Payload: map[string]any{"error": err.Error()}})
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "site_worker_unavailable"}, map[string]any{"activity_id": activityID})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, err.Error(), map[string]any{"count": 1, "status": workflowStatusFailed})
+	}
+	queueRun := map[string]any{
+		"hostname":              workflowEngineHost,
+		"playbook_rel_path":     relPath,
+		"playbook_name":         friendlyName,
+		"playbook_content":      strings.ReplaceAll(cleanText(doc["script"]), "\r\n", "\n"),
+		"credential_id":         nullableScheduledCredentialID(credentialID),
+		"variable_values":       workflowVariableOverrides(node),
+		"payload_files":         quickRunFiles(doc["files"]),
+		"target_specifications": targetSpecs,
+		"runtime_files":         runtimeFiles,
+		"source":                "workflow_run",
+		"activity_id":           activityID,
+		"workflow_run_id":       runID,
+		"workflow_node_run_id":  nodeRunID,
+		"connection":            transport,
+	}
+	response, errPayload := postWatchdogWorkerJSON(ctx, auth, route, "/automation/ansible/run", map[string]any{"queue_run": queueRun}, 10*time.Second)
+	if errPayload != nil {
+		message := firstText(cleanText(errPayload["message"]), cleanText(errPayload["error"]), "Ansible playbook dispatch failed.")
+		_ = s.markQuickRunActivityFailed(ctx, activityID, message)
+		_ = s.updateWorkflowChildJob(ctx, childJobID, workflowChildJobUpdate{Status: workflowStatusFailed, StderrSummary: message, Payload: errPayload})
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "ansible_dispatch_failed"}, map[string]any{"activity_id": activityID})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, message, map[string]any{"count": 1, "status": workflowStatusFailed})
+	}
+	if cleanText(response["run_id"]) == "" {
+		message := "Site-worker did not return an Ansible run id."
+		_ = s.markQuickRunActivityFailed(ctx, activityID, message)
+		_ = s.updateWorkflowChildJob(ctx, childJobID, workflowChildJobUpdate{Status: workflowStatusFailed, StderrSummary: message, Payload: response})
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "ansible_dispatch_failed"}, map[string]any{"activity_id": activityID})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, message, map[string]any{"count": 1, "status": workflowStatusFailed})
+	}
+
+	results := s.waitForWorkflowActivities(ctx, []map[string]any{{"child_job_id": childJobID, "hostname": workflowEngineHost, "activity_id": activityID, "status": workflowStatusRunning}}, workflowNodeTimeoutSeconds(node, doc))
+	if len(results) == 0 {
+		results = []map[string]any{{"hostname": workflowEngineHost, "activity_id": activityID, "status": workflowStatusFailed, "stdout": "", "stderr": "Ansible execution returned no result."}}
+	}
+	result := results[0]
+	_ = s.updateWorkflowChildJob(ctx, childJobID, workflowChildJobUpdate{
+		Status:        workflowNormalizeStatus(result["status"]),
+		StdoutSummary: cleanText(result["stdout"]),
+		StderrSummary: cleanText(firstNonEmptyAny(result["stderr"], result["error"])),
+		Payload:       result,
+	})
+	status := workflowRollupResults(results, skipped)
+	output := workflowOutput(status, map[string]any{"results": results, "job_output": workflowBuildJobOutput(results, targets, skipped)}, map[string]any{"skipped_targets": skipped, "execution_mode": transport}, map[string]any{"activity_id": activityID})
+	return output, s.finalizeWorkflowNode(ctx, nodeRunID, status, input, output, nil, "", map[string]any{"count": 1, "status": status})
+}
+
+func (s *postgresOperatorStore) executeWorkflowSubworkflow(ctx context.Context, auth *authService, runID int64, nodeRunID int64, node map[string]any, input map[string]any, sourceMetadata map[string]any, profile operatorProfile) (map[string]any, error) {
+	data := mapStringAny(node["data"])
+	workflowGUID := assemblyCoerceGUID(firstNonEmptyAny(data["workflow_guid"], data["workflowGuid"]))
+	if workflowGUID == "" {
+		output := workflowOutput(workflowStatusFailed, nil, map[string]any{"reason": "missing_workflow_guid"}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, workflowStatusFailed, input, output, nil, "Execute Subworkflow node is missing a selected workflow.", nil)
+	}
+	ancestry := workflowStringList(sourceMetadata["workflow_ancestry"])
+	parentGUID := assemblyCoerceGUID(sourceMetadata["workflow_guid"])
+	if parentGUID != "" {
+		ancestry = append(ancestry, parentGUID)
+	}
+	nextMetadata := copyMap(sourceMetadata)
+	nextMetadata["workflow_ancestry"] = ancestry
+	nextMetadata["parent_workflow_run_id"] = runID
+	nextMetadata["parent_node_id"] = cleanText(node["id"])
+	result, statusCode, err := s.startWorkflowRun(ctx, workflowStartRequest{
+		WorkflowGUID:   workflowGUID,
+		SourceType:     "subworkflow",
+		SourceMetadata: nextMetadata,
+		CreatedBy:      firstText(cleanText(sourceMetadata["created_by"]), workflowCreatedBy(profile)),
+		ExecuteAsync:   true,
+		RunnerProfile:  profile,
+		Auth:           auth,
+	})
+	if err != nil {
+		status := workflowStatusFailed
+		output := workflowOutput(status, nil, map[string]any{"reason": "subworkflow_start_failed", "status_code": statusCode}, map[string]any{})
+		return output, s.finalizeWorkflowNode(ctx, nodeRunID, status, input, output, nil, err.Error(), nil)
+	}
+	childRun := mapStringAny(result.Payload["run"])
+	childRunID := coerceInt64(childRun["id"])
+	childStatus := workflowNormalizeStatus(childRun["status"])
+	childJobID, err := s.createWorkflowChildJob(ctx, workflowChildJobInsert{
+		WorkflowRunID:      runID,
+		WorkflowNodeRunID:  nodeRunID,
+		ChildKind:          "workflow",
+		ChildIdentifier:    strconv.FormatInt(childRunID, 10),
+		ChildWorkflowRunID: childRunID,
+		ComponentGUID:      workflowGUID,
+		ComponentName:      firstText(cleanText(childRun["workflow_name"]), workflowGUID),
+		ComponentKind:      "workflow",
+		Status:             childStatus,
+		Payload:            map[string]any{"workflow_guid": workflowGUID},
+	})
+	if err != nil {
+		return nil, err
+	}
+	timeoutSeconds := workflowNodeTimeoutSeconds(node, nil)
+	if result.ShouldExecute && childRunID > 0 {
+		childCtx := ctx
+		cancel := func() {}
+		if timeoutSeconds > 0 {
+			childCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+		}
+		runErr := s.executeWorkflowRun(childCtx, auth, childRunID, profile)
+		cancel()
+		if runErr != nil {
+			if errors.Is(childCtx.Err(), context.DeadlineExceeded) {
+				s.markWorkflowRunTimedOut(context.Background(), childRunID, "Child workflow run timed out.")
+			} else {
+				s.failWorkflowRun(context.Background(), childRunID, runErr.Error())
+			}
+		}
+	}
+	childResult := s.waitForWorkflowRun(ctx, childRunID, timeoutSeconds)
+	_ = s.updateWorkflowChildJob(ctx, childJobID, workflowChildJobUpdate{Status: workflowNormalizeStatus(childResult["status"]), Payload: childResult})
+	finalPayload := mapStringAny(childResult["final_payload"])
+	finalData := mapStringAny(finalPayload["data"])
+	exports := mapStringAny(finalData["exports"])
+	jobOutput := workflowMapList(finalData["job_output"])
+	childStatus = workflowNormalizeStatus(childResult["status"])
+	output := workflowOutput(childStatus, map[string]any{
+		"workflow_run_id": childRunID,
+		"final_payload":   finalPayload,
+		"exports":         exports,
+		"job_output":      jobOutput,
+	}, map[string]any{"workflow_guid": workflowGUID}, map[string]any{"child_workflow_run_id": childRunID})
+	return output, s.finalizeWorkflowNode(ctx, nodeRunID, childStatus, input, output, nil, cleanText(childResult["error"]), map[string]any{"child_workflow_run_id": childRunID, "status": childStatus})
 }
 
 func (s *postgresOperatorStore) createWorkflowNodeRuns(ctx context.Context, runID int64, nodes []map[string]any) (map[string]int64, error) {
@@ -1042,6 +1247,390 @@ func (s *postgresOperatorStore) withWorkflowConn(ctx context.Context, fn func(*s
 	}
 	defer conn.Close()
 	return fn(conn)
+}
+
+type workflowChildJobInsert struct {
+	WorkflowRunID      int64
+	WorkflowNodeRunID  int64
+	ChildKind          string
+	ChildIdentifier    string
+	ActivityID         int64
+	ChildWorkflowRunID int64
+	TargetHostname     string
+	ComponentGUID      string
+	ComponentName      string
+	ComponentKind      string
+	Status             string
+	Payload            map[string]any
+}
+
+type workflowChildJobUpdate struct {
+	Status        string
+	StdoutSummary string
+	StderrSummary string
+	Payload       map[string]any
+}
+
+func (s *postgresOperatorStore) createWorkflowChildJob(ctx context.Context, req workflowChildJobInsert) (int64, error) {
+	now := time.Now().Unix()
+	payloadJSON, _ := json.Marshal(req.Payload)
+	var activityID any
+	if req.ActivityID > 0 {
+		activityID = req.ActivityID
+	}
+	var childRunID any
+	if req.ChildWorkflowRunID > 0 {
+		childRunID = req.ChildWorkflowRunID
+	}
+	var childJobID int64
+	err := s.withWorkflowConn(ctx, func(conn *sql.Conn) error {
+		return conn.QueryRowContext(ctx, `
+			INSERT INTO engine.workflow_child_jobs(
+				workflow_run_id, workflow_node_run_id, child_kind, child_identifier,
+				activity_id, child_workflow_run_id, target_hostname, component_guid,
+				component_name, component_kind, status, stdout_summary, stderr_summary,
+				payload_json, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'','',$12,$13,$14)
+			RETURNING id
+		`, req.WorkflowRunID, req.WorkflowNodeRunID, cleanText(req.ChildKind), nullableCleanString(req.ChildIdentifier), activityID, childRunID, nullableCleanString(req.TargetHostname), nullableCleanString(req.ComponentGUID), nullableCleanString(req.ComponentName), nullableCleanString(req.ComponentKind), workflowNormalizeStatus(req.Status), string(payloadJSON), now, now).Scan(&childJobID)
+	})
+	return childJobID, err
+}
+
+func (s *postgresOperatorStore) updateWorkflowChildJob(ctx context.Context, childJobID int64, req workflowChildJobUpdate) error {
+	if childJobID <= 0 {
+		return nil
+	}
+	now := time.Now().Unix()
+	fields := map[string]any{
+		"status":     workflowNormalizeStatus(req.Status),
+		"updated_at": now,
+	}
+	if req.StdoutSummary != "" {
+		fields["stdout_summary"] = truncateString(req.StdoutSummary, 2048)
+	}
+	if req.StderrSummary != "" {
+		fields["stderr_summary"] = truncateString(req.StderrSummary, 2048)
+	}
+	if req.Payload != nil {
+		payloadJSON, _ := json.Marshal(req.Payload)
+		fields["payload_json"] = string(payloadJSON)
+	}
+	return s.withWorkflowConn(ctx, func(conn *sql.Conn) error {
+		sets := make([]string, 0, len(fields))
+		args := make([]any, 0, len(fields)+1)
+		keys := make([]string, 0, len(fields))
+		for key := range fields {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			args = append(args, fields[key])
+			sets = append(sets, key+"=$"+strconv.Itoa(len(args)))
+		}
+		args = append(args, childJobID)
+		_, err := conn.ExecContext(ctx, "UPDATE engine.workflow_child_jobs SET "+strings.Join(sets, ", ")+" WHERE id=$"+strconv.Itoa(len(args)), args...)
+		return err
+	})
+}
+
+func (s *postgresOperatorStore) waitForWorkflowRun(ctx context.Context, runID int64, timeoutSeconds int64) map[string]any {
+	if runID <= 0 {
+		return map[string]any{"id": runID, "status": workflowStatusFailed, "error": "Child workflow run was not created."}
+	}
+	deadline := time.Time{}
+	if timeoutSeconds > 0 {
+		deadline = time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+	}
+	for {
+		run, found, err := s.getWorkflowRun(ctx, runID)
+		if err != nil {
+			return map[string]any{"id": runID, "status": workflowStatusFailed, "error": err.Error()}
+		}
+		if !found {
+			return map[string]any{"id": runID, "status": workflowStatusFailed, "error": "Child workflow run was not found."}
+		}
+		if workflowTerminal(cleanText(run["status"])) {
+			return run
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			s.markWorkflowRunTimedOut(ctx, runID, "Child workflow run timed out.")
+			updated, found, _ := s.getWorkflowRun(ctx, runID)
+			if found {
+				return updated
+			}
+			return map[string]any{"id": runID, "status": workflowStatusTimedOut, "error": "Child workflow run timed out."}
+		}
+		time.Sleep(workflowPollInterval)
+	}
+}
+
+func (s *postgresOperatorStore) markWorkflowRunTimedOut(ctx context.Context, runID int64, message string) {
+	now := time.Now().Unix()
+	finalPayload := workflowOutput(workflowStatusTimedOut, nil, map[string]any{"reason": "child_workflow_timeout"}, map[string]any{})
+	raw, _ := json.Marshal(finalPayload)
+	_ = s.updateWorkflowRun(ctx, runID, map[string]any{
+		"status":             workflowStatusTimedOut,
+		"error":              message,
+		"final_payload_json": string(raw),
+		"finished_ts":        now,
+		"updated_at":         now,
+	})
+}
+
+func (s *postgresOperatorStore) workflowAnsibleTargetSpecs(ctx context.Context, auth *authService, transport string, activeTargets []map[string]any, credentialID *int64, useServiceAccount bool) ([]any, []any, error) {
+	if transport == "local" {
+		siteID := workflowSingleSiteID(activeTargets)
+		return []any{map[string]any{
+			"hostname":           workflowEngineHost,
+			"inventory_hostname": workflowEngineHost,
+			"site_group":         "site_local",
+			"site_id":            siteID,
+			"host_vars":          map[string]any{"ansible_connection": "local"},
+		}}, []any{}, nil
+	}
+	var credential map[string]any
+	if credentialID != nil {
+		if auth == nil || auth.aegis == nil {
+			return nil, nil, errAegisLocked
+		}
+		loaded, found, err := s.loadDecryptedSchedulerCredential(ctx, auth.aegis, *credentialID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !found {
+			return nil, nil, errors.New("Selected credential was not found.")
+		}
+		credential = loaded
+		if connectionType := strings.ToLower(cleanText(credential["connection_type"])); connectionType != "" && connectionType != transport {
+			return nil, nil, errors.New("Selected credential does not match the execution context.")
+		}
+	}
+	privateKeyPath := ""
+	runtimeFiles := []any{}
+	if transport == "ssh" && credential != nil {
+		privateKey := workflowNormalizePrivateKey(cleanText(credential["private_key"]))
+		passphrase := cleanText(credential["private_key_passphrase"])
+		password := cleanText(credential["password"])
+		if privateKey != "" && passphrase != "" && password == "" {
+			return nil, nil, errors.New("Passphrase-protected SSH private keys require a credential password for workflow Ansible runs.")
+		}
+		if privateKey != "" && passphrase == "" {
+			privateKeyPath = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
+			runtimeFiles = append(runtimeFiles, map[string]any{"relative_path": "auth/id_borealis_ssh", "content": privateKey, "mode": 384})
+		}
+	}
+
+	agentIDs := []any{}
+	requiredPorts := []any{}
+	targetPorts := map[string]int{}
+	for _, target := range activeTargets {
+		agentID := cleanText(target["agent_id"])
+		if agentID == "" {
+			continue
+		}
+		port := scheduledEndpointPort(cleanText(target["connection_endpoint"]))
+		if port <= 0 {
+			if transport == "winrm" {
+				port = 5985
+			} else {
+				port = 22
+			}
+		}
+		agentIDs = append(agentIDs, agentID)
+		requiredPorts = append(requiredPorts, port)
+		targetPorts[agentID] = port
+	}
+	vpnPayload, err := workflowInternalJSON(ctx, auth, http.MethodPost, "/api/internal/job-scheduler/vpn-prepare", map[string]any{
+		"agent_ids":             agentIDs,
+		"required_ports":        requiredPorts,
+		"reason":                "workflow_ansible",
+		"timeout_seconds":       45,
+		"poll_interval_seconds": 0.5,
+	}, 60*time.Second)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessions := schedulerAnyMap(vpnPayload["sessions"])
+	specs := []any{}
+	for _, target := range activeTargets {
+		hostname := cleanText(target["hostname"])
+		agentID := cleanText(target["agent_id"])
+		if hostname == "" || agentID == "" {
+			continue
+		}
+		session := schedulerAnyMap(sessions[agentID])
+		peerIP := strings.Split(cleanText(session["virtual_ip"]), "/")[0]
+		if peerIP == "" || !boolFromAny(session["dispatch_ready"]) {
+			return nil, nil, fmt.Errorf("WireGuard connectivity is unavailable for '%s'.", hostname)
+		}
+		port := targetPorts[agentID]
+		hostVars := map[string]any{
+			"ansible_host":       peerIP,
+			"ansible_connection": transport,
+		}
+		if port > 0 {
+			hostVars["ansible_port"] = port
+		}
+		if transport == "ssh" {
+			hostVars["ansible_ssh_retries"] = envInt("BOREALIS_SHARED_ANSIBLE_SSH_RETRIES", 3, 1, 20)
+			hostVars["ansible_ssh_timeout"] = envInt("BOREALIS_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS", 10, 1, 120)
+			hostVars["ansible_ssh_transfer_method"] = firstText(cleanText(os.Getenv("BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD")), "sftp")
+			workflowApplySSHCredentialHostVars(hostVars, credential, privateKeyPath)
+		} else {
+			username := ""
+			password := ""
+			winRMTransport := "ntlm"
+			if useServiceAccount {
+				account, found, err := s.loadSchedulerServiceAccount(ctx, agentID)
+				if err != nil {
+					return nil, nil, err
+				}
+				if found {
+					username = cleanText(account["username"])
+					password = cleanText(account["password"])
+				}
+			} else if credential != nil {
+				username = cleanText(credential["username"])
+				password = cleanText(credential["password"])
+				metadata := schedulerAnyMap(credential["metadata"])
+				winRMTransport = firstText(cleanText(metadata["winrm_transport"]), "ntlm")
+			}
+			if username == "" || password == "" {
+				return nil, nil, fmt.Errorf("WinRM workflow nodes require a credential with username and password for '%s'.", hostname)
+			}
+			hostVars["ansible_user"] = username
+			hostVars["ansible_password"] = password
+			hostVars["ansible_winrm_transport"] = winRMTransport
+			hostVars["ansible_winrm_server_cert_validation"] = "ignore"
+		}
+		siteID := coerceInt64(target["site_id"])
+		siteName := cleanText(target["site_name"])
+		specs = append(specs, map[string]any{
+			"hostname":           hostname,
+			"inventory_hostname": firstText(cleanText(target["inventory_hostname"]), scheduledSafeInventoryLabel(hostname, "host")),
+			"site_group":         scheduledSiteGroupName(siteName, siteID),
+			"site_id":            siteID,
+			"host_vars":          hostVars,
+		})
+	}
+	if len(specs) == 0 {
+		return nil, nil, errors.New("No eligible Ansible targets were available for this workflow node.")
+	}
+	return specs, runtimeFiles, nil
+}
+
+func workflowInternalJSON(ctx context.Context, auth *authService, method string, path string, body map[string]any, timeout time.Duration) (map[string]any, error) {
+	if auth == nil || auth.verifier == nil || len(auth.verifier.secret) == 0 {
+		return nil, errors.New("internal API token unavailable")
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = strings.NewReader(string(raw))
+	}
+	target := strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/") + path
+	req, err := http.NewRequestWithContext(requestCtx, method, target, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var payload map[string]any
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&payload)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if resp.StatusCode >= 400 {
+		return payload, fmt.Errorf("internal API %s returned %d: %s", path, resp.StatusCode, firstText(cleanText(payload["message"]), cleanText(payload["error"])))
+	}
+	return payload, nil
+}
+
+func workflowSingleSiteID(targets []map[string]any) int64 {
+	siteID := int64(0)
+	for _, target := range targets {
+		current := coerceInt64(target["site_id"])
+		if current <= 0 {
+			continue
+		}
+		if siteID == 0 {
+			siteID = current
+			continue
+		}
+		if siteID != current {
+			return 0
+		}
+	}
+	return siteID
+}
+
+func workflowAnsibleRouteSiteID(specs []any) int64 {
+	for _, raw := range specs {
+		spec := schedulerAnyMap(raw)
+		if siteID := coerceInt64(spec["site_id"]); siteID > 0 {
+			return siteID
+		}
+	}
+	return 0
+}
+
+func workflowNormalizePrivateKey(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	if value != "" && !strings.HasSuffix(value, "\n") {
+		value += "\n"
+	}
+	return value
+}
+
+func workflowApplySSHCredentialHostVars(hostVars map[string]any, credential map[string]any, privateKeyPath string) {
+	if credential == nil {
+		return
+	}
+	if username := cleanText(credential["username"]); username != "" {
+		hostVars["ansible_user"] = username
+	}
+	if password := cleanText(credential["password"]); password != "" {
+		hostVars["ansible_password"] = password
+		hostVars["ansible_ssh_password_mechanism"] = "sshpass"
+	}
+	if privateKeyPath != "" {
+		hostVars["ansible_ssh_private_key_file"] = privateKeyPath
+		existing := cleanText(hostVars["ansible_ssh_extra_args"])
+		addition := "-o IdentitiesOnly=yes -o PreferredAuthentications=publickey,password,keyboard-interactive -o PubkeyAuthentication=yes -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=yes"
+		if existing == "" {
+			hostVars["ansible_ssh_extra_args"] = addition
+		} else if !strings.Contains(existing, addition) {
+			hostVars["ansible_ssh_extra_args"] = existing + " " + addition
+		}
+	}
+	if become := cleanText(credential["become_method"]); become != "" {
+		hostVars["ansible_become"] = true
+		hostVars["ansible_become_method"] = become
+		if username := cleanText(credential["become_username"]); username != "" {
+			hostVars["ansible_become_user"] = username
+		}
+		if password := cleanText(credential["become_password"]); password != "" {
+			hostVars["ansible_become_password"] = password
+		}
+	}
 }
 
 func workflowMapList(value any) []map[string]any {

@@ -121,11 +121,6 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 	if pgStore, ok := store.(*postgresOperatorStore); ok {
 		aegis = newGoAegisService(pgStore.db, []byte(secret))
 	}
-	legacyAegis := &legacyBootstrapGate{
-		baseURL: cfg.LegacyURL,
-		secret:  []byte(secret),
-		client:  &http.Client{Timeout: cfg.AuthTimeout},
-	}
 
 	return &authService{
 		verifier: &tokenVerifier{
@@ -135,9 +130,8 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 		},
 		store: store,
 		bootstrapGate: &goBootstrapGate{
-			store:       store,
-			aegis:       aegis,
-			legacyAegis: legacyAegis,
+			store: store,
+			aegis: aegis,
 		},
 		aegis:   aegis,
 		devMode: newGoDevModeManager(),

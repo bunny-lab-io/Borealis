@@ -101,7 +101,7 @@ type officialCatalogService struct {
 	now   func() time.Time
 }
 
-func assemblyCatalogRefresh(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL) {
+func assemblyCatalogRefresh(w http.ResponseWriter, r *http.Request, auth *authService) {
 	_, store, ok := assemblyCatalogRequestContext(w, r, auth)
 	if !ok {
 		return
@@ -111,9 +111,6 @@ func assemblyCatalogRefresh(w http.ResponseWriter, r *http.Request, auth *authSe
 	service := newOfficialCatalogService(auth, store)
 	manifest := service.activeManifest(ctx, true, true, true)
 	cleanup := service.cleanupDeleted(ctx, manifest)
-	if catalogIntFromAny(cleanup["deleted_count"]) > 0 || catalogIntFromAny(cleanup["state_pruned_count"]) > 0 {
-		_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
-	}
 	filter := assemblyListFilter{
 		Domain:       assemblyNormalizeDomain(r.URL.Query().Get("domain")),
 		AssemblyType: strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type"))),
@@ -135,7 +132,7 @@ func assemblyCatalogRefresh(w http.ResponseWriter, r *http.Request, auth *authSe
 	})
 }
 
-func assemblyCatalogUpdateOne(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL, assemblyGUID string) {
+func assemblyCatalogUpdateOne(w http.ResponseWriter, r *http.Request, auth *authService, assemblyGUID string) {
 	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
 		failure.write(w)
 		return
@@ -153,11 +150,10 @@ func assemblyCatalogUpdateOne(w http.ResponseWriter, r *http.Request, auth *auth
 		writeJSON(w, status, map[string]any{"error": err.Error()})
 		return
 	}
-	_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
 	writeJSON(w, http.StatusOK, item)
 }
 
-func assemblyCatalogUpdateAll(w http.ResponseWriter, r *http.Request, auth *authService, legacyURL *url.URL) {
+func assemblyCatalogUpdateAll(w http.ResponseWriter, r *http.Request, auth *authService) {
 	if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
 		failure.write(w)
 		return
@@ -171,11 +167,6 @@ func assemblyCatalogUpdateAll(w http.ResponseWriter, r *http.Request, auth *auth
 	defer cancel()
 	service := newOfficialCatalogService(auth, store)
 	result, status := service.updateAllOfficialAssemblies(ctx)
-	if status == http.StatusOK {
-		if catalogIntFromAny(result["installed_count"]) > 0 || len(anyStringSlice(result["updated"])) > 0 || catalogIntFromAny(result["deleted_count"]) > 0 {
-			_ = notifyLegacyAssemblyCache(ctx, auth, legacyURL, "reload")
-		}
-	}
 	writeJSON(w, status, result)
 }
 

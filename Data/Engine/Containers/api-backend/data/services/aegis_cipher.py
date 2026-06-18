@@ -31,7 +31,7 @@ from ..crypto.aegis import (
     is_aegis_envelope,
     random_salt,
 )
-from .API.access_management.passkeys import (
+from .auth.passkeys import (
     build_passkey_lookup_hmac,
     deserialize_passkey_secret_bundle,
     normalize_webauthn_storage_value,
