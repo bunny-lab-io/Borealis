@@ -114,6 +114,220 @@ func TestConnectAcksUnsupportedEvent(t *testing.T) {
 	}
 }
 
+func TestConnectRespondsToPingWhileEventHandlerRuns(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	pongCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`42["vpn_tunnel_start",{"agent_id":"A"}]`)); err != nil {
+			errCh <- err
+			return
+		}
+		select {
+		case <-handlerStarted:
+		case <-time.After(time.Second):
+			errCh <- fmt.Errorf("handler did not start")
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("2")); err != nil {
+			errCh <- err
+			return
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+			errCh <- err
+			return
+		}
+		_, pong, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		pongCh <- string(pong)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.On("vpn_tunnel_start", func(ctx context.Context, payload any) (any, error) {
+		close(handlerStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-releaseHandler:
+			return map[string]any{"ok": true}, nil
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		close(releaseHandler)
+		t.Fatal(err)
+	case pong := <-pongCh:
+		if pong != "3" {
+			close(releaseHandler)
+			t.Fatalf("pong = %q, want Engine.IO pong", pong)
+		}
+	case <-time.After(3 * time.Second):
+		close(releaseHandler)
+		t.Fatal("timed out waiting for pong")
+	}
+	close(releaseHandler)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connect exit")
+	}
+}
+
+func TestConnectRespondsToPingWhileAckHandlerRuns(t *testing.T) {
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	pongCh := make(chan string, 1)
+	ackCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`4215["service_control_action",{"name":"svc"}]`)); err != nil {
+			errCh <- err
+			return
+		}
+		select {
+		case <-handlerStarted:
+		case <-time.After(time.Second):
+			errCh <- fmt.Errorf("handler did not start")
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("2")); err != nil {
+			errCh <- err
+			return
+		}
+		if err := conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+			errCh <- err
+			return
+		}
+		_, pong, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		pongCh <- string(pong)
+		<-releaseHandler
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			errCh <- err
+			return
+		}
+		_, ack, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		ackCh <- string(ack)
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.On("service_control_action", func(ctx context.Context, payload any) (any, error) {
+		close(handlerStarted)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-releaseHandler:
+			return map[string]any{"ok": true}, nil
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		close(releaseHandler)
+		t.Fatal(err)
+	case pong := <-pongCh:
+		if pong != "3" {
+			close(releaseHandler)
+			t.Fatalf("pong = %q, want Engine.IO pong", pong)
+		}
+	case <-time.After(3 * time.Second):
+		close(releaseHandler)
+		t.Fatal("timed out waiting for pong")
+	}
+	close(releaseHandler)
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case ack := <-ackCh:
+		if !strings.HasPrefix(ack, "4315") {
+			t.Fatalf("ack = %q, want ack id 15", ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ack")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connect exit")
+	}
+}
+
 func TestConnectInvokesOnConnectedAfterNamespaceConnect(t *testing.T) {
 	connectedCh := make(chan struct{}, 1)
 	errCh := make(chan error, 1)

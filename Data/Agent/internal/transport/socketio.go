@@ -197,31 +197,42 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 			}
 			return nil
 		}
-		response, handlerErr := handler(ctx, payload)
-		afterAck := afterAckCallback(response)
-		response = ackPayload(response)
-		if ackID != "" {
-			if handlerErr != nil {
-				response = map[string]any{"error": "handler_error", "message": handlerErr.Error()}
-				afterAck = nil
-			}
-			ackPayload, err := json.Marshal([]any{response})
-			if err != nil {
-				return err
-			}
-			if err := c.write("43" + ackID + string(ackPayload)); err != nil {
-				return err
-			}
-			if afterAck != nil {
-				go afterAck()
-			}
-			return nil
-		}
-		if handlerErr != nil {
-			return handlerErr
-		}
+		go c.dispatchEvent(ctx, handler, payload, ackID)
 	}
 	return nil
+}
+
+func (c *Client) dispatchEvent(ctx context.Context, handler Handler, payload any, ackID string) {
+	var response any
+	var handlerErr error
+	defer func() {
+		if recovered := recover(); recovered != nil && ackID != "" {
+			_ = c.write("43" + ackID + `[{"error":"handler_panic"}]`)
+		}
+	}()
+	response, handlerErr = handler(ctx, payload)
+	afterAck := afterAckCallback(response)
+	response = ackPayload(response)
+	if ackID == "" {
+		if handlerErr == nil && afterAck != nil {
+			go afterAck()
+		}
+		return
+	}
+	if handlerErr != nil {
+		response = map[string]any{"error": "handler_error", "message": handlerErr.Error()}
+		afterAck = nil
+	}
+	ackPayload, err := json.Marshal([]any{response})
+	if err != nil {
+		ackPayload = []byte(`[{"error":"handler_ack_encode_failed"}]`)
+	}
+	if err := c.write("43" + ackID + string(ackPayload)); err != nil {
+		return
+	}
+	if afterAck != nil {
+		go afterAck()
+	}
 }
 
 func (c *Client) resetConnected() {
