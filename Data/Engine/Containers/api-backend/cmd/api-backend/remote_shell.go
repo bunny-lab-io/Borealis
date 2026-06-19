@@ -245,15 +245,15 @@ func (c *goRemoteShellTunnelConnector) connectTunnel(ctx context.Context, source
 		return nil, http.StatusInternalServerError, map[string]any{"error": "connect_failed", "detail": err.Error()}
 	}
 	host := strings.Split(cleanText(payload["virtual_ip"]), "/")[0]
-	if host != "" && !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_SHELL_FAST_READY_POLL_INTERVAL_SECONDS", 0.15)) {
+	if host != "" && !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5)) {
 		c.service.requestAgentStart(ctx, agentID, true, "remote_shell_backend_unreachable", []int{shellPort})
 		c.service.requestRemoteShellRestart(ctx, agentID, "remote_shell_backend_unreachable")
-	}
-	if host != "" && !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_SHELL_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5)) {
-		return nil, http.StatusServiceUnavailable, map[string]any{
-			"error": "remote_shell_backend_unreachable",
-			"host":  host,
-			"port":  shellPort,
+		if !waitForTCP(host, shellPort, vncEnvFloat("BOREALIS_SHELL_RESTART_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_SHELL_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5)) {
+			return nil, http.StatusServiceUnavailable, map[string]any{
+				"error": "remote_shell_backend_unreachable",
+				"host":  host,
+				"port":  shellPort,
+			}
 		}
 	}
 	_ = c.service.confirmTransportSuccess(agentID)

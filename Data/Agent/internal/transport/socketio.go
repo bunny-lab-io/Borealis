@@ -42,6 +42,7 @@ type Client struct {
 	headers     map[string]string
 	handlers    map[string]Handler
 	onConnected func(context.Context) error
+	onActivity  func()
 	conn        *websocket.Conn
 	writeMu     sync.Mutex
 	handlerMu   sync.RWMutex
@@ -73,6 +74,10 @@ func (c *Client) On(event string, handler Handler) {
 
 func (c *Client) OnConnected(fn func(context.Context) error) {
 	c.onConnected = fn
+}
+
+func (c *Client) OnActivity(fn func()) {
+	c.onActivity = fn
 }
 
 func (c *Client) SetConnectTimeout(timeout time.Duration) {
@@ -131,10 +136,17 @@ func (c *Client) Connect(ctx context.Context) error {
 		if err := c.handleMessage(ctx, string(message)); err != nil {
 			return err
 		}
+		c.recordActivity()
 		if deadlineActive && c.isConnected() {
 			_ = conn.SetReadDeadline(time.Time{})
 			deadlineActive = false
 		}
+	}
+}
+
+func (c *Client) recordActivity() {
+	if c.onActivity != nil {
+		c.onActivity()
 	}
 }
 

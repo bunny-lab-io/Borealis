@@ -131,6 +131,17 @@ func TestSchedulerManagerSiteWorkerImageMatch(t *testing.T) {
 	}
 }
 
+func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "")
+	if got := schedulerSiteWorkerSocketIOAsyncMode(); got != "eventlet" {
+		t.Fatalf("expected eventlet default, got %q", got)
+	}
+	t.Setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+	if got := schedulerSiteWorkerSocketIOAsyncMode(); got != "threading" {
+		t.Fatalf("expected explicit threading, got %q", got)
+	}
+}
+
 func TestSchedulerManagerCallsSiteWorkerHostService(t *testing.T) {
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/remote-ops/host-service/call" {

@@ -385,6 +385,69 @@ func TestConnectInvokesOnConnectedAfterNamespaceConnect(t *testing.T) {
 	}
 }
 
+func TestConnectInvokesActivityCallbackOnIncomingTraffic(t *testing.T) {
+	activityCh := make(chan struct{}, 3)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("2")); err != nil {
+			errCh <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.OnActivity(func() {
+		activityCh <- struct{}{}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(ctx)
+	}()
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			t.Fatal(err)
+		case <-activityCh:
+		case <-time.After(3 * time.Second):
+			t.Fatal("timed out waiting for socket activity")
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connect exit")
+	}
+}
+
 func TestConnectTimesOutWaitingForNamespaceConnect(t *testing.T) {
 	errCh := make(chan error, 1)
 	upgrader := websocket.Upgrader{}

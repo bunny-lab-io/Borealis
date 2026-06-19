@@ -64,15 +64,28 @@ func decideWatchdogRecovery(input watchdogDecisionInput) watchdogDecision {
 	if input.LastHeartbeatSuccessAt > 0 {
 		heartbeatAge := input.Now.Sub(time.Unix(input.LastHeartbeatSuccessAt, 0))
 		if heartbeatAge > watchdogHeartbeatStaleAfter {
+			if socketConnectedRecently(input, watchdogSocketStaleAfter) {
+				return watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: fmt.Sprintf("age=%s heartbeat_stale_age=%s socket_alive", age.Round(time.Second), heartbeatAge.Round(time.Second))}
+			}
 			return restartWatchdogDecision(input, fmt.Sprintf("stale_heartbeat_success_age=%s", heartbeatAge.Round(time.Second)))
 		}
 	} else if input.LastHeartbeatAttemptAt > 0 {
 		attemptAge := input.Now.Sub(time.Unix(input.LastHeartbeatAttemptAt, 0))
 		if attemptAge > watchdogHeartbeatStaleAfter {
+			if socketConnectedRecently(input, watchdogSocketStaleAfter) {
+				return watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: fmt.Sprintf("age=%s heartbeat_attempt_stale_age=%s socket_alive", age.Round(time.Second), attemptAge.Round(time.Second))}
+			}
 			return restartWatchdogDecision(input, fmt.Sprintf("heartbeat_never_succeeded_attempt_age=%s", attemptAge.Round(time.Second)))
 		}
 	}
 	return watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: fmt.Sprintf("age=%s", age.Round(time.Second))}
+}
+
+func socketConnectedRecently(input watchdogDecisionInput, maxAge time.Duration) bool {
+	if strings.ToLower(strings.TrimSpace(input.LastSocketState)) != "connected" || input.LastSocketStateAt <= 0 {
+		return false
+	}
+	return input.Now.Sub(time.Unix(input.LastSocketStateAt, 0)) <= maxAge
 }
 
 func restartWatchdogDecision(input watchdogDecisionInput, reason string) watchdogDecision {

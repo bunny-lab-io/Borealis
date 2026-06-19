@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import time
 from pathlib import Path
+
+import pytest
 
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.job_scheduler import worker as site_worker
@@ -171,6 +174,77 @@ def test_site_worker_source_excludes_go_owned_work_item_claims(tmp_path: Path) -
         assert cur.fetchone() == (WORK_STATUS_QUEUED, WORK_KIND_SCHEDULED_RUN)
     finally:
         conn.close()
+
+
+class _HeartbeatFakeConn:
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def test_site_worker_heartbeat_retries_transient_db_deadlock(monkeypatch) -> None:
+    conn = _HeartbeatFakeConn()
+    calls = []
+    sleeps = []
+
+    def fake_heartbeat(_conn, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise sqlite3.Error("deadlock detected")
+
+    monkeypatch.setattr(site_worker, "heartbeat_worker", fake_heartbeat)
+
+    site_worker._commit_worker_heartbeat(
+        logging.getLogger("test.site_worker"),
+        conn,
+        worker_guid="worker-deadlock-retry",
+        status=WORKER_STATUS_RUNNING,
+        lanes=[site_worker.LANE_AGENT_SOCKETS],
+        task_links=[],
+        idle_since=None,
+        claimed_count=0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert len(calls) == 2
+    assert conn.rollbacks == 1
+    assert conn.commits == 1
+    assert sleeps == [0.25]
+
+
+def test_site_worker_heartbeat_does_not_retry_non_transient_db_error(monkeypatch) -> None:
+    conn = _HeartbeatFakeConn()
+    calls = []
+
+    def fake_heartbeat(_conn, **kwargs):
+        calls.append(kwargs)
+        raise sqlite3.Error("syntax error near worker heartbeat")
+
+    monkeypatch.setattr(site_worker, "heartbeat_worker", fake_heartbeat)
+
+    with pytest.raises(sqlite3.Error, match="syntax error"):
+        site_worker._commit_worker_heartbeat(
+            logging.getLogger("test.site_worker"),
+            conn,
+            worker_guid="worker-fatal-error",
+            status=WORKER_STATUS_RUNNING,
+            lanes=[site_worker.LANE_AGENT_SOCKETS],
+            task_links=[],
+            idle_since=None,
+            claimed_count=0,
+            sleep_fn=lambda _seconds: None,
+        )
+
+    assert len(calls) == 1
+    assert conn.rollbacks == 1
+    assert conn.commits == 0
+
 
 def test_register_worker_creates_active_route_record(tmp_path: Path, monkeypatch) -> None:
     dynamic_dir = tmp_path / "dynamic"

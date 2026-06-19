@@ -1423,6 +1423,7 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 		"-e", "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST=127.0.0.1",
 		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT=%d", remoteOpsPort),
 		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT=%d", remoteDesktopPort),
+		"-e", "BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE="+schedulerSiteWorkerSocketIOAsyncMode(),
 		"-e", "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=300",
 		"-e", "BOREALIS_INTERNAL_API_BASE_URL="+m.apiBase,
 		"-e", fmt.Sprintf("BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s.log", workerGUID),
@@ -2360,6 +2361,10 @@ func schedulerComposeEnvFile(projectRoot string) string {
 
 func schedulerDesiredSiteWorkerImage() string {
 	return envDefault("BOREALIS_SITE_WORKER_IMAGE", "borealis-engine/site-worker:local")
+}
+
+func schedulerSiteWorkerSocketIOAsyncMode() string {
+	return envDefault("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "eventlet")
 }
 
 func fileExists(path string) bool {

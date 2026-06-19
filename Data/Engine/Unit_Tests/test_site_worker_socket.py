@@ -6,8 +6,10 @@ import json
 import logging
 import queue
 import socket
+import sys
 import threading
 import time
+import types
 from pathlib import Path
 
 from Data.Engine.auth import device_purge_state, jwt_service
@@ -26,6 +28,43 @@ AGENT_ID = f"{AGENT_HOSTNAME}_{AGENT_GUID}_SYSTEM"
 
 def _service_log(_service: str, _message: str, scope=None, *, level: str = "INFO") -> None:
     return None
+
+
+def test_site_worker_socketio_async_mode_defaults_to_eventlet(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", raising=False)
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED", raising=False)
+    monkeypatch.setattr(worker_socket.importlib.util, "find_spec", lambda _name: object())
+    monkeypatch.setattr(worker_socket.importlib, "import_module", lambda _name: object())
+    monkeypatch.setitem(
+        sys.modules,
+        "eventlet",
+        types.SimpleNamespace(monkey_patch=lambda **kwargs: calls.append(kwargs)),
+    )
+
+    assert worker_socket._resolve_socketio_async_mode() == "eventlet"
+    assert calls == [{"thread": False}]
+
+
+def test_site_worker_socketio_async_mode_reuses_prepatched_eventlet(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", raising=False)
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED", "1")
+    monkeypatch.setattr(
+        worker_socket.importlib.util,
+        "find_spec",
+        lambda _name: (_ for _ in ()).throw(AssertionError("eventlet discovery should not run")),
+    )
+
+    assert worker_socket._resolve_socketio_async_mode() == "eventlet"
+
+
+def test_site_worker_socketio_async_mode_falls_back_to_threading_without_eventlet(monkeypatch) -> None:
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", raising=False)
+    monkeypatch.delenv("BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED", raising=False)
+    monkeypatch.setattr(worker_socket.importlib.util, "find_spec", lambda _name: None)
+
+    assert worker_socket._resolve_socketio_async_mode() == "threading"
 
 
 def _db_factory(db_path: Path):

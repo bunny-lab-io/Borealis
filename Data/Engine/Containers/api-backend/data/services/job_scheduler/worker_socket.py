@@ -67,21 +67,27 @@ from Data.Engine.services.RemoteDesktop.rfb_probe import wait_for_vnc_auth_ready
 from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
+_EVENTLET_PREPATCH_ENV = "BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED"
+
 
 def _now_ts() -> int:
     return int(time.time())
 
 
 def _resolve_socketio_async_mode() -> str:
-    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "threading").strip().lower() or "threading"
+    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "eventlet").strip().lower() or "eventlet"
     if requested != "eventlet":
         return requested
+    if str(os.environ.get(_EVENTLET_PREPATCH_ENV) or "").strip() == "1":
+        return "eventlet"
     try:
-        importlib.util.find_spec("engineio.async_drivers.eventlet")
+        if importlib.util.find_spec("engineio.async_drivers.eventlet") is None:
+            return "threading"
         importlib.import_module("engineio.async_drivers.eventlet")
         import eventlet  # type: ignore
 
         eventlet.monkey_patch(thread=False)
+        os.environ[_EVENTLET_PREPATCH_ENV] = "1"
         return "eventlet"
     except Exception:
         return "threading"
@@ -252,10 +258,9 @@ class SiteWorkerSocketRuntime:
             self.app,
             cors_allowed_origins="*",
             async_mode=_resolve_socketio_async_mode(),
-            engineio_options={
-                "max_http_buffer_size": 100_000_000,
-                "max_websocket_message_size": 100_000_000,
-            },
+            max_http_buffer_size=100_000_000,
+            ping_interval=20,
+            ping_timeout=60,
         )
         self.registry = AgentSocketRegistry(self.socketio, logger.getChild("agent_registry"))
         self.jwt_service = jwt_service_module.load_service()

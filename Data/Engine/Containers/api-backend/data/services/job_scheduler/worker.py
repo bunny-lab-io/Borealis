@@ -2,7 +2,36 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import os
+
+
+_EVENTLET_PREPATCH_ENV = "BOREALIS_SITE_WORKER_EVENTLET_PREPATCHED"
+
+
+def _prepatch_eventlet_if_requested() -> None:
+    if not str(os.environ.get("BOREALIS_SITE_WORKER_GUID") or "").strip():
+        return
+    requested = str(os.environ.get("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE") or "eventlet").strip().lower() or "eventlet"
+    if requested != "eventlet":
+        return
+    try:
+        if importlib.util.find_spec("engineio.async_drivers.eventlet") is None:
+            os.environ["BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE"] = "threading"
+            return
+        importlib.import_module("engineio.async_drivers.eventlet")
+        import eventlet  # type: ignore
+
+        eventlet.monkey_patch(thread=False)
+        os.environ[_EVENTLET_PREPATCH_ENV] = "1"
+    except Exception:
+        os.environ["BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE"] = "threading"
+        os.environ.pop(_EVENTLET_PREPATCH_ENV, None)
+
+
+_prepatch_eventlet_if_requested()
+
 import threading
 import time
 from typing import Any, Dict, Mapping, Optional
@@ -28,6 +57,13 @@ from .worker_socket import SiteWorkerSocketRuntime
 
 LANE_AGENT_SOCKETS = "agent_sockets"
 
+_TRANSIENT_HEARTBEAT_DB_ERRORS = (
+    "deadlock detected",
+    "could not serialize access",
+    "serialization failure",
+    "lock timeout",
+)
+
 
 class _NoopSocketIO:
     def start_background_task(self, target, *args, **kwargs):
@@ -48,6 +84,69 @@ def _db_factory(database_url: str):
         return sqlite3.connect(database_url, timeout=30)
 
     return _factory
+
+
+def _db_exception_text(exc: BaseException) -> str:
+    parts = [f"{type(exc).__name__}: {exc}"]
+    for attr in ("__cause__", "__context__"):
+        nested = getattr(exc, attr, None)
+        if nested is not None and nested is not exc:
+            parts.append(f"{type(nested).__name__}: {nested}")
+    return " ".join(parts).lower()
+
+
+def _is_transient_heartbeat_db_error(exc: BaseException) -> bool:
+    text = _db_exception_text(exc)
+    return any(marker in text for marker in _TRANSIENT_HEARTBEAT_DB_ERRORS)
+
+
+def _rollback_quietly(conn: sqlite3.Connection) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def _commit_worker_heartbeat(
+    logger,
+    conn: sqlite3.Connection,
+    *,
+    worker_guid: str,
+    status: str,
+    lanes,
+    task_links,
+    idle_since: Optional[int],
+    claimed_count: int,
+    max_attempts: int = 3,
+    sleep_fn=time.sleep,
+) -> None:
+    attempt = 1
+    while True:
+        try:
+            heartbeat_worker(
+                conn,
+                worker_guid=worker_guid,
+                status=status,
+                lanes=lanes,
+                task_links=task_links,
+                idle_since=idle_since,
+                claimed_count=claimed_count,
+            )
+            conn.commit()
+            return
+        except Exception as exc:
+            _rollback_quietly(conn)
+            if attempt >= max_attempts or not _is_transient_heartbeat_db_error(exc):
+                raise
+            logger.warning(
+                "site worker heartbeat transient db error; retrying worker_guid=%s attempt=%s/%s err=%s",
+                worker_guid,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            sleep_fn(min(1.5, 0.25 * attempt))
+            attempt += 1
 
 
 def _api_base_url() -> str:
@@ -238,6 +337,7 @@ def main() -> None:
     def online_device_count(_conn: sqlite3.Connection) -> int:
         return _online_site_device_count(secret, site_id=site_id)
 
+    exit_reason = "shutdown"
     try:
         while True:
             agent_device_count = connected_device_count()
@@ -248,7 +348,8 @@ def main() -> None:
                     idle_since = None
                 elif idle_since is None:
                     idle_since = _now_ts()
-                heartbeat_worker(
+                _commit_worker_heartbeat(
+                    logger,
                     conn,
                     worker_guid=worker_guid,
                     status=WORKER_STATUS_RUNNING if (agent_device_count > 0 or online_device_total > 0) else WORKER_STATUS_IDLE,
@@ -257,14 +358,33 @@ def main() -> None:
                     idle_since=None if online_device_total > 0 else idle_since,
                     claimed_count=0,
                 )
-                conn.commit()
             finally:
                 conn.close()
             if idle_since is not None and (_now_ts() - idle_since) >= idle_ttl:
-                logger.info("site worker idle ttl reached; exiting")
+                exit_reason = "idle_ttl"
+                logger.info(
+                    "site worker idle ttl reached; exiting worker_guid=%s site_id=%s idle_seconds=%s",
+                    worker_guid,
+                    site_id,
+                    _now_ts() - idle_since,
+                )
                 return
             time.sleep(3.0)
+    except BaseException as exc:
+        exit_reason = f"exception:{type(exc).__name__}"
+        logger.exception(
+            "site worker main loop failed worker_guid=%s site_id=%s",
+            worker_guid,
+            site_id,
+        )
+        raise
     finally:
+        logger.info(
+            "site worker stopping worker_guid=%s site_id=%s reason=%s",
+            worker_guid,
+            site_id,
+            exit_reason,
+        )
         conn = db_factory()
         try:
             stop_worker(conn, worker_guid=worker_guid)

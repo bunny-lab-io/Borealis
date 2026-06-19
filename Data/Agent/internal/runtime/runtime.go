@@ -313,6 +313,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	a.logger.Printf("socket connecting route=%s", socketBaseURL)
 	headers := a.authClient.AuthHeaders()
 	socket := transport.NewClient(socketBaseURL, headers)
+	socket.OnActivity(a.recordConnectedSocketActivity)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
 	if a.software != nil {
