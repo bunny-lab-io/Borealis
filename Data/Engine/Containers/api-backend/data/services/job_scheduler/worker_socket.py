@@ -63,6 +63,7 @@ from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     GuacamoleSessionRegistry,
     normalize_guacamole_performance_preference,
 )
+from Data.Engine.services.RemoteDesktop.rfb_probe import wait_for_vnc_auth_ready
 from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
@@ -91,6 +92,30 @@ def _remote_addr() -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return (request.remote_addr or "").strip()
+
+
+def _env_float(name: str, fallback: float, minimum: float = 0.0) -> float:
+    try:
+        value = float(str(os.environ.get(name) or "").strip())
+    except Exception:
+        value = fallback
+    if value < minimum:
+        return fallback
+    return value
+
+
+def _vnc_auth_probe_error(reason: str) -> str:
+    normalized = str(reason or "").strip().lower()
+    auth_markers = (
+        "auth_failed",
+        "too_many_auth_failures",
+        "security_type",
+        "unsupported_security",
+        "vnc_auth_unavailable",
+    )
+    if any(marker in normalized for marker in auth_markers):
+        return "vnc_auth_failed"
+    return "vnc_backend_unreachable"
 
 
 def _assert_port_available(host: str, port: int) -> None:
@@ -871,6 +896,40 @@ class SiteWorkerSocketRuntime:
             except Exception:
                 dpi = 96
             performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
+            auth_probe = wait_for_vnc_auth_ready(
+                host,
+                port,
+                password,
+                timeout_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS", 5.0, 0.25),
+                poll_interval_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_POLL_INTERVAL_SECONDS", 0.5, 0.1),
+            )
+            if auth_probe.checked and not auth_probe.ok:
+                error_code = _vnc_auth_probe_error(auth_probe.reason)
+                self._log(
+                    "remote_desktop_vnc_auth_probe_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
+                        agent_id,
+                        session_id,
+                        host,
+                        port,
+                        error_code,
+                        auth_probe.reason,
+                    ),
+                    level="WARNING",
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": error_code,
+                            "detail": auth_probe.reason,
+                            "auth_probe": {
+                                "checked": auth_probe.checked,
+                                "ok": auth_probe.ok,
+                                "reason": auth_probe.reason,
+                            },
+                        }
+                    ),
+                    503,
+                )
 
             guacamole_session = self._guacamole_registry.create(
                 agent_id=agent_id,

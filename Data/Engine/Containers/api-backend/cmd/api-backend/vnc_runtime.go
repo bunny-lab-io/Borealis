@@ -222,23 +222,44 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		log.Printf("vnc_token_issue_failed agent_id=%s hostname=%s error=%v", agentID, hostname, issueErr)
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
-	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
-	workerResponse, workerStatus, workerErr := remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
-		"operation_token":        issued.Token,
-		"agent_id":               agentID,
-		"host":                   host,
-		"port":                   vncPort,
-		"password":               session.ControllerPassword,
-		"operator_id":            profile.Username,
-		"session_id":             session.SessionID,
-		"participant_id":         participant.ParticipantID,
-		"role":                   participant.Role,
-		"width":                  width,
-		"height":                 height,
-		"dpi":                    96,
-		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
-	}, 10*time.Second)
+	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body)
 	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
+	if vncWorkerSessionNeedsAuthRetry(workerErr) {
+		log.Printf("vnc_auth_retry_start agent_id=%s hostname=%s session_id=%s reason=%s", agentID, hostname, session.SessionID, cleanText(workerErr["detail"]))
+		retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", 25))
+		if retryErr == nil && retryCredential.ControllerPassword != "" {
+			credential = retryCredential
+			session, participant, _ = v.ensureSession(agentID, profile.Username, credential, removeWallpaper)
+			emitOK = emitVNCStart(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
+				"agent_id":            agentID,
+				"session_id":          session.SessionID,
+				"controller_password": "",
+				"view_only_password":  "",
+				"port":                vncPort,
+				"allowed_ips":         allowedIPs,
+				"remove_wallpaper":    removeWallpaper,
+				"credential_revision": session.CredentialRevision,
+				"reason":              "vnc_auth_retry",
+			})
+			log.Printf("vnc_auth_retry_start_emit agent_id=%s hostname=%s emitted=%t session_id=%s revision=%d", agentID, hostname, emitOK, session.SessionID, session.CredentialRevision)
+			if emitOK {
+				retryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+				log.Printf("vnc_auth_retry_tcp_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
+				if retryReady {
+					workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body)
+					log.Printf("vnc_auth_retry_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
+				} else {
+					workerStatus = http.StatusServiceUnavailable
+					workerErr = map[string]any{"error": "vnc_backend_unreachable", "detail": "vnc_auth_retry_tcp_probe_failed"}
+				}
+			} else {
+				workerStatus = http.StatusConflict
+				workerErr = map[string]any{"error": "agent_socket_missing", "detail": "vnc_auth_retry_emit_failed"}
+			}
+		} else {
+			log.Printf("vnc_auth_retry_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, retryErr)
+		}
+	}
 	if workerErr != nil {
 		v.recordError(session.SessionID, "worker_guacamole_unavailable")
 		if workerStatus == 0 {
@@ -302,6 +323,29 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 			},
 		},
 	}, http.StatusOK
+}
+
+func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile operatorProfile, result remoteOpsSessionResult, issued issuedRemoteOpsSession, session *vncCollaborationSession, participant *vncParticipant, credential vncCredential, host string, vncPort int, body map[string]any) (map[string]any, int, map[string]any) {
+	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
+	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
+		"operation_token":        issued.Token,
+		"agent_id":               session.AgentID,
+		"host":                   host,
+		"port":                   vncPort,
+		"password":               session.ControllerPassword,
+		"operator_id":            profile.Username,
+		"session_id":             session.SessionID,
+		"participant_id":         participant.ParticipantID,
+		"role":                   participant.Role,
+		"width":                  width,
+		"height":                 height,
+		"dpi":                    96,
+		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
+	}, 10*time.Second)
+}
+
+func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {
+	return strings.EqualFold(cleanText(workerErr["error"]), "vnc_auth_failed")
 }
 
 func (v *vncRuntime) issueRemoteDesktopToken(profile operatorProfile, result remoteOpsSessionResult) (issuedRemoteOpsSession, error) {

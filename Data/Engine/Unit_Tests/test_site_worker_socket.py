@@ -12,7 +12,9 @@ from pathlib import Path
 
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.RemoteDesktop.rfb_probe import VncAuthProbeResult
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
+from Data.Engine.services.job_scheduler import worker_socket
 from Data.Engine.services.job_scheduler.worker_socket import SiteWorkerSocketRuntime
 from Data.Engine.services.remote_ops.sessions import issue_remote_op_session
 
@@ -577,6 +579,11 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     runtime, _token = _runtime(tmp_path)
     operation_token = _issue_remote_desktop_token(runtime)
     monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+    monkeypatch.setattr(
+        worker_socket,
+        "wait_for_vnc_auth_ready",
+        lambda *_args, **_kwargs: VncAuthProbeResult(False, True, "auth_probe_disabled"),
+    )
 
     client = runtime.app.test_client()
     response = client.post(
@@ -611,6 +618,40 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.session_id == "vnc-session-1"
     assert session.participant_id == "participant-1"
     assert session.performance_preference == 2
+
+
+def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, _token = _runtime(tmp_path)
+    operation_token = _issue_remote_desktop_token(runtime)
+    monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+    monkeypatch.setattr(
+        worker_socket,
+        "wait_for_vnc_auth_ready",
+        lambda *_args, **_kwargs: VncAuthProbeResult(True, False, "auth_failed"),
+    )
+
+    response = runtime.app.test_client().post(
+        "/remote-desktop/vnc/session",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "operation_token": operation_token,
+            "agent_id": AGENT_ID,
+            "host": "10.255.0.20",
+            "port": 5900,
+            "password": "secretpw",
+            "operator_id": "unit",
+            "session_id": "vnc-session-1",
+            "participant_id": "participant-1",
+            "role": "controller",
+        },
+    )
+
+    assert response.status_code == 503
+    payload = response.get_json()
+    assert payload["error"] == "vnc_auth_failed"
+    assert payload["auth_probe"] == {"checked": True, "ok": False, "reason": "auth_failed"}
 
 
 def test_site_worker_remote_desktop_rejects_wrong_worker_token(tmp_path: Path, monkeypatch) -> None:

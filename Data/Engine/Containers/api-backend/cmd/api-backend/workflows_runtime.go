@@ -1592,12 +1592,7 @@ func workflowAnsibleRouteSiteID(specs []any) int64 {
 }
 
 func workflowNormalizePrivateKey(value string) string {
-	value = strings.ReplaceAll(value, "\r\n", "\n")
-	value = strings.ReplaceAll(value, "\r", "\n")
-	if value != "" && !strings.HasSuffix(value, "\n") {
-		value += "\n"
-	}
-	return value
+	return normalizeSSHPrivateKeyMaterial(value)
 }
 
 func workflowApplySSHCredentialHostVars(hostVars map[string]any, credential map[string]any, privateKeyPath string) {

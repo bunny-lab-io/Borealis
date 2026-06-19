@@ -26,6 +26,7 @@ const (
 	schedulerResolutionEligible   = "eligible"
 	schedulerResolutionSkipped    = "skipped"
 	schedulerResolutionUnresolved = "unresolved"
+	scheduledSSHPrivateKeyPath    = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
 )
 
 type scheduledExecutionTarget struct {
@@ -378,6 +379,7 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 	}
 	var credential map[string]any
 	var runtimeFiles []any
+	privateKeyPath := ""
 	if transport == "ssh" || (transport == "winrm" && !req.UseServiceAccount) {
 		if req.CredentialID == nil {
 			_ = m.updateScheduledRunTargets(ctx, req.RunID, req.TargetRowIDs, schedulerResolutionUnresolved, "credential_missing", transport, "", "")
@@ -392,6 +394,17 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 		if strings.ToLower(cleanText(credential["connection_type"])) != "" && strings.ToLower(cleanText(credential["connection_type"])) != transport {
 			_ = m.updateScheduledRunTargets(ctx, req.RunID, req.TargetRowIDs, schedulerResolutionUnresolved, "credential_connection_mismatch", transport, "", "")
 			return nil, nil, m.failScheduledRun(ctx, req.RunID, "Selected credential does not match the execution context.")
+		}
+		if transport == "ssh" {
+			privateKey, err := scheduledSSHPrivateKeyContent(credential)
+			if err != nil {
+				_ = m.updateScheduledRunTargets(ctx, req.RunID, req.TargetRowIDs, schedulerResolutionUnresolved, "credential_private_key_invalid", transport, "", "")
+				return nil, nil, m.failScheduledRun(ctx, req.RunID, err.Error())
+			}
+			if privateKey != "" {
+				privateKeyPath = scheduledSSHPrivateKeyPath
+				runtimeFiles = append(runtimeFiles, map[string]any{"relative_path": "auth/id_borealis_ssh", "content": privateKey, "mode": 384})
+			}
 		}
 	}
 	requiredPorts := []any{}
@@ -444,14 +457,7 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 			hostVars["ansible_port"] = port
 		}
 		if transport == "ssh" {
-			hostVars["ansible_user"] = cleanText(credential["username"])
-			if password := cleanText(credential["password"]); password != "" {
-				hostVars["ansible_password"] = password
-			}
-			if privateKey := cleanText(credential["private_key"]); privateKey != "" && cleanText(credential["private_key_passphrase"]) == "" {
-				hostVars["ansible_ssh_private_key_file"] = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
-				runtimeFiles = append(runtimeFiles, map[string]any{"relative_path": "auth/id_borealis_ssh", "content": privateKey, "mode": 384})
-			}
+			applyScheduledSSHCredentialHostVars(hostVars, credential, privateKeyPath)
 			hostVars["ansible_ssh_retries"] = envInt("BOREALIS_SHARED_ANSIBLE_SSH_RETRIES", 3, 1, 20)
 			hostVars["ansible_ssh_timeout"] = envInt("BOREALIS_SHARED_ANSIBLE_SSH_TIMEOUT_SECONDS", 10, 1, 120)
 			hostVars["ansible_ssh_transfer_method"] = firstText(cleanText(os.Getenv("BOREALIS_SHARED_ANSIBLE_SSH_TRANSFER_METHOD")), "sftp")
@@ -499,6 +505,61 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 		_ = m.markScheduledRunSkipped(ctx, req.RunID, fmt.Sprintf("No eligible devices were available for this Ansible run (%d skipped).", skipped))
 	}
 	return specs, runtimeFiles, nil
+}
+
+func scheduledSSHPrivateKeyContent(credential map[string]any) (string, error) {
+	privateKey := normalizeSSHPrivateKeyMaterial(cleanText(credential["private_key"]))
+	if privateKey == "" {
+		return "", nil
+	}
+	password := cleanText(credential["password"])
+	if cleanText(credential["private_key_passphrase"]) != "" {
+		if password == "" {
+			return "", errors.New("Passphrase-protected SSH private keys require a credential password for scheduled Ansible runs.")
+		}
+		return "", nil
+	}
+	if err := parseSSHPrivateKeyMaterial(privateKey); err != nil {
+		if password != "" {
+			return "", nil
+		}
+		return "", errors.New("Selected SSH private key could not be parsed by OpenSSH. Save a valid unencrypted SSH private key or add a password fallback.")
+	}
+	return privateKey, nil
+}
+
+func applyScheduledSSHCredentialHostVars(hostVars map[string]any, credential map[string]any, privateKeyPath string) {
+	if username := cleanText(credential["username"]); username != "" {
+		hostVars["ansible_user"] = username
+	}
+	password := cleanText(credential["password"])
+	if password != "" {
+		hostVars["ansible_password"] = password
+		hostVars["ansible_ssh_password_mechanism"] = "sshpass"
+	}
+	if privateKeyPath != "" {
+		hostVars["ansible_ssh_private_key_file"] = privateKeyPath
+		existing := cleanText(hostVars["ansible_ssh_extra_args"])
+		addition := "-o IdentitiesOnly=yes -o PreferredAuthentications=publickey,password,keyboard-interactive -o PubkeyAuthentication=yes -o PasswordAuthentication=yes -o KbdInteractiveAuthentication=yes"
+		if password == "" {
+			addition = "-o IdentitiesOnly=yes -o BatchMode=yes -o PreferredAuthentications=publickey -o PubkeyAuthentication=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no"
+		}
+		if existing == "" {
+			hostVars["ansible_ssh_extra_args"] = addition
+		} else if !strings.Contains(existing, addition) {
+			hostVars["ansible_ssh_extra_args"] = existing + " " + addition
+		}
+	}
+	if become := cleanText(credential["become_method"]); become != "" {
+		hostVars["ansible_become"] = true
+		hostVars["ansible_become_method"] = become
+		if username := cleanText(credential["become_username"]); username != "" {
+			hostVars["ansible_become_user"] = username
+		}
+		if password := cleanText(credential["become_password"]); password != "" {
+			hostVars["ansible_become_password"] = password
+		}
+	}
 }
 
 type scheduledActivityInsert struct {

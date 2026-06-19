@@ -1,14 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestSchedulerManagerComputeNextRunMatchesPythonIntervals(t *testing.T) {
@@ -235,5 +240,86 @@ func TestSchedulerExecutionHelpersNormalizeScheduledPayloads(t *testing.T) {
 	metadata := scheduledActivityMetadata(12, 34, 56, "script", "Patch", "asm-1")
 	if metadata["scheduled_job_id"] != int64(12) || metadata["scheduled_job_run_id"] != int64(34) || metadata["assembly_guid"] != "asm-1" {
 		t.Fatalf("unexpected metadata %#v", metadata)
+	}
+}
+
+func testOpenSSHPrivateKey(t *testing.T) string {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(bytes.NewReader(bytes.Repeat([]byte{42}, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(privateKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(block))
+}
+
+func TestNormalizeSSHPrivateKeyMaterialRepairsEscapedLineEndings(t *testing.T) {
+	raw := "-----BEGIN OPENSSH PRIVATE KEY-----\\r\\nabc\\n-----END OPENSSH PRIVATE KEY-----"
+	got := normalizeSSHPrivateKeyMaterial(raw)
+	if strings.Contains(got, `\n`) || strings.Contains(got, "\r") {
+		t.Fatalf("private key line endings not normalized: %q", got)
+	}
+	if !strings.HasSuffix(got, "\n") {
+		t.Fatalf("expected final newline")
+	}
+}
+
+func TestScheduledSSHPrivateKeyContentNormalizesAndParses(t *testing.T) {
+	key := testOpenSSHPrivateKey(t)
+	escaped := strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(key), "\n", `\n`), "\r", "")
+	got, err := scheduledSSHPrivateKeyContent(map[string]any{
+		"private_key": escaped,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == "" || strings.Contains(got, `\n`) || !strings.HasSuffix(got, "\n") {
+		t.Fatalf("unexpected normalized key content")
+	}
+}
+
+func TestScheduledSSHPrivateKeyContentFallsBackToPasswordOnInvalidKey(t *testing.T) {
+	got, err := scheduledSSHPrivateKeyContent(map[string]any{
+		"private_key": "not a private key",
+		"password":    "secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("invalid key with password should use password-only auth")
+	}
+}
+
+func TestScheduledSSHPrivateKeyContentRejectsInvalidKeyWithoutPassword(t *testing.T) {
+	_, err := scheduledSSHPrivateKeyContent(map[string]any{
+		"private_key": "not a private key",
+	})
+	if err == nil || !strings.Contains(err.Error(), "could not be parsed") {
+		t.Fatalf("expected invalid private key error, got %v", err)
+	}
+}
+
+func TestApplyScheduledSSHCredentialHostVarsUsesDocumentedAuthFlags(t *testing.T) {
+	hostVars := map[string]any{}
+	applyScheduledSSHCredentialHostVars(hostVars, map[string]any{
+		"username":        "ops",
+		"password":        "secret",
+		"become_method":   "sudo",
+		"become_username": "root",
+		"become_password": "become-secret",
+	}, scheduledSSHPrivateKeyPath)
+
+	if hostVars["ansible_user"] != "ops" || hostVars["ansible_password"] != "secret" || hostVars["ansible_ssh_password_mechanism"] != "sshpass" {
+		t.Fatalf("missing scheduled ssh auth vars %#v", hostVars)
+	}
+	if hostVars["ansible_ssh_private_key_file"] != scheduledSSHPrivateKeyPath || !strings.Contains(cleanText(hostVars["ansible_ssh_extra_args"]), "PreferredAuthentications") {
+		t.Fatalf("missing scheduled private-key vars %#v", hostVars)
+	}
+	if hostVars["ansible_become"] != true || hostVars["ansible_become_method"] != "sudo" || hostVars["ansible_become_user"] != "root" || hostVars["ansible_become_password"] != "become-secret" {
+		t.Fatalf("missing scheduled become vars %#v", hostVars)
 	}
 }

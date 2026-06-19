@@ -48,6 +48,27 @@ func TestResolveShellPortDefaultsAndValidates(t *testing.T) {
 	}
 }
 
+func TestPowerShellArgsUseDurableInteractiveProcess(t *testing.T) {
+	args := strings.Join(shellArgs("powershell", "powershell.exe"), " ")
+	if strings.Contains(args, "-Command") || strings.Contains(args, " - ") {
+		t.Fatalf("PowerShell shell args should not use stdin script mode: %s", args)
+	}
+	for _, expected := range []string{"-NoLogo", "-NoProfile", "-ExecutionPolicy Bypass", "-NoExit"} {
+		if !strings.Contains(args, expected) {
+			t.Fatalf("PowerShell args missing %s: %s", expected, args)
+		}
+	}
+}
+
+func TestNormalizeShellInputUsesPlatformLineEndings(t *testing.T) {
+	if got := string(normalizeShellInput("bash", []byte("whoami\r\nhostname\r"))); got != "whoami\nhostname\n" {
+		t.Fatalf("unexpected bash input normalization: %q", got)
+	}
+	if got := string(normalizeShellInput("powershell", []byte("whoami\nhostname"))); got != "whoami\r\nhostname\r\n" {
+		t.Fatalf("unexpected PowerShell input normalization: %q", got)
+	}
+}
+
 func TestShellSessionPingPongAndBashStdout(t *testing.T) {
 	if _, err := os.Stat("/bin/sh"); err != nil {
 		t.Skip("/bin/sh unavailable")

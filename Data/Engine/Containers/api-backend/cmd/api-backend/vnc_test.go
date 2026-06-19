@@ -170,3 +170,15 @@ func TestRequestVNCServerCredentialConsumesWorkerCallEnvelope(t *testing.T) {
 		t.Fatalf("display data missing %#v", credential)
 	}
 }
+
+func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
+	if !vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_failed"}) {
+		t.Fatalf("expected vnc_auth_failed to request auth retry")
+	}
+	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_backend_unreachable"}) {
+		t.Fatalf("backend reachability errors should not rotate credentials")
+	}
+	if vncWorkerSessionNeedsAuthRetry(nil) {
+		t.Fatalf("nil worker error should not request auth retry")
+	}
+}

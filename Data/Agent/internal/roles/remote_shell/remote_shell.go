@@ -563,9 +563,7 @@ func (s *shellSession) handleStdin(msg map[string]any) {
 		s.close()
 		return
 	}
-	if s.shellKind == "bash" {
-		decoded = normalizeLineEndings(decoded)
-	}
+	decoded = normalizeShellInput(s.shellKind, decoded)
 	messageID := strings.TrimSpace(fmt.Sprint(msg["message_id"]))
 	sentAt, hasSentAt := coerceInt64(msg["sent_at_ms"])
 	receivedAt := nowMS()
@@ -717,7 +715,7 @@ func (s *shellSession) close() {
 func shellArgs(shellKind string, shellBin string) []string {
 	switch shellKind {
 	case "powershell":
-		return []string{"-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"}
+		return []string{"-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit"}
 	case "bash":
 		base := strings.ToLower(filepath.Base(shellBin))
 		if base == "bash" {
@@ -869,6 +867,17 @@ func normalizeLineEndings(input []byte) []byte {
 	text := strings.ReplaceAll(string(input), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	return []byte(text)
+}
+
+func normalizeShellInput(shellKind string, input []byte) []byte {
+	text := string(normalizeLineEndings(input))
+	if shellKind != "powershell" {
+		return []byte(text)
+	}
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return []byte(strings.ReplaceAll(text, "\n", "\r\n"))
 }
 
 func valueOrDash(value string) string {

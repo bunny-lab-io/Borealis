@@ -1024,14 +1024,16 @@ function TaskExpiryCountdown({ group }) {
   const remaining = Math.max(0, Math.ceil(Number(group?.removal_remaining_seconds || 0)));
   if (expiresAt <= 0 || remaining <= 0) return null;
   return (
-    <Box sx={{ mt: 0.12, minWidth: 0, width: "100%" }}>
+    <Box sx={{ minWidth: 0, width: "100%", display: "flex", justifyContent: "flex-start" }}>
       <Typography
         component="span"
         sx={{
+          display: "block",
+          width: "100%",
           color: "rgba(148,163,184,0.72)",
           fontSize: "0.68rem",
           fontWeight: 500,
-          lineHeight: 1.15,
+          lineHeight: 1.2,
           textAlign: "left",
           whiteSpace: "nowrap",
           overflow: "hidden",
@@ -1216,7 +1218,18 @@ function AssignedTasksCell(params) {
             minWidth: 0,
           }}
         >
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              justifyContent: "center",
+              alignSelf: "stretch",
+              minWidth: 0,
+              minHeight: BASE_ROW_HEIGHT - 2,
+              gap: 0.05,
+            }}
+          >
             <Tooltip title={group.job_name || group.label || ""} placement="top-start" arrow>
               <Box
                 component="button"
