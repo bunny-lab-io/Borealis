@@ -131,7 +131,7 @@ class VncProxyServer:
     async def _handle_guacamole_client(self, websocket: Any, parsed: Any, raw_path: str) -> None:
         query = parse_qs(parsed.query or "")
         token = (query.get("token") or [""])[0]
-        session = self.guacamole_registry.consume(token)
+        session = self.guacamole_registry.lookup(token)
         host = session.host if session else ""
         port = session.port if session else 0
         agent_id = session.agent_id if session else ""
@@ -140,6 +140,14 @@ class VncProxyServer:
             self.logger.warning("Guacamole proxy rejected session (token=%s path=%s)", token_hint, raw_path)
             await websocket.close(code=1008, reason="invalid_session")
             return
+        original_confirm_transport = session.confirm_transport
+
+        def _confirm_transport(reason: str) -> None:
+            self.guacamole_registry.revoke(token)
+            if callable(original_confirm_transport):
+                original_confirm_transport(reason)
+
+        session.confirm_transport = _confirm_transport
 
         logger = self.logger.getChild("guacamole")
         connection_id = ""

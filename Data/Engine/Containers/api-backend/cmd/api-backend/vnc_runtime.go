@@ -198,19 +198,24 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	}
 	fastReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
 	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
+	recoveryReady := fastReady
 	if !fastReady {
-		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
-		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
+		recoveryReady = waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
-	recoveryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
 	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
 	if !recoveryReady {
-		v.recordError(session.SessionID, "vnc_backend_unreachable")
-		return map[string]any{
-			"error": "vnc_backend_unreachable",
-			"host":  host,
-			"port":  vncPort,
-		}, http.StatusServiceUnavailable
+		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
+		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
+		restartReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
+		log.Printf("vnc_tcp_probe_restart agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, restartReady)
+		if !restartReady {
+			v.recordError(session.SessionID, "vnc_backend_unreachable")
+			return map[string]any{
+				"error": "vnc_backend_unreachable",
+				"host":  host,
+				"port":  vncPort,
+			}, http.StatusServiceUnavailable
+		}
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
@@ -274,8 +279,12 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
 	}
 	_ = v.vpn.confirmTransportSuccess(agentID)
-	log.Printf("vnc_establish_success agent_id=%s hostname=%s session_id=%s participant_id=%s host=%s port=%d", agentID, hostname, session.SessionID, participant.ParticipantID, host, vncPort)
 	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
+	tokenHint := guacToken
+	if len(tokenHint) > 8 {
+		tokenHint = tokenHint[:8]
+	}
+	log.Printf("vnc_establish_success agent_id=%s hostname=%s session_id=%s participant_id=%s host=%s port=%d ws_path=%s token_hint=%s", agentID, hostname, session.SessionID, participant.ParticipantID, host, vncPort, wsPath, tokenHint)
 	urls := remoteOpsWorkerURLs(r, result.Route)
 	snapshot := v.sessionSnapshot(session, profile.Username)
 	snapshot["display_topology"] = credential.DisplayTopology

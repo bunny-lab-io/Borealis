@@ -128,6 +128,20 @@ class GuacamoleSessionRegistry:
             session = self._sessions.pop(token, None)
         return session
 
+    def lookup(self, token: str) -> Optional[GuacamoleVncSession]:
+        if not token:
+            return None
+        with self._lock:
+            self._cleanup()
+            return self._sessions.get(token)
+
+    def revoke(self, token: str) -> bool:
+        if not token:
+            return False
+        with self._lock:
+            self._cleanup()
+            return self._sessions.pop(token, None) is not None
+
     def revoke_agent(self, agent_id: str) -> int:
         if not agent_id:
             return 0

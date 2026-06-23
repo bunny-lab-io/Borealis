@@ -971,12 +971,13 @@ class SiteWorkerSocketRuntime:
                 ),
             )
             self._log(
-                "remote_desktop_session_registered agent_id={0} session_id={1} participant_id={2} host={3} port={4}".format(
+                "remote_desktop_session_registered agent_id={0} session_id={1} participant_id={2} host={3} port={4} token_hint={5}".format(
                     agent_id,
                     session_id,
                     participant_id,
                     host,
                     port,
+                    guacamole_session.token[:8] if guacamole_session.token else "-",
                 )
             )
             return jsonify({"status": "ok", "token": guacamole_session.token}), 200

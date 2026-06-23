@@ -46,6 +46,11 @@ Use this file as entrypoint for Codex instructions. Full knowledgebase lives und
 - If the issue is an ongoing issue, you will continue to work from the same pull request until the issue is resolved, regardless of the number of commits.
 - If the developer tells you to merge the pull request early, be sure to confirm with them by saying "PR MERGE REQUESTED: Are you sure?", and if they say anything to the effect of yes, then you will merge the PR before the originally-tasked work is completed, but urge the developer to finish their changes before merging the PR if doing so will leave the codebase in a broken state. (Dont let the developer merge changes before they are stable/safe)
 
+## Re-Deploying the Engine and Rebuilding the Agent Golang Binaries
+- You may need to rebuild / re-deploy the Engine as part of testing, you are able to do this because the username that you operate under in this development environment has sudoless sudo, allowing you, the Codex agent, to run sudo commands without restriction.  This allows you to redeploy the engine and rebuild the golang binaries on-demand.
+- **Re-Deploy the Engine**: `bash /opt/Borealis/Engine.sh deploy prod`
+- **Re-Build the Agent Go Binaries**: `bash /opt/Borealis/Data/Agent/build-agent.sh`
+
 ## Unit Testing
 - For codebase changes, use `Docs/index.md` to find unit testing guidance before choosing validation.
 - Use `Engine_Unit_Tests.sh`, `Data/Agent/Unit_Tests/Agent_Unit_Tests.sh`, and `Data/Agent/Unit_Tests/Agent_Unit_Tests.ps1` as the unit test entrypoints.

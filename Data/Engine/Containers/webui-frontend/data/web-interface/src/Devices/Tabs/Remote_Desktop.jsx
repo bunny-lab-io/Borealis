@@ -248,6 +248,32 @@ function buildWsUrl(wsPath, token) {
   return parsed.toString();
 }
 
+function buildGuacamoleWsCandidates(data) {
+  const candidates = [];
+  const addCandidate = (value) => {
+    let candidate = "";
+    try {
+      candidate = buildWsUrl(value, "");
+    } catch {
+      candidate = "";
+    }
+    if (candidate && !candidates.includes(candidate)) {
+      candidates.push(candidate);
+    }
+  };
+
+  addCandidate(data?.guacamole_ws_url);
+  addCandidate(data?.guacamole_ws_path);
+
+  const routePrefix = normalizeText(data?.remote_ops_session?.worker?.route_path_prefix);
+  if (routePrefix) {
+    const normalizedPrefix = routePrefix.startsWith("/") ? routePrefix : `/${routePrefix}`;
+    addCandidate(`${normalizedPrefix.replace(/\/$/, "")}/remote-desktop/vnc/guacamole`);
+  }
+
+  return candidates;
+}
+
 function keysymFromChar(char) {
   if (!char) return null;
   if (char === "\n" || char === "\r") return 0xff0d;
@@ -274,6 +300,7 @@ const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
 const VNC_SESSION_RECONNECT_DELAY_MS = 1500;
 const VNC_OPEN_TIMEOUT_MS = 30000;
+const VNC_WS_OPEN_TIMEOUT_MS = 6000;
 const VNC_READY_STABILIZE_MS = 1800;
 const VNC_IDLE_WARNING_MS = 5 * 60 * 1000;
 const VNC_IDLE_DISCONNECT_MS = 6 * 60 * 1000;
@@ -1294,7 +1321,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const connectToken = Number(options.connectToken || 0);
       const attempt = Number(options.attempt || 1);
       const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
-      const wsUrl = buildWsUrl(data?.guacamole_ws_path, "") || data?.guacamole_ws_url || "";
+      const wsUrl = normalizeText(options.wsUrl) || buildGuacamoleWsCandidates(data)[0] || "";
+      const wsCandidateIndex = Math.max(1, Number(options.wsCandidateIndex || 1));
+      const wsCandidateCount = Math.max(1, Number(options.wsCandidateCount || 1));
       const token = data?.token || "";
       const displayHost = displayRef.current;
       if (!wsUrl || !token) {
@@ -1312,6 +1341,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       setStatusMessage(
         attempt > 1
           ? `Establishing Apache Guacamole... attempt ${attempt}/${maxAttempts}`
+          : wsCandidateCount > 1
+            ? `Establishing Apache Guacamole... route ${wsCandidateIndex}/${wsCandidateCount}`
           : "Establishing Apache Guacamole..."
       );
 
@@ -1350,6 +1381,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       return await new Promise((resolve, reject) => {
         let settled = false;
         let tunnelConnected = false;
+        let tunnelOpened = false;
         let desktopReady = false;
         let sawDesktopSync = false;
         let stableTimerId = 0;
@@ -1378,6 +1410,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           settled = true;
           desktopReady = true;
           clearTimeout(timeoutId);
+          clearTimeout(wsOpenTimeoutId);
           clearStableTimer();
           syncFramebufferSize(client);
           configureDisplaySurface(client, displayMode);
@@ -1393,6 +1426,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (settled) return;
           settled = true;
           clearTimeout(timeoutId);
+          clearTimeout(wsOpenTimeoutId);
           cleanup();
           const err = error instanceof Error ? error : new Error(String(error || "Guacamole session unavailable."));
           err.retryable = retryable;
@@ -1419,6 +1453,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         tunnel.onstatechange = (state) => {
           if (isStaleAttempt()) return;
           if (state === Guacamole.Tunnel.State.OPEN) {
+            tunnelOpened = true;
             tunnelWarningShownRef.current = false;
             return;
           }
@@ -1537,6 +1572,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           }
           finishReject("Guacamole connection timed out.", true);
         }, VNC_OPEN_TIMEOUT_MS);
+        const wsOpenTimeoutId = setTimeout(() => {
+          if (desktopReady || tunnelOpened) return;
+          try {
+            client.disconnect();
+          } catch {
+            /* ignore */
+          }
+          finishReject("Guacamole websocket did not open.", true);
+        }, VNC_WS_OPEN_TIMEOUT_MS);
         try {
           client.connect(`token=${encodeURIComponent(token)}`);
         } catch (error) {
@@ -1594,11 +1638,37 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (!sessionData || connectAttemptRef.current !== connectToken) {
             return;
           }
-          await openVncSession(sessionData, {
-            connectToken,
-            attempt,
-            maxAttempts: VNC_AUTO_RETRY_ATTEMPTS,
-          });
+          const wsCandidates = buildGuacamoleWsCandidates(sessionData);
+          const candidateList = wsCandidates.length ? wsCandidates : [""];
+          let lastCandidateError = null;
+          for (let candidateIndex = 0; candidateIndex < candidateList.length; candidateIndex += 1) {
+            if (connectAttemptRef.current !== connectToken) return;
+            try {
+              await openVncSession(sessionData, {
+                connectToken,
+                attempt,
+                maxAttempts: VNC_AUTO_RETRY_ATTEMPTS,
+                wsUrl: candidateList[candidateIndex],
+                wsCandidateIndex: candidateIndex + 1,
+                wsCandidateCount: candidateList.length,
+              });
+              return;
+            } catch (candidateErr) {
+              teardownDisplay();
+              lastCandidateError = candidateErr;
+              const retryableCandidate = candidateErr?.retryable !== false;
+              if (!retryableCandidate || candidateIndex >= candidateList.length - 1) {
+                throw candidateErr;
+              }
+              setSessionState("connecting");
+              setVncStage("retrying");
+              setStatusMessage(`Retrying Guacamole route... (${candidateIndex + 2}/${candidateList.length})`);
+              await sleep(250);
+            }
+          }
+          if (lastCandidateError) {
+            throw lastCandidateError;
+          }
           return;
         } catch (err) {
           teardownDisplay();
