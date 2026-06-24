@@ -2114,7 +2114,7 @@ export default function SiteList() {
     {
       headerName: "Auto-Approval",
       field: "auto_approve_until",
-      minWidth: 210,
+      minWidth: 240,
       valueGetter: (params) => {
         const until = Number(params.data?.auto_approve_until || 0);
         const active = Boolean(params.data?.auto_approval_active) && until > Math.floor(Date.now() / 1000);
