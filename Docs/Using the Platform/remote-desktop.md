@@ -17,6 +17,10 @@ Remote Desktop opens a shared browser VNC session to a Windows agent through Bor
 
 If another operator already has the device open, Borealis joins the same shared collaboration session.
 
+!!! info
+
+    Slower endpoints can spend extra time on `Authenticating Session` while the Agent finishes VNC service and listener checks. Borealis continues probing before failing so underpowered virtual machines have time to become ready.
+
 ## Use Session Controls
 
 - Reconnect if the browser stream drops after it was already ready.
@@ -68,3 +72,6 @@ If another operator already has the device open, Borealis joins the same shared 
     - Browser receives a Borealis one-time token, not the UltraVNC password.
     - Guacamole connects through local `guacd`, then to the agent VNC listener over WireGuard.
     - VNC role keeps UltraVNC available after firewall scope and runtime credentials are ready.
+    - VNC establish performs a fast TCP probe first, then longer recovery and restart probes for slow Agent readiness.
+    - Engine VNC readiness waits can be tuned with `BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS`, `BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS`, `BOREALIS_VNC_RESTART_READY_WAIT_SECONDS`, and `BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS`.
+    - Agent VNC readiness serializes local service checks, gives pending services time to settle, force-kills stuck `STOP_PENDING` UltraVNC processes after grace time, and waits for the listener before reporting ready.

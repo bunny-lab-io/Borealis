@@ -31,9 +31,10 @@ const (
 )
 
 var (
-	serviceTransitionWait           = 12 * time.Second
-	serviceTransitionForceKillWait  = 5 * time.Second
-	serviceAlreadyRunningVerifyWait = 4 * time.Second
+	serviceTransitionWait           = 20 * time.Second
+	serviceTransitionForceKillWait  = 10 * time.Second
+	serviceAlreadyRunningVerifyWait = 8 * time.Second
+	listenerReadyWait               = 20 * time.Second
 )
 
 type AuthClient interface {
@@ -548,7 +549,7 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	m.mu.Lock()
 	m.serviceConfigLoaded = true
 	m.mu.Unlock()
-	listenerReady := m.waitForListener(port, 8*time.Second)
+	listenerReady := m.waitForListener(port, listenerReadyWait)
 	serviceState := m.queryServiceState(ctx, m.serviceName)
 	ready := listenerReady && isServiceRunning(serviceState)
 	listenerState := "not_listening"

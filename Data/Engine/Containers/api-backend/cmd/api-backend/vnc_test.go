@@ -219,3 +219,23 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 		t.Fatalf("nil worker error should not request auth retry")
 	}
 }
+
+func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
+	cases := map[string]float64{
+		"live_credentials": defaultVNCLiveCredentialWaitSeconds,
+		"recovery_ready":   defaultVNCRecoveryReadyWaitSeconds,
+		"restart_ready":    defaultVNCRestartReadyWaitSeconds,
+		"auth_retry_ready": defaultVNCAuthRetryReadyWaitSeconds,
+	}
+	minimums := map[string]float64{
+		"live_credentials": 30,
+		"recovery_ready":   20,
+		"restart_ready":    20,
+		"auth_retry_ready": 20,
+	}
+	for name, got := range cases {
+		if got < minimums[name] {
+			t.Fatalf("%s wait too short for slow agents: got %.1fs want >= %.1fs", name, got, minimums[name])
+		}
+	}
+}

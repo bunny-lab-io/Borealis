@@ -15,6 +15,13 @@ import (
 	"time"
 )
 
+const (
+	defaultVNCLiveCredentialWaitSeconds = 30
+	defaultVNCRecoveryReadyWaitSeconds  = 25
+	defaultVNCRestartReadyWaitSeconds   = 25
+	defaultVNCAuthRetryReadyWaitSeconds = 20
+)
+
 type vncRuntime struct {
 	auth    *authService
 	vpn     *vpnTunnelService
@@ -137,7 +144,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	hostname := result.Device.Hostname
 	serviceMode := serviceModeFromAgentID(agentID)
 	log.Printf("vnc_issue_start agent_id=%s hostname=%s service_mode=%s worker_guid=%s", agentID, hostname, serviceMode, result.Route.WorkerGUID)
-	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_establish", vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", 20))
+	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_establish", vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds))
 	if credErr != nil || credential.ControllerPassword == "" {
 		log.Printf("vnc_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, credErr)
 		return map[string]any{"error": "vnc_agent_live_credentials_unavailable"}, http.StatusServiceUnavailable
@@ -200,13 +207,13 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
 	recoveryReady := fastReady
 	if !fastReady {
-		recoveryReady = waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
+		recoveryReady = waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", defaultVNCRecoveryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
 	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
 	if !recoveryReady {
 		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
 		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
-		restartReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
+		restartReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", defaultVNCRestartReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
 		log.Printf("vnc_tcp_probe_restart agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, restartReady)
 		if !restartReady {
 			v.recordError(session.SessionID, "vnc_backend_unreachable")
@@ -248,7 +255,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 			})
 			log.Printf("vnc_auth_retry_start_emit agent_id=%s hostname=%s emitted=%t session_id=%s revision=%d", agentID, hostname, emitOK, session.SessionID, session.CredentialRevision)
 			if emitOK {
-				retryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", 10), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+				retryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
 				log.Printf("vnc_auth_retry_tcp_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
 				if retryReady {
 					workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body)

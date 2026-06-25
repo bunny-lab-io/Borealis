@@ -693,6 +693,83 @@ func TestEnsureAlwaysOnClearsReadyWhenServiceStopPending(t *testing.T) {
 	}
 }
 
+func TestEnsureAlwaysOnWaitsForDelayedListener(t *testing.T) {
+	oldListenerReadyWait := listenerReadyWait
+	listenerReadyWait = 250 * time.Millisecond
+	defer func() {
+		listenerReadyWait = oldListenerReadyWait
+	}()
+
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := reserved.Addr().String()
+	port := reserved.Addr().(*net.TCPAddr).Port
+	if err := reserved.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(50 * time.Millisecond)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Errorf("delayed listener failed: %v", err)
+			return
+		}
+		defer listener.Close()
+		conn, err := listener.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	manager := &Manager{
+		supported:          true,
+		configPath:         filepath.Join(dir, "agent.json"),
+		logPath:            filepath.Join(dir, "vnc.log"),
+		serviceName:        serviceName,
+		vncExe:             exePath,
+		port:               port,
+		allowedIPs:         "10.255.0.1/32",
+		controllerPassword: "bootpass",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "powershell.exe" {
+				return commandResult{ExitCode: 0}, nil
+			}
+			if name == "sc.exe" && len(args) > 0 {
+				switch args[0] {
+				case "query":
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				case "config", "failure":
+					return commandResult{Stdout: "ok", ExitCode: 0}, nil
+				}
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+
+	if err := manager.ensureAlwaysOn(context.Background(), "vnc_establish"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delayed listener did not receive readiness probe")
+	}
+	if !manager.lastReady || manager.lastListenerState != "listening" || manager.lastServiceState != "RUNNING" {
+		t.Fatalf("expected delayed listener readiness, ready=%t service=%s listener=%s", manager.lastReady, manager.lastServiceState, manager.lastListenerState)
+	}
+}
+
 func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
 	manager := &Manager{
 		serviceName: serviceName,
