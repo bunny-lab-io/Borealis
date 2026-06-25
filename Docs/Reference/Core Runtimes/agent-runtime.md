@@ -32,6 +32,10 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Linux protection: root-owned `0600` file with `0700` parent directory.
 - Writes are atomic temp-write + rename and serialized across processes through a sibling `agent.json.lock` file. Each write increments `agent.state.revision` and stamps `agent.state.writer` plus `agent.state.last_write_at` so stale writer/debug cases are visible.
 
+## Agent CLI Flags
+
+Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Agent` command-line arguments, including install and re-deploy inputs, metadata field get/set, update checks, service repair/removal, watchdog checks, validation, and internal helper modes.
+
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints (Engine-facing)
@@ -54,6 +58,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 
     ### Related documentation
 
+    - [Agent CLI Flags](agent-cli-flags.md)
     - [Security and Trust](../../Reference/security-and-trust.md)
     - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
     - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
