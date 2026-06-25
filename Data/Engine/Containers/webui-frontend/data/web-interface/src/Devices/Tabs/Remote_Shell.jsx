@@ -16,6 +16,15 @@ import {
   RefreshRounded as RefreshIcon,
 } from "@mui/icons-material";
 import { io } from "socket.io-client";
+import "prismjs/themes/prism-okaidia.css";
+import {
+  clampOutput,
+  cleanShellOutput,
+  highlightShellOutput,
+  inferShellKind,
+  normalizeText,
+  shellLanguageForKind,
+} from "./remoteShellFormatting.js";
 
 const MAGIC_UI = {
   panelBorder: "rgba(148, 163, 184, 0.35)",
@@ -40,12 +49,6 @@ const gradientButtonSx = {
 
 const fontFamilyMono =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-const OUTPUT_LIMIT = 40000;
-const ANSI_OSC_PATTERN = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
-const ANSI_ST_PATTERN = /\u001B[P^_][\s\S]*?\u001B\\/g;
-const ANSI_CSI_PATTERN = /\u001B\[[0-?]*[ -/]*[@-~]/g;
-const ANSI_ESC_PATTERN = /\u001B[@-Z\\-_]/g;
-const ANSI_C1_CSI_PATTERN = /\u009B[0-?]*[ -/]*[@-~]/g;
 
 const emitAsync = (socket, event, payload, timeoutMs = 4000) =>
   new Promise((resolve) => {
@@ -98,51 +101,6 @@ const waitForSocketConnect = (socket, timeoutMs = 10000) =>
     socket.on("disconnect", handleDisconnect);
   });
 
-function normalizeText(value) {
-  if (value == null) return "";
-  try {
-    return String(value).trim();
-  } catch {
-    return "";
-  }
-}
-
-function clampOutput(value) {
-  return value.length > OUTPUT_LIMIT ? value.slice(value.length - OUTPUT_LIMIT) : value;
-}
-
-function inferShellKind(device) {
-  const fingerprint = [
-    device?.operating_system,
-    device?.agent_operating_system,
-    device?.os,
-    device?.summary?.operating_system,
-    device?.summary?.agent_operating_system,
-    device?.summary?.os,
-  ]
-    .map(normalizeText)
-    .join(" ")
-    .toLowerCase();
-
-  if (!fingerprint) return "powershell";
-  if (fingerprint.includes("windows")) return "powershell";
-  if (
-    fingerprint.includes("linux") ||
-    fingerprint.includes("ubuntu") ||
-    fingerprint.includes("debian") ||
-    fingerprint.includes("rocky") ||
-    fingerprint.includes("centos") ||
-    fingerprint.includes("red hat") ||
-    fingerprint.includes("rhel") ||
-    fingerprint.includes("fedora") ||
-    fingerprint.includes("suse") ||
-    fingerprint.includes("alpine")
-  ) {
-    return "bash";
-  }
-  return "powershell";
-}
-
 function shellSocketConfig(remoteOpsSession) {
   const routePrefix = normalizeText(remoteOpsSession?.worker?.route_path_prefix);
   if (routePrefix) {
@@ -174,23 +132,6 @@ function shellTunnelPayload(data) {
   return payload;
 }
 
-function cleanShellOutput(value) {
-  if (value == null) return "";
-  try {
-    return String(value)
-      .replace(/\r\n/g, "\n")
-      .replace(/\r(?!\n)/g, "")
-      .replace(ANSI_OSC_PATTERN, "")
-      .replace(ANSI_ST_PATTERN, "")
-      .replace(ANSI_CSI_PATTERN, "")
-      .replace(ANSI_C1_CSI_PATTERN, "")
-      .replace(ANSI_ESC_PATTERN, "")
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-  } catch {
-    return "";
-  }
-}
-
 export default function ReverseTunnelRemoteShell({ device }) {
   const [sessionState, setSessionState] = useState("idle");
   const [shellState, setShellState] = useState("idle");
@@ -210,8 +151,13 @@ export default function ReverseTunnelRemoteShell({ device }) {
   const previousAgentIdRef = useRef("");
   const connectAttemptRef = useRef(0);
   const shellKind = useMemo(() => inferShellKind(device), [device]);
+  const shellLanguage = useMemo(() => shellLanguageForKind(shellKind), [shellKind]);
   const promptLabel = shellKind === "bash" ? "#" : "PS>";
   const displayOutput = useMemo(() => cleanShellOutput(output), [output]);
+  const highlightedOutput = useMemo(
+    () => highlightShellOutput(displayOutput, shellKind),
+    [displayOutput, shellKind]
+  );
 
   const agentId = useMemo(() => {
     return (
@@ -623,20 +569,44 @@ export default function ReverseTunnelRemoteShell({ device }) {
         >
           <Box
             component="pre"
+            className={`language-${shellLanguage}`}
             sx={{
               margin: 0,
               minHeight: "100%",
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
-              background: "transparent",
+              background: "transparent !important",
+              backgroundColor: "transparent !important",
               color: "#e6edf3",
               fontFamily: fontFamilyMono,
               fontSize: 13,
               lineHeight: 1.5,
               pr: 4,
+              "& code": {
+                display: "block",
+                fontFamily: "inherit",
+                fontSize: "inherit",
+                lineHeight: "inherit",
+                color: "inherit",
+                whiteSpace: "inherit",
+                background: "transparent !important",
+                backgroundColor: "transparent !important",
+              },
+              "&[class*='language-']": {
+                background: "transparent !important",
+                backgroundColor: "transparent !important",
+              },
+              "& code[class*='language-']": {
+                background: "transparent !important",
+                backgroundColor: "transparent !important",
+              },
             }}
           >
-            {displayOutput}
+            <Box
+              component="code"
+              className={`language-${shellLanguage}`}
+              dangerouslySetInnerHTML={{ __html: highlightedOutput }}
+            />
           </Box>
           <Box sx={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 0.5 }}>
             <Tooltip title="Copy output">
