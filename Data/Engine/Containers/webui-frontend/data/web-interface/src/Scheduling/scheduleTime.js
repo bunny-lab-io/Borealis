@@ -47,6 +47,12 @@ export function dayjsFromEpochInTimezone(epochSeconds, timeZone = "", fallback =
   return parsed?.isValid?.() ? parsed : fallback;
 }
 
+export function dayjsFromEngineClock(clock, offsetSeconds = 0, fallback = dayjs()) {
+  const epoch = Number(clock?.epoch);
+  if (!Number.isFinite(epoch) || epoch <= 0) return fallback;
+  return dayjsFromEpochInTimezone(epoch + Number(offsetSeconds || 0), clock?.timezone, fallback);
+}
+
 export function wallClockStringFromDayjs(value) {
   const parsed = value?.second ? value.second(0) : dayjs(value).second(0);
   return parsed?.isValid?.() ? parsed.format(WALL_CLOCK_FORMAT) : null;

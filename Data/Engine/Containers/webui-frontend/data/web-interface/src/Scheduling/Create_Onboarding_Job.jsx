@@ -48,6 +48,7 @@ import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
 import {
+  dayjsFromEngineClock,
   fetchEngineScheduleClock,
   wallClockStringFromDatetimeLocal,
   wallClockStringFromDayjs,
@@ -648,14 +649,15 @@ function datetimeLocalValue(epochSeconds, timeZone = "") {
   return wallClockStringFromEpoch(epochSeconds, timeZone);
 }
 
-function defaultStartDateTime() {
-  return dayjs().add(5, "minute").second(0);
+function defaultStartDateTime(clock = null) {
+  return dayjsFromEngineClock(clock, 5 * 60, dayjs().add(5, "minute").second(0));
 }
 
-function dateTimePickerValue(value) {
+function dateTimePickerValue(value, clock = null) {
   const text = String(value || "").trim();
-  const parsed = text ? dayjs(text).second(0) : defaultStartDateTime();
-  return parsed?.isValid?.() ? parsed : defaultStartDateTime();
+  const fallback = defaultStartDateTime(clock);
+  const parsed = text ? dayjs(text).second(0) : fallback;
+  return parsed?.isValid?.() ? parsed : fallback;
 }
 
 function datetimeLocalValueFromDayjs(value) {
@@ -1380,6 +1382,11 @@ export default function CreateOnboardingJob() {
   const [nameTouched, setNameTouched] = useState(false);
   const [selectedTargetId, setSelectedTargetId] = useState("");
   const [progressionClock, setProgressionClock] = useState(() => Date.now());
+  const [engineScheduleClock, setEngineScheduleClock] = useState({
+    timezone: "",
+    epoch: null,
+    loaded: false,
+  });
   const targetGridApiRef = useRef(null);
   const progressionGridApiRef = useRef(null);
   const targetsLoadingRef = useRef(false);
@@ -1479,9 +1486,9 @@ export default function CreateOnboardingJob() {
       start:
         normalizedType === "immediately"
           ? prev.start
-          : prev.start || datetimeLocalValueFromDayjs(defaultStartDateTime()),
+          : prev.start || datetimeLocalValueFromDayjs(defaultStartDateTime(engineScheduleClock)),
     }));
-  }, []);
+  }, [engineScheduleClock]);
 
   const fetchInstallBranches = useCallback(async () => {
     setBranchesLoading(true);
@@ -1559,6 +1566,8 @@ export default function CreateOnboardingJob() {
         editing ? fetch(`/api/scheduled_jobs/${jobId}`, { credentials: "include" }) : Promise.resolve(null),
         fetchEngineScheduleClock().catch(() => ({ timezone: "", epoch: null })),
       ]);
+      const nextClock = { ...clock, loaded: true };
+      setEngineScheduleClock(nextClock);
       const sitesData = await sitesResp.json().catch(() => ({}));
       if (!sitesResp.ok) throw new Error(sitesData?.error || `Unable to load sites (${sitesResp.status})`);
       const credentialsData = await credentialsResp.json().catch(() => ({}));
@@ -1623,7 +1632,7 @@ export default function CreateOnboardingJob() {
               DEFAULT_ONBOARDING_CONCURRENCY
           ),
           scheduleType: job.schedule_type || "immediately",
-          start: datetimeLocalValue(job.start_ts, clock?.timezone || ""),
+          start: datetimeLocalValue(job.start_ts, nextClock.timezone || ""),
           enabled: Boolean(job.enabled),
         });
         setNameTouched(Boolean(job.name));
@@ -2616,7 +2625,7 @@ export default function CreateOnboardingJob() {
                       <LocalizationProvider dateAdapter={AdapterDayjs}>
                         <DateTimePicker
                           label="Start"
-                          value={dateTimePickerValue(form.start)}
+                          value={dateTimePickerValue(form.start, engineScheduleClock)}
                           onChange={(value) => setField("start", datetimeLocalValueFromDayjs(value))}
                           views={["year", "month", "day", "hours", "minutes"]}
                           format="YYYY-MM-DD hh:mm A"

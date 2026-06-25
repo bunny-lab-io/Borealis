@@ -59,6 +59,7 @@ import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
 import {
+  dayjsFromEngineClock,
   dayjsFromEpochInTimezone,
   fetchEngineScheduleClock,
   wallClockStringFromDayjs,
@@ -1567,21 +1568,40 @@ export default function CreateJob() {
   const [assembliesError, setAssembliesError] = useState("");
   const assemblyExportCacheRef = useRef(new Map());
   const quickDraftAppliedRef = useRef(null);
-  const [engineTimezone, setEngineTimezone] = useState("");
+  const startDateTimeTouchedRef = useRef(false);
+  const hydratedFormKeyRef = useRef("");
+  const [engineScheduleClock, setEngineScheduleClock] = useState({
+    timezone: "",
+    epoch: null,
+    loaded: false,
+  });
+  const engineTimezone = engineScheduleClock.timezone || "";
 
   useEffect(() => {
     let canceled = false;
     fetchEngineScheduleClock()
-      .then(({ timezone }) => {
-        if (!canceled && timezone) {
-          setEngineTimezone(timezone);
+      .then((clock) => {
+        if (canceled) return;
+        const nextClock = { ...clock, loaded: true };
+        setEngineScheduleClock(nextClock);
+        if (!initialJob && !quickJobDraft && !startDateTimeTouchedRef.current) {
+          setStartDateTime(dayjsFromEngineClock(nextClock, 5 * 60, dayjs().add(5, "minute").second(0)));
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!canceled) {
+          setEngineScheduleClock((prev) => ({ ...prev, loaded: true }));
+        }
+      });
     return () => {
       canceled = true;
     };
   }, []);
+
+  useEffect(() => {
+    hydratedFormKeyRef.current = "";
+    startDateTimeTouchedRef.current = false;
+  }, [initialJob?.id]);
 
   useEffect(() => {
     setQuickJobDraft(location.state?.quickJobDraft || null);
@@ -3954,10 +3974,18 @@ export default function CreateJob() {
     let canceled = false;
     const hydrate = async () => {
       if (initialJob && initialJob.id) {
+        const formKey = String(initialJob.id);
+        if (hydratedFormKeyRef.current === formKey) {
+          return;
+        }
         if (!hasHydratedJobPayload(resolvedInitialJob)) {
           return;
         }
+        if (resolvedInitialJob.start_ts && !engineScheduleClock.loaded) {
+          return;
+        }
 
+        hydratedFormKeyRef.current = formKey;
         setJobName(resolvedInitialJob.name || "");
         setPageTitleJobName(
           typeof resolvedInitialJob.name === "string" ? resolvedInitialJob.name.trim() : ""
@@ -3995,20 +4023,24 @@ export default function CreateJob() {
           setComponents(hydrated);
           setComponentVarErrors({});
         }
-      } else if (!initialJob) {
+      } else if (!initialJob && hydratedFormKeyRef.current !== "new") {
+        hydratedFormKeyRef.current = "new";
         setPageTitleJobName("");
         setComponents([]);
         setComponentVarErrors({});
         setSelectedCredentialId("");
         setUseSvcAccount(true);
         setExpiration("1h");
+        if (engineScheduleClock.loaded && !startDateTimeTouchedRef.current) {
+          setStartDateTime(dayjsFromEngineClock(engineScheduleClock, 5 * 60, dayjs().add(5, "minute").second(0)));
+        }
       }
     };
     hydrate();
     return () => {
       canceled = true;
     };
-  }, [engineTimezone, hydrateExistingComponents, initialJob, normalizeTargetList, resolvedInitialJob]);
+  }, [engineScheduleClock, engineTimezone, hydrateExistingComponents, initialJob, normalizeTargetList, resolvedInitialJob]);
 
   const openAddComponent = async () => {
     setAddCompOpen(true);
@@ -4628,7 +4660,10 @@ export default function CreateJob() {
                 <LocalizationProvider dateAdapter={AdapterDayjs}>
                   <DateTimePicker
                     value={startDateTime}
-                    onChange={(val) => setStartDateTime(val?.second ? val.second(0) : val)}
+                    onChange={(val) => {
+                      startDateTimeTouchedRef.current = true;
+                      setStartDateTime(val?.second ? val.second(0) : val);
+                    }}
                     views={["year", "month", "day", "hours", "minutes"]}
                     format="YYYY-MM-DD hh:mm A"
                     slotProps={{
