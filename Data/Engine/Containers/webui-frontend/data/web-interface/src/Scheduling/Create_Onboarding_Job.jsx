@@ -51,7 +51,7 @@ import {
   dayjsFromEngineClock,
   fetchEngineScheduleClock,
   wallClockStringFromDatetimeLocal,
-  wallClockStringFromDayjs,
+  wallClockStringFromEnginePickerValue,
   wallClockStringFromEpoch,
 } from "./scheduleTime.js";
 import { AgGridReact } from "ag-grid-react";
@@ -661,7 +661,7 @@ function dateTimePickerValue(value, clock = null) {
 }
 
 function datetimeLocalValueFromDayjs(value) {
-  return wallClockStringFromDayjs(value) || "";
+  return wallClockStringFromEnginePickerValue(value) || "";
 }
 
 function targetOutputContent(target, mode) {

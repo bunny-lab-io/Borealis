@@ -62,7 +62,7 @@ import {
   dayjsFromEngineClock,
   dayjsFromEpochInTimezone,
   fetchEngineScheduleClock,
-  wallClockStringFromDayjs,
+  wallClockStringFromEnginePickerValue,
 } from "./scheduleTime.js";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
@@ -4282,7 +4282,7 @@ export default function CreateJob() {
       name: jobName,
       components: payloadComponents,
       targets: workflowMode ? [] : serializeTargetsForSave(targets),
-      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? wallClockStringFromDayjs(startDateTime) : null },
+      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? wallClockStringFromEnginePickerValue(startDateTime) : null },
       duration: { stopAfterEnabled: expiration !== "no_expire", expiration },
       execution_context: workflowMode ? "system" : execContext,
       credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),

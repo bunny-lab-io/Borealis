@@ -53,7 +53,7 @@ export function dayjsFromEngineClock(clock, offsetSeconds = 0, fallback = dayjs(
   return dayjsFromEpochInTimezone(epoch + Number(offsetSeconds || 0), clock?.timezone, fallback);
 }
 
-export function wallClockStringFromDayjs(value) {
+export function wallClockStringFromEnginePickerValue(value) {
   const parsed = value?.second ? value.second(0) : dayjs(value).second(0);
   return parsed?.isValid?.() ? parsed.format(WALL_CLOCK_FORMAT) : null;
 }
