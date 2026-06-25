@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -386,6 +388,113 @@ func TestRoutineAlwaysOnEnsureDoesNotWriteSteadyStateLogs(t *testing.T) {
 	}
 	if strings.TrimSpace(string(raw)) != "" {
 		t.Fatalf("expected steady always-on check to stay quiet, got:\n%s", string(raw))
+	}
+}
+
+func TestDisconnectEnsureSkipsHeavyWorkWhenAlreadyReady(t *testing.T) {
+	for _, reason := range []string{"operator_disconnect", "component_unmount", "vnc_session_end"} {
+		t.Run(reason, func(t *testing.T) {
+			runnerCalls := 0
+			manager := &Manager{
+				supported:          true,
+				serviceName:        serviceName,
+				port:               5900,
+				allowedIPs:         "10.255.0.1/32",
+				controllerPassword: "bootpass",
+				lastReady:          true,
+				lastServiceState:   "RUNNING",
+				lastListenerState:  "listening",
+				runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+					runnerCalls++
+					return commandResult{}, errors.New("disconnect ensure should not touch service runner")
+				},
+			}
+
+			if err := manager.ensureAlwaysOn(context.Background(), reason); err != nil {
+				t.Fatal(err)
+			}
+			if runnerCalls != 0 {
+				t.Fatalf("disconnect ensure touched service runner %d times", runnerCalls)
+			}
+		})
+	}
+}
+
+func TestEnsureAlwaysOnSerializesLifecycleWork(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var activeRunnerCalls int32
+	var maxActiveRunnerCalls int32
+	manager := &Manager{
+		supported:           true,
+		configPath:          filepath.Join(dir, "agent.json"),
+		logPath:             filepath.Join(dir, "vnc.log"),
+		serviceName:         serviceName,
+		vncExe:              exePath,
+		port:                port,
+		allowedIPs:          "10.255.0.1/32",
+		controllerPassword:  "bootpass",
+		credentialRevision:  12345,
+		removeWallpaper:     true,
+		serviceConfigLoaded: true,
+		lastReady:           true,
+		lastServiceState:    "RUNNING",
+		lastListenerState:   "listening",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			current := atomic.AddInt32(&activeRunnerCalls, 1)
+			for {
+				maxObserved := atomic.LoadInt32(&maxActiveRunnerCalls)
+				if current <= maxObserved || atomic.CompareAndSwapInt32(&maxActiveRunnerCalls, maxObserved, current) {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			defer atomic.AddInt32(&activeRunnerCalls, -1)
+
+			if name == "sc.exe" && len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+	if _, _, err := manager.ensureConfig(port, "bootpass", true); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- manager.ensureAlwaysOn(context.Background(), "vnc_establish")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if max := atomic.LoadInt32(&maxActiveRunnerCalls); max > 1 {
+		t.Fatalf("expected serialized VNC lifecycle work, observed %d concurrent runner calls", max)
 	}
 }
 

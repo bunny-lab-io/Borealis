@@ -71,6 +71,7 @@ type Manager struct {
 	runner      commandRunner
 
 	mu                  sync.Mutex
+	ensureMu            sync.Mutex
 	started             bool
 	supported           bool
 	unsupportedReason   string
@@ -473,6 +474,12 @@ func (m *Manager) ensureRequestPayload(reason string, credential string, revisio
 
 func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 	if m == nil || !m.supported {
+		return nil
+	}
+	m.ensureMu.Lock()
+	defer m.ensureMu.Unlock()
+	if isPassiveDisconnectEnsureReason(reason) && m.credentialFastPathReady() {
+		m.tracef("VNC ensure skipped reason=%s service=%s ready=true", reason, m.serviceName)
 		return nil
 	}
 	m.mu.Lock()
@@ -1028,6 +1035,15 @@ func (m *Manager) tracef(format string, args ...any) {
 
 func isRoutineEnsureReason(reason string) bool {
 	return strings.EqualFold(strings.TrimSpace(reason), "always_on_check")
+}
+
+func isPassiveDisconnectEnsureReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "operator_disconnect", "component_unmount", "vnc_session_end":
+		return true
+	default:
+		return false
+	}
 }
 
 func vncTraceEnabled() bool {
