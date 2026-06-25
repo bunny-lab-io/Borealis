@@ -97,6 +97,11 @@ Do not create separate scratch-memory docs when domain doc, issue, PR, or SBOM e
   * `!!! tip` for beginner guidance or recommended choices.
   * `!!! warning` for destructive, risky, or environment-sensitive actions.
   * `!!! info` for short operational context that helps without requiring code knowledge.
+  * `!!! success` for illustrating examples of what successful behavior / output may look like.
+  * `!!! question` for situations where research or considerations from the operator may be necessary.
+  * `!!! danger` to illustrate to the operator that they need to be careful, because their actions may affect several systems or cause irrevokable damage or break the Borealis environment or the host it runs on.
+  * `!!! bug` for known bugs or unintended behavior that involves operator workarounds.  Anything labeled as a bug should have some kind of mitigation or workaround.
+  * `!!! example` used to illustrate data with placeholder values or placeholder data representing expected input or output.
   * `??? note` for optional advanced commands, alternate install paths, and deeper configuration.
   * `??? example "Detailed Codex Breakdown"` for Codex-only details and hidden reference material.
 
