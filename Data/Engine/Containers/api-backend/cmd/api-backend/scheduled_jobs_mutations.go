@@ -890,10 +890,10 @@ func scheduledParseTS(value any) sql.NullInt64 {
 	if parsed, err := time.Parse(time.RFC3339, strings.ReplaceAll(text, "Z", "+00:00")); err == nil {
 		return sql.NullInt64{Int64: parsed.Unix(), Valid: true}
 	}
-	if parsed, err := time.Parse("2006-01-02T15:04", text); err == nil {
+	if parsed, err := time.ParseInLocation("2006-01-02T15:04", text, engineScheduleLocation()); err == nil {
 		return sql.NullInt64{Int64: parsed.Unix(), Valid: true}
 	}
-	if parsed, err := time.Parse("2006-01-02 15:04:05", text); err == nil {
+	if parsed, err := time.ParseInLocation("2006-01-02 15:04:05", text, engineScheduleLocation()); err == nil {
 		return sql.NullInt64{Int64: parsed.Unix(), Valid: true}
 	}
 	if value, ok := int64Value(text); ok {
