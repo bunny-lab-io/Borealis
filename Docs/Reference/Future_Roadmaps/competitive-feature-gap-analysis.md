@@ -43,7 +43,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | PowerShell / script execution | Shipped | `Docs/Using the Platform/Assemblies/scripts.md`, `Docs/Using the Platform/scheduled-jobs.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `README.md` | Borealis supports quick jobs, scheduled jobs, and signed PowerShell/Batch/Bash execution. |
 | Service inventory and service control | Shipped | `Docs/Using the Platform/service-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | Device APIs expose cached services plus start/stop/restart actions. |
 | Installed software inventory, uninstall, and software override governance | Shipped | `Docs/Using the Platform/software-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Reference/software-icon-overrides.md`, `Docs/Reference/software-uninstall-overrides.md`, `Docs/Reference/software-uninstall-blocklist.md` | Borealis now has a first-class Installed Software surface with row-level uninstall, global icon overrides, global uninstall overrides, uninstall block/unblock, on-demand `Query Software Changes`, and uninstall progress/history in Activity History. |
-| Processes | Shipped | `Docs/Using the Platform/process-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
+| Processes | Shipped | `Docs/Using the Platform/process-management.md`, `Docs/Reference/Core Runtimes/agent-runtime.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`, `Data/Agent/Roles/role_system_process_management.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx` | Borealis now has a Device Summary `Processes` tab with live process snapshots, CPU/memory/disk/network metadata, owner and command-line columns, parent/child grouping, system-process filtering, terminated-process visibility, copy actions, and operator-triggered `End Task`. |
 | Screenshot / quick visual capture | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy node screenshot support is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
 | Macro / UI automation | Deferred | `Docs/Reference/Core Runtimes/agent-runtime.md` | Legacy macro automation is retired from the Go Agent migration scope; revisit as a new product feature if needed. |
 | Event Viewer | Absent | `Docs/Using the Platform/device-auditing.md`, `Docs/Reference/Data and Schema/api-reference.md` | No event-log/Event Viewer APIs or documented UI surface were found. |
@@ -138,10 +138,10 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 | --- | --- | --- | --- |
 | MFA | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
 | Passkeys / modern auth | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
-| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
+| LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_ldap.go`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
 | Script/code signing | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/Assemblies/scripts.md` | Strong differentiator versus much of the field. |
 | Aegis secret protection | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
-| Site-scoped RBAC | Shipped | `Docs/Using the Platform/site-assignments.md`, `README.md`, `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py` | Strong multi-operator control model now extends to directory-backed user groups. |
+| Site-scoped RBAC | Shipped | `Docs/Using the Platform/site-assignments.md`, `README.md`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go` | Strong multi-operator control model now extends to directory-backed user groups. |
 | Customer lockbox | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/engine-log-management.md` | No tenancy-support lockbox pattern is documented. |
 | SAML / SSO | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
 | Management IP allowlisting | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/remote-shell.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
@@ -255,14 +255,15 @@ Borealis is not starting from zero. Several areas already compare well, and thes
 - Live process inspection and termination:
   - `Docs/Using the Platform/process-management.md`
   - `Docs/Reference/Core Runtimes/agent-runtime.md`
-  - `Data/Engine/Containers/api-backend/data/services/API/devices/processes.py`
+  - `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`
   - `Data/Agent/Roles/role_system_process_management.py`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
   - `Docs/Reference/security-and-trust.md`
   - `Docs/Reference/Core Runtimes/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
-  - `Data/Engine/Containers/api-backend/data/services/API/access_management/directory_services.py`
+  - `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`
+  - `Data/Engine/Containers/api-backend/cmd/api-backend/directory_ldap.go`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`
   - `Data/Engine/Containers/api-backend/data/database.py`
 - Site-scoped RBAC and scoped targeting:

@@ -83,17 +83,18 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
 ## Engine Tuning Profiles
-- Legacy systemd deployments auto-detected the Engine host profile during deployment and re-deployment.
-- Container deployments render conservative DB pool values into `Engine/Deploy/compose.env`; tune those values explicitly for larger installations until profile-aware container tuning is added.
+- Container deployments auto-detect the Engine host profile during every `Engine.sh deploy` and redeploy.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
-- The launcher writes the selected profile metadata and tuning values into `Engine/database.env` and then applies the PostgreSQL settings with launcher-managed `ALTER SYSTEM` statements.
+- The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled work-item slots into `Engine/Deploy/compose.env`.
+- Docker Compose applies PostgreSQL tuning through the `postgres-db` container startup command, so operators do not run manual `ALTER SYSTEM` steps for normal profile tuning.
 - The current auto-selected single-node profiles are:
   - `Homelab`
   - `Small Business`
   - `MSP / Production`
   - `Enterprise`
-- The roadmap-only `Enterprise Clustered` profile in `README.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+- The roadmap-only `Enterprise Clustered` profile in `Docs/Engine/deploying-the-engine.md` is not auto-selected today because Borealis does not yet support clustered orchestration.
+- Site-worker scheduled work-item slots are profile-managed and exposed as read-only in Server Info.
 
 ### Profile selection thresholds
 - Borealis scores CPU and RAM separately, then uses the lower of the two ranks as the effective profile so an unbalanced host does not get over-tuned.
@@ -129,6 +130,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 10`
   - `BOREALIS_DB_MAX_OVERFLOW = 10`
   - effective pooled Engine connection burst capacity: `20`
+- Site-worker scheduled work-item slots:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 5`
 - PostgreSQL connection ceiling:
   - `max_connections = 80`
 - PostgreSQL memory and cache:
@@ -156,6 +159,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 12`
   - `BOREALIS_DB_MAX_OVERFLOW = 16`
   - effective pooled Engine connection burst capacity: `28`
+- Site-worker scheduled work-item slots:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 8`
 - PostgreSQL connection ceiling:
   - `max_connections = 120`
 - PostgreSQL memory and cache:
@@ -183,6 +188,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 20`
   - `BOREALIS_DB_MAX_OVERFLOW = 20`
   - effective pooled Engine connection burst capacity: `40`
+- Site-worker scheduled work-item slots:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 12`
 - PostgreSQL connection ceiling:
   - `max_connections = 150`
 - PostgreSQL memory and cache:
@@ -210,6 +217,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
   - `BOREALIS_DB_POOL_SIZE = 24`
   - `BOREALIS_DB_MAX_OVERFLOW = 24`
   - effective pooled Engine connection burst capacity: `48`
+- Site-worker scheduled work-item slots:
+  - `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY = 16`
 - PostgreSQL connection ceiling:
   - `max_connections = 180`
 - PostgreSQL memory and cache:
@@ -290,7 +299,7 @@ finally:
 
     - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
     - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
-    - Scheduler database behavior: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+    - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Scheduler queue leasing: `Data/Engine/Containers/api-backend/data/services/job_scheduler/queue.py`
     - Assembly schema source: `Data/Engine/Containers/api-backend/data/assembly_management/databases.py`
     - Bundled official assembly snapshot: `Data/Engine/Containers/api-backend/data/Official_Assemblies/`
@@ -620,7 +629,7 @@ finally:
     - Columns: `id`, `name`, `description`, `archived`, `enabled`, `severity`, `match_mode`, `site_mode`, `criteria_json`, `actions_json`, `evaluation_interval_seconds`, `cooldown_seconds`, `auto_resolve_after_seconds`, `min_consecutive_matches`, `boot_grace_seconds`, `last_edited_by`, `created_at`, `updated_at`, `last_evaluated_at`.
     - Used by:
     - `/api/watchdogs*`.
-    - `WatchdogRuntimeService`.
+    - Go `watchdogRuntime`.
     - Notes:
     - Watchdog definitions are saved independently from runtime state and incident history.
     - Saving a watchdog immediately triggers a fresh evaluation pass.
@@ -813,6 +822,19 @@ finally:
     - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
     - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 60 seconds), and `/api/server/workers?history_seconds=60` hides old terminal rows even if legacy rows lack `stopped_at`.
 
+    #### `job_scheduler_worker_routes`
+    - Status: Active.
+    - Purpose: Scheduler-owned route registry for active and recently terminal site-worker routes.
+    - Columns: `worker_guid`, `site_id`, `container_name`, `route_name`, `route_path_prefix`, `route_file_path`, `upstream_scheme`, `upstream_host`, `upstream_port`, `status`, `generation`, `metadata_json`, `created_at`, `updated_at`, `retired_at`.
+    - Used by:
+    - `job-scheduler` site-worker spawn, Docker reconcile, lost-worker detection, and worker-history pruning.
+    - Future remote-operation session brokering that needs a stable worker route lookup without Docker inspection.
+    - Notes:
+    - `worker_guid` is the primary key and matches `job_scheduler_workers.worker_guid`.
+    - Active route rows use status `active`; terminal route rows use `retired` or `lost`.
+    - `generation` starts at `1` and increments only when route metadata or lifecycle status changes, not on every scheduler reconcile tick.
+    - Route files are recorded as `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` by default. M3 records route metadata only; later milestones write and authorize feature-specific route traffic.
+
     #### `job_scheduler_service_snapshots`
     - Status: Active.
     - Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.
@@ -913,7 +935,7 @@ finally:
     - Directory Services admin APIs.
     - `/api/auth/login` directory credential-provider routing.
     - Notes:
-    - Aegis protects `bind_password_encrypted` and `kerberos_keytab_encrypted`.
+    - Aegis protects `bind_password_encrypted`; `kerberos_*` columns are retained for legacy schema compatibility.
     - Providers must pass `/api/directory/providers/<id>/test` before enablement.
     - LDAPS is strict by default; optional PEM trust anchors supplement system trust.
 

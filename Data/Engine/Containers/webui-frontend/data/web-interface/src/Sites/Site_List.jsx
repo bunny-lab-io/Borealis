@@ -14,7 +14,6 @@ import {
   MenuItem,
   Paper,
   Typography,
-  IconButton,
   Tooltip,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
@@ -24,7 +23,6 @@ import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
 import DownloadRoundedIcon from "@mui/icons-material/DownloadRounded";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import DevicesIcon from "@mui/icons-material/Devices";
 import CheckCircleOutlineRoundedIcon from "@mui/icons-material/CheckCircleOutlineRounded";
@@ -40,7 +38,6 @@ import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import {
   createRouteRequestPlan,
-  fetchRouteJson,
   getRouteErrorMessage,
   requireAuthenticatedRequest,
   rethrowIfRouteRedirect,
@@ -62,14 +59,45 @@ const themeClassName = myTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
-const AUTO_SIZE_COLUMNS = ["device_count", "enrollment_code"];
+const WORKER_HISTORY_SECONDS = 300;
+const WORKER_REMOVE_SECONDS = 30;
+const TASK_REMOVE_SECONDS = 60;
+const SITE_WORKER_REFRESH_MS = 15000;
+const BASE_ROW_HEIGHT = 56;
+const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
 const RAW_BOREALIS_BASE_URL = "https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads";
+const BOREALIS_LINK_COLOR = "#58a6ff";
+const BOREALIS_LINK_HOVER_COLOR = "#7dd3fc";
 const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
+];
+
+const TONE_STYLES = {
+  running: { border: "rgba(125,211,252,0.5)", bg: "rgba(14,116,144,0.2)", text: "#bae6fd" },
+  idle: { border: "rgba(52,211,153,0.34)", bg: "rgba(6,78,59,0.16)", text: "#bbf7d0" },
+  pending: { border: "rgba(251,191,36,0.5)", bg: "rgba(120,53,15,0.2)", text: "#fde68a" },
+  failed: { border: "rgba(251,113,133,0.52)", bg: "rgba(127,29,29,0.22)", text: "#fecdd3" },
+  stopped: { border: "rgba(148,163,184,0.3)", bg: "rgba(30,41,59,0.22)", text: "#cbd5e1" },
+  no_online: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.18)", text: "#94a3b8" },
+  unknown: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.2)", text: "#cbd5e1" },
+};
+
+const TASK_SECTIONS = [
+  { key: "success", label: "Success", color: "#00d18c" },
+  { key: "running", label: "Running", color: "#58a6ff" },
+  { key: "pending", label: "Pending", color: "#999999" },
+  { key: "failed", label: "Failed", color: "#ff4f4f" },
+  { key: "skipped", label: "Skipped", color: "#f0c36d" },
+];
+
+const CONNECTION_SECTIONS = [
+  { key: "connected", label: "Connected", color: "#00d18c" },
+  { key: "disconnected", label: "Disconnected", color: "#ff4f4f" },
+  { key: "offline", label: "Offline", color: "#999999" },
 ];
 
 const MAGIC_UI = {
@@ -316,6 +344,508 @@ const SITE_CONTEXT_MENU_GROUP_LABELS = {
 
 const SITE_CONTEXT_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
 
+function titleCase(value) {
+  return String(value || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function durationLabel(seconds) {
+  const value = Math.max(0, Math.ceil(Number(seconds || 0)));
+  if (value >= 60) {
+    const minutes = Math.floor(value / 60);
+    const remainder = value % 60;
+    return `${minutes}m${String(remainder).padStart(2, "0")}s`;
+  }
+  return `${value}s`;
+}
+
+function connectedDeviceCount(worker) {
+  const direct = [
+    worker?.connected_device_count,
+    worker?.connectedDeviceCount,
+    worker?.registered_device_count,
+    worker?.registeredDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const links = Array.isArray(worker?.task_links) ? worker.task_links : [];
+  const link = links.find((item) => String(item?.kind || "").toLowerCase() === "agent_sockets");
+  const count = Number(link?.count || link?.device_count || link?.target_count || 0);
+  return Number.isFinite(count) && count > 0 ? count : 0;
+}
+
+function siteDeviceCount(payload, worker, siteId) {
+  const direct = [
+    worker?.site_device_count,
+    worker?.siteDeviceCount,
+    worker?.site_total_device_count,
+    worker?.siteTotalDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const counts = payload?.site_device_counts || payload?.siteDeviceCounts || {};
+  const mapped = Number(counts[String(siteId)] || counts[siteId] || 0);
+  return Number.isFinite(mapped) && mapped > 0 ? mapped : 0;
+}
+
+function siteOnlineDeviceCount(payload, worker, siteId, connectedCount = 0) {
+  const direct = [
+    worker?.site_online_device_count,
+    worker?.siteOnlineDeviceCount,
+    worker?.online_device_count,
+    worker?.onlineDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const counts = payload?.site_online_device_counts || payload?.siteOnlineDeviceCounts || {};
+  const mapped = Number(counts[String(siteId)] || counts[siteId] || 0);
+  if (Number.isFinite(mapped) && mapped > 0) return mapped;
+  return Math.max(0, Number(connectedCount || 0));
+}
+
+function deviceConnectionBreakdown(payload, worker, siteId, connectedDevices, siteDevices) {
+  const connected = Math.max(0, Number(connectedDevices || 0));
+  const total = Math.max(0, Number(siteDevices || 0), connected);
+  const online = Math.max(connected, Math.min(total, siteOnlineDeviceCount(payload, worker, siteId, connected)));
+  return {
+    connected_devices: connected,
+    site_device_count: total,
+    site_online_device_count: online,
+    disconnected_devices: Math.max(0, online - connected),
+    offline_devices: Math.max(0, total - online),
+  };
+}
+
+function siteRecordsById(payload) {
+  const records = new Map();
+  const sites = Array.isArray(payload?.sites) ? payload.sites : [];
+  if (sites.length) {
+    sites.forEach((site) => {
+      const siteId = Number(site?.id || site?.site_id || 0);
+      if (!Number.isFinite(siteId) || siteId <= 0) return;
+      const deviceCount = Number(site?.device_count || site?.site_device_count || 0);
+      const onlineDeviceCount = Number(site?.online_device_count || site?.site_online_device_count || 0);
+      records.set(siteId, {
+        site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+        site_online_device_count: Number.isFinite(onlineDeviceCount) && onlineDeviceCount > 0 ? onlineDeviceCount : 0,
+      });
+    });
+    return records;
+  }
+
+  const names = payload?.site_names || {};
+  const counts = payload?.site_device_counts || {};
+  const onlineCounts = payload?.site_online_device_counts || {};
+  Object.keys(names).forEach((siteIdRaw) => {
+    const siteId = Number(siteIdRaw || 0);
+    if (!Number.isFinite(siteId) || siteId <= 0) return;
+    const deviceCount = Number(counts[String(siteId)] || counts[siteId] || 0);
+    const onlineDeviceCount = Number(onlineCounts[String(siteId)] || onlineCounts[siteId] || 0);
+    records.set(siteId, {
+      site_device_count: Number.isFinite(deviceCount) && deviceCount > 0 ? deviceCount : 0,
+      site_online_device_count: Number.isFinite(onlineDeviceCount) && onlineDeviceCount > 0 ? onlineDeviceCount : 0,
+    });
+  });
+  return records;
+}
+
+function workStatusBucket(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (["succeeded", "success", "completed"].includes(normalized)) return "success";
+  if (normalized === "running") return "running";
+  if (["queued", "pending", "reassigning"].includes(normalized)) return "pending";
+  if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "skipped";
+  if (["failed", "lost", "error", "timed_out", "timed out", "timeout"].includes(normalized)) return "failed";
+  return "pending";
+}
+
+function isTerminalTaskBucket(bucket) {
+  return ["success", "failed", "skipped"].includes(String(bucket || "").trim().toLowerCase());
+}
+
+function statusRank(status) {
+  const ranks = { running: 0, pending: 1, failed: 2, success: 3, skipped: 4 };
+  return ranks[workStatusBucket(status)] ?? 5;
+}
+
+function emptyTaskCounts() {
+  return {
+    success: 0,
+    running: 0,
+    pending: 0,
+    failed: 0,
+    skipped: 0,
+    total_tasks: 0,
+  };
+}
+
+function terminalWorkerAgeSeconds(worker, nowSeconds) {
+  const stoppedAt = Number(worker?.stopped_at || worker?.updated_at || worker?.last_seen_at || worker?.started_at || 0);
+  if (stoppedAt > 0) return Math.max(0, Number(nowSeconds || 0) - stoppedAt);
+  return 0;
+}
+
+function workerStartedSeconds(worker) {
+  const startedAt = Number(worker?.started_at || 0);
+  return Number.isFinite(startedAt) && startedAt > 0 ? startedAt : 0;
+}
+
+function workerVisibleKey(worker) {
+  const workerGuid = String(worker?.worker_guid || "").trim();
+  if (workerGuid) return `guid:${workerGuid}`;
+  const containerName = String(worker?.container_name || "").trim();
+  if (containerName) return `container:${containerName}`;
+  const containerId = String(worker?.container_id || "").trim();
+  if (containerId) return `docker:${containerId}`;
+  return `site:${Number(worker?.site_id || 0)}:${workerStartedSeconds(worker)}:${String(worker?.status || "").trim()}`;
+}
+
+function isTerminalWorker(worker) {
+  const normalized = String(worker?.status || "").trim().toLowerCase();
+  return ["stopped", "lost"].includes(normalized);
+}
+
+function isActiveWorker(worker) {
+  const normalized = String(worker?.status || "").trim().toLowerCase();
+  return ["starting", "running", "idle"].includes(normalized);
+}
+
+function workIdentity(work) {
+  const id = String(work?.id ?? "").trim();
+  if (id) return `id:${id}`;
+  return [
+    "fallback",
+    work?.kind || "work",
+    work?.site_id || "",
+    work?.job_id || "",
+    work?.run_id || "",
+    work?.target_id || "",
+    work?.worker_guid || work?.lease_owner || "",
+  ].join(":");
+}
+
+function jobIdForWork(work) {
+  const taskLink = work?.task_link || {};
+  const value = work?.job_id || taskLink?.job_id || "";
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+}
+
+function jobPathForWork(work, jobId) {
+  const taskLink = work?.task_link || {};
+  const path = String(taskLink?.path || "").trim();
+  if (path) return path;
+  if (jobId) return `${APP_PATHS.job(jobId)}?tab=job_history`;
+  return "";
+}
+
+function jobNameForWork(work) {
+  const taskLink = work?.task_link || {};
+  return String(work?.job_name || taskLink?.job_name || taskLink?.name || taskLink?.label || "").trim();
+}
+
+function taskActivitySeconds(work) {
+  return Number(work?.finished_at || work?.heartbeat_at || work?.updated_at || work?.started_at || work?.created_at || 0);
+}
+
+function taskCountdownSecondsLabel(seconds) {
+  return `${Math.max(0, Math.ceil(Number(seconds || 0)))}s`;
+}
+
+export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
+  const byWorker = new Map();
+  const seen = new Set();
+  const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
+  const recentWork = Array.isArray(payload?.recent_work) ? payload.recent_work : [];
+  [...activeWork, ...recentWork].forEach((work) => {
+    const identity = workIdentity(work);
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    const keys = new Set(
+      [work?.worker_guid, work?.lease_owner, work?.container_name]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    );
+    const siteId = Number(work?.site_id || 0);
+    if (Number.isFinite(siteId) && siteId > 0) {
+      keys.add(`site:${siteId}`);
+    }
+    if (!keys.size) return;
+    const bucket = workStatusBucket(work?.status);
+    const jobId = jobIdForWork(work);
+    const jobName = jobNameForWork(work);
+    const jobKey = jobId ? `job:${jobId}` : `work:${work?.kind || "task"}:${work?.id || identity}`;
+    const activitySeconds = taskActivitySeconds(work);
+    keys.forEach((key) => {
+      const workerGroups = byWorker.get(key) || new Map();
+      const group = workerGroups.get(jobKey) || {
+        key: jobKey,
+        job_id: jobId,
+        job_name: jobName,
+        label: jobId ? `Job ID: ${jobId}` : "Task",
+        path: jobPathForWork(work, jobId),
+        counts: emptyTaskCounts(),
+        first_started_at: Number(work?.started_at || work?.created_at || 0),
+        last_activity_at: activitySeconds,
+        terminal_last_activity_at: 0,
+        has_active_work: false,
+        expires_at: null,
+        removal_remaining_seconds: null,
+        rank: statusRank(work?.status),
+      };
+      const counts = group.counts;
+      counts[bucket] = Number(counts[bucket] || 0) + 1;
+      counts.total_tasks = Number(counts.total_tasks || 0) + 1;
+      if (isTerminalTaskBucket(bucket)) {
+        group.terminal_last_activity_at = Math.max(Number(group.terminal_last_activity_at || 0), activitySeconds);
+      } else {
+        group.has_active_work = true;
+      }
+      group.rank = Math.min(Number(group.rank ?? 5), statusRank(work?.status));
+      group.first_started_at = Math.min(
+        Number(group.first_started_at || work?.started_at || work?.created_at || 0),
+        Number(work?.started_at || work?.created_at || group.first_started_at || 0)
+      );
+      group.last_activity_at = Math.max(
+        Number(group.last_activity_at || 0),
+        activitySeconds
+      );
+      if (!group.job_name && jobName) group.job_name = jobName;
+      if (!group.path) group.path = jobPathForWork(work, jobId);
+      workerGroups.set(jobKey, group);
+      byWorker.set(key, workerGroups);
+    });
+  });
+
+  const normalized = new Map();
+  byWorker.forEach((groups, key) => {
+    normalized.set(
+      key,
+      Array.from(groups.values())
+        .map((group) => {
+          const terminalAt = Number(group.terminal_last_activity_at || 0);
+          if (!group.has_active_work && terminalAt > 0) {
+            const expiresAt = terminalAt + TASK_REMOVE_SECONDS;
+            const remaining = expiresAt - Number(nowSeconds || 0);
+            return {
+              ...group,
+              expires_at: expiresAt,
+              removal_remaining_seconds: Math.max(0, remaining),
+            };
+          }
+          return group;
+        })
+        .filter((group) => Number(group.expires_at || 0) <= 0 || Number(group.removal_remaining_seconds || 0) > 0)
+        .sort((left, right) => {
+          if (left.rank !== right.rank) return left.rank - right.rank;
+          if (Number(left.job_id || 0) && Number(right.job_id || 0) && Number(left.job_id) !== Number(right.job_id)) {
+            return Number(left.job_id) - Number(right.job_id);
+          }
+          return Number(right.last_activity_at || 0) - Number(left.last_activity_at || 0);
+        })
+    );
+  });
+  return normalized;
+}
+
+function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds = null) {
+  const normalized = String(worker?.status || "").trim().toLowerCase();
+  const connected = connectedDeviceCount(worker);
+  if (removalRemainingSeconds != null) {
+    return { label: `Removing in ${durationLabel(removalRemainingSeconds)}`, tone: "stopped" };
+  }
+  if (connected > 0 && !["lost", "stopped", "failed"].includes(normalized)) {
+    return { label: "Running", tone: "running" };
+  }
+  if (normalized === "idle") {
+    const idleSince = Number(worker?.idle_since || nowSeconds);
+    const remaining = Math.max(0, Math.ceil(Number(idleTtlSeconds || 300) - Math.max(0, nowSeconds - idleSince)));
+    if (remaining > 0) {
+      return { label: `Tearing Down in ${durationLabel(remaining)}`, tone: "idle" };
+    }
+    return { label: "Idle", tone: "idle" };
+  }
+  if (normalized === "running") return { label: "Running", tone: "running" };
+  if (normalized === "starting") return { label: "Starting", tone: "pending" };
+  if (normalized === "lost") return { label: "Lost", tone: "failed" };
+  if (normalized === "stopped") return { label: "Stopped", tone: "stopped" };
+  return { label: titleCase(normalized || "unknown"), tone: "unknown" };
+}
+
+function buildWorkerRowsBySite(payload, nowSeconds) {
+  const workers = Array.isArray(payload?.workers) ? payload.workers : [];
+  const taskGroupsByWorker = buildTaskGroupsByWorker(payload, nowSeconds);
+  const idleTtlSeconds = Math.max(300, Number(payload?.worker_idle_ttl_seconds || 300));
+  const newestActiveBySite = new Map();
+  workers.forEach((worker) => {
+    const siteId = Number(worker?.site_id || 0);
+    if (siteId <= 0 || !isActiveWorker(worker)) return;
+    const startedAt = workerStartedSeconds(worker);
+    const key = workerVisibleKey(worker);
+    const existing = newestActiveBySite.get(siteId);
+    if (!existing || startedAt > existing.startedAt || (startedAt === existing.startedAt && key > existing.key)) {
+      newestActiveBySite.set(siteId, { key, startedAt });
+    }
+  });
+
+  const newestTerminalBySite = new Map();
+  workers.forEach((worker) => {
+    const siteId = Number(worker?.site_id || 0);
+    if (siteId <= 0 || newestActiveBySite.has(siteId) || !isTerminalWorker(worker)) return;
+    if (terminalWorkerAgeSeconds(worker, nowSeconds) >= WORKER_REMOVE_SECONDS) return;
+    const startedAt = workerStartedSeconds(worker);
+    const key = workerVisibleKey(worker);
+    const existing = newestTerminalBySite.get(siteId);
+    if (!existing || startedAt > existing.startedAt || (startedAt === existing.startedAt && key > existing.key)) {
+      newestTerminalBySite.set(siteId, { key, startedAt });
+    }
+  });
+
+  const rowsBySite = new Map();
+  workers
+    .filter((worker) => Number(worker?.site_id || 0) > 0)
+    .filter((worker) => {
+      const siteId = Number(worker?.site_id || 0);
+      const key = workerVisibleKey(worker);
+      const active = newestActiveBySite.get(siteId);
+      if (active) return key === active.key;
+      if (!isTerminalWorker(worker)) return true;
+      const terminal = newestTerminalBySite.get(siteId);
+      return Boolean(terminal && key === terminal.key);
+    })
+    .forEach((worker) => {
+      const siteId = Number(worker?.site_id || 0);
+      const workerGuid = String(worker?.worker_guid || "").trim();
+      const containerName = String(worker?.container_name || "").trim();
+      const removalRemainingSeconds = isTerminalWorker(worker)
+        ? WORKER_REMOVE_SECONDS - terminalWorkerAgeSeconds(worker, nowSeconds)
+        : null;
+      const status = workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds);
+      const taskGroups =
+        (workerGuid && taskGroupsByWorker.get(workerGuid)) ||
+        (containerName && taskGroupsByWorker.get(containerName)) ||
+        taskGroupsByWorker.get(`site:${siteId}`) ||
+        [];
+      const connectedDevices = connectedDeviceCount(worker);
+      const deviceCounts = deviceConnectionBreakdown(
+        payload,
+        worker,
+        siteId,
+        connectedDevices,
+        siteDeviceCount(payload, worker, siteId)
+      );
+      rowsBySite.set(siteId, {
+        site_worker_guid: workerGuid,
+        site_worker_container_name: containerName,
+        site_worker_container_id: String(worker?.container_id || "").trim() || "Unknown",
+        site_worker_container_id_full: String(worker?.container_id_full || "").trim(),
+        site_worker_status_label: status.label,
+        site_worker_status_tone: status.tone,
+        connected_devices: deviceCounts.connected_devices,
+        site_device_count: deviceCounts.site_device_count,
+        site_online_device_count: deviceCounts.site_online_device_count,
+        disconnected_devices: deviceCounts.disconnected_devices,
+        offline_devices: deviceCounts.offline_devices,
+        assigned_task_groups: taskGroups,
+        raw_site_worker: worker,
+      });
+    });
+  return rowsBySite;
+}
+
+function mergeSiteWorkerRows(sites, payload, nowSeconds) {
+  const workerRowsBySite = buildWorkerRowsBySite(payload, nowSeconds);
+  const recordsBySite = siteRecordsById(payload);
+  return (Array.isArray(sites) ? sites : [])
+    .map((site) => {
+      const siteId = Number(site?.id || site?.site_id || 0);
+      const siteName = String(site?.name || site?.site_name || "").trim();
+      const siteRecord = recordsBySite.get(siteId) || {};
+      const workerRow = workerRowsBySite.get(siteId);
+      const rawSiteDeviceCount = Number(site?.device_count || 0);
+      if (workerRow) {
+        const connected = Number(workerRow.connected_devices || 0);
+        const total = Math.max(0, rawSiteDeviceCount, Number(workerRow.site_device_count || 0));
+        const online = Math.max(
+          connected,
+          Math.min(total, Math.max(Number(workerRow.site_online_device_count || 0), connected + Number(workerRow.disconnected_devices || 0)))
+        );
+        return {
+          ...site,
+          ...workerRow,
+          site_id: siteId,
+          site_name: siteName,
+          device_count: total,
+          site_device_count: total,
+          site_online_device_count: online,
+          disconnected_devices: Math.max(0, online - connected),
+          offline_devices: Math.max(0, total - online),
+        };
+      }
+
+      const total = Math.max(0, rawSiteDeviceCount, Number(siteRecord.site_device_count || 0));
+      const online = Math.max(0, Math.min(total, Number(siteRecord.site_online_device_count || 0)));
+      return {
+        ...site,
+        site_id: siteId,
+        site_name: siteName,
+        site_worker_guid: "",
+        site_worker_container_name: "",
+        site_worker_container_id: "N/A",
+        site_worker_container_id_full: "",
+        site_worker_status_label: "No Online Devices",
+        site_worker_status_tone: "no_online",
+        connected_devices: 0,
+        site_device_count: total,
+        site_online_device_count: online,
+        disconnected_devices: online,
+        offline_devices: Math.max(0, total - online),
+        assigned_task_groups: [],
+        raw_site_worker: null,
+      };
+    })
+    .sort((left, right) =>
+      String(left?.name || left?.site_name || "").localeCompare(
+        String(right?.name || right?.site_name || ""),
+        undefined,
+        { sensitivity: "base", numeric: true }
+      )
+    );
+}
+
+async function fetchSiteWorkerPayloadRoute(progress) {
+  try {
+    const payload = await progress.fetchJson(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    rethrowIfRouteRedirect(error);
+    return {};
+  }
+}
+
+async function fetchSiteWorkerPayloadBrowser() {
+  try {
+    const response = await fetch(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}&_=${Date.now()}`, {
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) return {};
+    return payload && typeof payload === "object" ? payload : {};
+  } catch {
+    return {};
+  }
+}
+
 function normalizeInstallServerUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
 }
@@ -353,7 +883,7 @@ function deriveInstallServerUrl(payload) {
 }
 
 export async function loadSiteListPageData(request) {
-  const progress = createRouteRequestPlan(request, 4);
+  const progress = createRouteRequestPlan(request, 5);
   try {
     await requireAuthenticatedRequest(request, progress);
     const data = await progress.fetchJson("/api/sites");
@@ -373,9 +903,11 @@ export async function loadSiteListPageData(request) {
     } else {
       progress.skip(1);
     }
+    const siteWorkerPayload = await fetchSiteWorkerPayloadRoute(progress);
 
     return {
       rows: Array.isArray(data?.sites) ? data.sites : [],
+      siteWorkerPayload,
       installServerUrl,
       initialError: "",
     };
@@ -383,6 +915,7 @@ export async function loadSiteListPageData(request) {
     rethrowIfRouteRedirect(error);
     return {
       rows: [],
+      siteWorkerPayload: {},
       installServerUrl: "",
       initialError: getRouteErrorMessage(error, "Unable to load sites."),
     };
@@ -396,6 +929,358 @@ function stopGridRowSelectionEvent(event) {
   if (typeof event.stopPropagation === "function") {
     event.stopPropagation();
   }
+}
+
+function StatusPill({ label, tone }) {
+  const style = TONE_STYLES[tone] || TONE_STYLES.unknown;
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 0,
+        maxWidth: "100%",
+        px: 0.85,
+        py: 0.25,
+        minHeight: 20,
+        borderRadius: 999,
+        border: `1px solid ${style.border}`,
+        background: style.bg,
+        color: style.text,
+        fontSize: "11px",
+        fontWeight: 700,
+        lineHeight: 1,
+        gap: 0.5,
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        verticalAlign: "middle",
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          backgroundColor: style.text,
+          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
+          flexShrink: 0,
+        }}
+      />
+      {label}
+    </Box>
+  );
+}
+
+function TaskResultsBar({ counts }) {
+  const total = Math.max(1, Number(counts?.total_tasks || 0));
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35, lineHeight: 1.55, fontFamily: gridFontFamily, minWidth: 0 }}>
+      <Box sx={{ display: "flex", borderRadius: 1, overflow: "hidden", width: 220, maxWidth: "100%", height: 6 }}>
+        {TASK_SECTIONS.map((section) => {
+          const value = Number(counts?.[section.key] || 0);
+          if (!value) return null;
+          return (
+            <Box
+              key={section.key}
+              component="span"
+              sx={{
+                display: "block",
+                height: "100%",
+                width: `${Math.max(4, Math.round((value / total) * 100))}%`,
+                backgroundColor: section.color,
+              }}
+            />
+          );
+        })}
+      </Box>
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          columnGap: 0.75,
+          rowGap: 0.2,
+          color: "#aaa",
+          fontSize: 11,
+          fontFamily: gridFontFamily,
+        }}
+      >
+        {TASK_SECTIONS.filter((section) => Number(counts?.[section.key] || 0) > 0).map((section) => (
+          <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
+            <Box component="span" sx={{ width: 6, height: 6, borderRadius: 1, backgroundColor: section.color }} />
+            {counts?.[section.key]} {section.label}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function TaskExpiryCountdown({ group }) {
+  const expiresAt = Number(group?.expires_at || 0);
+  const remaining = Math.max(0, Math.ceil(Number(group?.removal_remaining_seconds || 0)));
+  if (expiresAt <= 0 || remaining <= 0) return null;
+  return (
+    <Box sx={{ minWidth: 0, width: "100%", display: "flex", justifyContent: "flex-start" }}>
+      <Typography
+        component="span"
+        sx={{
+          display: "block",
+          width: "100%",
+          color: "rgba(148,163,184,0.72)",
+          fontSize: "0.68rem",
+          fontWeight: 500,
+          lineHeight: 1.2,
+          textAlign: "left",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {taskCountdownSecondsLabel(remaining)}
+      </Typography>
+    </Box>
+  );
+}
+
+function SiteWorkerContainerCell(params) {
+  const row = params?.data || {};
+  const onRecreate = params?.context?.onRecreate;
+  const busy = params?.context?.recreateBusyId === row.site_worker_guid;
+  const canRecreate = Boolean(row.site_worker_guid);
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "flex-start",
+        gap: 0.9,
+        width: "100%",
+        height: "100%",
+        minWidth: 0,
+      }}
+    >
+      <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
+      {canRecreate ? (
+        <Box
+          component="button"
+          type="button"
+          disabled={busy}
+          onMouseDown={stopGridRowSelectionEvent}
+          onClick={(event) => {
+            stopGridRowSelectionEvent(event);
+            if (busy) return;
+            onRecreate?.(row);
+          }}
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            p: 0,
+            m: 0,
+            border: 0,
+            background: "transparent",
+            color: BOREALIS_LINK_COLOR,
+            cursor: busy ? "default" : "pointer",
+            font: "inherit",
+            fontSize: "0.82rem",
+            fontWeight: 700,
+            lineHeight: 1.45,
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+            transition: "color 160ms ease, opacity 160ms ease",
+            "&:hover": busy
+              ? undefined
+              : {
+                  color: BOREALIS_LINK_HOVER_COLOR,
+                  textDecoration: "underline",
+                },
+            "&:disabled": {
+              opacity: 0.6,
+            },
+          }}
+        >
+          {busy ? "Re-Deploy Queued" : "Re-Deploy Site Worker"}
+        </Box>
+      ) : null}
+    </Box>
+  );
+}
+
+function ConnectedDevicesCell(params) {
+  const connected = Number(params?.data?.connected_devices || 0);
+  const disconnected = Number(params?.data?.disconnected_devices || 0);
+  const offline = Number(params?.data?.offline_devices || 0);
+  const total = Math.max(0, Number(params?.data?.site_device_count || 0), connected + disconnected + offline);
+  const counts = { connected, disconnected, offline };
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 0.35,
+        width: "100%",
+        height: "100%",
+        minWidth: 0,
+        lineHeight: 1.25,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          borderRadius: 1,
+          overflow: "hidden",
+          width: 220,
+          maxWidth: "100%",
+          height: 6,
+          backgroundColor: "rgba(148,163,184,0.18)",
+        }}
+      >
+        {CONNECTION_SECTIONS.map((section) => {
+          const value = Number(counts[section.key] || 0);
+          if (!value || total <= 0) return null;
+          return (
+            <Box
+              key={section.key}
+              component="span"
+              sx={{
+                display: "block",
+                height: "100%",
+                width: `${Math.max(4, Math.round((value / total) * 100))}%`,
+                backgroundColor: section.color,
+              }}
+            />
+          );
+        })}
+      </Box>
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          columnGap: 0.7,
+          rowGap: 0.1,
+          color: "#aaa",
+          fontSize: 10,
+          fontFamily: gridFontFamily,
+        }}
+      >
+        {CONNECTION_SECTIONS.map((section) => (
+          <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.35 }}>
+            <Box component="span" sx={{ width: 5, height: 5, borderRadius: 1, backgroundColor: section.color }} />
+            {counts[section.key]} {section.label}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
+function AssignedTasksCell(params) {
+  const groups = Array.isArray(params?.data?.assigned_task_groups) ? params.data.assigned_task_groups : [];
+  const navigate = params?.context?.navigate;
+  if (!groups.length) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          No Running Tasks
+        </Typography>
+      </Box>
+    );
+  }
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "100%",
+        height: "100%",
+        minHeight: "100%",
+        py: 0.35,
+      }}
+    >
+      {groups.map((group) => (
+        <Box
+          key={group.key}
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "112px minmax(0, 1fr)",
+            alignItems: "center",
+            columnGap: 1.2,
+            minHeight: BASE_ROW_HEIGHT - 2,
+            width: "min(100%, 470px)",
+            minWidth: 0,
+          }}
+        >
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              justifyContent: "center",
+              alignSelf: "stretch",
+              minWidth: 0,
+              minHeight: BASE_ROW_HEIGHT - 2,
+              gap: 0.05,
+            }}
+          >
+            <Tooltip title={group.job_name || group.label || ""} placement="top-start" arrow>
+              <Box
+                component="button"
+                type="button"
+                disabled={!group.path}
+                onMouseDown={stopGridRowSelectionEvent}
+                onClick={(event) => {
+                  stopGridRowSelectionEvent(event);
+                  if (group.path && navigate) navigate(String(group.path));
+                }}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  width: "100%",
+                  maxWidth: "100%",
+                  p: 0,
+                  border: 0,
+                  background: "transparent",
+                  color: BOREALIS_LINK_COLOR,
+                  cursor: group.path ? "pointer" : "default",
+                  font: "inherit",
+                  fontSize: "0.8rem",
+                  fontWeight: 700,
+                  lineHeight: 1.4,
+                  textDecoration: "none",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  transition: "color 160ms ease",
+                  "&:hover": group.path
+                    ? {
+                        color: BOREALIS_LINK_HOVER_COLOR,
+                        textDecoration: "underline",
+                      }
+                    : undefined,
+                  "&:disabled": {
+                    opacity: 0.72,
+                  },
+                }}
+              >
+                {group.label}
+              </Box>
+            </Tooltip>
+            <TaskExpiryCountdown group={group} />
+          </Box>
+          <TaskResultsBar counts={group.counts || emptyTaskCounts()} />
+        </Box>
+      ))}
+    </Box>
+  );
 }
 
 function escapePowerShellDoubleQuoted(value) {
@@ -716,16 +1601,22 @@ function InstallBranchDialog({
 }
 
 const PAGE_TITLE = "Sites";
-const PAGE_SUBTITLE = "Manage site enrollment codes and open device inventories by site.";
+const PAGE_SUBTITLE = "Manage sites and open device inventories by site.";
 const PAGE_ICON = LocationCityIcon;
 
 export default function SiteList() {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
-  const initialRows = Array.isArray(loaderData?.rows) ? loaderData.rows : [];
+  const initialRows = useMemo(() => (Array.isArray(loaderData?.rows) ? loaderData.rows : []), [loaderData]);
+  const initialSiteWorkerPayload = useMemo(
+    () => (loaderData?.siteWorkerPayload && typeof loaderData.siteWorkerPayload === "object" ? loaderData.siteWorkerPayload : {}),
+    [loaderData]
+  );
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
   const [rows, setRows] = useState(() => initialRows);
+  const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => initialSiteWorkerPayload);
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
+  const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [createOpen, setCreateOpen] = useState(false);
@@ -747,9 +1638,13 @@ export default function SiteList() {
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
+  const [recreateConfirmRow, setRecreateConfirmRow] = useState(null);
+  const [recreateBusyId, setRecreateBusyId] = useState("");
+  const [recreateError, setRecreateError] = useState("");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
+  const siteWorkerRefreshInFlightRef = useRef(false);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
     icon: "locationcity",
@@ -760,6 +1655,10 @@ export default function SiteList() {
       await notify(message);
     },
     [notify]
+  );
+  const displayRows = useMemo(
+    () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
+    [nowSeconds, rows, siteWorkerPayload]
   );
 
   const handleOpenDevicesForSite = useCallback(
@@ -810,14 +1709,22 @@ export default function SiteList() {
 
   const fetchSites = useCallback(async () => {
     try {
-      const res = await fetch("/api/sites");
+      const [res, workerPayload] = await Promise.all([
+        fetch("/api/sites", { credentials: "include", cache: "no-store" }),
+        fetchSiteWorkerPayloadBrowser(),
+      ]);
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
+      }
       const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
+      setSiteWorkerPayload(workerPayload);
       setInstallServerUrl(nextInstallServerUrl);
       setLoadError("");
     } catch {
       setRows([]);
+      setSiteWorkerPayload({});
       setInstallServerUrl("");
       setLoadError("Unable to load sites.");
     }
@@ -891,13 +1798,43 @@ export default function SiteList() {
 
   useEffect(() => {
     setRows(initialRows);
+    setSiteWorkerPayload(initialSiteWorkerPayload);
     setInstallServerUrl(initialInstallServerUrl);
     setLoadError(String(loaderData?.initialError || ""));
-  }, [initialInstallServerUrl, initialRows, loaderData]);
+  }, [initialInstallServerUrl, initialRows, initialSiteWorkerPayload, loaderData]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setNowSeconds(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refreshSiteWorkerPayload = async () => {
+      if (siteWorkerRefreshInFlightRef.current) return;
+      siteWorkerRefreshInFlightRef.current = true;
+      try {
+        const workerPayload = await fetchSiteWorkerPayloadBrowser();
+        if (active && workerPayload && typeof workerPayload === "object" && Object.keys(workerPayload).length > 0) {
+          setSiteWorkerPayload(workerPayload);
+        }
+      } finally {
+        siteWorkerRefreshInFlightRef.current = false;
+      }
+    };
+    const intervalId = setInterval(refreshSiteWorkerPayload, SITE_WORKER_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+      siteWorkerRefreshInFlightRef.current = false;
+    };
+  }, []);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
-    if (!api || !rows.length) return;
+    if (!api || !displayRows.length) return;
     const doSize = () => {
       autoSizeHandleRef.current = null;
       const liveApi = gridApiRef.current || gridRef.current?.api || api;
@@ -920,11 +1857,11 @@ export default function SiteList() {
     } else {
       autoSizeHandleRef.current = setTimeout(doSize, 0);
     }
-  }, [rows.length]);
+  }, [displayRows.length]);
 
   useEffect(() => {
     autoSizeColumns();
-  }, [rows, autoSizeColumns]);
+  }, [displayRows, autoSizeColumns]);
 
   useEffect(() => {
     return () => {
@@ -953,29 +1890,6 @@ export default function SiteList() {
       return false;
     }
   }, []);
-
-  const handleCopy = useCallback(async (code, siteName = "") => {
-    const value = (code || "").trim();
-    if (!value) return;
-    const normalizedSiteName = String(siteName || "Unknown Site").trim() || "Unknown Site";
-    const copied = await copyTextToClipboard(value, "Copy enrollment code");
-    if (copied) {
-      await sendNotification({
-        title: "Enrollment Code Copied",
-        message: `Enrollment code for <b>${normalizedSiteName}</b> copied to clipboard.`,
-        icon: "done",
-        variant: "info",
-      });
-      return;
-    }
-
-    await sendNotification({
-      title: "Manual Copy Required",
-      message: `Clipboard access was blocked, so Borealis opened a manual copy prompt for the enrollment code at <b>${normalizedSiteName}</b>.`,
-      icon: "warning",
-      variant: "warning",
-    });
-  }, [copyTextToClipboard, sendNotification]);
 
   const handleCloseInstallMenu = useCallback(() => {
     setInstallMenuAnchorEl(null);
@@ -1095,84 +2009,112 @@ export default function SiteList() {
     {
       headerName: "Name",
       field: "name",
-      minWidth: 220,
-      flex: 1,
-      sort: "asc",
+      minWidth: 260,
+      flex: 1.15,
       cellRendererParams: {
         suppressMouseEventHandling: () => true,
       },
-      cellRenderer: (params) => (
-        <span
-          style={{ color: "#58a6ff", cursor: "pointer", fontWeight: 500 }}
-          onMouseDown={stopGridRowSelectionEvent}
-          onClick={(event) => {
-            stopGridRowSelectionEvent(event);
-            handleOpenDevicesForSite(params.data);
-          }}
-        >
-          {params.value}
-        </span>
-      ),
+      cellRenderer: (params) => {
+        const description = String(params?.data?.description || "").trim();
+        return (
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              alignItems: "flex-start",
+              width: "100%",
+              height: "100%",
+              minWidth: 0,
+              lineHeight: 1.25,
+            }}
+          >
+            <Box
+              component="span"
+              sx={{
+                color: BOREALIS_LINK_COLOR,
+                cursor: "pointer",
+                fontWeight: 500,
+                fontSize: "0.88rem",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                maxWidth: "100%",
+              }}
+              onMouseDown={stopGridRowSelectionEvent}
+              onClick={(event) => {
+                stopGridRowSelectionEvent(event);
+                handleOpenDevicesForSite(params.data);
+              }}
+            >
+              {params.value}
+            </Box>
+            {description ? (
+              <Typography
+                component="span"
+                title={description}
+                sx={{
+                  mt: 0.25,
+                  color: "rgba(148,163,184,0.72)",
+                  fontSize: "0.72rem",
+                  fontWeight: 500,
+                  lineHeight: 1.2,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  maxWidth: "100%",
+                }}
+              >
+                {description}
+              </Typography>
+            ) : null}
+          </Box>
+        );
+      },
     },
     {
-      headerName: "Description",
-      field: "description",
-      minWidth: 280,
-    },
-    {
-      headerName: "Devices",
-      field: "device_count",
-      resizable: false,
-      minWidth: 110,
-    },
-    {
-      headerName: "Agent Enrollment Code",
-      field: "enrollment_code",
-      minWidth: 260,
-      resizable: false,
+      headerName: "Site Worker Container",
+      field: "site_worker_container_id",
+      minWidth: 300,
+      flex: 0.95,
       filter: false,
       suppressHeaderMenuButton: true,
       suppressHeaderContextMenu: true,
       cellRendererParams: {
         suppressMouseEventHandling: () => true,
       },
-      cellRenderer: (params) => {
-        const code = params.value || "—";
-        const siteName = params?.data?.name || "";
-        return (
-          <Box
-            sx={{ display: "flex", alignItems: "center", gap: 1 }}
-            onMouseDown={stopGridRowSelectionEvent}
-            onClick={stopGridRowSelectionEvent}
-            onDoubleClick={stopGridRowSelectionEvent}
-            onTouchStart={stopGridRowSelectionEvent}
-          >
-            <Typography variant="body2" sx={{ fontFamily: "monospace", color: "#9aa3ad" }}>
-              {code}
-            </Typography>
-            <Tooltip title="Copy">
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={(event) => {
-                    stopGridRowSelectionEvent(event);
-                    void handleCopy(code, siteName);
-                  }}
-                  disabled={!code || code === "—"}
-                  sx={{ color: MAGIC_UI.textMuted }}
-                >
-                  <ContentCopyIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        );
+      cellRenderer: SiteWorkerContainerCell,
+    },
+    {
+      headerName: "Connected Devices",
+      field: "connected_devices",
+      resizable: false,
+      minWidth: 250,
+      flex: 0.9,
+      filter: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      cellClass: "center-col",
+      cellRenderer: ConnectedDevicesCell,
+    },
+    {
+      headerName: "Assigned Tasks",
+      field: "assigned_task_groups",
+      minWidth: 340,
+      flex: 1.2,
+      filter: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      cellRendererParams: {
+        suppressMouseEventHandling: () => true,
       },
+      cellClass: "center-col",
+      cellRenderer: AssignedTasksCell,
     },
     {
       headerName: "Auto-Approval",
       field: "auto_approve_until",
-      minWidth: 210,
+      minWidth: 240,
       valueGetter: (params) => {
         const until = Number(params.data?.auto_approve_until || 0);
         const active = Boolean(params.data?.auto_approval_active) && until > Math.floor(Date.now() / 1000);
@@ -1200,10 +2142,10 @@ export default function SiteList() {
         );
       },
     },
-  ], [handleCopy, handleOpenDevicesForSite]);
+  ], [handleOpenDevicesForSite]);
 
   const defaultColDef = useMemo(() => ({
-    sortable: true,
+    sortable: false,
     filter: "agTextColumnFilter",
     resizable: true,
     minWidth: 160,
@@ -1280,6 +2222,50 @@ export default function SiteList() {
     setDeleteOpen(true);
   }, [handleCloseSiteContextMenu, hasSelectedSites, selectedIds]);
 
+  const openRecreateDialog = useCallback((row) => {
+    setRecreateError("");
+    setRecreateConfirmRow(row || null);
+  }, []);
+
+  const closeRecreateDialog = useCallback(() => {
+    if (recreateBusyId) return;
+    setRecreateConfirmRow(null);
+    setRecreateError("");
+  }, [recreateBusyId]);
+
+  const confirmRecreate = useCallback(async () => {
+    const workerGuid = String(recreateConfirmRow?.site_worker_guid || "").trim();
+    if (!workerGuid) return;
+    setRecreateBusyId(workerGuid);
+    setRecreateError("");
+    try {
+      const response = await fetch(`/api/server/workers/${encodeURIComponent(workerGuid)}/recreate`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
+      }
+      await sendNotification(`Re-deploy queued for ${recreateConfirmRow?.name || "site worker"}.`);
+      setRecreateConfirmRow(null);
+      await fetchSites();
+    } catch (error) {
+      const message = error?.message || "Unable to queue site-worker re-deploy.";
+      setRecreateError(message);
+      await sendNotification({
+        title: "Site Worker Re-Deploy Failed",
+        message,
+        icon: "warning",
+        variant: "error",
+      });
+    } finally {
+      setRecreateBusyId("");
+    }
+  }, [fetchSites, recreateConfirmRow, sendNotification]);
+
   useEffect(() => {
     if (!hasSelectedSites) {
       setInstallMenuAnchorEl(null);
@@ -1351,7 +2337,6 @@ export default function SiteList() {
   const siteContextActions = useMemo(() => {
     const row = siteContextMenu.row || null;
     const unavailableReason = row ? "" : "Select a site first.";
-    const enrollmentCode = String(row?.enrollment_code || "").trim();
     const deleteTargetCount = row?.id != null && selectedIds.has(row.id) ? selectedSiteRows.length : row ? 1 : 0;
     return [
       {
@@ -1394,19 +2379,6 @@ export default function SiteList() {
         },
       },
       {
-        id: "copy-enrollment-code",
-        group: "primary",
-        label: "Copy Site Enrollment Code",
-        icon: ContentCopyIcon,
-        disabled: Boolean(unavailableReason) || !enrollmentCode,
-        disabledReason: unavailableReason || (!enrollmentCode ? "This site is missing an enrollment code." : ""),
-        description: "Copy the agent enrollment code for this site.",
-        onClick: () => {
-          handleCloseSiteContextMenu();
-          void handleCopy(enrollmentCode, row?.name || "");
-        },
-      },
-      {
         id: "configure-auto-approval",
         group: "primary",
         label: "Configure Auto-Approval",
@@ -1446,7 +2418,6 @@ export default function SiteList() {
     ];
   }, [
     handleCloseSiteContextMenu,
-    handleCopy,
     handleOpenDeleteDialog,
     handleOpenDevicesForSite,
     handleOpenOnboardingForSite,
@@ -1473,6 +2444,15 @@ export default function SiteList() {
     Icon: PAGE_ICON,
     actions: pageHeaderActions,
   });
+
+  const gridContext = useMemo(
+    () => ({
+      navigate,
+      onRecreate: openRecreateDialog,
+      recreateBusyId,
+    }),
+    [navigate, openRecreateDialog, recreateBusyId]
+  );
 
   return (
     <Paper
@@ -1645,18 +2625,48 @@ export default function SiteList() {
                 backgroundColor: "rgba(125,211,252,0.2) !important",
                 boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
               },
+              "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+                display: "flex",
+                alignItems: "center",
+              },
+              "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                paddingTop: 0,
+                paddingBottom: 0,
+              },
+              "& .ag-center-cols-container .ag-cell.center-col, & .ag-pinned-left-cols-container .ag-cell.center-col, & .ag-pinned-right-cols-container .ag-cell.center-col": {
+                justifyContent: "center",
+                textAlign: "center",
+              },
+              "& .ag-center-cols-container .ag-cell.center-col .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell.center-col .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell.center-col .ag-cell-wrapper": {
+                justifyContent: "center",
+              },
+              "& .ag-cell-value": {
+                width: "100%",
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+              },
             }}
           >
             <AgGridReact
               ref={gridRef}
-              rowData={rows}
+              rowData={displayRows}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
+              context={gridContext}
               rowSelection={rowSelection}
               selectionColumnDef={selectionColumnDef}
               suppressCellFocus
               suppressContextMenu
               preventDefaultOnContextMenu
+              rowHeight={BASE_ROW_HEIGHT}
+              getRowHeight={(params) =>
+                BASE_ROW_HEIGHT * Math.max(1, Array.isArray(params?.data?.assigned_task_groups) ? params.data.assigned_task_groups.length : 0)
+              }
               pagination
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}
@@ -1684,11 +2694,44 @@ export default function SiteList() {
                 setSelectedIds(new Set(selected));
               }}
               onCellContextMenu={(params) => handleOpenSiteContextMenu(params.event, params.data, params.node)}
+              onFirstDataRendered={autoSizeColumns}
+              onRowDataUpdated={autoSizeColumns}
               theme={myTheme}
             />
           </Box>
         </Box>
       </PageBodyFrame>
+
+      <Dialog open={Boolean(recreateConfirmRow)} onClose={closeRecreateDialog} PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
+        <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
+              Re-Deploy Site Worker
+            </Typography>
+            <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
+              {recreateConfirmRow?.name ? `Site: ${recreateConfirmRow.name}` : "Site worker container"}
+            </Typography>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
+          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem", lineHeight: 1.55 }}>
+            Borealis will stop this site-worker container. Job Scheduler will deploy a replacement when same-site Agent or task demand remains.
+          </Typography>
+          {recreateError ? (
+            <Alert severity="error" variant="outlined" sx={{ mt: 2, color: "#fecdd3", borderColor: "rgba(251,113,133,0.42)" }}>
+              {recreateError}
+            </Alert>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
+          <Button onClick={closeRecreateDialog} sx={SITE_DIALOG_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
+            Cancel
+          </Button>
+          <Button onClick={confirmRecreate} sx={SITE_DIALOG_DANGER_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
+            {recreateBusyId ? "Queuing..." : "Re-Deploy"}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <CreateSiteDialog
         open={createOpen}

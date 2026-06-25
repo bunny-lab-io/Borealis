@@ -49,7 +49,6 @@ export const APP_PATHS = {
   siteAssignment: "/users/site-assignment",
   server: "/server",
   engineStatus: "/engine-status",
-  siteWorkers: "/engine-status",
   logs: "/logs",
   metadataFields: "/metadata-fields",
   devTools: "/dev-tools",

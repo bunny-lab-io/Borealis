@@ -59,7 +59,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
         ensure_job_scheduler_tables(conn)
-        _ensure_workflow_runtime_tables(conn, logger=logger)
+        _ensure_workflow_tables(conn, logger=logger)
         conn.commit()
     except Exception as exc:  # pragma: no cover - defensive runtime guard
         if logger:
@@ -1210,7 +1210,7 @@ def _ensure_scheduled_job_support_tables(conn: sqlite3.Connection, *, logger: Op
         cur.close()
 
 
-def _ensure_workflow_runtime_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+def _ensure_workflow_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
     cur = conn.cursor()
     try:
         cur.execute(

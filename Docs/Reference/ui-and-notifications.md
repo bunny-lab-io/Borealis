@@ -92,14 +92,16 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 
     - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
     - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
-    - `GET /api/server/timezones` (Operator Admin Session) - returns the current engine host timezone and the selectable timezone inventory for the Server Info timezone picker.
-    - `POST /api/server/timezone` (Operator Admin Session) - changes the timezone used by the engine host from the WebUI.
     - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WireGuard runtime status, public-edge certificate health, and live operator presence.
-    - `GET /api/server/ansible-runner-settings` (Operator Admin Session) - returns the persisted scheduled-Ansible per-job and global runner limits shown in Server Info.
-    - `PUT /api/server/ansible-runner-settings` (Operator Admin Session) - updates the persisted scheduled-Ansible per-job and global runner limits from Server Info.
+    - `GET /api/server/workers` (Operator Admin Session) - returns active and recent site-worker container state, all sites with total and online device counts, connected Agent counts, and worker-assigned work for Engine Status and Sites.
+    - `POST /api/server/workers/<worker_guid>/recreate` (Operator Admin Session) - queues a scheduler-owned site-worker container stop so a replacement can be deployed.
+    - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns profile-managed site-worker scheduled-lane work-item capacity shown in Server Info.
+    - `GET /api/server/agent-release-channels` (Operator Admin Session) - returns Agent update channel targets shown in Server Info.
+    - `PUT /api/server/agent-release-channels` (Operator Admin Session) - updates default Agent update channel or repo and refreshes cached artifacts.
+    - `POST /api/server/agent-release-channels/refresh` (Operator Admin Session) - refreshes Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Operator Admin Session) - queues the corresponding container service command shown on Server Info rows: restart, rebuild, reload, or reconcile.
     - `POST /api/server/services/<service_key>/restart` (Operator Admin Session) - queues a safe detached restart for `borealis_engine`, `borealis_traefik`, or a specific `postgresql_cluster` instance.
-    - `POST /api/server/wireguard/recover` (Operator Admin Session) - triggers Borealis WireGuard listener recovery when active tunnels exist.
+    - `POST /api/server/wireguard/recover` (Operator Admin Session) - queues WireGuard tunnel reconcile when active tunnels exist.
     - `GET /api/watchdogs` (Token Authenticated) - list watchdog policies for the Watchdogs page.
     - `POST /api/watchdogs/preview` (Token Authenticated) - preview the current watchdog outcome from the editor.
     - `GET /api/watchdogs/incidents` (Token Authenticated) - list queue incidents for Alerts and return queue counts.
@@ -154,8 +156,10 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `AppShell.jsx` plus `PageChromeProvider` own the title, subtitle, icon, and header action rail. `PageBodyFrame` owns the body inset, rounded outer shell, shell chrome, and variant-specific structure.
     - Supported variants: `grid`, `grid_with_stack`, `split_tool`, `content_panel`.
     - Informational admin dashboards such as Server Info should prefer `content_panel`, start with a hero strip of high-signal stat cards, and then stack glass sections beneath it rather than recreating toolbar chrome inside the body.
-    - Server Info now includes a runtime row for scheduled Ansible concurrency so operators can adjust the per-job and global Engine-side runner budget without restarting the engine or editing env files.
-    - Sites includes an `Active Site Workers` tab backed by ReactFlow. It polls `/api/server/workers?history_seconds=60` and renders a left-to-right scheduler -> site-worker -> task pyramid using Flow Editor-style node cards, circular ports, animated dashed edges, site display names, and aggregated recent task cards.
+    - Server Info includes a runtime row for Site Worker Scheduled Tasks so operators can see profile-managed per-worker scheduled-lane work-item capacity. Operators change it by changing host sizing/profile inputs and redeploying, not by editing a UI field.
+    - Sites merges site-worker state into the main AG Grid rows. It fetches `/api/server/workers?history_seconds=300` with site load, keeps rows ordered by site name A-Z, and shows inline `Re-Deploy Site Worker` actions, Engine Status-style status pills, connected/disconnected/offline Agent bars, and Scheduled Jobs-style task bars.
+    - Engine Status task cards label device count separately from scheduler slot count. `Task (8 Devices)` means eight targets are represented by the card; it can be one shared Ansible work item or a grouped set of individual one-target work items.
+    - Engine Status terminal task cards show `Success`, `Failed`, or `Skipped` with a 30-second countdown. Matching terminal events update the existing bucket and reset the countdown; orphaned work awaiting a replacement site worker shows `Reassigning to New Worker`, while the worker lane shows `Re-Deploying`.
     - Default body inset is `px: 2`, `pt: 2.5`, and `pb: 2`. The `pt: 2.5` token adds 20px of shared spacing between the page subtitle and the body frame.
     - The body shell keeps that outer inset, but the main page content should bleed to the inside edge of the shell rather than sitting inside a second shared padding layer.
     - Do not add manual `mt: "10px"` drops or top-level `p: 3` wrappers to compensate for the header or to recreate internal shell padding.

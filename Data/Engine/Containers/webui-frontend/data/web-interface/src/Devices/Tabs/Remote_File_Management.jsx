@@ -58,6 +58,7 @@ import FileUploadRoundedIcon from "@mui/icons-material/FileUploadRounded";
 import FileDownloadRoundedIcon from "@mui/icons-material/FileDownloadRounded";
 import FolderRoundedIcon from "@mui/icons-material/FolderRounded";
 import InsertDriveFileRoundedIcon from "@mui/icons-material/InsertDriveFileRounded";
+import ImageRoundedIcon from "@mui/icons-material/ImageRounded";
 import LinkRoundedIcon from "@mui/icons-material/LinkRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import ComputerRoundedIcon from "@mui/icons-material/ComputerRounded";
@@ -103,6 +104,19 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 const ROOTS_SENTINEL = "__borealis_roots__";
 const TRANSFER_POLL_INTERVAL_MS = 2000;
 const LARGE_TEXT_FILE_WARNING_BYTES = 10 * 1024 * 1024;
+const IMAGE_PREVIEW_MIME_TYPES = {
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".jfif": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+};
+const IMAGE_PREVIEW_EXTENSIONS = new Set(Object.keys(IMAGE_PREVIEW_MIME_TYPES));
 
 const REFRESH_ICON_BUTTON_SX = {
   width: 42,
@@ -844,6 +858,21 @@ function isEditableFileEntry(entry) {
   return Boolean(entry) && !isDirectory(entry);
 }
 
+function getFileExtension(pathValue) {
+  const fileName = normalizeText(pathValue).split(/[\\/]/).filter(Boolean).pop() || normalizeText(pathValue);
+  const extensionIndex = fileName.lastIndexOf(".");
+  if (extensionIndex <= 0 || extensionIndex === fileName.length - 1) return "";
+  return fileName.slice(extensionIndex).toLowerCase();
+}
+
+function getImagePreviewMimeType(pathValue) {
+  return IMAGE_PREVIEW_MIME_TYPES[getFileExtension(pathValue)] || "";
+}
+
+function isPreviewableImageEntry(entry) {
+  return Boolean(entry) && !isDirectory(entry) && IMAGE_PREVIEW_EXTENSIONS.has(getFileExtension(entry?.name || entry?.path));
+}
+
 function isWindowsDriveRootEntry(entry, currentPath, platform) {
   if (platform !== "windows" || normalizeText(currentPath) || !isDirectory(entry)) {
     return false;
@@ -1445,6 +1474,8 @@ export default function RemoteFileManagement({ device }) {
   const editorViewRef = useRef(null);
   const editorSearchInputRef = useRef(null);
   const handleSaveEditorRef = useRef(null);
+  const imagePreviewTransfersRef = useRef({});
+  const imagePreviewUrlRef = useRef("");
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [platform, setPlatform] = useState("");
@@ -1502,6 +1533,16 @@ export default function RemoteFileManagement({ device }) {
   const [rowLoadStateByPath, setRowLoadStateByPath] = useState({});
   const [showHiddenItems, setShowHiddenItems] = useState(false);
   const [clipboardState, setClipboardState] = useState(null);
+  const [imagePreview, setImagePreview] = useState({
+    open: false,
+    status: "idle",
+    fileName: "",
+    path: "",
+    transferId: "",
+    objectUrl: "",
+    error: "",
+    sizeBytes: 0,
+  });
 
   const requestedWorkingDirectory = useMemo(
     () => normalizeText(searchParams.get("working_directory")),
@@ -1522,6 +1563,10 @@ export default function RemoteFileManagement({ device }) {
   );
 
   const selectedEntry = selectedRows.length === 1 ? selectedRows[0] : null;
+  const imagePreviewEntry = useMemo(
+    () => (selectedRows.length === 1 && isPreviewableImageEntry(selectedRows[0]) ? selectedRows[0] : null),
+    [selectedRows]
+  );
   const displayedPath = useMemo(() => getDisplayedPath(addressPath, platform), [addressPath, platform]);
   const addressBarSegments = useMemo(() => buildAddressBarSegments(addressPath, platform), [addressPath, platform]);
   const addressBarRootPath = useMemo(() => (platform === "windows" ? "" : "/"), [platform]);
@@ -1982,6 +2027,104 @@ export default function RemoteFileManagement({ device }) {
     document.body.removeChild(anchor);
   }, [hostname]);
 
+  const clearImagePreviewObjectUrl = useCallback(() => {
+    if (imagePreviewUrlRef.current) {
+      URL.revokeObjectURL(imagePreviewUrlRef.current);
+      imagePreviewUrlRef.current = "";
+    }
+  }, []);
+
+  const closeImagePreview = useCallback(() => {
+    clearImagePreviewObjectUrl();
+    setImagePreview({
+      open: false,
+      status: "idle",
+      fileName: "",
+      path: "",
+      transferId: "",
+      objectUrl: "",
+      error: "",
+      sizeBytes: 0,
+    });
+  }, [clearImagePreviewObjectUrl]);
+
+  useEffect(() => () => {
+    clearImagePreviewObjectUrl();
+  }, [clearImagePreviewObjectUrl]);
+
+  const openCompletedImagePreview = useCallback(
+    async (transferData, previewRequest) => {
+      const transferId = normalizeText(transferData?.transfer_id || previewRequest?.transferId);
+      if (!hostname || !transferId) return;
+      const fileName =
+        normalizeText(previewRequest?.fileName) ||
+        normalizeText(transferData?.result_name) ||
+        normalizeText(transferData?.archive_name) ||
+        "remote-image";
+      const imagePath = normalizeText(previewRequest?.path);
+      setImagePreview({
+        open: true,
+        status: "loading",
+        fileName,
+        path: imagePath,
+        transferId,
+        objectUrl: "",
+        error: "",
+        sizeBytes: Number(previewRequest?.sizeBytes || transferData?.bytes_total || 0),
+      });
+      try {
+        const response = await fetch(
+          `/api/device/files/${encodeURIComponent(hostname)}/transfer/${encodeURIComponent(transferId)}/content`,
+          { credentials: "include" }
+        );
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          throw new Error(normalizeText(errorText) || `HTTP ${response.status}`);
+        }
+        const rawBlob = await response.blob();
+        const fallbackType = getImagePreviewMimeType(fileName || imagePath);
+        const blobType =
+          rawBlob.type && rawBlob.type !== "application/octet-stream"
+            ? rawBlob.type
+            : fallbackType || rawBlob.type || "application/octet-stream";
+        const previewBlob = rawBlob.type === blobType ? rawBlob : new Blob([rawBlob], { type: blobType });
+        const objectUrl = URL.createObjectURL(previewBlob);
+        clearImagePreviewObjectUrl();
+        imagePreviewUrlRef.current = objectUrl;
+        setImagePreview({
+          open: true,
+          status: "ready",
+          fileName,
+          path: imagePath,
+          transferId,
+          objectUrl,
+          error: "",
+          sizeBytes: Number(previewBlob.size || previewRequest?.sizeBytes || transferData?.bytes_total || 0),
+        });
+      } catch (previewError) {
+        const message = String(previewError?.message || previewError);
+        clearImagePreviewObjectUrl();
+        setImagePreview({
+          open: true,
+          status: "error",
+          fileName,
+          path: imagePath,
+          transferId,
+          objectUrl: "",
+          error: message,
+          sizeBytes: Number(previewRequest?.sizeBytes || transferData?.bytes_total || 0),
+        });
+        await notifyOperator({
+          title: "Preview Failed",
+          message,
+          icon: "error",
+          variant: "error",
+        });
+      }
+    },
+    [clearImagePreviewObjectUrl, hostname, notifyOperator]
+  );
+
   useEffect(() => {
     const pendingTransfers = Object.values(activeTransfers || {}).filter(
       (transfer) => transfer?.transfer_id && !isTerminalTransferStatus(transfer?.status)
@@ -2001,22 +2144,30 @@ export default function RemoteFileManagement({ device }) {
             throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
           }
           if (canceled) return;
-          setActiveTransfers((previous) => ({ ...previous, [transfer.transfer_id]: data }));
+          const transferId = normalizeText(data?.transfer_id || transfer?.transfer_id);
+          const transferData = { ...data, transfer_id: transferId };
+          setActiveTransfers((previous) => ({ ...previous, [transfer.transfer_id]: transferData }));
           const handledKey = `${transfer.transfer_id}:${normalizeText(data?.status).toLowerCase()}`;
           if (normalizeText(data?.status).toLowerCase() === "completed" && !handledTransfersRef.current[handledKey]) {
             handledTransfersRef.current[handledKey] = true;
-            if (normalizeText(data?.direction).toLowerCase() === "download" && data?.download_ready) {
-              triggerDownload(data.transfer_id, data.result_name || data.archive_name);
-              void notifyOperator({
-                title: "Download Ready",
-                message: `Prepared ${normalizeText(data?.result_name) || normalizeText(data?.archive_name) || "the requested download"}.`,
-                icon: "download",
-                variant: "success",
-              });
+            if (normalizeText(transferData?.direction).toLowerCase() === "download" && transferData?.download_ready) {
+              const previewRequest = imagePreviewTransfersRef.current[transferId];
+              if (previewRequest) {
+                delete imagePreviewTransfersRef.current[transferId];
+                await openCompletedImagePreview(transferData, previewRequest);
+              } else {
+                triggerDownload(transferId, transferData.result_name || transferData.archive_name);
+                void notifyOperator({
+                  title: "Download Ready",
+                  message: `Prepared ${normalizeText(transferData?.result_name) || normalizeText(transferData?.archive_name) || "the requested download"}.`,
+                  icon: "download",
+                  variant: "success",
+                });
+              }
             } else {
               void notifyOperator({
                 title: "Upload Complete",
-                message: `Uploaded ${Number(data?.item_count || 0)} item${Number(data?.item_count || 0) === 1 ? "" : "s"} to ${normalizeText(data?.target_path) || "the selected directory"}.`,
+                message: `Uploaded ${Number(transferData?.item_count || 0)} item${Number(transferData?.item_count || 0) === 1 ? "" : "s"} to ${normalizeText(transferData?.target_path) || "the selected directory"}.`,
                 icon: "upload",
                 variant: "success",
               });
@@ -2030,9 +2181,22 @@ export default function RemoteFileManagement({ device }) {
           }
           if (normalizeText(data?.status).toLowerCase() === "failed" && !handledTransfersRef.current[handledKey]) {
             handledTransfersRef.current[handledKey] = true;
+            const previewRequest = imagePreviewTransfersRef.current[transferId];
+            if (previewRequest) {
+              delete imagePreviewTransfersRef.current[transferId];
+              setImagePreview((previous) =>
+                previous.transferId === transferId
+                  ? {
+                      ...previous,
+                      status: "error",
+                      error: normalizeText(transferData?.error) || "The image preview transfer failed.",
+                    }
+                  : previous
+              );
+            }
             void notifyOperator({
               title: "Transfer Failed",
-              message: normalizeText(data?.error) || "The file transfer failed.",
+              message: normalizeText(transferData?.error) || "The file transfer failed.",
               icon: "error",
               variant: "error",
             });
@@ -2044,9 +2208,22 @@ export default function RemoteFileManagement({ device }) {
           }
           if (normalizeText(data?.status).toLowerCase() === "canceled" && !handledTransfersRef.current[handledKey]) {
             handledTransfersRef.current[handledKey] = true;
+            const previewRequest = imagePreviewTransfersRef.current[transferId];
+            if (previewRequest) {
+              delete imagePreviewTransfersRef.current[transferId];
+              setImagePreview((previous) =>
+                previous.transferId === transferId
+                  ? {
+                      ...previous,
+                      status: "error",
+                      error: "The image preview transfer was canceled.",
+                    }
+                  : previous
+              );
+            }
             void notifyOperator({
               title: "Transfer Canceled",
-              message: normalizeText(data?.error) || "The file transfer was canceled.",
+              message: normalizeText(transferData?.error) || "The file transfer was canceled.",
               icon: "notification",
               variant: "info",
             });
@@ -2072,7 +2249,7 @@ export default function RemoteFileManagement({ device }) {
       canceled = true;
       window.clearInterval(timerId);
     };
-  }, [activeTransfers, hostname, notifyOperator, refreshBaseView, triggerDownload]);
+  }, [activeTransfers, hostname, notifyOperator, openCompletedImagePreview, refreshBaseView, triggerDownload]);
 
   const handleCloseEditor = useCallback(() => {
     setEditorOpen(false);
@@ -2577,6 +2754,83 @@ export default function RemoteFileManagement({ device }) {
     }
   }, [hostname, notifyOperator, selectedRows]);
 
+  const handlePreviewImage = useCallback(async () => {
+    const entry = imagePreviewEntry;
+    if (!hostname || !isPreviewableImageEntry(entry) || actionBusy) return;
+    const targetPath = normalizeText(entry?.path);
+    if (!targetPath) return;
+    const fileName = normalizeText(entry?.name) || targetPath.split(/[\\/]/).filter(Boolean).pop() || "remote-image";
+    setActionBusy("image-preview");
+    clearImagePreviewObjectUrl();
+    setImagePreview({
+      open: true,
+      status: "preparing",
+      fileName,
+      path: targetPath,
+      transferId: "",
+      objectUrl: "",
+      error: "",
+      sizeBytes: Number(entry?.size_bytes || 0),
+    });
+    try {
+      const response = await fetch(`/api/device/files/${encodeURIComponent(hostname)}/download`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [
+            {
+              path: entry.path,
+              name: entry.name,
+              kind: entry.kind,
+            },
+          ],
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
+      }
+      const transferId = normalizeText(data?.transfer_id);
+      if (!transferId) {
+        throw new Error("Image preview transfer did not return a transfer ID.");
+      }
+      imagePreviewTransfersRef.current[transferId] = {
+        transferId,
+        fileName,
+        path: targetPath,
+        sizeBytes: Number(entry?.size_bytes || 0),
+      };
+      setImagePreview((previous) => ({
+        ...previous,
+        status: "preparing",
+        transferId,
+      }));
+      setActiveTransfers((previous) => ({ ...previous, [transferId]: data }));
+      await notifyOperator({
+        title: "Preview Started",
+        message: `Preparing ${fileName}.`,
+        icon: "image",
+        variant: "info",
+      });
+    } catch (previewError) {
+      const message = String(previewError?.message || previewError);
+      setImagePreview((previous) => ({
+        ...previous,
+        status: "error",
+        error: message,
+      }));
+      await notifyOperator({
+        title: "Preview Failed",
+        message,
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setActionBusy("");
+    }
+  }, [actionBusy, clearImagePreviewObjectUrl, hostname, imagePreviewEntry, notifyOperator]);
+
   const handleCancelTransfer = useCallback(
     async (transfer) => {
       const transferId = normalizeText(transfer?.transfer_id);
@@ -2980,6 +3234,22 @@ export default function RemoteFileManagement({ device }) {
         },
       },
       {
+        id: "preview-image",
+        group: "primary",
+        label: "Preview Image",
+        icon: ImageRoundedIcon,
+        disabled: !imagePreviewEntry || !!actionBusy,
+        disabledReason:
+          selectedRows.length !== 1
+            ? "Select one image file."
+            : !imagePreviewEntry
+              ? "Select a PNG, JPG, GIF, WEBP, BMP, SVG, ICO, or AVIF file."
+              : "",
+        onClick: () => {
+          void handlePreviewImage();
+        },
+      },
+      {
         id: "edit",
         group: "organize",
         label: "Edit",
@@ -3107,9 +3377,12 @@ export default function RemoteFileManagement({ device }) {
       handleCopySelection,
       handleCutSelection,
       handleOpenEditor,
+      handleOpenUploadPicker,
       handleOpenUploadFolderPicker,
+      handlePreviewImage,
       handleStartDownload,
       handlePasteClipboard,
+      imagePreviewEntry,
       inlineEditingUnsupported,
       platform,
       resolvedClipboardTarget,
@@ -4243,6 +4516,89 @@ export default function RemoteFileManagement({ device }) {
           </Box>
         </Box>
       </Drawer>
+
+      <Dialog
+        open={Boolean(imagePreview.open)}
+        onClose={closeImagePreview}
+        fullWidth
+        maxWidth="lg"
+        PaperProps={{ sx: { ...DIALOG_PAPER_SX, maxHeight: "92vh" } }}
+      >
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="Image Preview"
+            subtitle={imagePreview.path || imagePreview.fileName || "Remote image"}
+          />
+        </DialogTitle>
+        <DialogContent sx={{ ...DIALOG_CONTENT_SX, pt: 1.4, overflow: "hidden" }}>
+          {imagePreview.status === "preparing" || imagePreview.status === "loading" ? (
+            <Stack spacing={1.1}>
+              <LinearProgress />
+              <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem" }}>
+                {imagePreview.status === "preparing" ? "Preparing remote image..." : "Loading preview..."}
+              </Typography>
+            </Stack>
+          ) : null}
+          {imagePreview.status === "error" ? (
+            <Alert severity="error" sx={{ borderRadius: 2 }}>
+              {imagePreview.error || "Image preview failed."}
+            </Alert>
+          ) : null}
+          {imagePreview.status === "ready" && imagePreview.objectUrl ? (
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minHeight: { xs: 260, md: 420 },
+                maxHeight: "68vh",
+                overflow: "auto",
+                borderRadius: 2,
+                border: "1px solid rgba(148,163,184,0.22)",
+                background:
+                  "linear-gradient(45deg, rgba(148,163,184,0.12) 25%, transparent 25%), " +
+                  "linear-gradient(-45deg, rgba(148,163,184,0.12) 25%, transparent 25%), " +
+                  "linear-gradient(45deg, transparent 75%, rgba(148,163,184,0.12) 75%), " +
+                  "linear-gradient(-45deg, transparent 75%, rgba(148,163,184,0.12) 75%), rgba(2,6,23,0.74)",
+                backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0",
+                backgroundSize: "20px 20px",
+                p: 1,
+              }}
+            >
+              <Box
+                component="img"
+                src={imagePreview.objectUrl}
+                alt={imagePreview.fileName || "Remote image preview"}
+                sx={{
+                  display: "block",
+                  maxWidth: "100%",
+                  maxHeight: "64vh",
+                  objectFit: "contain",
+                  borderRadius: 1,
+                }}
+              />
+            </Box>
+          ) : null}
+          {imagePreview.status === "ready" ? (
+            <Typography sx={{ mt: 1, color: MAGIC_UI.textMuted, fontSize: "0.8rem" }}>
+              {imagePreview.fileName || "Remote image"}{imagePreview.sizeBytes ? ` - ${formatBytes(imagePreview.sizeBytes)}` : ""}
+            </Typography>
+          ) : null}
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          {imagePreview.status === "ready" && imagePreview.transferId ? (
+            <Button
+              onClick={() => triggerDownload(imagePreview.transferId, imagePreview.fileName)}
+              sx={DIALOG_BUTTON_SX}
+            >
+              Download
+            </Button>
+          ) : null}
+          <Button onClick={closeImagePreview} sx={DIALOG_PRIMARY_BUTTON_SX}>
+            Close
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog
         open={editorCloseConfirmOpen}

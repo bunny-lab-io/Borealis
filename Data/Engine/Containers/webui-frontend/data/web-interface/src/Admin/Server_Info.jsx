@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData, useNavigate } from "react-router-dom";
 import {
-  Autocomplete,
   Box,
   Button,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -783,28 +781,12 @@ export default function ServerInfo() {
   const [actionBusyKey, setActionBusyKey] = useState("");
   const [confirmAction, setConfirmAction] = useState(null);
   const [boostPollingUntil, setBoostPollingUntil] = useState(0);
-  const [timezoneDialogOpen, setTimezoneDialogOpen] = useState(false);
-  const [timezoneOptions, setTimezoneOptions] = useState([]);
-  const [timezoneOptionsLoaded, setTimezoneOptionsLoaded] = useState(false);
-  const [timezoneLoading, setTimezoneLoading] = useState(false);
-  const [timezoneSaving, setTimezoneSaving] = useState(false);
-  const [timezoneError, setTimezoneError] = useState("");
-  const [selectedTimezone, setSelectedTimezone] = useState("");
-  const [ansibleRunnerDialogOpen, setAnsibleRunnerDialogOpen] = useState(false);
-  const [ansibleRunnerSaving, setAnsibleRunnerSaving] = useState(false);
-  const [ansibleRunnerError, setAnsibleRunnerError] = useState("");
-  const [ansibleRunnerJobLimit, setAnsibleRunnerJobLimit] = useState("20");
-  const [ansibleRunnerGlobalLimit, setAnsibleRunnerGlobalLimit] = useState("50");
   const [releaseChannelsDialogOpen, setReleaseChannelsDialogOpen] = useState(false);
   const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
   const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
   const [releaseChannelsError, setReleaseChannelsError] = useState("");
   const [releaseDefaultChannel, setReleaseDefaultChannel] = useState("stable");
   const [releaseRepo, setReleaseRepo] = useState("");
-  const [timezoneMeta, setTimezoneMeta] = useState({
-    currentTimezone: "",
-    changeSupported: null,
-  });
   const hasOverviewRef = useRef(Boolean(loaderData?.overview));
 
   const sendScopedNotification = useAppNotifications();
@@ -841,41 +823,6 @@ export default function ServerInfo() {
     }
   }, []);
 
-  const fetchTimezoneOptions = useCallback(async () => {
-    setTimezoneLoading(true);
-    setTimezoneError("");
-    try {
-      const response = await fetch("/api/server/timezones", {
-        credentials: "include",
-        cache: "no-store",
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setTimezoneOptions(Array.isArray(payload?.timezones) ? payload.timezones : []);
-      setTimezoneOptionsLoaded(true);
-      const currentTimezone = String(payload?.current_timezone || "").trim();
-      const changeSupported =
-        typeof payload?.change_supported === "boolean" ? payload.change_supported : null;
-      setTimezoneMeta({
-        currentTimezone,
-        changeSupported,
-      });
-      if (currentTimezone) {
-        setSelectedTimezone(currentTimezone);
-      }
-    } catch (requestError) {
-      setTimezoneError(
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not load server timezones."
-      );
-    } finally {
-      setTimezoneLoading(false);
-    }
-  }, []);
-
   const fetchServerTimeSnapshot = useCallback(async () => {
     setServerTimeLoading(true);
     try {
@@ -888,14 +835,6 @@ export default function ServerInfo() {
         throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       }
       setServerTimeSnapshot(payload);
-      const snapshotTimezoneId = String(payload?.timezone_id || "").trim();
-      const snapshotTimezone = String(payload?.timezone || "").trim();
-      if (snapshotTimezoneId || snapshotTimezone) {
-        setTimezoneMeta((current) => ({
-          currentTimezone: current?.currentTimezone || snapshotTimezoneId || snapshotTimezone,
-          changeSupported: current?.changeSupported ?? null,
-        }));
-      }
     } catch {
       /* server time fallback is best-effort */
     } finally {
@@ -954,16 +893,8 @@ export default function ServerInfo() {
 
   useEffect(() => {
     if (!isAdmin) return;
-    fetchTimezoneOptions();
     fetchServerTimeSnapshot();
-  }, [fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin]);
-
-  useEffect(() => {
-    if (!timezoneDialogOpen) return;
-    if (!timezoneOptionsLoaded) {
-      fetchTimezoneOptions();
-    }
-  }, [fetchTimezoneOptions, timezoneDialogOpen, timezoneOptionsLoaded]);
+  }, [fetchServerTimeSnapshot, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -973,14 +904,10 @@ export default function ServerInfo() {
       !String(hostPayload?.server_time?.utc || "").trim() &&
       !String(hostPayload?.server_time?.display || "").trim();
     const missingTimezoneId = !String(hostPayload?.timezone_id || "").trim();
-    const missingChangeSupport = typeof hostPayload?.timezone_change_supported !== "boolean";
     if (missingClock || missingTimezoneId) {
       fetchServerTimeSnapshot();
     }
-    if (missingTimezoneId || missingChangeSupport) {
-      fetchTimezoneOptions();
-    }
-  }, [fetchOverview, fetchServerTimeSnapshot, fetchTimezoneOptions, isAdmin, overview]);
+  }, [fetchServerTimeSnapshot, isAdmin, overview]);
 
   useEffect(() => {
     if (!boostPollingUntil || boostPollingUntil <= Date.now()) return undefined;
@@ -1053,26 +980,6 @@ export default function ServerInfo() {
         "Recover the Borealis WireGuard listener now? This is intended for live tunnel transport issues while operator sessions are active.",
     });
   }, []);
-
-  const closeTimezoneDialog = useCallback(() => {
-    if (timezoneSaving) return;
-    setTimezoneDialogOpen(false);
-    setTimezoneError("");
-  }, [timezoneSaving]);
-
-  const openAnsibleRunnerDialog = useCallback(() => {
-    const currentSettings = overview?.ansible_runner || {};
-    setAnsibleRunnerJobLimit(String(Number(currentSettings?.job_concurrency_limit || 20)));
-    setAnsibleRunnerGlobalLimit(String(Number(currentSettings?.global_concurrency_limit || 50)));
-    setAnsibleRunnerError("");
-    setAnsibleRunnerDialogOpen(true);
-  }, [overview]);
-
-  const closeAnsibleRunnerDialog = useCallback(() => {
-    if (ansibleRunnerSaving) return;
-    setAnsibleRunnerDialogOpen(false);
-    setAnsibleRunnerError("");
-  }, [ansibleRunnerSaving]);
 
   const openReleaseChannelsDialog = useCallback(() => {
     const currentSettings = overview?.agent_release_channels || {};
@@ -1173,104 +1080,6 @@ export default function ServerInfo() {
     }
   }, [fetchOverview, sendScopedNotification]);
 
-  const applyAnsibleRunnerSettings = useCallback(async () => {
-    const jobLimit = Number(ansibleRunnerJobLimit);
-    const globalLimit = Number(ansibleRunnerGlobalLimit);
-    if (!Number.isFinite(jobLimit) || jobLimit < 1 || !Number.isInteger(jobLimit)) {
-      setAnsibleRunnerError("Per-job concurrency must be a whole number greater than 0.");
-      return;
-    }
-    if (!Number.isFinite(globalLimit) || globalLimit < 1 || !Number.isInteger(globalLimit)) {
-      setAnsibleRunnerError("Global concurrency must be a whole number greater than 0.");
-      return;
-    }
-    setAnsibleRunnerSaving(true);
-    setAnsibleRunnerError("");
-    try {
-      const response = await fetch("/api/server/ansible-runner-settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          job_concurrency_limit: jobLimit,
-          global_concurrency_limit: globalLimit,
-        }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setAnsibleRunnerDialogOpen(false);
-      await sendScopedNotification({
-        title: "Ansible Limits Updated",
-        message: `Scheduled Ansible concurrency updated to ${jobLimit} per job and ${globalLimit} globally.`,
-        icon: "settings",
-        variant: "info",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not update Ansible runner settings.";
-      setAnsibleRunnerError(message);
-      await sendScopedNotification({
-        title: "Ansible Limits Update Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setAnsibleRunnerSaving(false);
-    }
-  }, [ansibleRunnerGlobalLimit, ansibleRunnerJobLimit, fetchOverview, sendScopedNotification]);
-
-  const applyTimezoneChange = useCallback(async () => {
-    const timezoneId = String(selectedTimezone || "").trim();
-    if (!timezoneId) {
-      setTimezoneError("Choose a timezone before applying the change.");
-      return;
-    }
-    setTimezoneSaving(true);
-    setTimezoneError("");
-    try {
-      const response = await fetch("/api/server/timezone", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ timezone: timezoneId }),
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-      }
-      setTimezoneDialogOpen(false);
-      await sendScopedNotification({
-        title: "Timezone Updated",
-        message: `Server timezone changed to ${timezoneId}.`,
-        icon: "schedule",
-        variant: "info",
-      });
-      setBoostPollingUntil(Date.now() + BOOSTED_POLL_DURATION_MS);
-      await fetchOverview({ background: false });
-    } catch (requestError) {
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Borealis could not change the server timezone.";
-      setTimezoneError(message);
-      await sendScopedNotification({
-        title: "Timezone Update Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setTimezoneSaving(false);
-    }
-  }, [fetchOverview, selectedTimezone, sendScopedNotification]);
-
   const executeAction = useCallback(async () => {
     if (!confirmAction) return;
     const targetRow = confirmAction?.payload || null;
@@ -1369,7 +1178,9 @@ export default function ServerInfo() {
   const operatorSessionCount = Math.max(0, Number(overview?.operator_session_count || 0));
   const wireguard = overview?.wireguard || {};
   const publicEdge = overview?.public_edge || {};
-  const ansibleRunner = overview?.ansible_runner || {};
+  const siteWorkerSettings = overview?.site_worker_settings || {};
+  const deploymentProfile = siteWorkerSettings?.deployment_profile || host?.deployment_profile || {};
+  const deploymentProfileName = String(deploymentProfile?.name || "Deployment Profile").trim();
   const agentReleaseChannels = overview?.agent_release_channels || {};
   const workerPayload = overview?.workers || {};
   const workers = Array.isArray(workerPayload?.workers) ? workerPayload.workers : [];
@@ -1379,18 +1190,12 @@ export default function ServerInfo() {
   const stableChannel = agentReleaseChannels?.channels?.stable || {};
   const unstableChannel = agentReleaseChannels?.channels?.unstable || {};
   const effectiveTimezoneId = String(
-    host?.timezone_id || timezoneMeta.currentTimezone || serverTimeSnapshot?.timezone_id || ""
+    host?.timezone_id || serverTimeSnapshot?.timezone_id || ""
   ).trim();
   const effectiveTimezoneLabel = String(
     effectiveTimezoneId || host?.timezone || serverTimeSnapshot?.timezone || ""
   ).trim();
   const effectiveServerTime = host?.server_time || serverTimeSnapshot || {};
-  const timezoneChangeSupported =
-    typeof host?.timezone_change_supported === "boolean"
-      ? host.timezone_change_supported
-      : typeof timezoneMeta.changeSupported === "boolean"
-      ? timezoneMeta.changeSupported
-      : true;
   const rawClockValue = formatServerClockDisplay(effectiveServerTime, effectiveTimezoneId);
   const clockValue =
     rawClockValue === "Unavailable" && (loading || serverTimeLoading) ? "Loading..." : rawClockValue;
@@ -1398,12 +1203,6 @@ export default function ServerInfo() {
     effectiveTimezoneLabel || (loading || serverTimeLoading ? "Loading..." : "Unavailable");
   const loadAverageValue = formatLoadAverageValue(resources?.load_average);
   const loadAverageCaption = `1, 5, and 15 minute averages · CPU Count ${resources?.cpu_count || 0}`;
-
-  const openTimezoneDialog = useCallback(() => {
-    setTimezoneError("");
-    setSelectedTimezone(effectiveTimezoneId);
-    setTimezoneDialogOpen(true);
-  }, [effectiveTimezoneId]);
 
   const gridDefaultColDef = useMemo(
     () => ({
@@ -1503,18 +1302,11 @@ export default function ServerInfo() {
         actions: [],
       },
       {
-        id: "ansible_runner_limits",
-        name: "Scheduled Ansible Runner",
-        value: `${Number(ansibleRunner?.job_concurrency_limit || 20)} / ${Number(ansibleRunner?.global_concurrency_limit || 50)}`,
-        details: "Per-job / global runner limits for scheduled Ansible execution on this engine",
-        actions: [
-          {
-            id: "edit_ansible_runner_limits",
-            label: ansibleRunnerSaving ? "Saving..." : "Edit Limits",
-            disabled: ansibleRunnerSaving,
-            onClick: openAnsibleRunnerDialog,
-          },
-        ],
+        id: "site_worker_scheduled_tasks",
+        name: "Site Worker Scheduled Tasks",
+        value: Number(siteWorkerSettings?.scheduled_task_concurrency_limit || 5),
+        details: `${deploymentProfileName} profile-managed scheduled-lane capacity per site worker`,
+        actions: [],
       },
       {
         id: "site_workers",
@@ -1544,14 +1336,7 @@ export default function ServerInfo() {
         name: "System Time",
         value: clockValue,
         details: timezoneDisplayValue,
-        actions: [
-          {
-            id: "change_timezone",
-            label: timezoneSaving ? "Applying..." : "Change Timezone",
-            disabled: !timezoneChangeSupported || timezoneSaving,
-            onClick: openTimezoneDialog,
-          },
-        ],
+        actions: [],
       },
       {
         id: "cpu_load_average",
@@ -1570,21 +1355,17 @@ export default function ServerInfo() {
     ],
     [
       agentReleaseChannels,
-      ansibleRunner,
-      ansibleRunnerSaving,
       clockValue,
+      deploymentProfileName,
       host,
       loadAverageCaption,
       loadAverageValue,
-      openAnsibleRunnerDialog,
       openReleaseChannelsDialog,
-      openTimezoneDialog,
       releaseChannelsRefreshing,
       releaseChannelsSaving,
+      siteWorkerSettings,
       stableChannel,
-      timezoneChangeSupported,
       timezoneDisplayValue,
-      timezoneSaving,
       unstableChannel,
       workerPayload?.active_count,
       workerPayload?.manager_active_count,
@@ -1898,186 +1679,6 @@ export default function ServerInfo() {
           />
         </Box>
       </PageBodyFrame>
-
-      <Dialog open={timezoneDialogOpen} onClose={closeTimezoneDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock
-            title="Change Server Timezone"
-            subtitle="Update the timezone used by the entire Borealis engine host without signing into SSH."
-          />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis will apply the selected timezone to the server itself. This affects the clock shown in the WebUI and any server-local time displays.
-          </Typography>
-          <Box sx={{ mt: 2 }}>
-            <Autocomplete
-              options={timezoneOptions}
-              loading={timezoneLoading}
-              value={selectedTimezone || null}
-              onChange={(_event, value) => {
-                setSelectedTimezone(String(value || ""));
-                setTimezoneError("");
-              }}
-              onInputChange={() => {
-                if (timezoneError) {
-                  setTimezoneError("");
-                }
-              }}
-              slotProps={{
-                popper: {
-                  sx: {
-                    zIndex: 1600,
-                    "& .MuiAutocomplete-paper": {
-                      mt: 0.75,
-                      borderRadius: 2.5,
-                      background: DIALOG_MAGIC_UI.panelBg,
-                      backdropFilter: "blur(18px)",
-                      border: `1px solid ${DIALOG_MAGIC_UI.panelBorderStrong}`,
-                      boxShadow: DIALOG_MAGIC_UI.glow,
-                      color: DIALOG_MAGIC_UI.textBright,
-                      overflow: "hidden",
-                    },
-                    "& .MuiAutocomplete-listbox": {
-                      py: 0.6,
-                      maxHeight: 360,
-                    },
-                    "& .MuiAutocomplete-option": {
-                      minHeight: 40,
-                      px: 1.6,
-                      py: 0.75,
-                      fontSize: "0.92rem",
-                      lineHeight: 1.35,
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "transparent",
-                      transition: "background 160ms ease, color 160ms ease",
-                    },
-                    "& .MuiAutocomplete-option.Mui-focused": {
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                    "& .MuiAutocomplete-option[aria-selected='true']": {
-                      background: "rgba(192,132,252,0.14)",
-                      color: "#f2e8ff",
-                    },
-                    "& .MuiAutocomplete-option[aria-selected='true'].Mui-focused": {
-                      background: "rgba(192,132,252,0.2)",
-                    },
-                    "& .MuiAutocomplete-loading, & .MuiAutocomplete-noOptions": {
-                      color: DIALOG_MAGIC_UI.textMuted,
-                      fontSize: "0.88rem",
-                      px: 1.6,
-                      py: 1.25,
-                    },
-                  },
-                },
-                clearIndicator: {
-                  sx: {
-                    color: DIALOG_MAGIC_UI.textMuted,
-                    borderRadius: 999,
-                    "&:hover": {
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                  },
-                },
-                popupIndicator: {
-                  sx: {
-                    color: DIALOG_MAGIC_UI.textMuted,
-                    borderRadius: 999,
-                    "&:hover": {
-                      color: DIALOG_MAGIC_UI.textBright,
-                      background: "rgba(125,211,252,0.08)",
-                    },
-                  },
-                },
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label="Timezone"
-                  placeholder="Select a timezone"
-                  sx={DIALOG_INPUT_SX}
-                  InputProps={{
-                    ...params.InputProps,
-                    endAdornment: (
-                      <>
-                        {timezoneLoading ? <CircularProgress size={18} sx={{ color: MAGIC_UI.accentA, mr: 1 }} /> : null}
-                        {params.InputProps.endAdornment}
-                      </>
-                    ),
-                  }}
-                />
-              )}
-            />
-          </Box>
-          {timezoneError ? (
-            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {timezoneError}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeTimezoneDialog} sx={DIALOG_BUTTON_SX} disabled={timezoneSaving}>
-            Cancel
-          </Button>
-          <Button onClick={applyTimezoneChange} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={timezoneSaving || timezoneLoading}>
-            {timezoneSaving ? "Applying..." : "Apply Timezone"}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={ansibleRunnerDialogOpen} onClose={closeAnsibleRunnerDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
-        <DialogTitle sx={DIALOG_TITLE_SX}>
-          <DialogHeaderBlock
-            title="Scheduled Ansible Concurrency"
-            subtitle="Tune how many scheduled Ansible runners Borealis can execute at once."
-          />
-        </DialogTitle>
-        <DialogContent sx={DIALOG_CONTENT_SX}>
-          <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Borealis enforces both the per-job cap and the shared global cap whenever scheduled Ansible jobs dispatch Engine-side runners. Individual modes fan out across targets, while shared modes still consume runner slots per playbook component.
-          </Typography>
-          <Stack spacing={2} sx={{ mt: 2 }}>
-            <TextField
-              label="Ansible_Runner_Job_Concurrency_Limit"
-              type="number"
-              value={ansibleRunnerJobLimit}
-              onChange={(event) => {
-                setAnsibleRunnerJobLimit(event.target.value);
-                if (ansibleRunnerError) setAnsibleRunnerError("");
-              }}
-              inputProps={{ min: 1, step: 1 }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Maximum concurrent scheduled Ansible runners allowed per job occurrence."
-            />
-            <TextField
-              label="Ansible_Runner_Global_Concurrency_Limit"
-              type="number"
-              value={ansibleRunnerGlobalLimit}
-              onChange={(event) => {
-                setAnsibleRunnerGlobalLimit(event.target.value);
-                if (ansibleRunnerError) setAnsibleRunnerError("");
-              }}
-              inputProps={{ min: 1, step: 1 }}
-              sx={DIALOG_INPUT_SX}
-              helperText="Maximum concurrent scheduled Ansible runners allowed across all scheduled jobs on this engine."
-            />
-          </Stack>
-          {ansibleRunnerError ? (
-            <Typography sx={{ mt: 1.4, color: "#ffb7b7", fontSize: "0.84rem", lineHeight: 1.45 }}>
-              {ansibleRunnerError}
-            </Typography>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button onClick={closeAnsibleRunnerDialog} sx={DIALOG_BUTTON_SX} disabled={ansibleRunnerSaving}>
-            Cancel
-          </Button>
-          <Button onClick={applyAnsibleRunnerSettings} sx={DIALOG_PRIMARY_BUTTON_SX} disabled={ansibleRunnerSaving}>
-            {ansibleRunnerSaving ? "Saving..." : "Save Limits"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <Dialog open={releaseChannelsDialogOpen} onClose={closeReleaseChannelsDialog} PaperProps={{ sx: DIALOG_PAPER_SX }}>
         <DialogTitle sx={DIALOG_TITLE_SX}>

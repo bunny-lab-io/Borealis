@@ -7,18 +7,14 @@
 
 """Configuration helpers for the Borealis Engine runtime.
 
-Stage 2 of the migration focuses on lifting the legacy configuration loading
-behaviour from :mod:`Data.Server.server` into reusable helpers so the Engine
-start-up path honours the same environment variables, filesystem layout, and
-logging expectations.  This module documents the supported launch parameters
-and exposes typed helpers that the application factory consumes.
+Configuration helpers shared by retained Python worker runtimes and maintenance
+commands. Go owns the public api-backend process; Python uses this module for
+site-worker, Ansible, scheduler healthcheck, and migration helpers.
 
 Launch overview
 ---------------
-The Engine can be started via :func:`Data.Engine.bootstrapper.main` or by
-invoking :func:`Data.Engine.server.create_app` manually. The shipped runtime is
-loopback HTTP only and expects the embedded Traefik + Let's Encrypt edge to own
-all public HTTPS traffic. Configuration is assembled from (in precedence
+The Go api-backend listens on loopback HTTP and expects the embedded Traefik +
+Let's Encrypt edge to own all public HTTPS traffic. Configuration is assembled from (in precedence
 order): ``config`` mapping overrides provided to :func:`load_runtime_config`,
 environment variables prefixed with ``BOREALIS_``, and finally built-in
 defaults. Key environment variables are
@@ -61,10 +57,8 @@ defaults. Key environment variables are
 ``BOREALIS_LETSENCRYPT_SETTINGS_PATH`` path to the Borealis-managed public edge
                                       settings JSON rendered by ``Engine.sh``.
 
-Direct public Engine TLS is no longer supported. The Python Engine always runs
-on loopback HTTP behind the embedded Traefik edge, while internal Engine
-certificates remain scoped to non-public uses such as WireGuard and code
-signing.
+Direct public Engine TLS is no longer supported. Internal Engine certificates
+remain scoped to non-public uses such as WireGuard and code signing.
 Logs are written to ``Engine/Services/api-backend/logs/engine.log`` with
 daily rotation and errors are additionally duplicated to
 ``Engine/Services/api-backend/logs/error.log`` so the runtime integrates with
@@ -755,7 +749,6 @@ def load_runtime_config(overrides: Optional[Mapping[str, Any]] = None) -> Engine
             "server",
             "assemblies",
             "workflows",
-            "scheduled_jobs",
             "notifications",
         )
 

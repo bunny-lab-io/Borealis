@@ -63,11 +63,14 @@ type shellSession struct {
 	shellBin  string
 	logf      func(string, ...any)
 	onClosed  func(*shellSession)
+	onReady   func(*shellSession)
 
 	writeMu sync.Mutex
 	metaMu  sync.Mutex
 	statsMu sync.Mutex
+	procMu  sync.Mutex
 	once    sync.Once
+	ready   sync.Once
 
 	proc   *exec.Cmd
 	stdin  io.WriteCloser
@@ -293,17 +296,27 @@ func (m *Manager) handleConnection(conn net.Conn) {
 		return
 	}
 	configureTCPSocket(conn)
-	session := newShellSession(conn, conn.RemoteAddr().String(), m.shellKind, m.shellBin, m.logf, m.onSessionClosed)
+	session := newShellSession(conn, conn.RemoteAddr().String(), m.shellKind, m.shellBin, m.logf, m.onSessionClosed, m.activateSession)
+	m.logf("Accepted remote shell connection from %s", conn.RemoteAddr().String())
+	go session.start()
+}
+
+func (m *Manager) activateSession(session *shellSession) {
+	if session == nil || session.isClosed() {
+		return
+	}
 	m.sessionMu.Lock()
 	prior := m.session
+	if prior == session {
+		m.sessionMu.Unlock()
+		return
+	}
 	m.session = session
 	m.sessionMu.Unlock()
-	if prior != nil && prior != session && !prior.isClosed() {
+	if prior != nil && !prior.isClosed() {
 		m.logf("Closing superseded remote shell session prior_session_id=%s prior_remote=%s", prior.sessionID(), prior.address)
 		prior.close()
 	}
-	m.logf("Accepted remote shell connection from %s", conn.RemoteAddr().String())
-	go session.start()
 }
 
 func (m *Manager) onSessionClosed(session *shellSession) {
@@ -344,7 +357,7 @@ func (m *Manager) logf(format string, args ...any) {
 	logutil.Append(m.logPath, logutil.RetentionDaysFromConfig(m.configPath), "[%s] [vpn-shell] %s", timestamp, message)
 }
 
-func newShellSession(conn net.Conn, address string, shellKind string, shellBin string, logf func(string, ...any), onClosed func(*shellSession)) *shellSession {
+func newShellSession(conn net.Conn, address string, shellKind string, shellBin string, logf func(string, ...any), onClosed func(*shellSession), onReady func(*shellSession)) *shellSession {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
@@ -355,25 +368,34 @@ func newShellSession(conn net.Conn, address string, shellKind string, shellBin s
 		shellBin:  strings.TrimSpace(shellBin),
 		logf:      logf,
 		onClosed:  onClosed,
+		onReady:   onReady,
 		closed:    make(chan struct{}),
 	}
 }
 
 func (s *shellSession) start() {
 	s.logf("Shell session starting remote=%s type=%s", s.address, s.shellKind)
-	stdout, stderr, err := s.startProcess()
+	s.writerLoop()
+}
+
+func (s *shellSession) ensureProcessStarted() error {
+	s.procMu.Lock()
+	if s.proc != nil && s.stdin != nil {
+		s.procMu.Unlock()
+		return nil
+	}
+	stdout, stderr, err := s.startProcessLocked()
+	s.procMu.Unlock()
 	if err != nil {
-		s.sendStdout([]byte(fmt.Sprintf("[borealis] Failed to start remote shell: %v\n", err)))
-		s.close()
-		return
+		return err
 	}
 	go s.readOutput(stdout, "stdout")
 	go s.readOutput(stderr, "stderr")
 	go s.waitProcess()
-	s.writerLoop()
+	return nil
 }
 
-func (s *shellSession) startProcess() (io.Reader, io.Reader, error) {
+func (s *shellSession) startProcessLocked() (io.Reader, io.Reader, error) {
 	if s.shellBin == "" {
 		return nil, nil, fmt.Errorf("missing shell binary")
 	}
@@ -410,10 +432,13 @@ func (s *shellSession) startProcess() (io.Reader, io.Reader, error) {
 }
 
 func (s *shellSession) waitProcess() {
-	if s.proc == nil {
+	s.procMu.Lock()
+	proc := s.proc
+	s.procMu.Unlock()
+	if proc == nil {
 		return
 	}
-	err := s.proc.Wait()
+	err := proc.Wait()
 	if err != nil {
 		s.logf("Shell subprocess exited error=%v", err)
 	} else {
@@ -471,6 +496,7 @@ func (s *shellSession) handleLine(line []byte) {
 		return
 	}
 	s.captureSessionID(msg)
+	s.markReady()
 	if s.handleControlMessage(msg) {
 		return
 	}
@@ -525,18 +551,19 @@ func (s *shellSession) handleControlMessage(msg map[string]any) bool {
 }
 
 func (s *shellSession) handleStdin(msg map[string]any) {
-	if s.stdin == nil {
-		return
-	}
 	payload := strings.TrimSpace(fmt.Sprint(msg["data"]))
 	decoded, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
 		s.logf("Shell stdin decode failed session_id=%s", s.sessionID())
 		return
 	}
-	if s.shellKind == "bash" {
-		decoded = normalizeLineEndings(decoded)
+	if err := s.ensureProcessStarted(); err != nil {
+		s.logf("Shell subprocess start failed error=%v session_id=%s", err, s.sessionID())
+		s.sendStdout([]byte(fmt.Sprintf("[borealis] Failed to start remote shell: %v\n", err)))
+		s.close()
+		return
 	}
+	decoded = normalizeShellInput(s.shellKind, decoded)
 	messageID := strings.TrimSpace(fmt.Sprint(msg["message_id"]))
 	sentAt, hasSentAt := coerceInt64(msg["sent_at_ms"])
 	receivedAt := nowMS()
@@ -550,7 +577,14 @@ func (s *shellSession) handleStdin(msg map[string]any) {
 	s.metaMu.Lock()
 	s.lastInput = meta
 	s.metaMu.Unlock()
-	if _, err := s.stdin.Write(decoded); err != nil {
+	s.procMu.Lock()
+	stdin := s.stdin
+	s.procMu.Unlock()
+	if stdin == nil {
+		s.logf("Shell stdin unavailable session_id=%s", s.sessionID())
+		return
+	}
+	if _, err := stdin.Write(decoded); err != nil {
 		s.logf("Shell stdin write failed session_id=%s", s.sessionID())
 		return
 	}
@@ -623,6 +657,14 @@ func (s *shellSession) captureSessionID(msg map[string]any) string {
 	return out
 }
 
+func (s *shellSession) markReady() {
+	s.ready.Do(func() {
+		if s.onReady != nil {
+			s.onReady(s)
+		}
+	})
+}
+
 func (s *shellSession) sessionID() string {
 	s.metaMu.Lock()
 	defer s.metaMu.Unlock()
@@ -642,11 +684,17 @@ func (s *shellSession) close() {
 	s.once.Do(func() {
 		close(s.closed)
 		_ = s.conn.Close()
-		if s.stdin != nil {
-			_ = s.stdin.Close()
+		s.procMu.Lock()
+		stdin := s.stdin
+		proc := s.proc
+		s.stdin = nil
+		s.proc = nil
+		s.procMu.Unlock()
+		if stdin != nil {
+			_ = stdin.Close()
 		}
-		if s.proc != nil && s.proc.Process != nil {
-			_ = s.proc.Process.Kill()
+		if proc != nil && proc.Process != nil {
+			_ = proc.Process.Kill()
 		}
 		s.statsMu.Lock()
 		inputMessages := s.inputMessages
@@ -667,7 +715,7 @@ func (s *shellSession) close() {
 func shellArgs(shellKind string, shellBin string) []string {
 	switch shellKind {
 	case "powershell":
-		return []string{"-NoLogo", "-NoProfile", "-NoExit", "-Command", "-"}
+		return []string{"-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit"}
 	case "bash":
 		base := strings.ToLower(filepath.Base(shellBin))
 		if base == "bash" {
@@ -819,6 +867,17 @@ func normalizeLineEndings(input []byte) []byte {
 	text := strings.ReplaceAll(string(input), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	return []byte(text)
+}
+
+func normalizeShellInput(shellKind string, input []byte) []byte {
+	text := string(normalizeLineEndings(input))
+	if shellKind != "powershell" {
+		return []byte(text)
+	}
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return []byte(strings.ReplaceAll(text, "\n", "\r\n"))
 }
 
 func valueOrDash(value string) string {

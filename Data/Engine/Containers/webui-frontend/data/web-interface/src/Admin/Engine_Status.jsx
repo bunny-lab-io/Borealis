@@ -110,12 +110,12 @@ export function statusTone(status) {
   const normalized = String(status || "").toLowerCase();
   if (["healthy"].includes(normalized)) return "success";
   if (["critical", "unhealthy"].includes(normalized)) return "failed";
-  if (["warning", "starting", "restarting"].includes(normalized)) return "queued";
+  if (["warning", "starting", "restarting", "reassigning", "re-deploying", "redeploying"].includes(normalized)) return "queued";
   if (["succeeded", "success", "completed"].includes(normalized)) return "success";
   if (["failed", "lost", "error"].includes(normalized)) return "failed";
   if (["running", "starting"].includes(normalized)) return "running";
   if (["queued", "pending"].includes(normalized)) return "queued";
-  if (["cancelled", "stopped"].includes(normalized)) return "stopped";
+  if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "stopped";
   if (normalized === "idle") return "idle";
   return "unknown";
 }
@@ -142,8 +142,37 @@ function statusLabel(status) {
   return titleCase(status || "unknown");
 }
 
+function countdownLabel(label, remainingSeconds) {
+  const remaining = Math.max(0, Math.ceil(Number(remainingSeconds || 0)));
+  return `${label} - ${remaining}s`;
+}
+
+export function taskStatusPillLabel(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (["succeeded", "success", "completed"].includes(normalized)) return "Success";
+  if (["running"].includes(normalized)) return "Running";
+  if (["queued", "pending", "reassigning"].includes(normalized)) return "Pending";
+  if (["failed", "lost", "error"].includes(normalized)) return "Failed";
+  if (["cancelled", "canceled", "skipped", "stopped"].includes(normalized)) return "Skipped";
+  return statusLabel(status);
+}
+
 function displayStatusLabel(data) {
-  const tone = statusTone(data?.status);
+  const status = data?.visualStatus || data?.status;
+  const tone = statusTone(status);
+  if (data?.isTask) {
+    const taskLabelText = data?.statusDisplayLabel || taskStatusPillLabel(status);
+    if (["success", "failed", "stopped"].includes(tone) && data?.closeRemainingSeconds != null) {
+      return countdownLabel(taskLabelText, data.closeRemainingSeconds);
+    }
+    return taskLabelText;
+  }
+  if (data?.visualStatusLabel) {
+    if (data?.statusCountdown && data?.closeRemainingSeconds != null) {
+      return countdownLabel(data.visualStatusLabel, data.closeRemainingSeconds);
+    }
+    return data.visualStatusLabel;
+  }
   if (tone === "idle" && !data?.isManager && data?.idleRemainingSeconds != null) {
     const remaining = Number(data?.idleRemainingSeconds ?? 0);
     return `Idle - Teardown in ${Math.max(0, Math.ceil(remaining))}s`;
@@ -152,21 +181,42 @@ function displayStatusLabel(data) {
     const remaining = Number(data.closeRemainingSeconds || 0);
     return `${statusLabel(data?.status)} - Closing in ${Math.max(0, Math.ceil(remaining))}s`;
   }
-  if (data?.isTask && ["success", "failed", "stopped"].includes(tone) && data?.closeRemainingSeconds != null) {
-    const remaining = Number(data.closeRemainingSeconds || 0);
-    return `${statusLabel(data?.status)} - Closing in ${Math.max(0, Math.ceil(remaining))}s`;
-  }
-  return statusLabel(data?.status);
+  return statusLabel(status);
 }
 
-function taskLabel() {
-  return "Task";
+function taskDeviceCount(entry, work) {
+  const numbers = [entry?.count, entry?.targetCount, work?.target_count]
+    .map((value) => Number(value || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return Math.max(1, ...numbers);
 }
 
-function targetCountLabel(targetCount) {
-  const count = Number(targetCount || 0);
+function taskLabel(deviceCount) {
+  const count = Math.max(1, Number(deviceCount || 1));
+  return `Task (${count} ${count === 1 ? "Device" : "Devices"})`;
+}
+
+function connectedDeviceLabel(deviceCount, { compact = false } = {}) {
+  const count = Math.max(0, Number(deviceCount || 0));
   if (count <= 0) return "";
-  return `${count} ${count === 1 ? "Device" : "Devices"} Targeted`;
+  const noun = count === 1 ? "Device" : "Devices";
+  return compact ? `${count} ${noun}` : `${count} ${noun} Connected`;
+}
+
+function siteWorkerConnectedDeviceCount(worker) {
+  const direct = [
+    worker?.connected_device_count,
+    worker?.connectedDeviceCount,
+    worker?.registered_device_count,
+    worker?.registeredDeviceCount,
+  ]
+    .map((value) => Number(value || 0))
+    .find((value) => Number.isFinite(value) && value > 0);
+  if (direct) return direct;
+  const links = Array.isArray(worker?.task_links) ? worker.task_links : [];
+  const link = links.find((item) => String(item?.kind || "").toLowerCase() === "agent_sockets");
+  const count = Number(link?.count || link?.device_count || link?.target_count || 0);
+  return Number.isFinite(count) && count > 0 ? count : 0;
 }
 
 function taskTypeLabel(work) {
@@ -198,7 +248,7 @@ function portHandleStyle(direction, tone) {
 }
 
 function WorkflowLikeCard({ data, children, hasOutput = false, hasInput = false, onClick }) {
-  const tone = statusTone(data.status);
+  const tone = statusTone(data.visualStatus || data.status);
   const colors = toneColor(tone);
   const terminal = tone === "stopped" || tone === "failed";
   return (
@@ -294,6 +344,11 @@ const WorkerNode = memo(({ data }) => {
             <Box sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.24)", background: "rgba(15,23,42,0.42)", px: 0.85, py: 0.32, color: COLORS.muted, fontSize: "0.67rem", lineHeight: 1 }}>
               {data.siteLabel}
             </Box>
+            {data.connectedDeviceLabel ? (
+              <Box sx={{ borderRadius: 999, border: "1px solid rgba(96,165,250,0.32)", background: "rgba(14,165,233,0.12)", px: 0.85, py: 0.32, color: COLORS.blue, fontSize: "0.67rem", fontWeight: 700, lineHeight: 1 }}>
+                {data.connectedDeviceLabel}
+              </Box>
+            ) : null}
           </Box>
         ) : null}
         {Array.isArray(data.actions) && data.actions.length ? (
@@ -345,36 +400,47 @@ const TaskNode = memo(({ data }) => {
                 {data.targetCountLabel}
               </Typography>
             ) : null}
-            {canOpen ? (
-              <Typography
-                component="button"
-                type="button"
-                onClick={data.onOpen}
-                sx={{
-                  mt: 0.35,
-                  p: 0,
-                  border: 0,
-                  background: "transparent",
-                  color: COLORS.blue,
-                  cursor: "pointer",
-                  fontSize: "0.69rem",
-                  fontWeight: 700,
-                  lineHeight: 1.1,
-                  textDecoration: "none",
-                  maxWidth: "100%",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  display: "block",
-                  textAlign: "left",
-                  "&:hover": {
-                    color: "#bae6fd",
-                    textDecoration: "none",
-                  },
-                }}
-              >
-                {data.taskName}
+            {data.statusDetail ? (
+              <Typography sx={{ mt: 0.35, color: COLORS.muted, fontSize: "0.68rem", lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {data.statusDetail}
               </Typography>
+            ) : null}
+            {data.taskName ? (
+              canOpen ? (
+                <Typography
+                  component="button"
+                  type="button"
+                  onClick={data.onOpen}
+                  sx={{
+                    mt: 0.35,
+                    p: 0,
+                    border: 0,
+                    background: "transparent",
+                    color: COLORS.blue,
+                    cursor: "pointer",
+                    fontSize: "0.69rem",
+                    fontWeight: 700,
+                    lineHeight: 1.1,
+                    textDecoration: "none",
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    display: "block",
+                    textAlign: "left",
+                    "&:hover": {
+                      color: "#bae6fd",
+                      textDecoration: "none",
+                    },
+                  }}
+                >
+                  {data.taskName}
+                </Typography>
+              ) : (
+                <Typography sx={{ mt: 0.35, color: COLORS.blue, fontSize: "0.69rem", fontWeight: 700, lineHeight: 1.1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {data.taskName}
+                </Typography>
+              )
             ) : null}
           </Box>
         </WorkflowLikeCard>
@@ -412,7 +478,15 @@ function centerOf(values, fallback = PYRAMID_CENTER_Y) {
 }
 
 function taskEntryTone(entry) {
-  return statusTone(entry?.work?.status);
+  return statusTone(entry?.reassigning ? "reassigning" : entry?.work?.status);
+}
+
+function isTerminalWorkTone(tone) {
+  return ["success", "failed", "stopped"].includes(tone);
+}
+
+function isTerminalWorkerTone(tone) {
+  return tone === "failed" || tone === "stopped";
 }
 
 function workerLaneRank(worker, taskEntries = []) {
@@ -421,24 +495,29 @@ function workerLaneRank(worker, taskEntries = []) {
   if (taskTones.has("queued")) return 1;
   const workerTone = statusTone(worker?.status);
   if (workerTone === "running") return 2;
+  if (siteWorkerConnectedDeviceCount(worker) > 0 && !isTerminalWorkerTone(workerTone)) return 2;
   if (workerTone === "idle") return 3;
   if (taskTones.has("failed")) return 4;
   if (workerTone === "failed" || workerTone === "stopped") return 5;
   return 6;
 }
 
-function workCacheKey(work) {
+function workIdentityKey(work) {
+  const id = String(work?.id ?? "").trim();
+  if (id) return `id:${id}`;
+  const taskLink = work?.task_link || {};
   return [
-    work?.id || "",
-    work?.worker_guid || work?.lease_owner || "",
+    "fallback",
     work?.kind || "work",
+    work?.site_id || "",
     work?.job_id || "",
     work?.run_id || "",
-    work?.status || "",
+    work?.target_id || work?.device_id || work?.hostname || "",
+    taskLink?.path || taskLink?.label || "",
   ].join(":");
 }
 
-function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
+export function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
   if (!holdInactive) return nextPayload;
   const nextWorkers = Array.isArray(nextPayload?.workers) ? nextPayload.workers : [];
   const currentWorkers = Array.isArray(currentPayload?.workers) ? currentPayload.workers : [];
@@ -449,8 +528,12 @@ function mergeWorkerPayload(currentPayload, nextPayload, holdInactive) {
   const nextWork = Array.isArray(nextPayload?.recent_work) ? nextPayload.recent_work : [];
   const currentWork = Array.isArray(currentPayload?.recent_work) ? currentPayload.recent_work : [];
   const workMap = new Map();
-  currentWork.forEach((work) => workMap.set(workCacheKey(work), work));
-  nextWork.forEach((work) => workMap.set(workCacheKey(work), work));
+  currentWork.forEach((work) => {
+    if (isTerminalWorkTone(statusTone(work?.status))) {
+      workMap.set(workIdentityKey(work), work);
+    }
+  });
+  nextWork.forEach((work) => workMap.set(workIdentityKey(work), work));
 
   return {
     ...currentPayload,
@@ -539,26 +622,57 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   const siteWorkers = visibleWorkers.filter((worker) => Number(worker?.site_id || 0) > 0);
   const nodeIdByGuid = new Map();
   const nodeIdBySite = new Map();
+  const activeNodeIdBySite = new Map();
+  const terminalNodeIdBySite = new Map();
+  const workerToneByNodeId = new Map();
   siteWorkers.forEach((worker, index) => {
     const nodeId = workerNodeId(worker, index + 1);
+    const tone = statusTone(worker?.status);
     const guid = String(worker?.worker_guid || "").trim();
     const leaseOwner = String(worker?.lease_owner || "").trim();
     if (guid) nodeIdByGuid.set(guid, nodeId);
     if (leaseOwner) nodeIdByGuid.set(leaseOwner, nodeId);
+    workerToneByNodeId.set(nodeId, tone);
     const siteId = Number(worker?.site_id || 0);
     if (siteId > 0 && !nodeIdBySite.has(siteId)) nodeIdBySite.set(siteId, nodeId);
+    if (siteId > 0 && !isTerminalWorkerTone(tone) && !activeNodeIdBySite.has(siteId)) {
+      activeNodeIdBySite.set(siteId, nodeId);
+    }
+    if (siteId > 0 && isTerminalWorkerTone(tone) && !terminalNodeIdBySite.has(siteId)) {
+      terminalNodeIdBySite.set(siteId, nodeId);
+    }
+  });
+
+  const redeployingSiteIds = new Set();
+  recentWorkRaw.forEach((work) => {
+    const siteId = Number(work?.site_id || 0);
+    if (siteId <= 0 || activeNodeIdBySite.has(siteId) || !terminalNodeIdBySite.has(siteId)) return;
+    if (!isTerminalWorkTone(statusTone(work?.status))) redeployingSiteIds.add(siteId);
   });
 
   const workerRows = [...siteWorkers];
   const placeholderBySite = new Map();
   const anchorForWork = (work) => {
-    const workerGuid = String(work?.worker_guid || work?.lease_owner || "").trim();
-    if (workerGuid && nodeIdByGuid.has(workerGuid)) return nodeIdByGuid.get(workerGuid);
-    const siteId = Number(work?.site_id || 0);
-    if (siteId > 0 && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
-    if (siteId <= 0) return managerNodeId;
     const tone = statusTone(work?.status);
-    if (dismissInactive && ["success", "failed", "stopped"].includes(tone)) return null;
+    const terminalWork = isTerminalWorkTone(tone);
+    const siteId = Number(work?.site_id || 0);
+    const workerGuid = String(work?.worker_guid || work?.lease_owner || "").trim();
+    let reassigning = false;
+    if (workerGuid && nodeIdByGuid.has(workerGuid)) {
+      const nodeId = nodeIdByGuid.get(workerGuid);
+      const workerTone = workerToneByNodeId.get(nodeId);
+      if (terminalWork || !isTerminalWorkerTone(workerTone)) return nodeId;
+      reassigning = true;
+    }
+    if (siteId > 0 && activeNodeIdBySite.has(siteId)) {
+      return { anchorId: activeNodeIdBySite.get(siteId), reassigning };
+    }
+    if (siteId > 0 && redeployingSiteIds.has(siteId) && terminalNodeIdBySite.has(siteId) && !terminalWork) {
+      return { anchorId: terminalNodeIdBySite.get(siteId), reassigning: true };
+    }
+    if (siteId > 0 && terminalWork && nodeIdBySite.has(siteId)) return nodeIdBySite.get(siteId);
+    if (siteId <= 0) return managerNodeId;
+    if (dismissInactive && terminalWork) return null;
     if (!placeholderBySite.has(siteId)) {
       const placeholder = {
         worker_guid: `queued-site-${siteId}`,
@@ -573,9 +687,11 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       const nodeId = workerNodeId(placeholder, workerRows.length + 1);
       placeholderBySite.set(siteId, nodeId);
       nodeIdBySite.set(siteId, nodeId);
+      activeNodeIdBySite.set(siteId, nodeId);
+      workerToneByNodeId.set(nodeId, statusTone(placeholder.status));
       workerRows.push(placeholder);
     }
-    return placeholderBySite.get(siteId);
+    return { anchorId: placeholderBySite.get(siteId), reassigning };
   };
 
   const groupedWork = new Map();
@@ -583,27 +699,34 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const tone = statusTone(work?.status);
     if (
       dismissInactive &&
-      ["success", "failed", "stopped"].includes(tone) &&
+      isTerminalWorkTone(tone) &&
       terminalAgeSeconds(work, nowSeconds, dismissStartedAt) >= TASK_CLOSE_SECONDS
     ) {
       return;
     }
-    const anchorId = anchorForWork(work);
+    const anchorResult = anchorForWork(work);
+    const anchorId = typeof anchorResult === "string" ? anchorResult : anchorResult?.anchorId;
     if (!anchorId) return;
+    const reassigning = Boolean(typeof anchorResult === "object" && anchorResult?.reassigning);
     const taskLink = work?.task_link || {};
-    const jobPart = work?.job_id || taskLink?.job_id || work?.run_id || work?.id;
+    const terminalBucket = isTerminalWorkTone(tone) && !reassigning;
+    const statusPart = reassigning ? "reassigning" : work?.status || "";
+    const jobPart = terminalBucket ? "terminal" : work?.job_id || taskLink?.job_id || work?.run_id || work?.id;
+    const linkPart = terminalBucket ? "" : taskLink?.path || taskLink?.label || "";
     const stableKey = [
       anchorId,
       work?.kind || "work",
       jobPart || work?.id,
-      taskLink?.path || taskLink?.label || "",
-      work?.status || "",
+      linkPart,
+      statusPart,
     ].join(":");
     const existing = groupedWork.get(stableKey);
     if (!existing) {
       groupedWork.set(stableKey, {
         anchorId,
         work: { ...work },
+        reassigning,
+        terminalBucket,
         count: 1,
         targetCount: Number(work?.target_count || 0),
         started_at: work?.started_at,
@@ -612,7 +735,9 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       return;
     }
     existing.count += 1;
-    existing.targetCount = Math.max(Number(existing.targetCount || 0), Number(work?.target_count || 0));
+    existing.reassigning = existing.reassigning || reassigning;
+    existing.terminalBucket = existing.terminalBucket || terminalBucket;
+    existing.targetCount += Number(work?.target_count || 0);
     const existingFinished = Number(existing.work?.finished_at || existing.work?.updated_at || 0);
     const nextFinished = Number(work?.finished_at || work?.updated_at || 0);
     if (nextFinished >= existingFinished) {
@@ -697,6 +822,12 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     const siteId = Number(worker?.site_id || 0);
     const siteName = String(worker?.site_name || siteNameFor(payload, siteId)).trim();
     const id = workerIdForRow.get(worker) || workerNodeId(worker, index + 1);
+    const workerStatus = worker?.status || "unknown";
+    const workerTone = statusTone(workerStatus);
+    const isRedeployingWorker = siteId > 0 && redeployingSiteIds.has(siteId) && isTerminalWorkerTone(workerTone);
+    const connectedDeviceCount = siteWorkerConnectedDeviceCount(worker);
+    const connectedLabel = connectedDeviceLabel(connectedDeviceCount);
+    const showConnectedStatus = connectedDeviceCount > 0 && !isRedeployingWorker && !isTerminalWorkerTone(workerTone);
     workerNodes.push({
       id,
       type: "worker",
@@ -704,15 +835,20 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
       data: {
         label: "Site Worker",
         startedLabel: epochLabel(worker?.started_at),
-        status: worker?.status || "unknown",
+        status: workerStatus,
+        visualStatus: isRedeployingWorker ? "re-deploying" : showConnectedStatus ? "running" : "",
+        visualStatusLabel: isRedeployingWorker ? "Re-Deploying" : showConnectedStatus ? "Running" : "",
+        statusCountdown: isRedeployingWorker,
         isManager: false,
         siteLabel: siteName || `Site ${siteId}`,
+        connectedDeviceCount,
+        connectedDeviceLabel: showConnectedStatus ? connectedLabel : "",
         idleRemainingSeconds:
-          dismissInactive && statusTone(worker?.status) === "idle"
+          dismissInactive && workerTone === "idle" && connectedDeviceCount <= 0
             ? idleTtlSeconds - Math.max(0, nowSeconds - Number(worker?.idle_since || nowSeconds))
             : null,
         closeRemainingSeconds:
-          dismissInactive && ["failed", "stopped"].includes(statusTone(worker?.status))
+          dismissInactive && (isRedeployingWorker || ["failed", "stopped"].includes(workerTone))
             ? WORKER_CLOSE_SECONDS - terminalAgeSeconds(worker, nowSeconds, dismissStartedAt)
             : null,
       },
@@ -725,7 +861,7 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
   workerNodes
     .filter((node) => node.id !== managerNodeId)
     .forEach((workerNode) => {
-      const tone = statusTone(workerNode.data.status);
+      const tone = statusTone(workerNode.data.visualStatus || workerNode.data.status);
       const color = edgeColor(tone === "stopped" ? "queued" : tone);
       edges.push({
         id: `edge:${managerNodeId}:${workerNode.id}`,
@@ -750,15 +886,18 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
     tasks.forEach((entry, taskIndex) => {
       const work = entry.work || {};
       const taskLink = work?.task_link || {};
-      const label = taskLabel();
-      const targets = targetCountLabel(entry.targetCount || work?.target_count);
+      const deviceCount = taskDeviceCount(entry, work);
+      const label = taskLabel(deviceCount);
+      const visualStatus = entry.reassigning ? "pending" : "";
+      const statusDetail = entry.reassigning ? "Reassigning to New Worker" : "";
+      const statusDisplayLabel = taskStatusPillLabel(visualStatus || work?.status);
       const taskNameBase = taskLink?.label || titleCase(work?.kind || "task");
-      const taskName = taskNameBase;
+      const taskName = entry.terminalBucket && entry.count > 1 ? `${statusDisplayLabel} Tasks` : taskNameBase;
       const duration = elapsedLabel(entry.started_at || work?.started_at, entry.finished_at || work?.finished_at);
-      const tone = statusTone(work?.status);
+      const tone = statusTone(visualStatus || work?.status);
       const terminalFinishedAt = Number(entry.finished_at || work?.finished_at || work?.updated_at || 0);
       const closeRemainingSeconds =
-        dismissInactive && ["success", "failed", "stopped"].includes(tone) && terminalFinishedAt > 0
+        dismissInactive && isTerminalWorkTone(tone) && terminalFinishedAt > 0
           ? TASK_CLOSE_SECONDS - terminalAgeSeconds(work, nowSeconds, dismissStartedAt)
           : null;
       const nodeId = `task:${workerNode.id}:${taskIndex}:${work?.id || work?.job_id || work?.run_id || "work"}`;
@@ -770,14 +909,17 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
           label,
           taskName,
           taskType: taskTypeLabel(work),
-          targetCountLabel: targets,
+          targetCountLabel: "",
           duration,
           status: work?.status || "unknown",
+          visualStatus,
+          statusDetail,
+          statusDisplayLabel,
           isTask: true,
           closeRemainingSeconds,
           error: work?.error || "",
-          path: taskLink?.path || "",
-          onOpen: taskLink?.path ? () => navigate(String(taskLink.path)) : undefined,
+          path: entry.terminalBucket && entry.count > 1 ? "" : taskLink?.path || "",
+          onOpen: !entry.terminalBucket || entry.count <= 1 ? (taskLink?.path ? () => navigate(String(taskLink.path)) : undefined) : undefined,
         },
         draggable: false,
       });

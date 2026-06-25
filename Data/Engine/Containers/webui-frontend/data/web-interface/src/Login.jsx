@@ -98,7 +98,7 @@ export default function Login({ onLogin }) {
           document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
         } catch (_) {}
       }
-      onLogin({ username: data.username, role: data.role });
+      onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });
     } catch (err) {
       const msg = err?.message || "Unable to log in";
       setError(msg);
@@ -119,7 +119,7 @@ export default function Login({ onLogin }) {
         } catch (_) {}
       }
       setError("");
-      onLogin({ username: data.username, role: data.role });
+      onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });
     } catch (err) {
       setError(
         err instanceof Error && err.message
@@ -173,7 +173,7 @@ export default function Login({ onLogin }) {
         } catch (_) {}
       }
       setError("");
-      onLogin({ username: data.username, role: data.role });
+      onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });
     } catch (err) {
       setError("Failed to verify code.");
     } finally {

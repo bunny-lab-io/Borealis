@@ -209,6 +209,7 @@ def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
     monkeypatch.setattr(guacamole_proxy, "_GUACD_READY_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_BACKEND_VERIFY_SECONDS", 0)
     opened: list[bool] = []
     session = GuacamoleVncSession(
         token="token",
@@ -247,6 +248,76 @@ def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyP
     ]
 
 
+def test_guacamole_proxy_retries_retryable_post_ready_backend_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    first_reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            encode_instruction("ready", "uuid-failed").encode("utf-8"),
+            encode_instruction("error", "Aborted. See logs.", "519").encode("utf-8"),
+        ]
+    )
+    second_reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            (
+                encode_instruction("ready", "uuid-ok")
+                + encode_instruction("size", "0", "1024", "768")
+            ).encode("utf-8"),
+        ]
+    )
+    writers: list[_FakeWriter] = []
+    readers = [first_reader, second_reader]
+
+    async def _fake_open_connection(_host: str, _port: int):
+        writer = _FakeWriter()
+        writers.append(writer)
+        return readers[len(writers) - 1], writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_READY_RETRY_DELAY_SECONDS", 0)
+    first_frames: list[str] = []
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+        on_first_frame=lambda opcode: first_frames.append(opcode),
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    assert len(writers) == 2
+    assert writers[0].closed is True
+    assert websocket.sent[0] == encode_instruction("", "uuid-ok")
+    assert websocket.sent[1] == encode_instruction("size", "0", "1024", "768")
+    assert first_frames == ["size"]
+
+
 def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
     reader = _FakeReader(
         [
@@ -270,6 +341,7 @@ def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypat
         return reader, writer
 
     monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    first_frames: list[str] = []
     session = GuacamoleVncSession(
         token="token",
         agent_id="agent-1",
@@ -279,6 +351,7 @@ def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypat
         created_at=0,
         expires_at=120,
         session_id="session-1",
+        on_first_frame=lambda opcode: first_frames.append(opcode),
     )
     websocket = _FakeWebSocket([encode_instruction("disconnect")])
 
@@ -294,3 +367,4 @@ def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypat
 
     assert websocket.sent[0] == encode_instruction("", "uuid-1")
     assert websocket.sent[1] == encode_instruction("size", "0", "1024", "768") + encode_instruction("sync", "1234")
+    assert first_frames == ["size"]

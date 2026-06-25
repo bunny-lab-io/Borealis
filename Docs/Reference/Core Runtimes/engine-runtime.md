@@ -116,8 +116,11 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
     ### PostgreSQL profile notes
-    - Container deployment starts PostgreSQL with conservative defaults from `compose.env`; legacy profile auto-tuning is not maintained in the container launcher.
-    - Adjust DB pool values in `Engine/Deploy/compose.env` before redeploy when larger installations need explicit tuning.
+    - `Engine.sh deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
+    - Site-worker scheduled-lane values are active work-item slots: Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.
+    - Shared Ansible work items can target multiple hosts inside one slot. Individual Ansible work items target one host per slot.
+    - PostgreSQL settings are applied through the `postgres-db` Compose command. Operators should not run manual PostgreSQL tuning steps for normal profile-managed deployments.
 
     ### WireGuard and VNC wiring
     - WireGuard server manager: `Data/Engine/Containers/api-backend/data/services/VPN/wireguard_server.py`.
@@ -136,8 +139,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Quick jobs and scheduled jobs share this runtime to resolve scripts and variables.
 
     ### Watchdog evaluator runtime
-    - `EngineContext.watchdog_runtime` owns the Borealis-native watchdog evaluator.
-    - Registration and bootstrap happen in `Data/Engine/Containers/api-backend/data/server.py` after the primary API, WebUI, and Socket.IO registrars.
+    - Go `watchdogRuntime` owns Borealis-native watchdog evaluation and remediation.
+    - Registration and bootstrap happen in `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` after route registration.
     - The evaluator loop periodically checks enabled watchdogs whose `evaluation_interval_seconds` has elapsed.
     - Immediate evaluation still happens on watchdog save and device-override updates so operator changes become visible without waiting for the scheduler tick.
     - On startup, the runtime purges any lingering resolved incidents that belong to offline-only watchdogs before the evaluator loop begins.
@@ -183,8 +186,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The Engine now exposes an Engine-global Aegis Cipher lifecycle through `Data/Engine/Containers/api-backend/data/services/aegis_cipher.py` and `Data/Engine/Containers/api-backend/data/services/API/access_management/aegis.py`.
     - The bootstrap gate for operator auth lives in `Data/Engine/Containers/api-backend/data/services/API/access_management/login.py` and `Data/Engine/Containers/api-backend/data/services/auth/bootstrap_state.py`.
     - Aegis v1 now protects stored credentials, the GitHub API token, operator password hashes, operator TOTP secrets, and passkey cryptographic material at rest using `scrypt` plus `AES-256-GCM`.
-    - Directory Services adds LDAP/LDAPS and Active Directory credential providers under the auth API group. Generic LDAP uses service-account search plus user-DN bind; Active Directory uses Kerberos password verification with provider-managed realm/KDC settings. Operators can define provider-scoped host overrides so FQDN server URLs connect to explicit IP addresses without editing Engine host records; TLS still uses the FQDN for SNI and certificate name validation. Operators can download an LDAPS peer certificate from the provider editor, review subject/issuer/SAN/fingerprint metadata, and pin that certificate for future strict TLS checks. The optional `gssapi` Python package installs only when Kerberos build packages such as `krb5-config` are available, so core Engine and Ansible deployment are not blocked on hosts missing AD prerequisites.
-    - Directory provider bind passwords and uploaded keytabs are Aegis-protected. Directory users are JIT cached in `users`, keep Borealis TOTP MFA, and cannot register passkeys.
+    - Directory Services adds LDAP/LDAPS and Active Directory-compatible credential providers under the auth API group. Generic LDAP and Active Directory providers use service-account search plus LDAP/LDAPS user bind. Operators can define provider-scoped host overrides so FQDN server URLs connect to explicit IP addresses without editing Engine host records; TLS still uses the FQDN for SNI and certificate name validation. Operators can download an LDAPS peer certificate from the provider editor, review subject/issuer/SAN/fingerprint metadata, and pin that certificate for future strict TLS checks.
+    - Directory provider bind passwords are Aegis-protected. Directory users are JIT cached in `users`, keep Borealis TOTP MFA, and cannot register passkeys.
     - Setup migrates any legacy plaintext credential, GitHub token, password hash, MFA secret, or passkey cryptographic row into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
     - The derived key is cached only in Engine memory. Restarting the Engine relocks protected secrets until an admin re-enters the cipher.
     - Borealis does not render the login screen until bootstrap reaches `login_required`. Fresh installs require Aegis setup plus first-admin bootstrap; every later restart requires Aegis unlock before normal login or passkey auth can start.
@@ -207,7 +210,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
 
     #### Ansible support (shared state)
-    - The Linux Engine now packages Ansible control-node tooling inside the `api-backend` image and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections`.
+    - The Linux Engine now packages Ansible control-node tooling inside worker runtimes and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections` for shared worker access.
     - Scheduled jobs support Engine-side shared Ansible execution for `local`, `ssh`, and `winrm` contexts.
     - Remote SSH/WinRM runs synthesize ephemeral inventories from Borealis device/filter state and active WireGuard sessions, using site-qualified inventory aliases for duplicate-hostname safety.
     - Shared remote Ansible transport follows the scheduled job execution context; device `connection_type` metadata does not override the operator-selected `ssh` or `winrm` mode.

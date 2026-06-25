@@ -103,7 +103,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a remote file download transfer from an in-scope device.
     - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
     - `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
-    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact from Engine temp storage.
+    - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact through the Engine API from site-worker transfer storage.
     - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
     - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
     - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
@@ -216,15 +216,16 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
     ### Server Info and Logs
     - `GET /api/server/time` (Operator Session) - server clock.
-    - `GET /api/server/timezones` (Admin) - list the current engine host timezone and the selectable timezone inventory for WebUI timezone management.
-    - `POST /api/server/timezone` (Admin) - change the timezone used by the entire engine host.
     - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
-    - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state.
-    - `GET /api/server/ansible-runner-settings` (Admin) - read the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
-    - `PUT /api/server/ansible-runner-settings` (Admin) - update the persisted per-job and global scheduled-Ansible runner limits used by the Engine scheduler.
+    - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state, all site names plus total/online device counts, recent assigned work, and short Docker container IDs when Docker metadata is available.
+    - `POST /api/server/workers/<worker_guid>/recreate` (Admin) - queue a scheduler-owned stop for one site-worker container so Job Scheduler can deploy a replacement when same-site Agent or task demand remains.
+    - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
+    - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
+    - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.
+    - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
-    - `POST /api/server/wireguard/recover` (Admin) - force a Borealis WireGuard listener recovery attempt when active VPN sessions exist.
+    - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
     - `GET /api/server/logs` (Admin) - list logs and retention.
     - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log lines.
     - `PUT /api/server/logs/retention` (Admin) - update retention policies.

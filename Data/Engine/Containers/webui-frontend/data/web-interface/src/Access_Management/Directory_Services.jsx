@@ -326,9 +326,6 @@ const emptyForm = {
   member_of_attribute: "memberOf",
   group_search_base_dn: "",
   nested_groups: true,
-  kerberos_realm: "",
-  kerberos_kdc: "",
-  kerberos_keytab_base64: "",
   admin_group_dns_text: "",
   user_group_dns_text: "",
   site_mappings: [],
@@ -460,7 +457,6 @@ function formFromProvider(provider) {
     server_urls: Array.isArray(provider.server_urls) ? provider.server_urls.join("\n") : "",
     host_overrides_text: hostOverridesToText(provider.host_overrides || {}),
     bind_password: "",
-    kerberos_keytab_base64: "",
     tls_ca_pem: provider.tls_ca_pem || "",
     username_attribute: provider.username_attribute || emptyForm.username_attribute,
     display_name_attribute: provider.display_name_attribute || emptyForm.display_name_attribute,
@@ -728,14 +724,11 @@ export default function DirectoryServices() {
       member_of_attribute: form.member_of_attribute,
       group_search_base_dn: form.group_search_base_dn,
       nested_groups: Boolean(form.nested_groups),
-      kerberos_realm: form.kerberos_realm,
-      kerberos_kdc: form.kerberos_kdc,
       group_mappings: roleDnsToMappings(form.admin_group_dns_text, userGroupDnsText),
       site_mappings: siteMappings,
     };
     if (!editingProvider?.tls_ca_pem_present || form.tls_ca_pem) payload.tls_ca_pem = form.tls_ca_pem;
     if (!editingProvider?.bind_password_present || form.bind_password) payload.bind_password = form.bind_password;
-    if (!editingProvider?.kerberos_keytab_present || form.kerberos_keytab_base64) payload.kerberos_keytab_base64 = form.kerberos_keytab_base64;
     return payload;
   }, [editingProvider, form]);
 
@@ -1528,13 +1521,6 @@ export default function DirectoryServices() {
                     <FormTooltip title="Optional LDAP filter template used to find one user. Leave blank for the default provider filter. Supported placeholders: {username}, {login}, and {user}.">
                       <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label="User Search Filter" placeholder="(|(sAMAccountName={username})(userPrincipalName={login})(mail={login}))" value={form.user_search_filter} onChange={(e) => updateForm("user_search_filter", e.target.value)} />
                     </FormTooltip>
-                    {form.provider_type === "active_directory" ? (
-                      <>
-                        <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 6" } }} label="Kerberos Realm" value={form.kerberos_realm} onChange={(e) => updateForm("kerberos_realm", e.target.value)} />
-                        <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 6" } }} label="KDC Host" value={form.kerberos_kdc} onChange={(e) => updateForm("kerberos_kdc", e.target.value)} />
-                        <TextField sx={{ ...DIALOG_INPUT_SX, gridColumn: { md: "span 12" } }} label={editingProvider?.kerberos_keytab_present ? "Keytab Base64 (leave blank to keep)" : "Keytab Base64"} multiline minRows={2} value={form.kerberos_keytab_base64} onChange={(e) => updateForm("kerberos_keytab_base64", e.target.value)} />
-                      </>
-                    ) : null}
                   </>
                 ) : null}
               </SectionCard>

@@ -18,11 +18,31 @@ import (
 
 type Handler func(context.Context, any) (any, error)
 
+type AfterAckResponse struct {
+	payload any
+	after   func()
+}
+
+func NewAfterAckResponse(payload any, after func()) AfterAckResponse {
+	return AfterAckResponse{payload: payload, after: after}
+}
+
+func (r AfterAckResponse) AckPayload() any {
+	return r.payload
+}
+
+func (r AfterAckResponse) AfterAck() {
+	if r.after != nil {
+		r.after()
+	}
+}
+
 type Client struct {
 	baseURL     string
 	headers     map[string]string
 	handlers    map[string]Handler
 	onConnected func(context.Context) error
+	onActivity  func()
 	conn        *websocket.Conn
 	writeMu     sync.Mutex
 	handlerMu   sync.RWMutex
@@ -54,6 +74,10 @@ func (c *Client) On(event string, handler Handler) {
 
 func (c *Client) OnConnected(fn func(context.Context) error) {
 	c.onConnected = fn
+}
+
+func (c *Client) OnActivity(fn func()) {
+	c.onActivity = fn
 }
 
 func (c *Client) SetConnectTimeout(timeout time.Duration) {
@@ -112,10 +136,17 @@ func (c *Client) Connect(ctx context.Context) error {
 		if err := c.handleMessage(ctx, string(message)); err != nil {
 			return err
 		}
+		c.recordActivity()
 		if deadlineActive && c.isConnected() {
 			_ = conn.SetReadDeadline(time.Time{})
 			deadlineActive = false
 		}
+	}
+}
+
+func (c *Client) recordActivity() {
+	if c.onActivity != nil {
+		c.onActivity()
 	}
 }
 
@@ -178,22 +209,42 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 			}
 			return nil
 		}
-		response, handlerErr := handler(ctx, payload)
-		if ackID != "" {
-			if handlerErr != nil {
-				response = map[string]any{"error": "handler_error", "message": handlerErr.Error()}
-			}
-			ackPayload, err := json.Marshal([]any{response})
-			if err != nil {
-				return err
-			}
-			return c.write("43" + ackID + string(ackPayload))
-		}
-		if handlerErr != nil {
-			return handlerErr
-		}
+		go c.dispatchEvent(ctx, handler, payload, ackID)
 	}
 	return nil
+}
+
+func (c *Client) dispatchEvent(ctx context.Context, handler Handler, payload any, ackID string) {
+	var response any
+	var handlerErr error
+	defer func() {
+		if recovered := recover(); recovered != nil && ackID != "" {
+			_ = c.write("43" + ackID + `[{"error":"handler_panic"}]`)
+		}
+	}()
+	response, handlerErr = handler(ctx, payload)
+	afterAck := afterAckCallback(response)
+	response = ackPayload(response)
+	if ackID == "" {
+		if handlerErr == nil && afterAck != nil {
+			go afterAck()
+		}
+		return
+	}
+	if handlerErr != nil {
+		response = map[string]any{"error": "handler_error", "message": handlerErr.Error()}
+		afterAck = nil
+	}
+	ackPayload, err := json.Marshal([]any{response})
+	if err != nil {
+		ackPayload = []byte(`[{"error":"handler_ack_encode_failed"}]`)
+	}
+	if err := c.write("43" + ackID + string(ackPayload)); err != nil {
+		return
+	}
+	if afterAck != nil {
+		go afterAck()
+	}
 }
 
 func (c *Client) resetConnected() {
@@ -239,9 +290,35 @@ func socketURL(baseURL string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported socket scheme %q", parsed.Scheme)
 	}
-	parsed.Path = "/socket.io/"
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(basePath, "/socket.io") {
+		parsed.Path = basePath + "/"
+	} else if basePath == "" {
+		parsed.Path = "/socket.io/"
+	} else {
+		parsed.Path = basePath + "/socket.io/"
+	}
 	parsed.RawQuery = "EIO=4&transport=websocket"
 	return parsed.String(), nil
+}
+
+type afterAckResponder interface {
+	AckPayload() any
+	AfterAck()
+}
+
+func ackPayload(response any) any {
+	if wrapped, ok := response.(afterAckResponder); ok {
+		return wrapped.AckPayload()
+	}
+	return response
+}
+
+func afterAckCallback(response any) func() {
+	if wrapped, ok := response.(afterAckResponder); ok {
+		return wrapped.AfterAck
+	}
+	return nil
 }
 
 func encodeEventPacket(event string, payload any) (string, error) {

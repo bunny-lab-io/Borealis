@@ -65,6 +65,7 @@ services:
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
@@ -129,6 +130,52 @@ services:
     container_name: borealis-engine-postgres-db
     network_mode: host
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - listen_addresses=127.0.0.1
+      - -c
+      - port=5432
+      - -c
+      - max_connections=${BOREALIS_POSTGRES_MAX_CONNECTIONS:-80}
+      - -c
+      - shared_buffers=${BOREALIS_POSTGRES_SHARED_BUFFERS:-1GB}
+      - -c
+      - effective_cache_size=${BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${BOREALIS_POSTGRES_WORK_MEM:-4MB}
+      - -c
+      - maintenance_work_mem=${BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM:-256MB}
+      - -c
+      - max_worker_processes=${BOREALIS_POSTGRES_MAX_WORKER_PROCESSES:-8}
+      - -c
+      - max_parallel_workers=${BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS:-8}
+      - -c
+      - max_parallel_workers_per_gather=${BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER:-2}
+      - -c
+      - autovacuum_max_workers=${BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS:-3}
+      - -c
+      - autovacuum_vacuum_cost_limit=${BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT:-1000}
+      - -c
+      - autovacuum_naptime=${BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME:-30s}
+      - -c
+      - autovacuum_vacuum_scale_factor=${BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR:-0.02}
+      - -c
+      - autovacuum_analyze_scale_factor=${BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR:-0.01}
+      - -c
+      - max_wal_size=${BOREALIS_POSTGRES_MAX_WAL_SIZE:-4GB}
+      - -c
+      - min_wal_size=${BOREALIS_POSTGRES_MIN_WAL_SIZE:-512MB}
+      - -c
+      - effective_io_concurrency=${BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY:-16}
+      - -c
+      - wal_compression=${BOREALIS_POSTGRES_WAL_COMPRESSION:-on}
+      - -c
+      - checkpoint_timeout=${BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT:-15min}
+      - -c
+      - checkpoint_completion_target=${BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}
+      - -c
+      - random_page_cost=${BOREALIS_POSTGRES_RANDOM_PAGE_COST:-1.1}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:

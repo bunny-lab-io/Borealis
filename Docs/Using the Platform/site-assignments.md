@@ -51,7 +51,7 @@ Directory Services can map directory groups to site sets. Those mappings replace
 
     ### Source map
 
-    - User API: `Data/Engine/Containers/api-backend/data/services/API/access_management/users.py`
+    - User API: `Data/Engine/Containers/api-backend/cmd/api-backend/users.go`
     - User site access manager: `Data/Engine/Containers/api-backend/data/services/auth/`
     - Site assignment UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Sites/Site_Assignment.jsx`
 

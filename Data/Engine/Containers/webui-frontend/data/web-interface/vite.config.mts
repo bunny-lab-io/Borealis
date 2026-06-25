@@ -74,6 +74,15 @@ export default defineConfig({
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, 'src') },
+    dedupe: [
+      '@codemirror/autocomplete',
+      '@codemirror/commands',
+      '@codemirror/language',
+      '@codemirror/lint',
+      '@codemirror/search',
+      '@codemirror/state',
+      '@codemirror/view',
+    ],
     extensions: ['.js','.jsx','.ts','.tsx']
   },
   test: {

@@ -65,13 +65,16 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
 
     ### Source map
 
-    - File API: `Data/Engine/Containers/api-backend/data/services/API/devices/file_management.py`
+    - File API: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_files.go`
+    - Site-worker transfer runtime: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`
+    - Shared transfer store: `Data/Engine/Containers/api-backend/data/services/remote_files/transfers.py`
     - File tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_File_Management.jsx`
     - Agent file role: `Data/Agent/internal/roles/file_management/`
 
     ### Runtime behavior
 
     - Browse and mutations use the device SYSTEM Socket.IO channel through `file_management_request`.
-    - Large transfers use Engine temp-file staging plus device-authenticated pull/push endpoints.
+    - Large transfers use site-worker temp-file staging behind Go API proxy routes plus device-authenticated pull/push endpoints.
     - Folder uploads use a manifest so nested paths do not need to fit in one socket payload.
     - Transfer progress doubles as a cancellation checkpoint.
+    - Inline text editing uses `@uiw/react-codemirror` plus Borealis-owned CodeMirror extensions. Vite dedupes `@codemirror/*` packages and npm overrides `@codemirror/state` so extension `instanceof` checks do not fail when editor setup and app extensions load through different dependency paths.

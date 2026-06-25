@@ -1,123 +1,193 @@
 # Software Bill of Materials
 
-This software bill of materials is an inventory of the direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. It was assembled from `Agent.exe`, `Engine.sh`, `Data/Agent/go.mod`, `Data/Engine/Containers/api-backend/data/engine-requirements.txt`, `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`, `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`, and `Data/Engine/Containers/`.
+This software bill of materials inventories direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. Engine dependencies are grouped by service so reviewers can trace licensing impact to the runtime that uses each dependency.
 
-The Python requirement files are currently unpinned, so the exact resolved version can change between installs. Where the install scripts pin a version explicitly, that version is called out below.
+Repeated entries are intentional when multiple Engine containers install the same requirement file or use the same runtime package. Python requirement files are currently unpinned, so exact resolved versions can change between installs. Explicitly pinned script, Go, Node, and container versions are called out below.
+
+**Primary Sources**:
+
+- `Data/Agent/go.mod`
+- `Data/Agent/build-agent.sh`
+- `Engine.sh`
+- `Data/Engine/Containers/build-manifest.json`
+- `Data/Engine/Containers/compose.yaml`
+- `Data/Engine/Containers/*/Dockerfile`
+- `Data/Engine/Containers/api-backend/go.mod`
+- `Data/Engine/Containers/api-backend/build-api-backend.sh`
+- `Data/Engine/Containers/api-backend/data/engine-requirements.txt`
+- `Data/Engine/Containers/api-backend/data/engine-worker-requirements.txt`
+- `Data/Engine/Containers/api-backend/data/Ansible/collections.yml`
+- `Data/Engine/Containers/webui-frontend/data/web-interface/package.json`
+- `Data/Engine/Containers/webui-frontend/data/web-interface/src/vendor/guacamole/guacamole-common-js.js`
 
 ## Borealis Agent Dependencies
 
-- Go standard library/runtime (compiled into `Agent.exe`) - BSD-3-Clause - https://go.dev/LICENSE
-- github.com/gorilla/websocket v1.5.3 - BSD-2-Clause - https://github.com/gorilla/websocket/blob/main/LICENSE
-- golang.org/x/sys v0.28.0 - BSD-3-Clause - https://cs.opensource.google/go/x/sys/+/master:LICENSE
-- WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- UltraVNC Server 1.8.2.1 - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) - BSD-3-Clause - https://go.dev/LICENSE
+| Service | Dependency | License |
+| --- | --- | --- |
+| agent | Go standard library/runtime (compiled into `Agent.exe`) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| agent | github.com/gorilla/websocket v1.5.3 | [BSD-2-Clause](https://github.com/gorilla/websocket/blob/main/LICENSE) |
+| agent | golang.org/x/sys v0.28.0 | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| agent | WireGuard (Windows MSI package 1.1 / client 0.5.3 and Linux `wireguard-tools`) | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
+| agent | UltraVNC Server 1.8.2.1 | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
+| agent | Go toolchain (native Linux build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
 
 ## Borealis Engine Dependencies
 
-- Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) - Apache-2.0 - https://github.com/moby/moby/blob/master/LICENSE
-- Docker CLI (`docker-ce-cli`, host and api-backend service-action helper) - Apache-2.0 - https://github.com/docker/cli/blob/master/LICENSE
-- Docker Compose plugin (Linux Engine deployment orchestration and api-backend service-action helper) - Apache-2.0 - https://github.com/docker/compose/blob/main/LICENSE
-- Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) - Apache-2.0 - https://github.com/docker/buildx/blob/master/LICENSE
-- Tecnativa Docker Socket Proxy container image (`ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`) - Apache-2.0 - https://github.com/Tecnativa/docker-socket-proxy/blob/master/LICENSE.txt
-- Debian Bookworm base image (`debian:bookworm-slim`) - Debian Free Software Guidelines / package-specific licenses - https://www.debian.org/legal/licenses/
-- Python container base image (`python:3.12-slim-bookworm`) - PSF License plus Debian package licenses - https://github.com/docker-library/python/blob/master/LICENSE
-- Node.js container base image (`node:22-bookworm-slim`) - MIT plus Debian package licenses - https://github.com/nodejs/node/blob/main/LICENSE
-- PostgreSQL container image (`postgres:17-bookworm`) - PostgreSQL License plus Debian package licenses - https://www.postgresql.org/about/licence/
-- Traefik container image (`traefik:v3.3`) - MIT - https://github.com/traefik/traefik/blob/master/LICENSE.md
-- Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) - Apache-2.0 - https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE
-- Python (system Python on Linux) - PSF License - https://docs.python.org/3/license.html
-- Flask - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
-- flask-cors - MIT - https://spdx.org/licenses/MIT.html
-- Flask-SocketIO - MIT - https://spdx.org/licenses/MIT.html
-- eventlet - MIT - https://spdx.org/licenses/MIT.html
-- cryptography - Apache-2.0 OR BSD-3-Clause - https://github.com/pyca/cryptography/blob/main/LICENSE
-- PyJWT - MIT - https://spdx.org/licenses/MIT.html
-- pyotp - MIT - https://spdx.org/licenses/MIT.html
-- qrcode - BSD - https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE
-- webauthn - BSD-3-Clause - https://github.com/duo-labs/py_webauthn/blob/master/LICENSE
-- Pillow - MIT-CMU - https://github.com/python-pillow/Pillow/blob/main/LICENSE
-- requests - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
-- aiohttp - Apache-2.0 AND MIT - https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt
-- python-socketio - MIT - https://spdx.org/licenses/MIT.html
-- websockets - BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
-- packaging - Apache-2.0 OR BSD-2-Clause - https://github.com/pypa/packaging/blob/main/LICENSE
-- regex - Apache-2.0 AND CNRI-Python - https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt
-- SQLAlchemy - MIT - https://spdx.org/licenses/MIT.html
-- alembic - MIT - https://spdx.org/licenses/MIT.html
-- psycopg (`psycopg[binary]`) - LGPL-3.0-only - https://spdx.org/licenses/LGPL-3.0-only.html
-- ldap3 - LGPL-3.0-or-later - https://github.com/cannatag/ldap3/blob/dev/COPYING
-- python-gssapi (`gssapi`, optional Kerberos Engine package) - ISC - https://github.com/pythongssapi/python-gssapi/blob/main/LICENSE.txt
-- MIT Kerberos (`krb5-user`/`krb5-workstation` runtime packages) - MIT - https://web.mit.edu/kerberos/krb5-devel/doc/mitK5license.html
-- ansible-core - GPL-3.0-or-later - https://spdx.org/licenses/GPL-3.0-or-later.html
-- ansible-runner - Apache-2.0 - https://spdx.org/licenses/Apache-2.0.html
-- jmespath - MIT - https://spdx.org/licenses/MIT.html
-- pywinrm (`pywinrm[credssp]`) - MIT - https://github.com/diyan/pywinrm/blob/master/LICENSE
-- pypsrp (`pypsrp[credssp]`) - MIT - https://github.com/jborean93/pypsrp/blob/master/LICENSE
-- Impacket - Apache-2.0 - https://github.com/fortra/impacket/blob/master/LICENSE
-- pytest - MIT - https://github.com/pytest-dev/pytest/blob/main/LICENSE
-- ansible.windows collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE
-- ansible.posix collection - GPL-3.0-or-later - https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE
-- community.general collection - GPL-3.0-or-later - https://github.com/ansible-collections/community.general/blob/main/COPYING
-- Tesseract OCR - Apache-2.0 - https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE
-- WireGuard tools - GPL-2.0-only - https://spdx.org/licenses/GPL-2.0-only.html
-- Traefik (Borealis-managed local HTTPS edge and ACME client) - MIT - https://github.com/traefik/traefik/blob/master/LICENSE.md
-- @emotion/react - MIT - https://spdx.org/licenses/MIT.html
-- @emotion/styled - MIT - https://spdx.org/licenses/MIT.html
-- @fortawesome/fontawesome-free - CC-BY-4.0 AND OFL-1.1 AND MIT - https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt
-- @fontsource/ibm-plex-sans - OFL-1.1 - https://openfontlicense.org/open-font-license-official-text/
-- @mui/icons-material - MIT - https://spdx.org/licenses/MIT.html
-- @mui/material - MIT - https://spdx.org/licenses/MIT.html
-- @mui/x-date-pickers - MIT - https://spdx.org/licenses/MIT.html
-- @mui/x-tree-view - MIT - https://spdx.org/licenses/MIT.html
-- @simplewebauthn/browser - MIT - https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE
-- ag-grid-community - MIT - https://spdx.org/licenses/MIT.html
-- ag-grid-react - MIT - https://spdx.org/licenses/MIT.html
-- Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE
-- Apache Guacamole Client (`guacamole-common-js`) 1.6.0 - Apache-2.0 - https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE
-- LibVNCServer / LibVNCClient - GPL-2.0-or-later - https://github.com/LibVNC/libvncserver/blob/master/COPYING
-- @codemirror/lang-css - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-html - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-javascript - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-json - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-markdown - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-python - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-sql - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-xml - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lang-yaml - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/language - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/legacy-modes - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/lint - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/merge - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/search - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/state - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/theme-one-dark - MIT - https://spdx.org/licenses/MIT.html
-- @codemirror/view - MIT - https://spdx.org/licenses/MIT.html
-- dayjs - MIT - https://spdx.org/licenses/MIT.html
-- normalize.css - MIT - https://spdx.org/licenses/MIT.html
-- @lezer/highlight - MIT - https://spdx.org/licenses/MIT.html
-- prismjs - MIT - https://spdx.org/licenses/MIT.html
-- react-simple-code-editor - MIT - https://spdx.org/licenses/MIT.html
-- react - MIT - https://spdx.org/licenses/MIT.html
-- react-color - MIT - https://spdx.org/licenses/MIT.html
-- react-dom - MIT - https://spdx.org/licenses/MIT.html
-- react-router-dom - MIT - https://spdx.org/licenses/MIT.html
-- react-resizable - MIT - https://spdx.org/licenses/MIT.html
-- react-markdown - MIT - https://spdx.org/licenses/MIT.html
-- reactflow - MIT - https://spdx.org/licenses/MIT.html
-- react-simple-keyboard - MIT - https://spdx.org/licenses/MIT.html
-- socket.io-client - MIT - https://spdx.org/licenses/MIT.html
-- @uiw/react-codemirror - MIT - https://github.com/uiwjs/react-codemirror/blob/master/LICENSE
-- codemirror - MIT - https://spdx.org/licenses/MIT.html
-- @testing-library/jest-dom - MIT - https://spdx.org/licenses/MIT.html
-- @testing-library/react - MIT - https://spdx.org/licenses/MIT.html
-- @vitejs/plugin-react - MIT - https://spdx.org/licenses/MIT.html
-- jsdom - MIT - https://github.com/jsdom/jsdom/blob/main/LICENSE.txt
-- vite - MIT - https://spdx.org/licenses/MIT.html
-- vitest - MIT - https://github.com/vitest-dev/vitest/blob/main/LICENSE
+Use `shared-engine` for dependencies that support host deployment, build orchestration, or cross-container service management rather than one container runtime.
+
+| Service | Dependency | License |
+| :--- | :--- | :--- |
+| api-backend | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
+| api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
+| api-backend | golang.org/x/crypto v0.33.0 (Go scrypt KDF support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
+| api-backend | github.com/go-ldap/ldap/v3 v3.4.8 (Go LDAP/LDAPS directory-provider support) | [MIT](https://github.com/go-ldap/ldap/blob/master/LICENSE) |
+| api-backend | github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 (Go LDAP NTLM support dependency) | [MIT](https://github.com/Azure/go-ntlmssp/blob/master/LICENSE) |
+| api-backend | github.com/go-asn1-ber/asn1-ber v1.5.5 (Go LDAP ASN.1 BER codec dependency) | [MIT](https://github.com/go-asn1-ber/asn1-ber/blob/master/LICENSE) |
+| api-backend | github.com/go-webauthn/webauthn v0.10.2 (Go WebAuthn passkey ceremonies) | [BSD-3-Clause](https://github.com/go-webauthn/webauthn/blob/master/LICENSE) |
+| api-backend | github.com/fxamacker/cbor/v2 v2.6.0 (Go WebAuthn CBOR codec dependency) | [MIT](https://github.com/fxamacker/cbor/blob/master/LICENSE) |
+| api-backend | github.com/go-webauthn/x v0.1.9 (Go WebAuthn support dependency) | [BSD-3-Clause](https://github.com/go-webauthn/x/blob/master/LICENSE) |
+| api-backend | github.com/golang-jwt/jwt/v5 v5.2.1 (Go WebAuthn transitive JWT support dependency) | [MIT](https://github.com/golang-jwt/jwt/blob/main/LICENSE) |
+| api-backend | github.com/google/go-tpm v0.9.0 (Go WebAuthn TPM attestation support dependency) | [Apache-2.0](https://github.com/google/go-tpm/blob/main/LICENSE) |
+| api-backend | github.com/google/uuid v1.6.0 (Go WebAuthn UUID support dependency) | [BSD-3-Clause](https://github.com/google/uuid/blob/master/LICENSE) |
+| api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
+| api-backend | github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) | [MIT](https://github.com/x448/float16/blob/master/LICENSE) |
+| api-backend | golang.org/x/sys v0.30.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| api-backend | Docker CLI (`docker-ce-cli`, container service-action helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
+| api-backend | Docker Compose plugin (container service-action helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| api-backend | Docker Buildx plugin / BuildKit (container image rebuild helper) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| api-backend | Flask | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| api-backend | flask-cors | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | Flask-SocketIO | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | eventlet | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | cryptography | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
+| api-backend | PyJWT | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | pyotp | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | qrcode | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
+| api-backend | webauthn | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
+| api-backend | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
+| api-backend | requests | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| api-backend | aiohttp | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
+| api-backend | python-socketio | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | websockets | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| api-backend | packaging | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
+| api-backend | regex | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
+| api-backend | SQLAlchemy | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | alembic | [MIT](https://spdx.org/licenses/MIT.html) |
+| api-backend | psycopg (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
+| api-backend | ldap3 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
+| api-backend | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
+| api-backend | Tesseract OCR | [Apache-2.0](https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE) |
+| api-backend | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
+| job-scheduler | Debian container base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines plus package licenses](https://www.debian.org/legal/licenses/) |
+| job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| job-scheduler | Docker CLI (`docker-ce-cli`, site-worker container launcher) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
+| job-scheduler | Docker Compose plugin (Engine service orchestration helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| job-scheduler | Docker Buildx plugin / BuildKit (container image rebuild helper) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |
+| remote-desktop-guacd | Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
+| remote-desktop-guacd | Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
+| remote-desktop-guacd | LibVNCServer / LibVNCClient | [GPL-2.0-or-later](https://github.com/LibVNC/libvncserver/blob/master/COPYING) |
+| site-worker | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
+| site-worker | Flask | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| site-worker | flask-cors | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | Flask-SocketIO | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | eventlet | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | cryptography | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
+| site-worker | PyJWT | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | pyotp | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | qrcode | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
+| site-worker | webauthn | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
+| site-worker | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
+| site-worker | requests | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| site-worker | aiohttp | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
+| site-worker | python-socketio | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | websockets | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| site-worker | packaging | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
+| site-worker | regex | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
+| site-worker | SQLAlchemy | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | alembic | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | psycopg (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
+| site-worker | ldap3 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
+| site-worker | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
+| site-worker | ansible-core | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
+| site-worker | ansible-runner | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| site-worker | jmespath | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | pywinrm (`pywinrm[credssp]`) | [MIT](https://github.com/diyan/pywinrm/blob/master/LICENSE) |
+| site-worker | pypsrp (`pypsrp[credssp]`) | [MIT](https://github.com/jborean93/pypsrp/blob/master/LICENSE) |
+| site-worker | Impacket | [Apache-2.0](https://github.com/fortra/impacket/blob/master/LICENSE) |
+| site-worker | ansible.windows collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE) |
+| site-worker | ansible.posix collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE) |
+| site-worker | community.general collection | [GPL-3.0-or-later](https://github.com/ansible-collections/community.general/blob/main/COPYING) |
+| site-worker | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
+| traefik-edge | Traefik container image (`traefik:v3.3`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
+| traefik-edge | Traefik (Borealis-managed local HTTPS edge and ACME client) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
+| webui-frontend | Node.js container base image (`node:22-bookworm-slim`) | [MIT plus Debian package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
+| webui-frontend | @emotion/react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @emotion/styled | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @fortawesome/fontawesome-free | [CC-BY-4.0 AND OFL-1.1 AND MIT](https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt) |
+| webui-frontend | @fontsource/ibm-plex-sans | [OFL-1.1](https://openfontlicense.org/open-font-license-official-text/) |
+| webui-frontend | @mui/icons-material | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/material | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/x-date-pickers | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/x-tree-view | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @simplewebauthn/browser | [MIT](https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE) |
+| webui-frontend | ag-grid-community | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | ag-grid-react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | Apache Guacamole Client (`guacamole-common-js`) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE) |
+| webui-frontend | @codemirror/lang-css | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-html | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-javascript | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-json | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-markdown | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-python | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-sql | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-xml | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-yaml | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/language | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/legacy-modes | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lint | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/merge | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/search | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/state | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/theme-one-dark | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/view | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @lezer/highlight | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @uiw/react-codemirror | [MIT](https://github.com/uiwjs/react-codemirror/blob/master/LICENSE) |
+| webui-frontend | codemirror | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | dayjs | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | normalize.css | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | prismjs | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-simple-code-editor | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-color | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-dom | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-router-dom | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-resizable | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-markdown | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | reactflow | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-simple-keyboard | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | socket.io-client | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @testing-library/jest-dom | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @testing-library/react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @vitejs/plugin-react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | jsdom | [MIT](https://github.com/jsdom/jsdom/blob/main/LICENSE.txt) |
+| webui-frontend | vite | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | vitest | [MIT](https://github.com/vitest-dev/vitest/blob/main/LICENSE) |
+| wireguard-tunnel | Debian Bookworm base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines / package-specific licenses](https://www.debian.org/legal/licenses/) |
+| wireguard-tunnel | Python (system Python on Linux) | [PSF License](https://docs.python.org/3/license.html) |
+| wireguard-tunnel | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
+| shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
+| shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
+| shared-engine | Docker Compose plugin (Linux Engine deployment orchestration) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| shared-engine | Tecnativa Docker Socket Proxy container image (`ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`) | [Apache-2.0](https://github.com/Tecnativa/docker-socket-proxy/blob/master/LICENSE.txt) |
+| shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
+| shared-engine | Go toolchain (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
 
 ## Maintenance Notes
 
 - Update this file whenever a dependency is added, removed, upgraded to a materially different licensed product, bundled into `Dependencies/`, or downloaded by bootstrap/runtime scripts.
 - Keep Agent and Engine inventories separate so deployment reviewers can quickly assess licensing impact by runtime.
+- Keep Engine dependency entries under the service that installs or vendors them. Use `shared-engine` for deployment or cross-container orchestration dependencies.
 - If Borealis later adopts lockfiles or generated SBOM tooling, this file can be expanded to include resolved transitive dependencies.

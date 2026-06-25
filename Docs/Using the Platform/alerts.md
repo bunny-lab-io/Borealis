@@ -50,7 +50,7 @@ Device Summary has a `Watchdogs` tab for active incidents, effective watchdog as
 
     - Alerts UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Alerting/Active_Alerts.jsx`
     - Device Watchdogs UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Watchdogs.jsx`
-    - Runtime: `Data/Engine/Containers/api-backend/data/services/API/watchdogs/runtime.py`
+    - Watchdog runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/watchdogs_runtime.go`
 
     ### Runtime behavior
 

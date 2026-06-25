@@ -27,7 +27,9 @@ Ansible playbook assemblies run from the Linux Engine against remote devices ove
 5. Select credential or service account path where applicable.
 6. Save.
 
-New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling.
+New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. The Site Worker Scheduled Tasks value is the visible throttle for scheduled Ansible execution. `Engine.sh deploy` tunes that value from the detected Engine deployment profile.
+
+The Site Worker Scheduled Tasks value limits active scheduled work items, not raw devices. Shared Ansible mode uses one work-item slot for a site batch and lets Ansible process the hosts inside that batch. Individual mode uses one work-item slot per target while active.
 
 ## Read Recap
 
@@ -43,8 +45,7 @@ SSH credentials may include password, private key, become method, and become pas
 
     - Playbook execution is scheduled through [Scheduled Jobs](../scheduled-jobs.md).
     - Assembly CRUD endpoints are listed in [Assemblies](assemblies.md).
-    - `GET /api/server/ansible-runner-settings` - read scheduled-Ansible concurrency limits.
-    - `PUT /api/server/ansible-runner-settings` - update scheduled-Ansible concurrency limits.
+    - `GET /api/server/site-worker-settings` - read profile-managed scheduled-lane worker capacity.
 
     ### Related documentation
 
@@ -58,13 +59,15 @@ SSH credentials may include password, private key, become method, and become pas
 
     - Ansible runner: `Data/Engine/Containers/api-backend/data/services/ansible/runner.py`
     - SSH credential rendering: `Data/Engine/Containers/api-backend/data/services/ansible/ssh_auth.py`
-    - Scheduler dispatch: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+    - Scheduler dispatch: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Scheduled job UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`
 
     ### Runtime behavior
 
     - Engine stages required Ansible collections into `Engine/Services/api-backend/cache/Ansible/collections`.
-    - Shared contexts run one inventory per playbook component.
-    - Individual contexts create one-host inventories and one run row per target.
+    - Shared contexts run one inventory per playbook component and consume one scheduled-lane worker slot for that site batch. The nodegraph can show `Task (8 Devices)` for one shared work item because the label reports target count, not slot count.
+    - Individual contexts create one-host inventories and one run row per target/component pair. Each queued run consumes one scheduled-lane worker slot while active. The nodegraph can group several same-job, same-status runs into one `Task (n Devices)` card.
     - SSH/WinRM target admission depends on WireGuard readiness and credential/service-account resolution.
-    - Individual runner fan-out is bounded by persisted per-job and global limits exposed in Server Info.
+    - Legacy Ansible runner limit endpoints remain API-compatible but scheduler dispatch no longer uses them as active gates.
+    - Site-worker scheduled-lane capacity is the active work-item claim limit. Profile values are `5`, `8`, `12`, or `16` scheduled work items per site worker; onboarding and other lanes are not changed by this setting.
+    - Borealis does not currently pass `--forks` to Ansible. Shared batches use Ansible's default internal host fan-out inside the single claimed work item.

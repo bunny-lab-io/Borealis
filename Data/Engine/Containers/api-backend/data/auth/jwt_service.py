@@ -66,8 +66,8 @@ def _tighten_permissions(path: Path) -> None:
         pass
 
 
-_KEY_DIR = _token_root()
-_KEY_FILE = _KEY_DIR / _KEY_FILENAME
+def _key_file() -> Path:
+    return _token_root() / _KEY_FILENAME
 
 
 class JWTService:
@@ -101,6 +101,20 @@ class JWTService:
         if extra_claims:
             payload.update(extra_claims)
 
+        token = jwt.encode(
+            payload,
+            self._private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            ),
+            algorithm="EdDSA",
+            headers={"kid": self._key_id},
+        )
+        return token
+
+    def issue_claims(self, claims: Dict[str, Any]) -> str:
+        payload = dict(claims or {})
         token = jwt.encode(
             payload,
             self._private_key.private_bytes(
@@ -147,10 +161,11 @@ def load_service() -> JWTService:
 
 
 def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
-    _KEY_DIR.mkdir(parents=True, exist_ok=True)
+    key_file = _key_file()
+    key_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if _KEY_FILE.exists():
-        with _KEY_FILE.open("rb") as fh:
+    if key_file.exists():
+        with key_file.open("rb") as fh:
             return serialization.load_pem_private_key(fh.read(), password=None)
 
     private_key = ed25519.Ed25519PrivateKey.generate()
@@ -159,9 +174,9 @@ def _load_or_create_private_key() -> ed25519.Ed25519PrivateKey:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    with _KEY_FILE.open("wb") as fh:
+    with key_file.open("wb") as fh:
         fh.write(pem)
-    _tighten_permissions(_KEY_FILE)
+    _tighten_permissions(key_file)
     return private_key
 
 

@@ -97,12 +97,26 @@ class _FakeWireGuardManager:
 def _build_service() -> tuple[VpnTunnelService, _FakeWireGuardManager, _DummySocketIO]:
     socketio = _DummySocketIO()
     wg = _FakeWireGuardManager()
+    host_service_events: list[tuple[str, str, str, Any, dict[str, Any]]] = []
+
+    def _emit_host_service_event(
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> bool:
+        host_service_events.append((hostname, service_mode, event_name, payload, dict(kwargs)))
+        return True
+
     context = SimpleNamespace(
         logger=logging.getLogger("borealis.test.vpn.service"),
         wireguard_port=30000,
         wireguard_engine_virtual_ip="10.255.0.1/24",
         wireguard_peer_network="10.255.0.0/24",
         wireguard_port_allowlist=(47002, 5900, 22),
+        emit_host_service_event=_emit_host_service_event,
+        host_service_events=host_service_events,
     )
     service = VpnTunnelService(
         context=context,
@@ -130,8 +144,12 @@ def test_request_agent_start_expands_allowed_ports_for_nondefault_ansible_transp
     assert payload["allowed_ports"] == [47002, 5900, 22, 2222]
     assert wg.apply_calls == 2
     assert wg.removed_rules == [["rule-agent-1"]]
-    assert socketio.emits[-1][0] == "vpn_tunnel_start"
-    assert socketio.emits[-1][1]["allowed_ports"] == [47002, 5900, 22, 2222]
+    assert socketio.emits == []
+    assert service.context.host_service_events[-1][0] == "agent-1"
+    assert service.context.host_service_events[-1][1] == "system"
+    assert service.context.host_service_events[-1][2] == "vpn_tunnel_start"
+    assert service.context.host_service_events[-1][3]["allowed_ports"] == [47002, 5900, 22, 2222]
+    assert service.context.host_service_events[-1][4]["allow_pending"] is True
 
 
 def test_wait_for_sessions_ready_requires_agent_ready_callback() -> None:

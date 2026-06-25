@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGraph, buildGraphAt, statusTone } from "@/Admin/Engine_Status.jsx";
+import { buildGraph, buildGraphAt, mergeWorkerPayload, statusTone, taskStatusPillLabel } from "@/Admin/Engine_Status.jsx";
 
 describe("active site workers canvas mapping", () => {
   it("renders engine service topology nodes and edges", () => {
@@ -96,23 +96,56 @@ describe("active site workers canvas mapping", () => {
 
     const graph = buildGraph(payload, () => {});
     const workerNode = graph.nodes.find((node) => node.id === "worker:worker-1");
-    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task (1 Device)");
     const edge = graph.edges.find((item) => item.target === taskNode?.id);
 
     expect(workerNode?.type).toBe("worker");
     expect(workerNode?.data.idleRemainingSeconds).toBeGreaterThanOrEqual(45);
     expect(workerNode?.data.idleRemainingSeconds).toBeLessThanOrEqual(60);
     expect(taskNode?.type).toBe("task");
+    expect(taskNode?.data.label).toBe("Task (1 Device)");
     expect(taskNode?.data.status).toBe("succeeded");
+    expect(taskNode?.data.statusDisplayLabel).toBe("Success");
     expect(taskNode?.data.taskType).toBe("Assembly");
-    expect(taskNode?.data.closeRemainingSeconds).toBeGreaterThanOrEqual(15);
-    expect(taskNode?.data.closeRemainingSeconds).toBeLessThanOrEqual(30);
+    expect(taskNode?.data.closeRemainingSeconds).toBeGreaterThanOrEqual(45);
+    expect(taskNode?.data.closeRemainingSeconds).toBeLessThanOrEqual(60);
     expect(taskNode?.data.taskName).toBe("Scheduled Job 42");
     expect(statusTone(taskNode?.data.status)).toBe("success");
     expect(edge?.label).toBeUndefined();
     expect(edge?.sourceHandle).toBe("output");
     expect(edge?.targetHandle).toBe("input");
     expect(edge?.animated).toBe(false);
+  });
+
+  it("shows connected site workers as running instead of idle teardown", () => {
+    const graph = buildGraphAt(
+      {
+        worker_idle_ttl_seconds: 60,
+        site_names: { 7: "Bunny Lab" },
+        workers: [
+          {
+            worker_guid: "worker-1",
+            container_name: "site-worker-1",
+            site_id: 7,
+            status: "idle",
+            started_at: 100,
+            idle_since: 950,
+            current_lanes: ["agent_sockets"],
+            task_links: [{ kind: "agent_sockets", label: "2 Devices Connected", count: 2 }],
+          },
+        ],
+      },
+      () => {},
+      1000
+    );
+
+    const workerNode = graph.nodes.find((node) => node.id === "worker:worker-1");
+
+    expect(workerNode?.data.visualStatus).toBe("running");
+    expect(workerNode?.data.visualStatusLabel).toBe("Running");
+    expect(workerNode?.data.connectedDeviceCount).toBe(2);
+    expect(workerNode?.data.connectedDeviceLabel).toBe("2 Devices Connected");
+    expect(workerNode?.data.idleRemainingSeconds).toBeNull();
   });
 
   it("hides terminal workers and their terminal work once worker is gone", () => {
@@ -227,7 +260,7 @@ describe("active site workers canvas mapping", () => {
     const taskNode = graph.nodes.find((node) => node.type === "task");
 
     expect(workerNode?.data.closeRemainingSeconds).toBe(55);
-    expect(taskNode?.data.closeRemainingSeconds).toBe(25);
+    expect(taskNode?.data.closeRemainingSeconds).toBe(55);
   });
 
 
@@ -253,7 +286,7 @@ describe("active site workers canvas mapping", () => {
             job_id: 42,
             status: "succeeded",
             started_at: now - 80,
-            finished_at: now - 31,
+            finished_at: now - 61,
             task_link: { label: "Scheduled Job 42", path: "/jobs/42?tab=job_history" },
           },
         ],
@@ -284,11 +317,119 @@ describe("active site workers canvas mapping", () => {
     );
 
     const placeholder = graph.nodes.find((node) => node.id === "worker:queued-site-9");
-    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.label === "Task (1 Device)");
     expect(placeholder).toBeTruthy();
     expect(taskNode).toBeTruthy();
+    expect(taskNode?.data.statusDisplayLabel).toBe("Pending");
     expect(graph.edges.some((edge) => edge.source === placeholder?.id && edge.target === taskNode?.id && edge.animated)).toBe(true);
     expect(statusTone("failed")).toBe("failed");
+  });
+
+  it("normalizes task status pill labels", () => {
+    expect(taskStatusPillLabel("succeeded")).toBe("Success");
+    expect(taskStatusPillLabel("running")).toBe("Running");
+    expect(taskStatusPillLabel("queued")).toBe("Pending");
+    expect(taskStatusPillLabel("failed")).toBe("Failed");
+    expect(taskStatusPillLabel("skipped")).toBe("Skipped");
+    expect(statusTone("skipped")).toBe("stopped");
+  });
+
+  it("marks active work from terminal workers as reassigning", () => {
+    const now = 1000;
+    const graph = buildGraphAt(
+      {
+        workers: [
+          {
+            worker_guid: "old-worker",
+            site_id: 7,
+            status: "stopped",
+            started_at: now - 80,
+            stopped_at: now - 5,
+          },
+          {
+            worker_guid: "new-worker",
+            site_id: 7,
+            status: "running",
+            started_at: now - 2,
+          },
+        ],
+        recent_work: [
+          {
+            id: 71,
+            kind: "scheduled_run",
+            lane: "scheduled_job",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 71,
+            status: "running",
+            started_at: now - 15,
+          },
+        ],
+      },
+      () => {},
+      now,
+      { dismissInactive: true, dismissStartedAt: now - 5 }
+    );
+
+    const stoppedWorker = graph.nodes.find((node) => node.id === "worker:old-worker");
+    const activeWorker = graph.nodes.find((node) => node.id === "worker:new-worker");
+    const taskNode = graph.nodes.find((node) => node.type === "task" && node.data.status === "running");
+    const taskEdge = graph.edges.find((edge) => edge.target === taskNode?.id);
+
+    expect(stoppedWorker).toBeTruthy();
+    expect(activeWorker).toBeTruthy();
+    expect(taskNode).toBeTruthy();
+    expect(taskNode?.data.visualStatus).toBe("pending");
+    expect(taskNode?.data.statusDisplayLabel).toBe("Pending");
+    expect(taskNode?.data.statusDetail).toBe("Reassigning to New Worker");
+    expect(statusTone(taskNode?.data.visualStatus)).toBe("queued");
+    expect(taskEdge?.source).toBe(activeWorker?.id);
+    expect(taskEdge?.source).not.toBe(stoppedWorker?.id);
+  });
+
+  it("does not retain stale active work rows when holding inactive workers", () => {
+    const merged = mergeWorkerPayload(
+      {
+        workers: [],
+        recent_work: [
+          {
+            id: 81,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 81,
+            status: "running",
+          },
+          {
+            id: 82,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 82,
+            status: "succeeded",
+          },
+        ],
+      },
+      {
+        workers: [],
+        recent_work: [
+          {
+            id: 81,
+            kind: "scheduled_run",
+            site_id: 7,
+            worker_guid: "old-worker",
+            job_id: 81,
+            status: "succeeded",
+          },
+        ],
+      },
+      true
+    );
+
+    expect(merged.recent_work).toHaveLength(2);
+    expect(merged.recent_work.find((work) => work.id === 81)?.status).toBe("succeeded");
+    expect(merged.recent_work.some((work) => work.id === 81 && work.status === "running")).toBe(false);
+    expect(merged.recent_work.find((work) => work.id === 82)?.status).toBe("succeeded");
   });
 
   it("collapses repeated task rows by worker job and status", () => {
@@ -337,8 +478,9 @@ describe("active site workers canvas mapping", () => {
     expect(workerNode?.data.label).toBe("Site Worker");
     expect(workerNode?.data.siteLabel).toBe("Bunny Lab");
     expect(taskNodes).toHaveLength(1);
-    expect(taskNodes[0].data.label).toBe("Task");
-    expect(taskNodes[0].data.targetCountLabel).toBe("2 Devices Targeted");
+    expect(taskNodes[0].data.label).toBe("Task (2 Devices)");
+    expect(taskNodes[0].data.targetCountLabel).toBe("");
+    expect(taskNodes[0].data.statusDisplayLabel).toBe("Success");
     expect(taskNodes[0].data.taskName).toBe("Scheduled Job 42");
   });
 

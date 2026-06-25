@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and Ansible concurrency.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and site-worker scheduled task slots.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -25,10 +25,11 @@ Use service actions for focused restart, rebuild, reload, or WireGuard reconcile
 
 Admins can adjust:
 
-- Engine timezone.
-- Scheduled Ansible per-job concurrency.
-- Scheduled Ansible global concurrency.
 - Agent release channel targets.
+
+Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
+
+This value is active scheduled-lane work-item capacity per site worker, not raw device concurrency. Shared Ansible batches, scheduled workflows, scheduled jobs, and agent-maintenance items each consume scheduled slots while active according to their work-item shape.
 
 !!! warning
 
@@ -40,14 +41,15 @@ Admins can adjust:
 
     - `GET /api/server/overview` - dashboard snapshot.
     - `GET /api/server/time` - server clock.
-    - `GET /api/server/timezones` - timezone options.
-    - `POST /api/server/timezone` - change host timezone.
     - `GET /api/server/workers` - active/recent worker state.
-    - `GET /api/server/ansible-runner-settings` - read Ansible runner limits.
-    - `PUT /api/server/ansible-runner-settings` - update Ansible runner limits.
+    - `POST /api/server/workers/<worker_guid>/recreate` - queue a site-worker container re-create.
+    - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
+    - `GET /api/server/agent-release-channels` - read Agent update channel targets.
+    - `PUT /api/server/agent-release-channels` - update default channel or repo and refresh cached artifacts.
+    - `POST /api/server/agent-release-channels/refresh` - refresh cached Agent update artifacts.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
-    - `POST /api/server/wireguard/recover` - recover WireGuard listener.
+    - `POST /api/server/wireguard/recover` - queue WireGuard tunnel reconcile.
 
     ### Related documentation
 
@@ -58,13 +60,20 @@ Admins can adjust:
 
     ### Source map
 
-    - Server API: `Data/Engine/Containers/api-backend/data/services/API/server/info.py`
-    - Log API: `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py`
+    - Server API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_overview.go`
+    - Server actions: `Data/Engine/Containers/api-backend/cmd/api-backend/server_actions.go`
+    - Agent release channels: `Data/Engine/Containers/api-backend/cmd/api-backend/server_agent_release_channels.go`
+    - WireGuard recovery: `Data/Engine/Containers/api-backend/cmd/api-backend/server_wireguard.go`
+    - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
     - Server Info UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Server_Info.jsx`
     - Service actions: `Data/Engine/Containers/api-backend/data/services/job_scheduler/`
 
     ### Runtime behavior
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
+    - Public-edge certificate health reads Traefik `acme.json` from the Engine state path, decodes base64 PEM certificate material, and reports expiry, severity, domains, resolver, and fingerprint in `/api/server/overview`.
+    - Active Operator Sessions counts live `/api/realtime/events` SSE subscribers. The realtime hub emits `server_operator_presence_changed` when subscribers connect or disconnect so Server Info can refresh without waiting for the next poll.
     - Service actions queue work items so API request can return before service changes interrupt runtime.
+    - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
+    - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
     - Server Info is informational first; raw log inspection belongs in Engine Log Management.

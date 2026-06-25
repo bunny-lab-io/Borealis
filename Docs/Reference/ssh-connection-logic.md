@@ -74,10 +74,10 @@ Combined inventory is fallback-only and should not be normal output when probes 
     ### Source map
 
     - Credential host-var rendering: `Data/Engine/Containers/api-backend/data/services/ansible/ssh_auth.py`
-    - Scheduled Ansible decision logic: `Data/Engine/Containers/api-backend/data/services/API/scheduled_jobs/job_scheduler.py`
+    - Scheduled Ansible decision logic: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
     - Ansible workspace/config generation: `Data/Engine/Containers/api-backend/data/services/ansible/runner.py`
-    - Workflow Ansible target rendering: `Data/Engine/Containers/api-backend/data/services/workflows/runtime.py`
-    - Unit coverage: `Data/Engine/Unit_Tests/test_scheduled_jobs_api.py`, `Data/Engine/Unit_Tests/test_ansible_runner.py`, `Data/Engine/Unit_Tests/test_workflow_runtime.py`
+    - Workflow Ansible target rendering: `Data/Engine/Containers/api-backend/cmd/api-backend/workflows_runtime.go`
+    - Unit coverage: Go scheduler/workflow tests and `Data/Engine/Unit_Tests/test_ansible_runner.py`
 
     ### Guardrails
 

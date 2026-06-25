@@ -4,6 +4,7 @@ Use this section when moving legacy WebUI pages into the shared React Router she
 
 ## Guides
 
+- [API Backend Rewrite](api-backend-rewrite.md) - milestone tracker for moving remote-operation ownership into site-workers before the Go rewrite.
 - [Migrating Pages to React Router](migrating-pages-to-react-router.md) - canonical page chrome, route registration, state preservation, and migration workflow.
 
 ??? example "Detailed Codex Breakdown"

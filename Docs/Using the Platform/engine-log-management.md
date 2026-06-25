@@ -46,7 +46,7 @@ Use `Delete File` for one file. Use domain/family deletion only when you intenti
 
     ### Source map
 
-    - Log API: `Data/Engine/Containers/api-backend/data/services/API/server/log_management.py`
+    - Log API: `Data/Engine/Containers/api-backend/cmd/api-backend/server_logs.go`
     - Log UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Log_Management.jsx`
     - Service logging helper: `Data/Engine/Containers/api-backend/data/services/API/__init__.py`
 

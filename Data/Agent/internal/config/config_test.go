@@ -18,6 +18,13 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.Agent.ReleaseChannel = "Unstable"
 	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
+	cfg.RemoteOps.Available = true
+	cfg.RemoteOps.SiteID = 1
+	cfg.RemoteOps.WorkerGUID = "worker-config-route"
+	cfg.RemoteOps.RouteGeneration = 3
+	cfg.RemoteOps.RoutePathPrefix = "/_borealis/site-workers/worker-config-route"
+	cfg.RemoteOps.BaseURL = "https://borealis.example.com/_borealis/site-workers/worker-config-route/"
+	cfg.RemoteOps.SocketURL = "https://borealis.example.com/_borealis/site-workers/worker-config-route/socket.io/"
 	cfg.UpdateDependencyState("WireGuard", func(state *DependencyStateSection) {
 		state.Phase = "healthy"
 		state.Status = "healthy"
@@ -56,6 +63,12 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.Agent.LogRetentionDays != DefaultLogRetentionDays {
 		t.Fatalf("log retention default = %d, want %d", loaded.Agent.LogRetentionDays, DefaultLogRetentionDays)
+	}
+	if loaded.RemoteOps.BaseURL != "https://borealis.example.com/_borealis/site-workers/worker-config-route" {
+		t.Fatalf("remote ops base url not normalized: %q", loaded.RemoteOps.BaseURL)
+	}
+	if loaded.RemoteOps.SocketURL != "https://borealis.example.com/_borealis/site-workers/worker-config-route/socket.io" {
+		t.Fatalf("remote ops socket url not normalized: %q", loaded.RemoteOps.SocketURL)
 	}
 	if loaded.Agent.State.Revision <= 0 || loaded.Agent.State.Writer == "" || loaded.Agent.State.LastWriteAt <= 0 {
 		t.Fatalf("state metadata missing: %#v", loaded.Agent.State)

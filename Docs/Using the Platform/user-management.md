@@ -52,7 +52,7 @@ After Aegis force reset, affected users can show recovery required. Recovering o
 
     ### Source map
 
-    - User API: `Data/Engine/Containers/api-backend/data/services/API/access_management/users.py`
+    - User API: `Data/Engine/Containers/api-backend/cmd/api-backend/users.go`
     - User UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Users.jsx`
     - Auth context UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/providers/AuthContext.jsx`
 

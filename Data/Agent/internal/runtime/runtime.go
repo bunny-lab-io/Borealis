@@ -300,11 +300,20 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 
 func (a *Agent) connectSocket(ctx context.Context) error {
 	a.recordSocketState("connecting")
-	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Engine socket connecting."); err != nil {
+	if err := a.postStatus(ctx, "socket_connecting", "healthy", "Site-worker socket connecting."); err != nil {
 		a.logger.Printf("status post failed: %v", err)
 	}
+	if err := a.authClient.RefreshRemoteOpsRoute(ctx); err != nil {
+		a.logger.Printf("remote ops route refresh failed: %v", err)
+	}
+	socketBaseURL := a.authClient.RemoteOpsBaseURL()
+	if socketBaseURL == "" {
+		return fmt.Errorf("site-worker remote ops route unavailable")
+	}
+	a.logger.Printf("socket connecting route=%s", socketBaseURL)
 	headers := a.authClient.AuthHeaders()
-	socket := transport.NewClient(a.authClient.BaseURL(), headers)
+	socket := transport.NewClient(socketBaseURL, headers)
+	socket.OnActivity(a.recordConnectedSocketActivity)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname
 	if a.software != nil {
@@ -327,6 +336,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		socket.On("vpn_tunnel_start", a.wireguard.HandleStart)
 		socket.On("vpn_tunnel_stop", a.wireguard.HandleStop)
 		socket.On("vpn_tunnel_activity", a.wireguard.HandleActivity)
+	}
+	if a.remoteShell != nil {
+		socket.On("remote_shell_restart", a.handleRemoteShellRestart)
 	}
 	if a.vnc != nil {
 		socket.On("vnc_start", a.vnc.HandleStart)
@@ -370,7 +382,17 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 		_ = a.postStatus(ctx, "steady_state_online", "healthy", "Agent steady state online.")
 		return nil
 	})
-	return socket.Connect(ctx)
+	if err := socket.Connect(ctx); err != nil {
+		if ctx.Err() == nil {
+			refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if refreshErr := a.authClient.RefreshRemoteOpsRoute(refreshCtx); refreshErr != nil {
+				a.logger.Printf("remote ops route refresh after socket disconnect failed: %v", refreshErr)
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *Agent) postStatus(ctx context.Context, phase string, status string, message string) error {

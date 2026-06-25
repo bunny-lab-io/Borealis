@@ -54,6 +54,20 @@ def _safe_path_parts(raw_name: Any) -> List[str]:
     return parts
 
 
+def _runtime_file_content(parts: Sequence[str], content: Any) -> str:
+    value = str(content)
+    if parts and parts[-1] == "id_borealis_ssh":
+        value = value.strip()
+        value = value.replace("\\r\\n", "\n")
+        value = value.replace("\\n", "\n")
+        value = value.replace("\\r", "\n")
+        value = value.replace("\r\n", "\n")
+        value = value.replace("\r", "\n")
+        if value and not value.endswith("\n"):
+            value += "\n"
+    return value
+
+
 def _env_positive_int(name: str, default: int) -> int:
     raw_value = str(os.getenv(name, "") or "").strip()
     if not raw_value:
@@ -454,7 +468,7 @@ class EngineAnsibleRunner:
                 continue
             destination = runtime_dir.joinpath(*parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(str(content), encoding="utf-8")
+            destination.write_text(_runtime_file_content(parts, content), encoding="utf-8")
             try:
                 mode_raw = item.get("mode")
                 if mode_raw not in (None, ""):

@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { EMPTY_AEGIS_STATUS, normalizeAegisStatus } from "../utils/aegis.js";
-import { EMPTY_BOOTSTRAP_STATE, normalizeBootstrapState } from "../utils/bootstrap.js";
+import { EMPTY_BOOTSTRAP_STATE, engineLoadingBootstrapState, normalizeBootstrapState } from "../utils/bootstrap.js";
 import { sha512 } from "../utils/crypto.js";
 import { postAppNotification } from "../utils/notifications.js";
 import {
@@ -9,10 +9,14 @@ import {
   registerPasskey as registerPasskeyCeremony,
   updatePasskeyLabel as updatePasskeyLabelCeremony,
 } from "../utils/passkeys.js";
-import { getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
+import { connectBorealisRealtime, disconnectBorealisRealtime, getBorealisSocket } from "../runtime/bootstrapClientRuntime.js";
 
 const SESSION_CACHE_KEY = "borealis_session";
 const SESSION_CACHE_TTL_MS = 3600 * 1000;
+
+function normalizeAuthSource(value) {
+  return String(value || "local").trim().toLowerCase() || "local";
+}
 
 function clearPersistedSession() {
   try {
@@ -31,6 +35,7 @@ function persistSession(payload) {
         username: payload.username,
         display_name: payload.display_name || payload.username,
         role: payload.role || null,
+        auth_source: normalizeAuthSource(payload.auth_source),
         timestamp: Date.now(),
       })
     );
@@ -61,6 +66,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [role, setRole] = useState(null);
   const [displayName, setDisplayName] = useState(null);
+  const [authSource, setAuthSource] = useState("local");
   const [mfaEnabled, setMfaEnabled] = useState(false);
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [ready, setReady] = useState(false);
@@ -69,10 +75,12 @@ export function AuthProvider({ children }) {
   const [aegisDialog, setAegisDialog] = useState(null);
 
   const clearClientSession = useCallback(() => {
+    disconnectBorealisRealtime();
     clearPersistedSession();
     setUser(null);
     setRole(null);
     setDisplayName(null);
+    setAuthSource("local");
     setMfaEnabled(false);
     setPasskeyCount(0);
     setAegisStatus(EMPTY_AEGIS_STATUS);
@@ -91,7 +99,7 @@ export function AuthProvider({ children }) {
     try {
       const response = await fetch("/api/bootstrap/state", { credentials: "include" });
       if (!response.ok) {
-        const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+        const fallback = engineLoadingBootstrapState();
         setBootstrapState(fallback);
         return fallback;
       }
@@ -100,7 +108,7 @@ export function AuthProvider({ children }) {
       setBootstrapState(normalized);
       return normalized;
     } catch {
-      const fallback = { ...EMPTY_BOOTSTRAP_STATE, phase: "aegis_setup_required" };
+      const fallback = engineLoadingBootstrapState();
       setBootstrapState(fallback);
       return fallback;
     }
@@ -140,6 +148,7 @@ export function AuthProvider({ children }) {
         setUser(me.username);
         setRole(me.role || null);
         setDisplayName(me.display_name || me.username);
+        setAuthSource(normalizeAuthSource(me.auth_source));
         setMfaEnabled(Boolean(me.mfa_enabled));
         setPasskeyCount(Number(me.passkey_count || 0));
         persistSession(me);
@@ -172,6 +181,7 @@ export function AuthProvider({ children }) {
         setUser(cached.username);
         setRole(cached.role || null);
         setDisplayName(cached.display_name || cached.username);
+        setAuthSource(normalizeAuthSource(cached.auth_source));
       }
 
       try {
@@ -182,6 +192,7 @@ export function AuthProvider({ children }) {
             setUser(me.username);
             setRole(me.role || null);
             setDisplayName(me.display_name || me.username);
+            setAuthSource(normalizeAuthSource(me.auth_source));
             setMfaEnabled(Boolean(me.mfa_enabled));
             setPasskeyCount(Number(me.passkey_count || 0));
           }
@@ -206,9 +217,11 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!ready || !user || String(bootstrapState?.phase || "") !== "login_required") {
+      disconnectBorealisRealtime();
       setAegisStatus(EMPTY_AEGIS_STATUS);
       return;
     }
+    connectBorealisRealtime();
     fetchAegisStatus();
   }, [bootstrapState, fetchAegisStatus, ready, user]);
 
@@ -237,6 +250,7 @@ export function AuthProvider({ children }) {
           setUser(me.username);
           setRole(me.role || null);
           setDisplayName(me.display_name || me.username);
+          setAuthSource(normalizeAuthSource(me.auth_source));
           setMfaEnabled(Boolean(me.mfa_enabled));
           setPasskeyCount(Number(me.passkey_count || 0));
           persistSession(me);
@@ -263,17 +277,19 @@ export function AuthProvider({ children }) {
   }, [bootstrapState, clearClientSession, fetchAegisStatus, ready, refreshBootstrapState, user]);
 
   const login = useCallback(
-    async ({ username, role: nextRole }) => {
+    async ({ username, role: nextRole, auth_source: nextAuthSource }) => {
       await refreshBootstrapState();
       setUser(username);
       setRole(nextRole || null);
       setDisplayName(username);
+      setAuthSource(normalizeAuthSource(nextAuthSource));
       setMfaEnabled(false);
       setPasskeyCount(0);
       persistSession({
         username,
         display_name: username,
         role: nextRole || null,
+        auth_source: normalizeAuthSource(nextAuthSource),
       });
 
       (async () => {
@@ -284,6 +300,7 @@ export function AuthProvider({ children }) {
             setUser(me.username);
             setRole(me.role || null);
             setDisplayName(me.display_name || me.username);
+            setAuthSource(normalizeAuthSource(me.auth_source));
             setMfaEnabled(Boolean(me.mfa_enabled));
             setPasskeyCount(Number(me.passkey_count || 0));
             persistSession(me);
@@ -517,6 +534,7 @@ export function AuthProvider({ children }) {
       user,
       role,
       displayName,
+      authSource,
       mfaEnabled,
       passkeyCount,
       aegisStatus,
@@ -542,6 +560,7 @@ export function AuthProvider({ children }) {
     [
       aegisDialog,
       aegisStatus,
+      authSource,
       bootstrapState,
       clearOperatorPresence,
       closeAegisDialog,

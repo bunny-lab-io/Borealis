@@ -527,6 +527,38 @@ generate_secret() {
   date +%s%N | sha256sum | awk '{print $1}'
 }
 
+resolve_runtime_owner_uid() {
+  if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_UID}"
+  elif [[ -n "${SUDO_UID:-}" ]]; then
+    printf '%s\n' "${SUDO_UID}"
+  else
+    id -u
+  fi
+}
+
+resolve_runtime_owner_gid() {
+  if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_GID}"
+  elif [[ -n "${SUDO_GID:-}" ]]; then
+    printf '%s\n' "${SUDO_GID}"
+  else
+    id -g
+  fi
+}
+
+apply_traefik_dynamic_config_permissions() {
+  local dynamic_dir="${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic"
+  local owner_uid
+  local owner_gid
+  owner_uid="$(resolve_runtime_owner_uid)"
+  owner_gid="$(resolve_runtime_owner_gid)"
+  if [[ "${EUID:-$(id -u)}" -eq 0 && "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]]; then
+    chown "${owner_uid}:${owner_gid}" "${dynamic_dir}" 2>/dev/null || true
+  fi
+  chmod 0775 "${dynamic_dir}" 2>/dev/null || true
+}
+
 ensure_service_tree() {
   mkdir -p "${DEPLOY_DIR}"
   mkdir -p \
@@ -544,6 +576,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/postgres-db/logs" \
     "${RUNTIME_ROOT}/Services/postgres-db/run" \
     "${RUNTIME_ROOT}/Services/traefik-edge/config" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" \
     "${RUNTIME_ROOT}/Services/traefik-edge/env" \
     "${RUNTIME_ROOT}/Services/traefik-edge/logs" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state" \
@@ -553,6 +586,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
+  apply_traefik_dynamic_config_permissions
   chmod 0777 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
@@ -689,6 +723,43 @@ resolve_acme_email() {
   fi
 }
 
+resolve_host_timezone() {
+  local timezone=""
+  if [[ -n "${BOREALIS_ENGINE_HOST_TIMEZONE:-}" ]]; then
+    printf '%s\n' "${BOREALIS_ENGINE_HOST_TIMEZONE}"
+    return 0
+  fi
+  if command_exists timedatectl; then
+    timezone="$(timedatectl show --property=Timezone --value 2>/dev/null | head -n 1 || true)"
+    timezone="$(printf '%s' "${timezone}" | tr -d '\r' | xargs)"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  local localtime_path=""
+  localtime_path="$(readlink -f /etc/localtime 2>/dev/null || true)"
+  if [[ "${localtime_path}" == *"/zoneinfo/"* ]]; then
+    timezone="${localtime_path#*/zoneinfo/}"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  if [[ -n "${TZ:-}" ]]; then
+    printf '%s\n' "${TZ}"
+    return 0
+  fi
+  if [[ -r /etc/timezone ]]; then
+    timezone="$(head -n 1 /etc/timezone 2>/dev/null | tr -d '\r' | xargs || true)"
+    if [[ -n "${timezone}" ]]; then
+      printf '%s\n' "${timezone}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "Etc/UTC"
+}
+
 resolve_traefik_trusted_proxy_ips() {
   local existing
   existing="$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)"
@@ -727,6 +798,197 @@ write_webui_mode_env_file() {
   ' "${RUNTIME_ENV}" > "${target}"
 }
 
+clamp_mib() {
+  local value="$1"
+  local minimum="$2"
+  local maximum="$3"
+  if (( value < minimum )); then
+    printf '%s\n' "${minimum}"
+    return 0
+  fi
+  if (( value > maximum )); then
+    printf '%s\n' "${maximum}"
+    return 0
+  fi
+  printf '%s\n' "${value}"
+}
+
+format_pg_memory_mib() {
+  local mib="$1"
+  if (( mib >= 1024 && mib % 1024 == 0 )); then
+    printf '%sGB\n' "$((mib / 1024))"
+    return 0
+  fi
+  printf '%sMB\n' "${mib}"
+}
+
+detect_host_vcpu() {
+  local count=""
+  if command_exists nproc; then
+    count="$(nproc 2>/dev/null || true)"
+  fi
+  if [[ -z "${count}" ]] && command_exists getconf; then
+    count="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+  fi
+  [[ "${count}" =~ ^[0-9]+$ && "${count}" -gt 0 ]] || count="1"
+  printf '%s\n' "${count}"
+}
+
+detect_host_memory_mib() {
+  local mem_mib=""
+  if [[ -r /proc/meminfo ]]; then
+    mem_mib="$(awk '/^MemTotal:/ {printf "%d", $2 / 1024}' /proc/meminfo 2>/dev/null || true)"
+  fi
+  [[ "${mem_mib}" =~ ^[0-9]+$ && "${mem_mib}" -gt 0 ]] || mem_mib="1024"
+  printf '%s\n' "${mem_mib}"
+}
+
+profile_rank_for_cpu() {
+  local vcpu="$1"
+  if (( vcpu >= 24 )); then
+    printf '3\n'
+  elif (( vcpu >= 16 )); then
+    printf '2\n'
+  elif (( vcpu >= 8 )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+profile_rank_for_memory() {
+  local mem_mib="$1"
+  if (( mem_mib >= 65536 )); then
+    printf '3\n'
+  elif (( mem_mib >= 32768 )); then
+    printf '2\n'
+  elif (( mem_mib >= 16384 )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+profile_name_for_rank() {
+  case "$1" in
+    3) printf '%s\n' "Enterprise" ;;
+    2) printf '%s\n' "MSP / Production" ;;
+    1) printf '%s\n' "Small Business" ;;
+    *) printf '%s\n' "Homelab" ;;
+  esac
+}
+
+load_profile_tuning() {
+  local vcpu="$1"
+  local mem_mib="$2"
+  local cpu_rank
+  local memory_rank
+  local profile_rank
+  cpu_rank="$(profile_rank_for_cpu "${vcpu}")"
+  memory_rank="$(profile_rank_for_memory "${mem_mib}")"
+  profile_rank="${cpu_rank}"
+  if (( memory_rank < profile_rank )); then
+    profile_rank="${memory_rank}"
+  fi
+
+  PROFILE_RANK="${profile_rank}"
+  PROFILE_NAME="$(profile_name_for_rank "${profile_rank}")"
+  PROFILE_CPU_RANK="${cpu_rank}"
+  PROFILE_MEMORY_RANK="${memory_rank}"
+  PROFILE_HOST_VCPU="${vcpu}"
+  PROFILE_HOST_MEMORY_MIB="${mem_mib}"
+  PROFILE_HOST_MEMORY_GIB="$(awk -v mib="${mem_mib}" 'BEGIN { printf "%.1f", mib / 1024 }')"
+
+  local shared_mib
+  local cache_mib
+  case "${profile_rank}" in
+    3)
+      PROFILE_DB_POOL_SIZE=24
+      PROFILE_DB_MAX_OVERFLOW=24
+      PROFILE_SITE_WORKER_CONCURRENCY=16
+      PROFILE_POSTGRES_MAX_CONNECTIONS=180
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 12288 24576)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 32768 65536)"
+      PROFILE_POSTGRES_WORK_MEM="16MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="1GB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=16
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=16
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=6
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=2500
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="15s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="12GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="2GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+    2)
+      PROFILE_DB_POOL_SIZE=20
+      PROFILE_DB_MAX_OVERFLOW=20
+      PROFILE_SITE_WORKER_CONCURRENCY=12
+      PROFILE_POSTGRES_MAX_CONNECTIONS=150
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 8192 16384)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 20480 32768)"
+      PROFILE_POSTGRES_WORK_MEM="8MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=12
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=12
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=4
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=5
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=2000
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="15s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="8GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="1GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=64
+      ;;
+    1)
+      PROFILE_DB_POOL_SIZE=12
+      PROFILE_DB_MAX_OVERFLOW=16
+      PROFILE_SITE_WORKER_CONCURRENCY=8
+      PROFILE_POSTGRES_MAX_CONNECTIONS=120
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 4096 8192)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 8192 16384)"
+      PROFILE_POSTGRES_WORK_MEM="8MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=4
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=1500
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="20s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="6GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="1GB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=32
+      ;;
+    *)
+      PROFILE_DB_POOL_SIZE=10
+      PROFILE_DB_MAX_OVERFLOW=10
+      PROFILE_SITE_WORKER_CONCURRENCY=5
+      PROFILE_POSTGRES_MAX_CONNECTIONS=80
+      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 1024 4096)"
+      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 4096 12288)"
+      PROFILE_POSTGRES_WORK_MEM="4MB"
+      PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="256MB"
+      PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS=8
+      PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=2
+      PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS=3
+      PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=1000
+      PROFILE_POSTGRES_AUTOVACUUM_NAPTIME="30s"
+      PROFILE_POSTGRES_MAX_WAL_SIZE="4GB"
+      PROFILE_POSTGRES_MIN_WAL_SIZE="512MB"
+      PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=16
+      ;;
+  esac
+  PROFILE_POSTGRES_SHARED_BUFFERS="$(format_pg_memory_mib "${shared_mib}")"
+  PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE="$(format_pg_memory_mib "${cache_mib}")"
+  PROFILE_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR="0.02"
+  PROFILE_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR="0.01"
+  PROFILE_POSTGRES_WAL_COMPRESSION="on"
+  PROFILE_POSTGRES_CHECKPOINT_TIMEOUT="15min"
+  PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET="0.9"
+  PROFILE_POSTGRES_RANDOM_PAGE_COST="1.1"
+}
+
 write_compose_env() {
   local mode="$1"
   local public_host="$2"
@@ -750,6 +1012,9 @@ write_compose_env() {
   local traefik_trusted_proxy_ips
   local traefik_forwarded_headers_trusted_ips
   local traefik_proxy_protocol_trusted_ips
+  local runtime_owner_uid
+  local runtime_owner_gid
+  local host_timezone
   if (($# >= 4)); then
     traefik_trusted_proxy_ips="${trusted_proxy_ips_arg}"
   else
@@ -757,14 +1022,25 @@ write_compose_env() {
   fi
   traefik_forwarded_headers_trusted_ips="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)}"
   traefik_proxy_protocol_trusted_ips="${BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS:-$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)}"
+  host_timezone="$(resolve_host_timezone)"
+  runtime_owner_uid="$(resolve_runtime_owner_uid)"
+  runtime_owner_gid="$(resolve_runtime_owner_gid)"
+  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
+  if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
+    log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
+  fi
 
   cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 BOREALIS_RUNTIME_ENV_FILE=${RUNTIME_ENV}
 BOREALIS_WEBUI_ENV_FILE=${WEBUI_ENV}
+BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
+BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
 BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
+BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
+TZ=${host_timezone}
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}
@@ -780,21 +1056,50 @@ BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/S
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
 BOREALIS_TRAEFIK_RUNTIME_ENV_PATH=${RUNTIME_ROOT}/Services/traefik-edge/env/runtime.env
 BOREALIS_TRAEFIK_STATIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/traefik.yml
-BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic.yml
+BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic
+BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH=${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/core.yml
 BOREALIS_TRAEFIK_HEALTH_PORT=${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}
 BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=${traefik_trusted_proxy_ips}
 BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=${traefik_forwarded_headers_trusted_ips}
 BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS=${traefik_proxy_protocol_trusted_ips}
+
+BOREALIS_DEPLOYMENT_PROFILE=${PROFILE_NAME}
+BOREALIS_DEPLOYMENT_PROFILE_RANK=${PROFILE_RANK}
+BOREALIS_DEPLOYMENT_CPU_RANK=${PROFILE_CPU_RANK}
+BOREALIS_DEPLOYMENT_MEMORY_RANK=${PROFILE_MEMORY_RANK}
+BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
+BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
+BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
 
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
 POSTGRES_PASSWORD=${postgres_password}
 BOREALIS_DATABASE_URL=postgresql://${db_user}:${postgres_password}@127.0.0.1:5432/${db_name}
 BOREALIS_DB_SSLMODE=disable
-BOREALIS_DB_POOL_SIZE=${BOREALIS_DB_POOL_SIZE:-10}
-BOREALIS_DB_MAX_OVERFLOW=${BOREALIS_DB_MAX_OVERFLOW:-10}
+BOREALIS_DB_POOL_SIZE=${PROFILE_DB_POOL_SIZE}
+BOREALIS_DB_MAX_OVERFLOW=${PROFILE_DB_MAX_OVERFLOW}
 BOREALIS_DB_CONNECT_TIMEOUT=${BOREALIS_DB_CONNECT_TIMEOUT:-15}
 BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS=${BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS:-60000}
+BOREALIS_POSTGRES_MAX_CONNECTIONS=${PROFILE_POSTGRES_MAX_CONNECTIONS}
+BOREALIS_POSTGRES_SHARED_BUFFERS=${PROFILE_POSTGRES_SHARED_BUFFERS}
+BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE=${PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE}
+BOREALIS_POSTGRES_WORK_MEM=${PROFILE_POSTGRES_WORK_MEM}
+BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM=${PROFILE_POSTGRES_MAINTENANCE_WORK_MEM}
+BOREALIS_POSTGRES_MAX_WORKER_PROCESSES=${PROFILE_POSTGRES_MAX_WORKER_PROCESSES}
+BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS=${PROFILE_POSTGRES_MAX_PARALLEL_WORKERS}
+BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER=${PROFILE_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER}
+BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS=${PROFILE_POSTGRES_AUTOVACUUM_MAX_WORKERS}
+BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT=${PROFILE_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT}
+BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME=${PROFILE_POSTGRES_AUTOVACUUM_NAPTIME}
+BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR=${PROFILE_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR}
+BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR=${PROFILE_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR}
+BOREALIS_POSTGRES_MAX_WAL_SIZE=${PROFILE_POSTGRES_MAX_WAL_SIZE}
+BOREALIS_POSTGRES_MIN_WAL_SIZE=${PROFILE_POSTGRES_MIN_WAL_SIZE}
+BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY=${PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY}
+BOREALIS_POSTGRES_WAL_COMPRESSION=${PROFILE_POSTGRES_WAL_COMPRESSION}
+BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT=${PROFILE_POSTGRES_CHECKPOINT_TIMEOUT}
+BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET=${PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET}
+BOREALIS_POSTGRES_RANDOM_PAGE_COST=${PROFILE_POSTGRES_RANDOM_PAGE_COST}
 
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
@@ -820,6 +1125,8 @@ BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certifica
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
 BOREALIS_ANSIBLE_RUNTIME_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache/Ansible
 BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/ansible_runner_settings.json
+BOREALIS_SITE_WORKER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/site_worker_settings.json
+BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}
 BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
@@ -853,6 +1160,7 @@ compute_service_hash() {
 import hashlib
 import json
 import pathlib
+import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -905,6 +1213,16 @@ digest.update(
     f"context={entry.get('context')}\n"
     f"target={targets.get(mode) or ''}\n".encode("utf-8")
 )
+if service == "api-backend":
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        commit = ""
+    digest.update(f"api_backend_version={commit}\n".encode("utf-8"))
 for rel in sorted(files, key=lambda p: str(p)):
     path = root / rel
     digest.update(str(rel).encode("utf-8") + b"\0")
@@ -973,9 +1291,21 @@ except Exception:
 PY
 }
 
+prepare_service_build_artifacts() {
+  local service="$1"
+  case "${service}" in
+    api-backend|job-scheduler)
+      log_status "${service}" "Building Go binary" "${C_YELLOW}"
+      BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
+        "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1
+      ;;
+  esac
+}
+
 build_service_image() {
   local service="$1"
   local mode="$2"
+  prepare_service_build_artifacts "${service}"
   local image_hash
   image_hash="$(compute_service_hash "${service}" "${mode}")"
   local tag="borealis-engine/${service}:sha-${image_hash:0:12}"
@@ -1378,6 +1708,21 @@ def env_settings_hash(path: pathlib.Path) -> str:
         lines.append(raw)
     return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
 
+def env_values(path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw or raw.lstrip().startswith("#") or "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        values[key.strip()] = value.strip()
+    return values
+
+def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
+    try:
+        return int(str(values.get(key, "")).strip())
+    except Exception:
+        return default
+
 services = [
     "docker-proxy",
     "api-backend",
@@ -1403,6 +1748,7 @@ if image_path.is_file():
             "hash": record.get("hash") or "",
         }
 
+env = env_values(env_file)
 payload = {
     "schema_version": 2,
     "project": project,
@@ -1416,6 +1762,40 @@ payload = {
     "service_images": service_images,
     "changed_services": changed_services,
     "compose_action": compose_action,
+    "deployment_profile": {
+        "name": env.get("BOREALIS_DEPLOYMENT_PROFILE", ""),
+        "rank": env_int(env, "BOREALIS_DEPLOYMENT_PROFILE_RANK"),
+        "cpu_rank": env_int(env, "BOREALIS_DEPLOYMENT_CPU_RANK"),
+        "memory_rank": env_int(env, "BOREALIS_DEPLOYMENT_MEMORY_RANK"),
+        "host_vcpu": env_int(env, "BOREALIS_DEPLOYMENT_HOST_VCPU"),
+        "host_memory_mib": env_int(env, "BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB"),
+        "host_memory_gib": env.get("BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB", ""),
+        "site_worker_scheduled_concurrency": env_int(env, "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY"),
+        "db_pool_size": env_int(env, "BOREALIS_DB_POOL_SIZE"),
+        "db_max_overflow": env_int(env, "BOREALIS_DB_MAX_OVERFLOW"),
+        "postgres": {
+            "max_connections": env_int(env, "BOREALIS_POSTGRES_MAX_CONNECTIONS"),
+            "shared_buffers": env.get("BOREALIS_POSTGRES_SHARED_BUFFERS", ""),
+            "effective_cache_size": env.get("BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE", ""),
+            "work_mem": env.get("BOREALIS_POSTGRES_WORK_MEM", ""),
+            "maintenance_work_mem": env.get("BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM", ""),
+            "max_worker_processes": env_int(env, "BOREALIS_POSTGRES_MAX_WORKER_PROCESSES"),
+            "max_parallel_workers": env_int(env, "BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS"),
+            "max_parallel_workers_per_gather": env_int(env, "BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER"),
+            "autovacuum_max_workers": env_int(env, "BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS"),
+            "autovacuum_vacuum_cost_limit": env_int(env, "BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT"),
+            "autovacuum_naptime": env.get("BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME", ""),
+            "autovacuum_vacuum_scale_factor": env.get("BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR", ""),
+            "autovacuum_analyze_scale_factor": env.get("BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR", ""),
+            "max_wal_size": env.get("BOREALIS_POSTGRES_MAX_WAL_SIZE", ""),
+            "min_wal_size": env.get("BOREALIS_POSTGRES_MIN_WAL_SIZE", ""),
+            "effective_io_concurrency": env_int(env, "BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY"),
+            "wal_compression": env.get("BOREALIS_POSTGRES_WAL_COMPRESSION", ""),
+            "checkpoint_timeout": env.get("BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT", ""),
+            "checkpoint_completion_target": env.get("BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET", ""),
+            "random_page_cost": env.get("BOREALIS_POSTGRES_RANDOM_PAGE_COST", ""),
+        },
+    },
     "deployed_at": datetime.now(timezone.utc).isoformat(),
     "services": services,
 }
@@ -1467,7 +1847,7 @@ deploy_engine() {
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
-  write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -1528,7 +1908,7 @@ service_action() {
       build_images "${mode}" "${service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
-      write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+      BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"

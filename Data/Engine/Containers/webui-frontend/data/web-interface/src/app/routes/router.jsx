@@ -544,10 +544,6 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
-                  path: "site-workers",
-                  element: <Navigate to={APP_PATHS.engineStatus} replace />,
-                },
-                {
                   path: "metadata-fields",
                   handle: {
                     title: "Metadata Fields",

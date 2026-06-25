@@ -7,6 +7,12 @@
 
 """Ansible service helpers for the Borealis Engine runtime."""
 
-from .runner import EngineAnsibleRunner
-
 __all__ = ["EngineAnsibleRunner"]
+
+
+def __getattr__(name):
+    if name == "EngineAnsibleRunner":
+        from .runner import EngineAnsibleRunner
+
+        return EngineAnsibleRunner
+    raise AttributeError(name)

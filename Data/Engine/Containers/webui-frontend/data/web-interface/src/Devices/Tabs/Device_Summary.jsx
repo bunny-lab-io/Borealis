@@ -990,6 +990,73 @@ const SummaryGridPlaceholder = React.memo(function SummaryGridPlaceholder({ heig
   );
 });
 
+const DescriptionCellEditor = React.memo(function DescriptionCellEditor({
+  value = "",
+  onDraftChange = null,
+  onSave = null,
+}) {
+  const [draft, setDraft] = useState(() => String(value || ""));
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    if (!focusedRef.current) {
+      setDraft(String(value || ""));
+    }
+  }, [value]);
+
+  const handleChange = useCallback(
+    (event) => {
+      const nextValue = event.target.value;
+      setDraft(nextValue);
+      onDraftChange?.(nextValue);
+    },
+    [onDraftChange]
+  );
+
+  const handleBlur = useCallback(() => {
+    focusedRef.current = false;
+    onSave?.(draft);
+  }, [draft, onSave]);
+
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        width: "100%",
+        minHeight: "100%",
+        py: 0.4,
+      }}
+    >
+      <TextField
+        size="small"
+        value={draft}
+        onFocus={() => {
+          focusedRef.current = true;
+        }}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        placeholder="Add a friendly label"
+        variant="outlined"
+        sx={{
+          width: "100%",
+          maxWidth: 520,
+          input: { color: MAGIC_UI.textBright, fontSize: "0.84rem", py: 0.7 },
+          "& .MuiOutlinedInput-root": {
+            backgroundColor: "rgba(4,7,17,0.65)",
+            borderRadius: 2,
+            "& fieldset": {
+              borderColor: "rgba(148,163,184,0.45)",
+            },
+            "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
+            "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
+          },
+        }}
+      />
+    </Box>
+  );
+});
+
 export default function DeviceSummary() {
   const loaderData = useLoaderData();
   const location = useLocation();
@@ -1924,25 +1991,35 @@ export default function DeviceSummary() {
     ]
   );
 
-  const saveDescription = async () => {
+  const handleDescriptionDraftChange = useCallback((nextDescription) => {
+    descriptionDraftRef.current = String(nextDescription ?? "");
+  }, []);
+
+  const saveDescription = useCallback(async (nextDescription = descriptionDraftRef.current) => {
     const targetHost = meta.hostname || details.summary?.hostname;
+    const draftDescription = String(nextDescription ?? "");
+    descriptionDraftRef.current = draftDescription;
+    setDescription(draftDescription);
     if (!targetHost) return;
     try {
-      await fetch(`/api/device/description/${targetHost}`, {
+      const response = await fetch(`/api/device/description/${targetHost}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description })
+        body: JSON.stringify({ description: draftDescription })
       });
-      loadedDescriptionRef.current = description;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      loadedDescriptionRef.current = draftDescription;
       setDetails((d) => ({
         ...d,
-        summary: { ...(d.summary || {}), description }
+        summary: { ...(d.summary || {}), description: draftDescription }
       }));
       setMeta((m) => ({ ...(m || {}), hostname: targetHost }));
     } catch (e) {
       console.warn("Failed to save description", e);
     }
-  };
+  }, [details.summary?.hostname, meta.hostname]);
 
   const formatMac = (mac) => (mac ? mac.replace(/-/g, ":").toUpperCase() : "unknown");
 
@@ -3151,38 +3228,11 @@ export default function DeviceSummary() {
       const value = String(params?.value ?? row?.value ?? "").trim() || "unknown";
       if (row?.editableDescription) {
         return (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              width: "100%",
-              minHeight: "100%",
-              py: 0.4,
-            }}
-          >
-            <TextField
-              size="small"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              onBlur={saveDescription}
-              placeholder="Add a friendly label"
-              variant="outlined"
-              sx={{
-                width: "100%",
-                maxWidth: 520,
-                input: { color: MAGIC_UI.textBright, fontSize: "0.84rem", py: 0.7 },
-                "& .MuiOutlinedInput-root": {
-                  backgroundColor: "rgba(4,7,17,0.65)",
-                  borderRadius: 2,
-                  "& fieldset": {
-                    borderColor: "rgba(148,163,184,0.45)",
-                  },
-                  "&:hover fieldset": { borderColor: MAGIC_UI.accentA },
-                  "&.Mui-focused fieldset": { borderColor: MAGIC_UI.accentA },
-                },
-              }}
-            />
-          </Box>
+          <DescriptionCellEditor
+            value={params?.value ?? row?.value ?? ""}
+            onDraftChange={handleDescriptionDraftChange}
+            onSave={saveDescription}
+          />
         );
       }
       if (row?.id === "agent-branch-channel") {
@@ -3292,7 +3342,7 @@ export default function DeviceSummary() {
           </Box>
         );
       },
-    [agentBranchChannelSaving, description, openAgentBranchChannelDialog, saveDescription]
+    [agentBranchChannelSaving, handleDescriptionDraftChange, openAgentBranchChannelDialog, saveDescription]
   );
 
   const topLevelSplitColumnDefs = useMemo(

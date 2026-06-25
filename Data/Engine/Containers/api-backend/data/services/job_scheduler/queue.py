@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+from pathlib import Path
 import time
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -28,6 +31,26 @@ WORKER_TERMINAL_STATUSES = (
     WORKER_STATUS_STOPPED,
     WORKER_STATUS_LOST,
 )
+WORKER_ROUTE_STATUS_ACTIVE = "active"
+WORKER_ROUTE_STATUS_RETIRED = "retired"
+WORKER_ROUTE_STATUS_LOST = "lost"
+WORKER_ROUTE_TERMINAL_STATUSES = (
+    WORKER_ROUTE_STATUS_RETIRED,
+    WORKER_ROUTE_STATUS_LOST,
+)
+
+DEFAULT_SITE_WORKER_ROUTE_ROOT = "/_borealis/site-workers"
+DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME = "http"
+DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST = "127.0.0.1"
+DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE = 56000
+DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE = 5000
+DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE = 61000
+DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE = 3000
+WORKER_ROUTE_SELECT_COLUMNS = """
+    worker_guid, site_id, container_name, route_name, route_path_prefix,
+    route_file_path, upstream_scheme, upstream_host, upstream_port,
+    status, generation, metadata_json, created_at, updated_at, retired_at
+"""
 
 LANE_ONBOARDING = "onboarding"
 LANE_SCHEDULED_JOB = "scheduled_job"
@@ -97,6 +120,239 @@ def _payload_task_type(kind: str, payload: Mapping[str, Any]) -> str:
     return ""
 
 
+def _safe_route_segment(value: Any) -> str:
+    text = str(value or "").strip()
+    segment = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in text).strip("-_")
+    return segment or "worker"
+
+
+def site_worker_remote_ops_port(worker_guid: Any, site_id: Any = 0) -> int:
+    return _site_worker_deterministic_port(
+        worker_guid,
+        site_id,
+        base_env="BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE",
+        range_env="BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE",
+        default_base=DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_BASE,
+        default_range=DEFAULT_SITE_WORKER_REMOTE_OPS_PORT_RANGE,
+    )
+
+
+def site_worker_remote_desktop_port(worker_guid: Any, site_id: Any = 0) -> int:
+    return _site_worker_deterministic_port(
+        worker_guid,
+        site_id,
+        base_env="BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE",
+        range_env="BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE",
+        default_base=DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE,
+        default_range=DEFAULT_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE,
+    )
+
+
+def _site_worker_deterministic_port(
+    worker_guid: Any,
+    site_id: Any = 0,
+    *,
+    base_env: str,
+    range_env: str,
+    default_base: int,
+    default_range: int,
+) -> int:
+    raw_base = str(os.environ.get(base_env) or "").strip()
+    raw_range = str(os.environ.get(range_env) or "").strip()
+    try:
+        base = int(raw_base) if raw_base else int(default_base)
+    except Exception:
+        base = int(default_base)
+    try:
+        port_range = int(raw_range) if raw_range else int(default_range)
+    except Exception:
+        port_range = int(default_range)
+    base = min(65000, max(1024, base))
+    port_range = min(max(1, port_range), max(1, 65535 - base))
+    seed = f"{worker_guid or ''}:{site_id or ''}".encode("utf-8", errors="ignore")
+    digest = hashlib.sha256(seed).hexdigest()
+    return base + (int(digest[:8], 16) % port_range)
+
+
+def _site_worker_route_dir() -> Path:
+    configured = str(os.environ.get("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR") or "").strip()
+    if configured:
+        return Path(configured)
+    project_root = Path(os.environ.get("BOREALIS_PROJECT_ROOT") or "/opt/Borealis")
+    return project_root / "Engine" / "Services" / "traefik-edge" / "config" / "dynamic"
+
+
+def _site_worker_route_metadata(
+    *,
+    worker_guid: str,
+    upstream_scheme: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME,
+    upstream_host: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
+    upstream_port: Optional[int] = None,
+) -> Dict[str, Any]:
+    segment = _safe_route_segment(worker_guid)
+    route_dir = _site_worker_route_dir()
+    try:
+        port = int(upstream_port or 0)
+    except Exception:
+        port = 0
+    if port < 0:
+        port = 0
+    return {
+        "route_name": f"borealis-site-worker-{segment}",
+        "route_path_prefix": f"{DEFAULT_SITE_WORKER_ROUTE_ROOT}/{segment}",
+        "route_file_path": str(route_dir / f"site-worker-{segment}.yml"),
+        "upstream_scheme": str(upstream_scheme or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME,
+        "upstream_host": str(upstream_host or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
+        "upstream_port": port,
+    }
+
+
+def _route_row_to_dict(row: Sequence[Any]) -> Dict[str, Any]:
+    return {
+        "worker_guid": row[0] or "",
+        "site_id": row[1],
+        "container_name": row[2] or "",
+        "route_name": row[3] or "",
+        "route_path_prefix": row[4] or "",
+        "route_file_path": row[5] or "",
+        "upstream_scheme": row[6] or "",
+        "upstream_host": row[7] or "",
+        "upstream_port": int(row[8] or 0),
+        "status": row[9] or "",
+        "generation": int(row[10] or 0),
+        "metadata": _json_loads(row[11], {}),
+        "created_at": row[12],
+        "updated_at": row[13],
+        "retired_at": row[14],
+    }
+
+
+def _quote_yaml(value: Any) -> str:
+    text = str(value or "")
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _route_tls_block() -> str:
+    hostname = str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost").strip()
+    acme_email = str(os.environ.get("BOREALIS_ACME_EMAIL") or "").strip()
+    if acme_email and hostname and hostname != "localhost":
+        return "      tls:\n        certResolver: letsencrypt"
+    return "      tls: {}"
+
+
+def _worker_route_config(route: Mapping[str, Any]) -> str:
+    hostname = str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost").strip() or "localhost"
+    route_name = str(route.get("route_name") or "").strip()
+    route_path_prefix = str(route.get("route_path_prefix") or "").rstrip("/")
+    upstream_scheme = str(route.get("upstream_scheme") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME
+    upstream_host = str(route.get("upstream_host") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST
+    upstream_port = int(route.get("upstream_port") or 0)
+    service_name = route_name
+    strip_name = f"{route_name}-strip"
+    upstream_url = f"{upstream_scheme}://{upstream_host}:{upstream_port}"
+    tls_block = _route_tls_block()
+    metadata = route.get("metadata") if isinstance(route.get("metadata"), Mapping) else {}
+    remote_desktop = metadata.get("remote_desktop_guacamole") if isinstance(metadata.get("remote_desktop_guacamole"), Mapping) else {}
+    try:
+        guacamole_port = int(remote_desktop.get("port") or 0)
+    except Exception:
+        guacamole_port = 0
+    guacamole_host = str(remote_desktop.get("host") or upstream_host).strip() or upstream_host
+    guacamole_scheme = str(remote_desktop.get("scheme") or upstream_scheme).strip() or upstream_scheme
+    guacamole_path = str(remote_desktop.get("path_prefix") or "/remote-desktop/vnc").strip() or "/remote-desktop/vnc"
+    if not guacamole_path.startswith("/"):
+        guacamole_path = f"/{guacamole_path}"
+    guacamole_route_path = f"{route_path_prefix}{guacamole_path.rstrip('/')}"
+    guacamole_service_name = f"{route_name}-remote-desktop"
+    guacamole_route_name = f"{route_name}-remote-desktop"
+    guacamole_url = f"{guacamole_scheme}://{guacamole_host}:{guacamole_port}"
+    lines = [
+        "http:",
+        "  middlewares:",
+        f"    {strip_name}:",
+        "      stripPrefix:",
+        "        prefixes:",
+        f"          - {_quote_yaml(route_path_prefix)}",
+        "  routers:",
+        f"    {route_name}:",
+        "      entryPoints:",
+        "        - websecure",
+        f"      rule: \"Host(`{hostname}`) && PathPrefix(`{route_path_prefix}`)\"",
+        "      middlewares:",
+        f"        - {strip_name}",
+        f"      service: {service_name}",
+        "      priority: 120",
+        tls_block,
+    ]
+    if guacamole_port > 0:
+        lines.extend(
+            [
+                f"    {guacamole_route_name}:",
+                "      entryPoints:",
+                "        - websecure",
+                f"      rule: \"Host(`{hostname}`) && PathPrefix(`{guacamole_route_path}`)\"",
+                "      middlewares:",
+                f"        - {strip_name}",
+                f"      service: {guacamole_service_name}",
+                "      priority: 130",
+                tls_block,
+            ]
+        )
+    lines.extend(
+        [
+            "  services:",
+            f"    {service_name}:",
+            "      loadBalancer:",
+            "        servers:",
+            f"          - url: {_quote_yaml(upstream_url)}",
+        ]
+    )
+    if guacamole_port > 0:
+        lines.extend(
+            [
+                f"    {guacamole_service_name}:",
+                "      loadBalancer:",
+                "        servers:",
+                f"          - url: {_quote_yaml(guacamole_url)}",
+            ]
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_worker_route_file(route: Mapping[str, Any]) -> None:
+    if str(route.get("status") or "") != WORKER_ROUTE_STATUS_ACTIVE:
+        return
+    try:
+        upstream_port = int(route.get("upstream_port") or 0)
+    except Exception:
+        upstream_port = 0
+    if upstream_port <= 0:
+        return
+    route_file_path = str(route.get("route_file_path") or "").strip()
+    if not route_file_path:
+        return
+    route_path = Path(route_file_path)
+    route_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = route_path.with_name(f".{route_path.name}.tmp")
+    tmp_path.write_text(_worker_route_config(route), encoding="utf-8")
+    os.replace(tmp_path, route_path)
+
+
+def _remove_worker_route_files(routes: Sequence[Mapping[str, Any]]) -> None:
+    for route in routes or []:
+        route_path = Path(str(route.get("route_file_path") or ""))
+        if not str(route_path):
+            continue
+        for path in (route_path, route_path.with_name(f".{route_path.name}.tmp")):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+
+
 def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
@@ -164,10 +420,33 @@ def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_scheduler_worker_routes (
+            worker_guid TEXT PRIMARY KEY,
+            site_id INTEGER NOT NULL,
+            container_name TEXT NOT NULL,
+            route_name TEXT NOT NULL,
+            route_path_prefix TEXT NOT NULL,
+            route_file_path TEXT NOT NULL,
+            upstream_scheme TEXT NOT NULL,
+            upstream_host TEXT NOT NULL,
+            upstream_port INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL,
+            generation INTEGER NOT NULL DEFAULT 1,
+            metadata_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            retired_at INTEGER
+        )
+        """
+    )
     cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_job_scheduler_work_dedupe ON job_scheduler_work_items(dedupe_key)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_work_claim ON job_scheduler_work_items(site_id, lane, status, available_at, priority)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_work_lease ON job_scheduler_work_items(status, lease_expires_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_workers_site ON job_scheduler_workers(site_id, status, last_seen_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_worker_routes_site ON job_scheduler_worker_routes(site_id, status, updated_at)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_job_scheduler_worker_routes_status ON job_scheduler_worker_routes(status, retired_at)")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS job_scheduler_service_snapshots (
@@ -413,7 +692,14 @@ def enqueue_service_action(
     normalized_service = str(service_key or "").strip().lower()
     action_name = str(action.get("action") or "").strip().lower()
     action_mode = str(action.get("mode") or "").strip().lower()
-    dedupe = f"service-action:{normalized_service}:{action_name}:{action_mode}:{now // 60}"
+    action_scope = str(
+        action.get("scope")
+        or action.get("worker_guid")
+        or action.get("container_name")
+        or ""
+    ).strip().lower()
+    scope_key = hashlib.sha256(action_scope.encode("utf-8", errors="ignore")).hexdigest()[:16] if action_scope else "global"
+    dedupe = f"service-action:{normalized_service}:{action_name}:{action_mode}:{scope_key}:{now // 60}"
     return _insert_work_item(
         conn,
         dedupe_key=dedupe,
@@ -435,28 +721,38 @@ def claim_next_work_item(
     lanes: Sequence[str],
     lease_owner: str,
     lease_seconds: int = 300,
+    kinds: Optional[Sequence[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
     lanes_norm = [str(lane or "").strip() for lane in lanes if str(lane or "").strip()]
     if not lanes_norm:
         return None
-    placeholders = ",".join("?" for _ in lanes_norm)
+    kinds_norm = [str(kind or "").strip() for kind in (kinds or []) if str(kind or "").strip()]
+    lane_placeholders = ",".join("?" for _ in lanes_norm)
+    kind_filter = ""
+    kind_params: List[str] = []
+    if kinds_norm:
+        kind_placeholders = ",".join("?" for _ in kinds_norm)
+        kind_filter = f"AND kind IN ({kind_placeholders})"
+        kind_params = kinds_norm
     select_sql = f"""
         SELECT id
           FROM job_scheduler_work_items
          WHERE site_id=?
-           AND lane IN ({placeholders})
+           AND lane IN ({lane_placeholders})
+           {kind_filter}
            AND status=?
            AND available_at<=?
          ORDER BY priority DESC, available_at ASC, id ASC
          LIMIT 1
          FOR UPDATE SKIP LOCKED
     """
+    claim_params = [int(site_id), *lanes_norm, *kind_params, WORK_STATUS_QUEUED, now]
     cur = conn.cursor()
     try:
         cur.execute("BEGIN")
-        cur.execute(select_sql, [int(site_id), *lanes_norm, WORK_STATUS_QUEUED, now])
+        cur.execute(select_sql, claim_params)
     except Exception:
         try:
             conn.rollback()
@@ -469,13 +765,14 @@ def claim_next_work_item(
             SELECT id
               FROM job_scheduler_work_items
              WHERE site_id=?
-               AND lane IN ({placeholders})
+               AND lane IN ({lane_placeholders})
+               {kind_filter}
                AND status=?
                AND available_at<=?
              ORDER BY priority DESC, available_at ASC, id ASC
              LIMIT 1
             """,
-            [int(site_id), *lanes_norm, WORK_STATUS_QUEUED, now],
+            claim_params,
         )
     row = cur.fetchone()
     if not row:
@@ -555,6 +852,75 @@ def complete_work_item(conn: sqlite3.Connection, *, work_id: int, status: str, e
     )
 
 
+def requeue_work_item(conn: sqlite3.Connection, *, work_id: int, delay_seconds: int = 0, error: str = "") -> None:
+    ensure_job_scheduler_tables(conn)
+    now = _now_ts()
+    available_at = now + max(0, int(delay_seconds or 0))
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE job_scheduler_work_items
+           SET status=?,
+               lease_owner=NULL,
+               lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
+               finished_at=NULL,
+               updated_at=?
+         WHERE id=?
+        """,
+        (
+            WORK_STATUS_QUEUED,
+            str(error or "")[:2000],
+            available_at,
+            now,
+            int(work_id),
+        ),
+    )
+
+
+def _release_worker_running_work_items(
+    conn: sqlite3.Connection,
+    *,
+    worker_guids: Sequence[str],
+    reason: str,
+) -> int:
+    guids = [str(item or "").strip() for item in worker_guids or [] if str(item or "").strip()]
+    if not guids:
+        return 0
+    now = _now_ts()
+    placeholders = ",".join("?" for _ in guids)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        UPDATE job_scheduler_work_items
+           SET status=?,
+               lease_owner=NULL,
+               lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
+               updated_at=?
+         WHERE status=?
+           AND worker_guid IN ({placeholders})
+        """,
+        (
+            WORK_STATUS_QUEUED,
+            str(reason or "site worker stopped before work completed")[:2000],
+            now,
+            now,
+            WORK_STATUS_RUNNING,
+            *guids,
+        ),
+    )
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
 def heartbeat_work_item(conn: sqlite3.Connection, *, work_id: int, lease_owner: str, lease_seconds: int = 300) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
@@ -581,14 +947,53 @@ def expire_stale_leases(conn: sqlite3.Connection) -> int:
            SET status=?,
                lease_owner=NULL,
                lease_expires_at=NULL,
+               heartbeat_at=NULL,
+               worker_guid=NULL,
+               container_name=NULL,
+               error=?,
+               available_at=?,
                updated_at=?
          WHERE status=?
            AND lease_expires_at IS NOT NULL
            AND lease_expires_at<?
         """,
-        (WORK_STATUS_QUEUED, now, WORK_STATUS_RUNNING, now),
+        (
+            WORK_STATUS_QUEUED,
+            "requeued after work lease expired",
+            now,
+            now,
+            WORK_STATUS_RUNNING,
+            now,
+        ),
     )
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    expired_count = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    cur.execute(
+        """
+        SELECT DISTINCT w.worker_guid
+          FROM job_scheduler_work_items i
+          JOIN job_scheduler_workers w ON w.worker_guid=i.worker_guid
+         WHERE i.status=?
+           AND COALESCE(i.site_id, 0)>0
+           AND w.status IN (?, ?)
+        """,
+        (WORK_STATUS_RUNNING, *WORKER_TERMINAL_STATUSES),
+    )
+    terminal_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    terminal_count = _release_worker_running_work_items(
+        conn,
+        worker_guids=terminal_guids,
+        reason="requeued after site worker stopped before work completed",
+    )
+    return expired_count + terminal_count
+
+
+def release_worker_running_work_items(conn: sqlite3.Connection, *, worker_guid: str, reason: str = "") -> int:
+    ensure_job_scheduler_tables(conn)
+    return _release_worker_running_work_items(
+        conn,
+        worker_guids=[str(worker_guid or "")],
+        reason=reason or "requeued after site worker stopped before work completed",
+    )
 
 
 def queued_site_ids(conn: sqlite3.Connection) -> List[int]:
@@ -612,6 +1017,339 @@ def claim_service_action(conn: sqlite3.Connection, *, lease_owner: str, lease_se
     return claim_next_work_item(conn, site_id=0, lanes=[LANE_SERVICE_ACTION], lease_owner=lease_owner, lease_seconds=lease_seconds)
 
 
+def _normalized_route_status(status: str) -> str:
+    normalized = str(status or WORKER_ROUTE_STATUS_ACTIVE).strip().lower()
+    if normalized == WORKER_ROUTE_STATUS_LOST:
+        return WORKER_ROUTE_STATUS_LOST
+    if normalized == WORKER_ROUTE_STATUS_RETIRED:
+        return WORKER_ROUTE_STATUS_RETIRED
+    return WORKER_ROUTE_STATUS_ACTIVE
+
+
+def _fetch_worker_route(conn: sqlite3.Connection, *, worker_guid: str) -> Optional[Dict[str, Any]]:
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE worker_guid=?
+         LIMIT 1
+        """,
+        (str(worker_guid or "").strip(),),
+    )
+    row = cur.fetchone()
+    return _route_row_to_dict(row) if row else None
+
+
+def _retire_other_active_worker_routes_for_site(
+    conn: sqlite3.Connection,
+    *,
+    site_id: int,
+    keep_worker_guid: str,
+) -> int:
+    normalized_guid = str(keep_worker_guid or "").strip()
+    try:
+        normalized_site_id = int(site_id)
+    except Exception:
+        normalized_site_id = 0
+    if normalized_site_id <= 0 or not normalized_guid:
+        return 0
+    now = _now_ts()
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE site_id=?
+           AND status=?
+           AND worker_guid<>?
+        """,
+        (normalized_site_id, WORKER_ROUTE_STATUS_ACTIVE, normalized_guid),
+    )
+    stale_routes = [_route_row_to_dict(row) for row in cur.fetchall() or []]
+    if not stale_routes:
+        return 0
+    cur.execute(
+        """
+        UPDATE job_scheduler_worker_routes
+           SET status=?,
+               generation=generation + 1,
+               updated_at=?,
+               retired_at=COALESCE(retired_at, ?)
+         WHERE site_id=?
+           AND status=?
+           AND worker_guid<>?
+        """,
+        (
+            WORKER_ROUTE_STATUS_RETIRED,
+            now,
+            now,
+            normalized_site_id,
+            WORKER_ROUTE_STATUS_ACTIVE,
+            normalized_guid,
+        ),
+    )
+    _remove_worker_route_files(stale_routes)
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
+def upsert_worker_route(
+    conn: sqlite3.Connection,
+    *,
+    worker_guid: str,
+    container_name: str,
+    site_id: int,
+    status: str = WORKER_ROUTE_STATUS_ACTIVE,
+    upstream_scheme: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME,
+    upstream_host: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
+    upstream_port: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    normalized_guid = str(worker_guid or "").strip()
+    try:
+        normalized_site_id = int(site_id)
+    except Exception:
+        normalized_site_id = 0
+    if not normalized_guid or normalized_site_id <= 0:
+        return None
+    route_fields = _site_worker_route_metadata(
+        worker_guid=normalized_guid,
+        upstream_scheme=upstream_scheme,
+        upstream_host=upstream_host,
+        upstream_port=upstream_port,
+    )
+    route_status = _normalized_route_status(status)
+    route_metadata = dict(metadata or {})
+    route_metadata.update(
+        {
+            "lifecycle_owner": "job-scheduler",
+            "route_kind": "site_worker",
+            "worker_guid": normalized_guid,
+        }
+    )
+    metadata_json = _json_dumps(route_metadata)
+    now = _now_ts()
+    normalized_container = str(container_name or f"site-worker-{normalized_guid}").strip() or f"site-worker-{normalized_guid}"
+    retired_at = now if route_status in WORKER_ROUTE_TERMINAL_STATUSES else None
+    if route_status == WORKER_ROUTE_STATUS_ACTIVE:
+        _retire_other_active_worker_routes_for_site(
+            conn,
+            site_id=normalized_site_id,
+            keep_worker_guid=normalized_guid,
+        )
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE worker_guid=?
+         LIMIT 1
+        """,
+        (normalized_guid,),
+    )
+    existing_row = cur.fetchone()
+    if not existing_row:
+        cur.execute(
+            """
+            INSERT INTO job_scheduler_worker_routes(
+                worker_guid, site_id, container_name, route_name, route_path_prefix,
+                route_file_path, upstream_scheme, upstream_host, upstream_port,
+                status, generation, metadata_json, created_at, updated_at, retired_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                normalized_guid,
+                normalized_site_id,
+                normalized_container,
+                route_fields["route_name"],
+                route_fields["route_path_prefix"],
+                route_fields["route_file_path"],
+                route_fields["upstream_scheme"],
+                route_fields["upstream_host"],
+                route_fields["upstream_port"],
+                route_status,
+                1,
+                metadata_json,
+                now,
+                now,
+                retired_at,
+            ),
+        )
+        created_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+        if created_route:
+            _write_worker_route_file(created_route)
+        return created_route
+
+    existing = _route_row_to_dict(existing_row)
+    desired = {
+        "site_id": normalized_site_id,
+        "container_name": normalized_container,
+        "route_name": route_fields["route_name"],
+        "route_path_prefix": route_fields["route_path_prefix"],
+        "route_file_path": route_fields["route_file_path"],
+        "upstream_scheme": route_fields["upstream_scheme"],
+        "upstream_host": route_fields["upstream_host"],
+        "upstream_port": route_fields["upstream_port"],
+        "status": route_status,
+        "metadata_json": metadata_json,
+    }
+    changed = (
+        int(existing.get("site_id") or 0) != int(desired["site_id"])
+        or str(existing.get("container_name") or "") != desired["container_name"]
+        or str(existing.get("route_name") or "") != desired["route_name"]
+        or str(existing.get("route_path_prefix") or "") != desired["route_path_prefix"]
+        or str(existing.get("route_file_path") or "") != desired["route_file_path"]
+        or str(existing.get("upstream_scheme") or "") != desired["upstream_scheme"]
+        or str(existing.get("upstream_host") or "") != desired["upstream_host"]
+        or int(existing.get("upstream_port") or 0) != int(desired["upstream_port"] or 0)
+        or str(existing.get("status") or "") != desired["status"]
+        or _json_dumps(existing.get("metadata") or {}) != metadata_json
+    )
+    if changed:
+        cur.execute(
+            """
+            UPDATE job_scheduler_worker_routes
+               SET site_id=?,
+                   container_name=?,
+                   route_name=?,
+                   route_path_prefix=?,
+                   route_file_path=?,
+                   upstream_scheme=?,
+                   upstream_host=?,
+                   upstream_port=?,
+                   status=?,
+                   generation=?,
+                   metadata_json=?,
+                   updated_at=?,
+                   retired_at=?
+             WHERE worker_guid=?
+            """,
+            (
+                normalized_site_id,
+                normalized_container,
+                route_fields["route_name"],
+                route_fields["route_path_prefix"],
+                route_fields["route_file_path"],
+                route_fields["upstream_scheme"],
+                route_fields["upstream_host"],
+                route_fields["upstream_port"],
+                route_status,
+                int(existing.get("generation") or 0) + 1,
+                metadata_json,
+                now,
+                retired_at,
+                normalized_guid,
+            ),
+        )
+    updated_route = _fetch_worker_route(conn, worker_guid=normalized_guid)
+    if updated_route:
+        if route_status == WORKER_ROUTE_STATUS_ACTIVE:
+            _write_worker_route_file(updated_route)
+        else:
+            _remove_worker_route_files([updated_route])
+    return updated_route
+
+
+def retire_worker_routes(
+    conn: sqlite3.Connection,
+    *,
+    worker_guids: Sequence[str],
+    status: str = WORKER_ROUTE_STATUS_RETIRED,
+) -> int:
+    ensure_job_scheduler_tables(conn)
+    guids = [str(item or "").strip() for item in worker_guids or [] if str(item or "").strip()]
+    if not guids:
+        return 0
+    route_status = _normalized_route_status(status)
+    if route_status == WORKER_ROUTE_STATUS_ACTIVE:
+        route_status = WORKER_ROUTE_STATUS_RETIRED
+    placeholders = ",".join("?" for _ in guids)
+    now = _now_ts()
+    cur = conn.cursor()
+    existing_routes = [
+        route
+        for route in (
+            _fetch_worker_route(conn, worker_guid=guid)
+            for guid in guids
+        )
+        if route
+    ]
+    cur.execute(
+        f"""
+        UPDATE job_scheduler_worker_routes
+           SET status=?,
+               generation=generation + 1,
+               updated_at=?,
+               retired_at=COALESCE(retired_at, ?)
+         WHERE worker_guid IN ({placeholders})
+           AND status<>?
+        """,
+        (route_status, now, now, *guids, route_status),
+    )
+    _remove_worker_route_files(existing_routes)
+    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+
+
+def worker_route_for_worker(conn: sqlite3.Connection, *, worker_guid: str) -> Optional[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    return _fetch_worker_route(conn, worker_guid=worker_guid)
+
+
+def active_worker_route_for_site(conn: sqlite3.Connection, *, site_id: int) -> Optional[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE site_id=?
+           AND status=?
+         ORDER BY updated_at DESC, generation DESC
+         LIMIT 1
+        """,
+        (int(site_id), WORKER_ROUTE_STATUS_ACTIVE),
+    )
+    row = cur.fetchone()
+    return _route_row_to_dict(row) if row else None
+
+
+def list_worker_routes(
+    conn: sqlite3.Connection,
+    *,
+    site_id: Optional[int] = None,
+    statuses: Optional[Sequence[str]] = None,
+    include_retired_since: int = 86400,
+) -> List[Dict[str, Any]]:
+    ensure_job_scheduler_tables(conn)
+    where: List[str] = []
+    params: List[Any] = []
+    if site_id is not None:
+        where.append("site_id=?")
+        params.append(int(site_id))
+    normalized_statuses = [_normalized_route_status(item) for item in statuses or [] if str(item or "").strip()]
+    if normalized_statuses:
+        placeholders = ",".join("?" for _ in normalized_statuses)
+        where.append(f"status IN ({placeholders})")
+        params.extend(normalized_statuses)
+    else:
+        cutoff = _now_ts() - max(0, int(include_retired_since or 0))
+        where.append("(status=? OR COALESCE(retired_at, updated_at, created_at, 0)>=?)")
+        params.extend([WORKER_ROUTE_STATUS_ACTIVE, cutoff])
+    where_sql = " AND ".join(where) if where else "1=1"
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE {where_sql}
+         ORDER BY site_id ASC, status ASC, updated_at DESC, generation DESC
+        """,
+        tuple(params),
+    )
+    return [_route_row_to_dict(row) for row in cur.fetchall() or []]
+
+
 def register_worker(
     conn: sqlite3.Connection,
     *,
@@ -619,9 +1357,18 @@ def register_worker(
     container_name: str,
     site_id: int,
     status: str = WORKER_STATUS_STARTING,
+    upstream_host: str = DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_HOST,
+    upstream_port: Optional[int] = None,
+    route_metadata: Optional[Mapping[str, Any]] = None,
 ) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
+    normalized_guid = str(worker_guid or "").strip()
+    normalized_container = str(container_name or "").strip()
+    try:
+        normalized_site_id = int(site_id)
+    except Exception:
+        normalized_site_id = 0
     cur = conn.cursor()
     cur.execute(
         """
@@ -639,9 +1386,9 @@ def register_worker(
             updated_at=EXCLUDED.updated_at
         """,
         (
-            str(worker_guid or ""),
-            str(container_name or ""),
-            int(site_id),
+            normalized_guid,
+            normalized_container,
+            normalized_site_id,
             str(status or WORKER_STATUS_STARTING),
             now,
             now,
@@ -656,6 +1403,23 @@ def register_worker(
             now,
         ),
     )
+    if normalized_site_id > 0:
+        worker_status = str(status or WORKER_STATUS_STARTING).strip().lower()
+        route_status = WORKER_ROUTE_STATUS_ACTIVE
+        if worker_status == WORKER_STATUS_LOST:
+            route_status = WORKER_ROUTE_STATUS_LOST
+        elif worker_status == WORKER_STATUS_STOPPED:
+            route_status = WORKER_ROUTE_STATUS_RETIRED
+        upsert_worker_route(
+            conn,
+            worker_guid=normalized_guid,
+            container_name=normalized_container,
+            site_id=normalized_site_id,
+            status=route_status,
+            upstream_host=upstream_host,
+            upstream_port=upstream_port,
+            metadata=route_metadata,
+        )
 
 
 def heartbeat_worker(
@@ -699,6 +1463,12 @@ def heartbeat_worker(
 def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WORKER_STATUS_STOPPED) -> None:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
+    normalized_guid = str(worker_guid or "").strip()
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=[normalized_guid],
+        reason="requeued after site worker stopped before work completed",
+    )
     cur = conn.cursor()
     cur.execute(
         """
@@ -709,8 +1479,10 @@ def stop_worker(conn: sqlite3.Connection, *, worker_guid: str, status: str = WOR
                updated_at=?
          WHERE worker_guid=?
         """,
-        (str(status or WORKER_STATUS_STOPPED), now, now, now, str(worker_guid or "")),
+        (str(status or WORKER_STATUS_STOPPED), now, now, now, normalized_guid),
     )
+    route_status = WORKER_ROUTE_STATUS_LOST if str(status or "").strip().lower() == WORKER_STATUS_LOST else WORKER_ROUTE_STATUS_RETIRED
+    retire_worker_routes(conn, worker_guids=[normalized_guid], status=route_status)
 
 
 def update_worker_docker_state(
@@ -771,16 +1543,35 @@ def mark_lost_workers(conn: sqlite3.Connection, *, stale_after_seconds: int = 30
     cur = conn.cursor()
     cur.execute(
         """
+        SELECT worker_guid
+          FROM job_scheduler_workers
+         WHERE status IN (?,?,?)
+           AND last_seen_at<?
+        """,
+        (*WORKER_ACTIVE_STATUSES, cutoff),
+    )
+    lost_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    if not lost_guids:
+        return 0
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=lost_guids,
+        reason="requeued after site worker heartbeat expired",
+    )
+    placeholders = ",".join("?" for _ in lost_guids)
+    cur.execute(
+        f"""
         UPDATE job_scheduler_workers
            SET status=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
-         WHERE status IN (?,?,?)
-           AND last_seen_at<?
+         WHERE worker_guid IN ({placeholders})
         """,
-        (WORKER_STATUS_LOST, now, now, *WORKER_ACTIVE_STATUSES, cutoff),
+        (WORKER_STATUS_LOST, now, now, *lost_guids),
     )
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    retire_worker_routes(conn, worker_guids=lost_guids, status=WORKER_ROUTE_STATUS_LOST)
+    return updated
 
 
 def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Sequence[str]) -> int:
@@ -788,22 +1579,42 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     now = _now_ts()
     live = [str(item or "").strip() for item in live_worker_guids or [] if str(item or "").strip()]
     cur = conn.cursor()
+    select_sql = """
+        SELECT worker_guid
+          FROM job_scheduler_workers
+         WHERE status IN (?,?,?)
+           AND COALESCE(site_id, 0)>0
+    """
+    select_params: List[Any] = [*WORKER_ACTIVE_STATUSES]
+    if live:
+        placeholders = ",".join("?" for _ in live)
+        select_sql += f" AND worker_guid NOT IN ({placeholders})"
+        select_params.extend(live)
+    cur.execute(select_sql, tuple(select_params))
+    missing_guids = [str(row[0] or "").strip() for row in cur.fetchall() or [] if row and str(row[0] or "").strip()]
+    if not missing_guids:
+        return 0
+    _release_worker_running_work_items(
+        conn,
+        worker_guids=missing_guids,
+        reason="requeued after site worker container disappeared",
+    )
+    missing_placeholders = ",".join("?" for _ in missing_guids)
     base_sql = """
         UPDATE job_scheduler_workers
            SET status=?,
                docker_state=?,
                stopped_at=COALESCE(stopped_at, ?),
                updated_at=?
-         WHERE status IN (?,?,?)
-           AND COALESCE(site_id, 0)>0
+         WHERE worker_guid IN ({missing_placeholders})
     """
-    params: List[Any] = [WORKER_STATUS_LOST, "missing", now, now, *WORKER_ACTIVE_STATUSES]
-    if live:
-        placeholders = ",".join("?" for _ in live)
-        base_sql += f" AND worker_guid NOT IN ({placeholders})"
-        params.extend(live)
-    cur.execute(base_sql, tuple(params))
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    cur.execute(
+        base_sql.format(missing_placeholders=missing_placeholders),
+        (WORKER_STATUS_LOST, "missing", now, now, *missing_guids),
+    )
+    updated = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    retire_worker_routes(conn, worker_guids=missing_guids, status=WORKER_ROUTE_STATUS_LOST)
+    return updated
 
 
 def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 60) -> int:
@@ -830,7 +1641,37 @@ def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 6
         """,
         (*WORKER_TERMINAL_STATUSES, cutoff),
     )
-    return max(0, int(getattr(cur, "rowcount", 0) or 0))
+    deleted_workers = max(0, int(getattr(cur, "rowcount", 0) or 0))
+    cur.execute(
+        f"""
+        SELECT {WORKER_ROUTE_SELECT_COLUMNS}
+          FROM job_scheduler_worker_routes
+         WHERE status IN (?, ?)
+           AND COALESCE(retired_at, updated_at, created_at, 0) < ?
+        """,
+        (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
+    )
+    stale_routes = [_route_row_to_dict(row) for row in cur.fetchall() or []]
+    cur.execute(
+        """
+        UPDATE job_scheduler_worker_routes
+           SET retired_at=COALESCE(retired_at, updated_at, created_at, ?),
+               updated_at=?
+         WHERE status IN (?, ?)
+           AND retired_at IS NULL
+        """,
+        (now, now, *WORKER_ROUTE_TERMINAL_STATUSES),
+    )
+    cur.execute(
+        """
+        DELETE FROM job_scheduler_worker_routes
+         WHERE status IN (?, ?)
+           AND COALESCE(retired_at, updated_at, created_at, 0) < ?
+        """,
+        (*WORKER_ROUTE_TERMINAL_STATUSES, cutoff),
+    )
+    _remove_worker_route_files(stale_routes)
+    return deleted_workers
 
 
 def list_worker_snapshots(conn: sqlite3.Connection, *, include_stopped_since: int = 86400) -> List[Dict[str, Any]]:

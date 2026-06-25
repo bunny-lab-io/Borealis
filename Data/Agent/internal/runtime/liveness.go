@@ -90,6 +90,27 @@ func (a *Agent) recordSocketState(state string) {
 	})
 }
 
+func (a *Agent) recordConnectedSocketActivity() {
+	if a == nil {
+		return
+	}
+	now := time.Now().Unix()
+	shouldWrite := false
+	a.socketMu.Lock()
+	if strings.EqualFold(strings.TrimSpace(a.socketState), "connected") {
+		a.socketStateAt = now
+		shouldWrite = true
+	}
+	a.socketMu.Unlock()
+	if !shouldWrite {
+		return
+	}
+	a.updateLivenessWithWriter("runtime:socket_activity", func(l *agentconfig.AgentLivenessSection) {
+		l.LastSocketState = "connected"
+		l.LastSocketStateAt = now
+	})
+}
+
 func (a *Agent) currentSocketState() (string, int64) {
 	if a == nil {
 		return "", 0

@@ -127,6 +127,31 @@ func TestAgentLivenessWriteUpdatesAgentJSON(t *testing.T) {
 	}
 }
 
+func TestConnectedSocketActivityRefreshesLiveness(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	agent := &Agent{configPath: configPath, logger: log.New(os.Stdout, "", 0)}
+	agent.socketState = "connected"
+	agent.socketStateAt = 100
+
+	agent.recordConnectedSocketActivity()
+
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Agent.Liveness.LastSocketState != "connected" {
+		t.Fatalf("socket state = %q, want connected", loaded.Agent.Liveness.LastSocketState)
+	}
+	if loaded.Agent.Liveness.LastSocketStateAt <= 100 {
+		t.Fatalf("socket activity timestamp was not refreshed: %d", loaded.Agent.Liveness.LastSocketStateAt)
+	}
+}
+
 func TestRecoveryLogWritesRoleRecoveryLog(t *testing.T) {
 	root := t.TempDir()
 	configPath := filepath.Join(root, agentconfig.FileName)
@@ -307,6 +332,32 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 			name:  "stale heartbeat restart",
 			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastHeartbeatSuccessAt: now.Add(-241 * time.Second).Unix(), Now: now},
 			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "stale_heartbeat_success_age=4m1s"},
+		},
+		{
+			name: "stale heartbeat with live socket",
+			input: watchdogDecisionInput{
+				ServiceExists:          true,
+				ServiceRunning:         true,
+				LastLocalTickAt:        now.Add(-30 * time.Second).Unix(),
+				LastHeartbeatSuccessAt: now.Add(-241 * time.Second).Unix(),
+				LastSocketState:        "connected",
+				LastSocketStateAt:      now.Add(-20 * time.Second).Unix(),
+				Now:                    now,
+			},
+			want: watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: "age=30s heartbeat_stale_age=4m1s socket_alive"},
+		},
+		{
+			name: "heartbeat attempt stale with live socket",
+			input: watchdogDecisionInput{
+				ServiceExists:          true,
+				ServiceRunning:         true,
+				LastLocalTickAt:        now.Add(-30 * time.Second).Unix(),
+				LastHeartbeatAttemptAt: now.Add(-241 * time.Second).Unix(),
+				LastSocketState:        "connected",
+				LastSocketStateAt:      now.Add(-20 * time.Second).Unix(),
+				Now:                    now,
+			},
+			want: watchdogDecision{Action: "check_liveness", Outcome: "healthy", Reason: "age=30s heartbeat_attempt_stale_age=4m1s socket_alive"},
 		},
 		{
 			name:  "stale liveness update active",

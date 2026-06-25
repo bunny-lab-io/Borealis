@@ -18,32 +18,47 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
-The Engine container deployment system uses conservative defaults from `Engine/Deploy/compose.env`. The sizing tables below are used for planning guidance and the engine will automatically scale itself to meet the system specs given to it everytime it is deployed/updated; if you tune database pool and PostgreSQL settings explicitly for larger installations.
+The Engine container deployment system auto-detects host vCPU and RAM on every `Engine.sh deploy` or redeploy. Borealis scores CPU and RAM separately, selects the lower profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through Docker Compose.
 
 === "Homelab"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 80-150 GiB |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Personal labs, testing, feature development, very small sites | Up to 250 | 1-3 | < 8 | < 16 GiB | 5 | 80-150 GiB |
 
 === "Small Business"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 150-250 GiB |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Smaller production environments | Up to 1,000 | 2-4 | 8-15 | 16-31 GiB | 8 | 150-250 GiB |
 
 === "MSP / Production"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 500 GiB |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Main Borealis target for SMB and managed-service usage | Up to 2,000 | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
 
 === "Enterprise"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 500 GiB-1 TiB |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Larger single-node environments on current architecture | Up to 10,000 | 10-20 | 24+ | 64 GiB+ | 16 | 500 GiB-1 TiB |
 
 === "Enterprise Clustered"
-    | Typical use | Endpoints | Active operators | vCPU | RAM | NVMe storage |
-    | --- | ---: | ---: | ---: | ---: | ---: |
-    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 500 GiB-1 TiB per node |
+    | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
+    | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+    | Roadmap-only multi-node planning placeholder | 10,000+ | 20+ per node | 24+ per node | 64 GiB+ per node | 16 per node | 500 GiB-1 TiB per node |
+
+!!! info "Scheduled task slots"
+
+    Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
+
+## Configure the Timezone
+Before you do anything, be sure to set the timezone on the Engine host using the following command as an example, everything deployed into the Engine will inherit this timezone via `TZ` environment variables.
+```sh
+sudo timedatectl set-timezone America/Denver
+```
+
+If the time itself is somehow off despite having the correct timezone, you can correct it with the following command:
+```sh
+date -s "1 JAN 2025 03:30:00"
+```
 
 ## Install the Engine
 Use the following one-line installer command when starting from a fresh Linux host:
@@ -70,6 +85,16 @@ During deployment, Borealis will install missing dependencies, prepare runtime c
 
 ### Configure the Engine
 You will be asked as series of questions during initial setup for a new engine.  The questions will be generally straight-forward and not too complicated.
+
+### Engine Host Timezone
+Borealis reads the Linux host timezone during every `Engine.sh deploy` or redeploy and passes that value into the Engine containers as `TZ`. Server Info uses that propagated timezone for Engine-local clock displays.
+
+Change the host timezone from the Linux shell, then redeploy the Engine so containers receive the updated value:
+
+```sh
+sudo timedatectl set-timezone America/Denver
+sudo bash Engine.sh deploy prod
+```
 
 ## First Run Checklist
 After deployment finishes:

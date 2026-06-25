@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	agenttransport "github.com/bunny-lab-io/borealis/go-agent/internal/transport"
 )
 
 var startLocalUpdaterForRequest = startLocalUpdater
@@ -18,32 +19,19 @@ func (a *Agent) handleUpdateRequest(ctx context.Context, payload any) (any, erro
 		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil
 	}
 	body, _ := payload.(map[string]any)
-	cfg := a.authClient.Config()
-	operation, err := a.authClient.StoreAgentUpdateOperation(
+	operation := a.previewUpdateOperation(
 		stringFromPayload(body, "operation_id", "request_id"),
 		"update_now",
-		cfg.Agent.ReleaseChannel,
-		cfg.Agent.Branch,
+		"",
+		"",
 	)
-	if err != nil {
-		a.logger.Printf("update operation state failed: %v", err)
-		return map[string]any{"status": "error", "detail": err.Error()}, nil
-	}
-	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
-		markUpdateOperationStatus(a.configPath, "failed", err.Error())
-		a.logger.Printf("local updater start failed: %v", err)
-		return map[string]any{
-			"status": "error",
-			"detail": err.Error(),
-		}, nil
-	}
-	markUpdateOperationStatus(a.configPath, "updater_started", "")
-	return map[string]any{
+	response := map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
 		"release_channel": operation.TargetChannel,
 		"branch":          operation.TargetBranch,
-	}, nil
+	}
+	return a.responseWithUpdateAfterAck(response, operation, "update request"), nil
 }
 
 func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (any, error) {
@@ -64,29 +52,102 @@ func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) 
 	if kind == "" {
 		kind = "switch_branch_channel"
 	}
-	operation, err := a.authClient.StoreAgentUpdateOperation(
+	operation := a.previewUpdateOperation(
 		stringFromPayload(body, "operation_id", "request_id"),
 		kind,
 		releaseChannel,
 		branch,
 	)
-	if err != nil {
-		a.logger.Printf("release channel update failed: %v", err)
-		return map[string]any{"status": "error", "detail": err.Error()}, nil
-	}
-	if err := startLocalUpdaterForRequest(a.configPath); err != nil {
-		markUpdateOperationStatus(a.configPath, "failed", err.Error())
-		a.logger.Printf("local updater start failed after release channel change: %v", err)
-		return map[string]any{"status": "error", "detail": err.Error()}, nil
-	}
-	markUpdateOperationStatus(a.configPath, "updater_started", "")
-	a.logger.Printf("release channel updated release_channel=%s branch=%s operation_id=%s", operation.TargetChannel, operation.TargetBranch, operation.OperationID)
-	return map[string]any{
+	response := map[string]any{
 		"status":          "ok",
 		"operation_id":    operation.OperationID,
 		"release_channel": operation.TargetChannel,
 		"branch":          operation.TargetBranch,
-	}, nil
+	}
+	return a.responseWithUpdateAfterAck(response, operation, "release channel change"), nil
+}
+
+func (a *Agent) responseWithUpdateAfterAck(response map[string]any, operation agentconfig.AgentUpdateSection, reason string) any {
+	if a == nil {
+		return response
+	}
+	return agenttransport.NewAfterAckResponse(response, func() {
+		a.storeUpdateAndStartLocalUpdaterAsync(operation, reason)
+	})
+}
+
+func (a *Agent) previewUpdateOperation(operationID string, kind string, releaseChannel string, branch string) agentconfig.AgentUpdateSection {
+	now := time.Now().Unix()
+	if strings.TrimSpace(operationID) == "" {
+		operationID = fmt.Sprintf("%d", now)
+	}
+	channel := ""
+	if strings.TrimSpace(releaseChannel) != "" {
+		channel = agentconfig.NormalizeReleaseChannel(releaseChannel)
+	}
+	targetBranch := ""
+	if strings.TrimSpace(branch) != "" {
+		targetBranch = agentconfig.NormalizeBranch(branch)
+	}
+	if channel == agentconfig.ReleaseChannelStable {
+		targetBranch = agentconfig.DefaultBranch
+	}
+	if channel != "" && targetBranch == "" {
+		targetBranch = agentconfig.DefaultBranch
+	}
+	return agentconfig.AgentUpdateSection{
+		OperationID:   strings.TrimSpace(operationID),
+		Kind:          strings.TrimSpace(kind),
+		Status:        "ack_pending_config",
+		StartedAt:     now,
+		UpdatedAt:     now,
+		DeadlineAt:    now + int64(15*time.Minute/time.Second),
+		TargetChannel: channel,
+		TargetBranch:  targetBranch,
+	}
+}
+
+func (a *Agent) storeUpdateAndStartLocalUpdaterAsync(operation agentconfig.AgentUpdateSection, reason string) {
+	if a == nil {
+		return
+	}
+	configPath := a.configPath
+	logger := a.logger
+	authClient := a.authClient
+	go func() {
+		if strings.TrimSpace(operation.TargetChannel) == "" || strings.TrimSpace(operation.TargetBranch) == "" {
+			cfg := authClient.Config()
+			if strings.TrimSpace(operation.TargetChannel) == "" {
+				operation.TargetChannel = cfg.Agent.ReleaseChannel
+			}
+			if strings.TrimSpace(operation.TargetBranch) == "" {
+				operation.TargetBranch = cfg.Agent.Branch
+			}
+		}
+		stored, err := authClient.StoreAgentUpdateOperation(
+			operation.OperationID,
+			operation.Kind,
+			operation.TargetChannel,
+			operation.TargetBranch,
+		)
+		if err != nil {
+			if logger != nil {
+				logger.Printf("update operation state failed after %s ack: %v", reason, err)
+			}
+			return
+		}
+		if logger != nil {
+			logger.Printf("update operation stored after %s ack release_channel=%s branch=%s operation_id=%s", reason, stored.TargetChannel, stored.TargetBranch, stored.OperationID)
+		}
+		if err := startLocalUpdaterForRequest(configPath); err != nil {
+			markUpdateOperationStatus(configPath, "failed", err.Error())
+			if logger != nil {
+				logger.Printf("local updater start failed after %s: %v", reason, err)
+			}
+			return
+		}
+		markUpdateOperationStatus(configPath, "updater_started", "")
+	}()
 }
 
 func releaseChannelFromPayload(payload map[string]any) string {

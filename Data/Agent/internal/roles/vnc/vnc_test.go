@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -248,6 +250,38 @@ func TestNormalizeFirewallRemoteRequiresSingleHost(t *testing.T) {
 	}
 }
 
+func TestEnsureFirewallRecreatesRule(t *testing.T) {
+	manager := &Manager{}
+	var commands []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "powershell.exe" && len(args) > 0 {
+			commands = append(commands, args[len(args)-1])
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.ensureFirewall(context.Background(), "10.255.0.1/32", 5900); err != nil {
+		t.Fatal(err)
+	}
+	if len(commands) != 1 {
+		t.Fatalf("expected one firewall command, got %#v", commands)
+	}
+	command := commands[0]
+	for _, expected := range []string{
+		"Remove-NetFirewallRule",
+		"New-NetFirewallRule",
+		"-LocalPort 5900",
+		"-RemoteAddress '10.255.0.1/32'",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("firewall command missing %q: %s", expected, command)
+		}
+	}
+	if strings.Contains(command, "Set-NetFirewallRule") {
+		t.Fatalf("firewall command should recreate rule instead of updating filters: %s", command)
+	}
+}
+
 func TestUltraVNCConfigIncludesSecurityAndCaptureSettings(t *testing.T) {
 	settings := ultraVNCSettings(5901, "DBD83CFD727A145800", true, "")
 	rendered := renderUltraVNCConfig(settings)
@@ -357,9 +391,117 @@ func TestRoutineAlwaysOnEnsureDoesNotWriteSteadyStateLogs(t *testing.T) {
 	}
 }
 
+func TestDisconnectEnsureSkipsHeavyWorkWhenAlreadyReady(t *testing.T) {
+	for _, reason := range []string{"operator_disconnect", "component_unmount", "vnc_session_end"} {
+		t.Run(reason, func(t *testing.T) {
+			runnerCalls := 0
+			manager := &Manager{
+				supported:          true,
+				serviceName:        serviceName,
+				port:               5900,
+				allowedIPs:         "10.255.0.1/32",
+				controllerPassword: "bootpass",
+				lastReady:          true,
+				lastServiceState:   "RUNNING",
+				lastListenerState:  "listening",
+				runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+					runnerCalls++
+					return commandResult{}, errors.New("disconnect ensure should not touch service runner")
+				},
+			}
+
+			if err := manager.ensureAlwaysOn(context.Background(), reason); err != nil {
+				t.Fatal(err)
+			}
+			if runnerCalls != 0 {
+				t.Fatalf("disconnect ensure touched service runner %d times", runnerCalls)
+			}
+		})
+	}
+}
+
+func TestEnsureAlwaysOnSerializesLifecycleWork(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	var activeRunnerCalls int32
+	var maxActiveRunnerCalls int32
+	manager := &Manager{
+		supported:           true,
+		configPath:          filepath.Join(dir, "agent.json"),
+		logPath:             filepath.Join(dir, "vnc.log"),
+		serviceName:         serviceName,
+		vncExe:              exePath,
+		port:                port,
+		allowedIPs:          "10.255.0.1/32",
+		controllerPassword:  "bootpass",
+		credentialRevision:  12345,
+		removeWallpaper:     true,
+		serviceConfigLoaded: true,
+		lastReady:           true,
+		lastServiceState:    "RUNNING",
+		lastListenerState:   "listening",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			current := atomic.AddInt32(&activeRunnerCalls, 1)
+			for {
+				maxObserved := atomic.LoadInt32(&maxActiveRunnerCalls)
+				if current <= maxObserved || atomic.CompareAndSwapInt32(&maxActiveRunnerCalls, maxObserved, current) {
+					break
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+			defer atomic.AddInt32(&activeRunnerCalls, -1)
+
+			if name == "sc.exe" && len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+	if _, _, err := manager.ensureConfig(port, "bootpass", true); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- manager.ensureAlwaysOn(context.Background(), "vnc_establish")
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if max := atomic.LoadInt32(&maxActiveRunnerCalls); max > 1 {
+		t.Fatalf("expected serialized VNC lifecycle work, observed %d concurrent runner calls", max)
+	}
+}
+
 func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 	calls := []string{}
 	queryCount := 0
+	started := false
 	manager := &Manager{
 		serviceName: serviceName,
 		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
@@ -371,11 +513,17 @@ func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 			switch args[0] {
 			case "query":
 				queryCount++
+				if started {
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				}
 				if queryCount == 1 {
 					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
 				}
 				return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
-			case "config", "failure", "stop", "start":
+			case "start":
+				started = true
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			case "config", "failure", "stop":
 				return commandResult{Stdout: "ok", ExitCode: 0}, nil
 			default:
 				return commandResult{Stdout: "ok", ExitCode: 0}, nil
@@ -418,10 +566,217 @@ func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T)
 	}
 }
 
+func TestEnsureServiceForceKillsStuckStopPendingService(t *testing.T) {
+	oldTransitionWait := serviceTransitionWait
+	oldForceKillWait := serviceTransitionForceKillWait
+	oldAlreadyRunningWait := serviceAlreadyRunningVerifyWait
+	serviceTransitionWait = time.Millisecond
+	serviceTransitionForceKillWait = time.Millisecond
+	serviceAlreadyRunningVerifyWait = time.Millisecond
+	defer func() {
+		serviceTransitionWait = oldTransitionWait
+		serviceTransitionForceKillWait = oldForceKillWait
+		serviceAlreadyRunningVerifyWait = oldAlreadyRunningWait
+	}()
+
+	calls := []string{}
+	killed := false
+	started := false
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			call := name + " " + strings.Join(args, " ")
+			calls = append(calls, call)
+			if name == "taskkill.exe" {
+				if strings.Join(args, " ") == "/PID 4242 /F" {
+					killed = true
+					return commandResult{Stdout: "SUCCESS", ExitCode: 0}, nil
+				}
+				return commandResult{Stdout: "unexpected pid", ExitCode: 1}, errors.New("unexpected pid")
+			}
+			if name != "sc.exe" || len(args) == 0 {
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			}
+			switch args[0] {
+			case "query":
+				if started {
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				}
+				if killed {
+					return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
+				}
+				return commandResult{Stdout: "STATE              : 3  STOP_PENDING", ExitCode: 0}, nil
+			case "queryex":
+				return commandResult{Stdout: "PID                : 4242", ExitCode: 0}, nil
+			case "start":
+				started = true
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			case "config", "failure":
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			default:
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			}
+		},
+	}
+
+	if err := manager.ensureService(context.Background(), "", "vnc_establish"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(calls, "taskkill.exe /PID 4242 /F") {
+		t.Fatalf("expected stuck service process kill, got %#v", calls)
+	}
+	if !containsCall(calls, "sc.exe start "+serviceName) {
+		t.Fatalf("expected service restart, got %#v", calls)
+	}
+}
+
+func TestEnsureAlwaysOnClearsReadyWhenServiceStopPending(t *testing.T) {
+	oldTransitionWait := serviceTransitionWait
+	oldForceKillWait := serviceTransitionForceKillWait
+	serviceTransitionWait = time.Millisecond
+	serviceTransitionForceKillWait = time.Millisecond
+	defer func() {
+		serviceTransitionWait = oldTransitionWait
+		serviceTransitionForceKillWait = oldForceKillWait
+	}()
+
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	manager := &Manager{
+		supported:          true,
+		configPath:         filepath.Join(dir, "agent.json"),
+		logPath:            filepath.Join(dir, "vnc.log"),
+		serviceName:        serviceName,
+		vncExe:             exePath,
+		port:               port,
+		allowedIPs:         "10.255.0.1/32",
+		controllerPassword: "bootpass",
+		lastReady:          true,
+		lastServiceState:   "RUNNING",
+		lastListenerState:  "listening",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "sc.exe" && len(args) > 0 {
+				switch args[0] {
+				case "query":
+					return commandResult{Stdout: "STATE              : 3  STOP_PENDING", ExitCode: 0}, nil
+				case "queryex":
+					return commandResult{Stdout: "PID                : 0", ExitCode: 0}, nil
+				case "config", "failure":
+					return commandResult{Stdout: "ok", ExitCode: 0}, nil
+				}
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+
+	err = manager.ensureAlwaysOn(context.Background(), "vnc_establish")
+	if err == nil {
+		t.Fatal("expected STOP_PENDING service to fail readiness")
+	}
+	if manager.lastReady {
+		t.Fatalf("expected lastReady to be cleared")
+	}
+	if manager.lastServiceState != "STOP_PENDING" || manager.lastListenerState != "listening" {
+		t.Fatalf("unexpected state service=%s listener=%s", manager.lastServiceState, manager.lastListenerState)
+	}
+}
+
+func TestEnsureAlwaysOnWaitsForDelayedListener(t *testing.T) {
+	oldListenerReadyWait := listenerReadyWait
+	listenerReadyWait = 250 * time.Millisecond
+	defer func() {
+		listenerReadyWait = oldListenerReadyWait
+	}()
+
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := reserved.Addr().String()
+	port := reserved.Addr().(*net.TCPAddr).Port
+	if err := reserved.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(50 * time.Millisecond)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			t.Errorf("delayed listener failed: %v", err)
+			return
+		}
+		defer listener.Close()
+		conn, err := listener.Accept()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}()
+
+	manager := &Manager{
+		supported:          true,
+		configPath:         filepath.Join(dir, "agent.json"),
+		logPath:            filepath.Join(dir, "vnc.log"),
+		serviceName:        serviceName,
+		vncExe:             exePath,
+		port:               port,
+		allowedIPs:         "10.255.0.1/32",
+		controllerPassword: "bootpass",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "powershell.exe" {
+				return commandResult{ExitCode: 0}, nil
+			}
+			if name == "sc.exe" && len(args) > 0 {
+				switch args[0] {
+				case "query":
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				case "config", "failure":
+					return commandResult{Stdout: "ok", ExitCode: 0}, nil
+				}
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+
+	if err := manager.ensureAlwaysOn(context.Background(), "vnc_establish"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("delayed listener did not receive readiness probe")
+	}
+	if !manager.lastReady || manager.lastListenerState != "listening" || manager.lastServiceState != "RUNNING" {
+		t.Fatalf("expected delayed listener readiness, ready=%t service=%s listener=%s", manager.lastReady, manager.lastServiceState, manager.lastListenerState)
+	}
+}
+
 func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
 	manager := &Manager{
 		serviceName: serviceName,
 		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "sc.exe" && len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
 			return commandResult{Stdout: "[SC] StartService FAILED 1056:\n\nAn instance of the service is already running.", ExitCode: 1056}, errors.New("exit status 1056")
 		},
 	}

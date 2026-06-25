@@ -14,6 +14,7 @@ import {
   MenuItem,
   TextField,
   Toolbar,
+  Tooltip,
   Typography,
 } from "@mui/material";
 import {
@@ -120,6 +121,7 @@ export default function AppShell() {
   const {
     user,
     displayName,
+    authSource,
     mfaEnabled,
     passkeyCount,
     logout,
@@ -161,6 +163,8 @@ export default function AppShell() {
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
   const currentPageKey = useMemo(() => resolveCurrentPageKey(matches), [matches]);
   const hideNavigationSidebar = currentPageKey === "device" || currentPageKey === "device-remote-desktop";
+  const passkeysDisabledForDirectoryUser = String(authSource || "").toLowerCase() === "directory";
+  const managePasskeysDisabled = passkeysDisabledForDirectoryUser || managePasskeysLoading || addPasskeyBusy;
 
   const resolvedChrome = useMemo(
     () => ({
@@ -403,10 +407,10 @@ export default function AppShell() {
 
   const handleOpenManagePasskeysDialog = useCallback(() => {
     handleUserMenuClose();
-    if (managePasskeysLoading) return;
+    if (managePasskeysLoading || passkeysDisabledForDirectoryUser) return;
     setManagePasskeysOpen(true);
     void loadManagedPasskeys();
-  }, [handleUserMenuClose, loadManagedPasskeys, managePasskeysLoading]);
+  }, [handleUserMenuClose, loadManagedPasskeys, managePasskeysLoading, passkeysDisabledForDirectoryUser]);
 
   const handleCloseManagePasskeysDialog = useCallback(() => {
     if (addPasskeyBusy || managePasskeyAction.id) return;
@@ -650,24 +654,28 @@ export default function AppShell() {
               open={Boolean(userMenuAnchorEl)}
               onClose={handleUserMenuClose}
             >
-              <MenuItem
-                disabled={managePasskeysLoading || addPasskeyBusy}
-                onClick={handleOpenManagePasskeysDialog}
+              <Tooltip
+                title={passkeysDisabledForDirectoryUser ? "Passkeys are Disallowed for Directory Users" : ""}
+                placement="left"
               >
-                <FingerprintIcon
-                  sx={{
-                    fontSize: 18,
-                    color:
-                      !managePasskeysLoading && !addPasskeyBusy
-                        ? "#8ecbff"
-                        : "rgba(148,163,184,0.62)",
-                    mr: 1,
-                  }}
-                />
-                {managePasskeysLoading
-                  ? "Loading Passkeys..."
-                  : `Manage Passkeys${passkeyCount ? ` (${passkeyCount})` : ""}`}
-              </MenuItem>
+                <span style={{ display: "block" }}>
+                  <MenuItem
+                    disabled={managePasskeysDisabled}
+                    onClick={handleOpenManagePasskeysDialog}
+                  >
+                    <FingerprintIcon
+                      sx={{
+                        fontSize: 18,
+                        color: !managePasskeysDisabled ? "#8ecbff" : "rgba(148,163,184,0.62)",
+                        mr: 1,
+                      }}
+                    />
+                    {managePasskeysLoading
+                      ? "Loading Passkeys..."
+                      : `Manage Passkeys${passkeyCount ? ` (${passkeyCount})` : ""}`}
+                  </MenuItem>
+                </span>
+              </Tooltip>
               <MenuItem disabled={resetOwnPasswordBusy} onClick={handleOpenResetOwnPasswordDialog}>
                 <VpnKeyIcon
                   sx={{

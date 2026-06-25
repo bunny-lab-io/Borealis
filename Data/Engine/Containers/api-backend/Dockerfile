@@ -12,10 +12,7 @@ RUN apt-get update \
         gnupg \
         iproute2 \
         iptables \
-        openssh-client \
         procps \
-        rsync \
-        sshpass \
         tesseract-ocr \
         wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -31,16 +28,17 @@ RUN install -m 0755 -d /etc/apt/keyrings \
 
 WORKDIR /opt/Borealis
 
-COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/borealis-engine-requirements.txt
+COPY Data/Engine/Containers/api-backend/data/engine-requirements.txt /tmp/engine-requirements.txt
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r /tmp/borealis-engine-requirements.txt
+    && python -m pip install -r /tmp/engine-requirements.txt
 
 COPY Data/Engine/Containers/api-backend/data /opt/Borealis/Data/Engine
 COPY Data/Agent /opt/Borealis/Data/Agent
+COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend
 COPY Data/Engine/Containers/api-backend/healthcheck.py /usr/local/bin/borealis-api-healthcheck
 
-RUN chmod +x /usr/local/bin/borealis-api-backend /usr/local/bin/borealis-api-healthcheck
+RUN chmod +x /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-api-backend /usr/local/bin/borealis-api-healthcheck
 
 EXPOSE 5000
 
