@@ -1956,20 +1956,25 @@ func computeScheduledNextRun(scheduleType string, startTS int64, lastRun *int64,
 		"every_15_minutes": 900,
 		"every_30_minutes": 1800,
 		"every_hour":       3600,
-		"daily":            86400,
-		"weekly":           7 * 86400,
 	}
 	if period, ok := periods[st]; ok {
 		next := last + period
 		return &next
 	}
-	t := time.Unix(last, 0)
+	if st == "daily" {
+		next := schedulerAddDays(last, 1)
+		return &next
+	}
+	if st == "weekly" {
+		next := schedulerAddDays(last, 7)
+		return &next
+	}
 	if st == "monthly" {
-		next := t.AddDate(0, 1, 0).Unix()
+		next := schedulerAddMonths(last, 1)
 		return &next
 	}
 	if st == "yearly" {
-		next := t.AddDate(1, 0, 0).Unix()
+		next := schedulerAddYears(last, 1)
 		return &next
 	}
 	return nil

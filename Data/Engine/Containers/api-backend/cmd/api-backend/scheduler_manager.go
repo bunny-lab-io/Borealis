@@ -2133,8 +2133,6 @@ func schedulerComputeNextRun(scheduleType string, startTS *int64, lastRunTS *int
 		"every_15_minutes": 15 * 60,
 		"every_30_minutes": 30 * 60,
 		"every_hour":       60 * 60,
-		"daily":            86400,
-		"weekly":           7 * 86400,
 	}
 	if period, ok := periods[st]; ok {
 		if last == nil {
@@ -2147,6 +2145,12 @@ func schedulerComputeNextRun(scheduleType string, startTS *int64, lastRunTS *int
 		return start
 	}
 	switch st {
+	case "daily":
+		value := schedulerAddDays(*last, 1)
+		return &value
+	case "weekly":
+		value := schedulerAddDays(*last, 7)
+		return &value
 	case "monthly":
 		value := schedulerAddMonths(*last, 1)
 		return &value
@@ -2158,33 +2162,54 @@ func schedulerComputeNextRun(scheduleType string, startTS *int64, lastRunTS *int
 	}
 }
 
+func engineScheduleLocation() *time.Location {
+	timezoneID := strings.TrimSpace(currentTimezoneID())
+	if timezoneID != "" {
+		if loc, err := time.LoadLocation(timezoneID); err == nil {
+			return loc
+		}
+	}
+	if time.Local != nil {
+		return time.Local
+	}
+	return time.UTC
+}
+
+func schedulerAddDays(ts int64, days int) int64 {
+	loc := engineScheduleLocation()
+	base := time.Unix(ts, 0).In(loc)
+	return base.AddDate(0, 0, days).Unix()
+}
+
 func schedulerAddMonths(ts int64, months int) int64 {
-	base := time.Unix(ts, 0).UTC()
+	loc := engineScheduleLocation()
+	base := time.Unix(ts, 0).In(loc)
 	year, month, day := base.Date()
 	hour, min, sec := base.Clock()
 	targetMonth := int(month) + months
 	year += (targetMonth - 1) / 12
 	targetMonth = ((targetMonth - 1) % 12) + 1
-	lastDay := daysInMonth(year, time.Month(targetMonth))
+	lastDay := daysInMonth(year, time.Month(targetMonth), loc)
 	if day > lastDay {
 		day = lastDay
 	}
-	return time.Date(year, time.Month(targetMonth), day, hour, min, sec, 0, time.UTC).Unix()
+	return time.Date(year, time.Month(targetMonth), day, hour, min, sec, 0, loc).Unix()
 }
 
 func schedulerAddYears(ts int64, years int) int64 {
-	base := time.Unix(ts, 0).UTC()
+	loc := engineScheduleLocation()
+	base := time.Unix(ts, 0).In(loc)
 	year, month, day := base.Date()
 	hour, min, sec := base.Clock()
 	year += years
-	if month == time.February && day == 29 && daysInMonth(year, month) < day {
+	if month == time.February && day == 29 && daysInMonth(year, month, loc) < day {
 		day = 28
 	}
-	return time.Date(year, month, day, hour, min, sec, 0, time.UTC).Unix()
+	return time.Date(year, month, day, hour, min, sec, 0, loc).Unix()
 }
 
-func daysInMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+func daysInMonth(year int, month time.Month, loc *time.Location) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, loc).Day()
 }
 
 func schedulerFloorMinute(ts int64) int64 {

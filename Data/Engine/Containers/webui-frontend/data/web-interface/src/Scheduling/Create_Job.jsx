@@ -58,6 +58,11 @@ import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
+import {
+  dayjsFromEpochInTimezone,
+  fetchEngineScheduleClock,
+  wallClockStringFromDayjs,
+} from "./scheduleTime.js";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
 import "prismjs/components/prism-bash";
@@ -1562,6 +1567,21 @@ export default function CreateJob() {
   const [assembliesError, setAssembliesError] = useState("");
   const assemblyExportCacheRef = useRef(new Map());
   const quickDraftAppliedRef = useRef(null);
+  const [engineTimezone, setEngineTimezone] = useState("");
+
+  useEffect(() => {
+    let canceled = false;
+    fetchEngineScheduleClock()
+      .then(({ timezone }) => {
+        if (!canceled && timezone) {
+          setEngineTimezone(timezone);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      canceled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setQuickJobDraft(location.state?.quickJobDraft || null);
@@ -3948,7 +3968,11 @@ export default function CreateJob() {
         );
         setStartDateTime(
           resolvedInitialJob.start_ts
-            ? dayjs(Number(resolvedInitialJob.start_ts) * 1000).second(0)
+            ? dayjsFromEpochInTimezone(
+                resolvedInitialJob.start_ts,
+                engineTimezone,
+                dayjs().add(5, "minute").second(0)
+              )
             : resolvedInitialJob.schedule?.start
               ? dayjs(resolvedInitialJob.schedule.start).second(0)
               : dayjs().add(5, "minute").second(0)
@@ -3984,7 +4008,7 @@ export default function CreateJob() {
     return () => {
       canceled = true;
     };
-  }, [hydrateExistingComponents, initialJob, normalizeTargetList, resolvedInitialJob]);
+  }, [engineTimezone, hydrateExistingComponents, initialJob, normalizeTargetList, resolvedInitialJob]);
 
   const openAddComponent = async () => {
     setAddCompOpen(true);
@@ -4226,7 +4250,7 @@ export default function CreateJob() {
       name: jobName,
       components: payloadComponents,
       targets: workflowMode ? [] : serializeTargetsForSave(targets),
-      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? (() => { try { const d = startDateTime?.toDate?.() || new Date(startDateTime); d.setSeconds(0,0); return d.toISOString(); } catch { return startDateTime; } })() : null },
+      schedule: { type: scheduleType, start: scheduleType !== "immediately" ? wallClockStringFromDayjs(startDateTime) : null },
       duration: { stopAfterEnabled: expiration !== "no_expire", expiration },
       execution_context: workflowMode ? "system" : execContext,
       credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),

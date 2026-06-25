@@ -24,6 +24,8 @@ Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM.
 
 Common schedule types include immediate, once, every 5/10/15/30 minutes, hourly, daily, weekly, monthly, and yearly.
 
+Scheduled wall-clock times use the Engine host timezone. If the Engine host is configured for `America/Denver`, a daily job set for `12:00 AM` runs at midnight in that timezone even when an operator browser or API client is in another timezone.
+
 ## Read Results
 
 - Current Run shows live or latest run state.
@@ -76,6 +78,8 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     ### Runtime behavior
 
     - `job-scheduler` owns scheduled ticks, queue leases, service actions, and site-worker lifecycle.
+    - Schedule create/update accepts offsetless wall-clock values such as `2026-06-25T00:00` as Engine-local time. Offset-bearing RFC3339 values remain absolute instants.
+    - Daily, weekly, monthly, and yearly recurrence preserves Engine-local wall-clock time across daylight saving changes.
     - Site workers execute site-scoped pressure work outside `api-backend`.
     - Each due occurrence resolves targets once and freezes membership in run target rows.
     - Filter targets preserve allowed site scope from creation/edit time.

@@ -47,6 +47,12 @@ import { LocalizationProvider } from "@mui/x-date-pickers/LocalizationProvider";
 import { DateTimePicker } from "@mui/x-date-pickers/DateTimePicker";
 import { AdapterDayjs } from "@mui/x-date-pickers/AdapterDayjs";
 import dayjs from "dayjs";
+import {
+  fetchEngineScheduleClock,
+  wallClockStringFromDatetimeLocal,
+  wallClockStringFromDayjs,
+  wallClockStringFromEpoch,
+} from "./scheduleTime.js";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import {
@@ -638,19 +644,8 @@ function compareOnboardingTargets(left, right) {
   return String(left?.targetLabel || "").localeCompare(String(right?.targetLabel || ""), undefined, { numeric: true, sensitivity: "base" });
 }
 
-function datetimeLocalValue(epochSeconds) {
-  if (!epochSeconds) return "";
-  const date = new Date(Number(epochSeconds) * 1000);
-  if (Number.isNaN(date.getTime())) return "";
-  const offsetMs = date.getTimezoneOffset() * 60000;
-  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
-}
-
-function isoFromDatetimeLocal(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
+function datetimeLocalValue(epochSeconds, timeZone = "") {
+  return wallClockStringFromEpoch(epochSeconds, timeZone);
 }
 
 function defaultStartDateTime() {
@@ -664,8 +659,7 @@ function dateTimePickerValue(value) {
 }
 
 function datetimeLocalValueFromDayjs(value) {
-  const parsed = value?.second ? value.second(0) : dayjs(value).second(0);
-  return parsed?.isValid?.() ? parsed.format("YYYY-MM-DDTHH:mm") : "";
+  return wallClockStringFromDayjs(value) || "";
 }
 
 function targetOutputContent(target, mode) {
@@ -1559,10 +1553,11 @@ export default function CreateOnboardingJob() {
     setLoading(true);
     setError("");
     try {
-      const [sitesResp, credentialsResp, jobResp] = await Promise.all([
+      const [sitesResp, credentialsResp, jobResp, clock] = await Promise.all([
         fetch("/api/sites", { credentials: "include" }),
         fetch("/api/credentials", { credentials: "include" }),
         editing ? fetch(`/api/scheduled_jobs/${jobId}`, { credentials: "include" }) : Promise.resolve(null),
+        fetchEngineScheduleClock().catch(() => ({ timezone: "", epoch: null })),
       ]);
       const sitesData = await sitesResp.json().catch(() => ({}));
       if (!sitesResp.ok) throw new Error(sitesData?.error || `Unable to load sites (${sitesResp.status})`);
@@ -1628,7 +1623,7 @@ export default function CreateOnboardingJob() {
               DEFAULT_ONBOARDING_CONCURRENCY
           ),
           scheduleType: job.schedule_type || "immediately",
-          start: datetimeLocalValue(job.start_ts),
+          start: datetimeLocalValue(job.start_ts, clock?.timezone || ""),
           enabled: Boolean(job.enabled),
         });
         setNameTouched(Boolean(job.name));
@@ -2288,7 +2283,7 @@ export default function CreateOnboardingJob() {
         ],
         schedule: {
           type: form.scheduleType || "immediately",
-          start: form.scheduleType === "immediately" ? null : isoFromDatetimeLocal(form.start),
+          start: form.scheduleType === "immediately" ? null : wallClockStringFromDatetimeLocal(form.start),
         },
         duration: { expiration: "no_expire" },
         execution_context: "onboarding_local_network",

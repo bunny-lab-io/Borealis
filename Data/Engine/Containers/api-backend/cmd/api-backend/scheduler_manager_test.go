@@ -35,6 +35,60 @@ func TestSchedulerManagerComputeNextRunMatchesPythonIntervals(t *testing.T) {
 	}
 }
 
+func TestScheduledParseTSUsesEngineTimezoneForWallClockInput(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := scheduledParseTS("2026-06-25T00:00")
+	want := time.Date(2026, time.June, 25, 0, 0, 0, 0, loc).Unix()
+	if !got.Valid || got.Int64 != want {
+		t.Fatalf("expected Denver wall clock epoch %d, got %#v", want, got)
+	}
+
+	absolute := scheduledParseTS("2026-06-25T00:00:00Z")
+	wantUTC := time.Date(2026, time.June, 25, 0, 0, 0, 0, time.UTC).Unix()
+	if !absolute.Valid || absolute.Int64 != wantUTC {
+		t.Fatalf("expected RFC3339 UTC epoch %d, got %#v", wantUTC, absolute)
+	}
+}
+
+func TestSchedulerManagerCalendarNextRunPreservesLocalMidnightAcrossDST(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.March, 8, 0, 0, 0, 0, loc).Unix()
+	last := time.Date(2026, time.March, 8, 0, 0, 0, 0, loc).Unix()
+	now := time.Date(2026, time.March, 9, 0, 0, 0, 0, loc).Unix()
+
+	got := schedulerComputeNextRun("daily", &start, &last, now)
+	want := time.Date(2026, time.March, 9, 0, 0, 0, 0, loc).Unix()
+	if got == nil || *got != want {
+		t.Fatalf("expected next Denver midnight %d, got %v", want, got)
+	}
+}
+
+func TestSchedulerManagerMonthlyNextRunPreservesLocalWallClockAcrossDST(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	loc, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.October, 25, 0, 0, 0, 0, loc).Unix()
+	last := time.Date(2026, time.October, 25, 0, 0, 0, 0, loc).Unix()
+	now := time.Date(2026, time.November, 25, 0, 0, 0, 0, loc).Unix()
+
+	got := schedulerComputeNextRun("monthly", &start, &last, now)
+	want := time.Date(2026, time.November, 25, 0, 0, 0, 0, loc).Unix()
+	if got == nil || *got != want {
+		t.Fatalf("expected next Denver monthly wall clock %d, got %v", want, got)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},
