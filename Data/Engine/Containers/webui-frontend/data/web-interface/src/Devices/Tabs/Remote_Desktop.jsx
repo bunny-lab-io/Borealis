@@ -299,8 +299,8 @@ const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
 const VNC_SESSION_RECONNECT_DELAY_MS = 1500;
-const VNC_OPEN_TIMEOUT_MS = 30000;
-const VNC_WS_OPEN_TIMEOUT_MS = 6000;
+const VNC_OPEN_TIMEOUT_MS = 90000;
+const VNC_WS_OPEN_TIMEOUT_MS = 20000;
 const VNC_READY_STABILIZE_MS = 1800;
 const VNC_IDLE_WARNING_MS = 5 * 60 * 1000;
 const VNC_IDLE_DISCONNECT_MS = 6 * 60 * 1000;
@@ -319,18 +319,23 @@ const CONNECTION_FLOW_STEPS = Object.freeze([
   },
   {
     id: "service",
-    label: "Checking VNC Service",
-    detail: "Confirming the remote desktop service is running.",
+    label: "Starting Agent VNC",
+    detail: "Waiting for the Agent to finish VNC service readiness.",
   },
   {
     id: "socket",
-    label: "Opening Desktop Socket",
-    detail: "Connecting the browser to the live VNC socket.",
+    label: "Opening Browser Socket",
+    detail: "Connecting the browser to the site-worker socket.",
   },
   {
-    id: "auth",
-    label: "Authenticating Session",
-    detail: "Negotiating credentials and display settings.",
+    id: "guacamole",
+    label: "Opening Guacamole",
+    detail: "Connecting Guacamole to the Agent VNC listener.",
+  },
+  {
+    id: "frame",
+    label: "Waiting for Desktop Frame",
+    detail: "Waiting for the first desktop framebuffer update.",
   },
   {
     id: "ready",
@@ -1253,8 +1258,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       throw buildRetryableError("Agent ID is required to establish.", false);
     }
     setStatusMessage("");
-    setVncStage("requesting_tunnel");
+    setVncStage("starting_agent_vnc");
     setSessionState("connecting");
+    setStatusMessage("Starting Agent VNC service...");
     try {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
@@ -1443,8 +1449,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             syncRenderedCanvasSize(client);
           }
           setSessionState("connecting");
-          setVncStage("handshaking");
-          setStatusMessage("Waiting for desktop video...");
+          setVncStage("waiting_frame");
+          setStatusMessage("Waiting for first desktop frame...");
           if (!stableTimerId) {
             stableTimerId = window.setTimeout(finishResolve, VNC_READY_STABILIZE_MS);
           }
@@ -1455,6 +1461,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (state === Guacamole.Tunnel.State.OPEN) {
             tunnelOpened = true;
             tunnelWarningShownRef.current = false;
+            setVncStage("opening_guacamole");
+            setStatusMessage("Opening Guacamole session...");
             return;
           }
           if (state === Guacamole.Tunnel.State.UNSTABLE && !tunnelWarningShownRef.current) {
@@ -1497,6 +1505,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           }
           if (state === Guacamole.Client.State.CONNECTED) {
             tunnelConnected = true;
+            setVncStage("waiting_frame");
+            setStatusMessage("Waiting for first desktop frame...");
             syncFramebufferSize(client);
             configureDisplaySurface(client, displayMode);
             if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
@@ -1534,7 +1544,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               setStatusMessage("Desktop stream closed. Reconnect or claim control when the session is ready.");
             }
           } else if (state === Guacamole.Client.State.WAITING) {
-            setVncStage("handshaking");
+            setVncStage("opening_guacamole");
           }
         };
         display.onresize = () => {
@@ -2345,6 +2355,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       case "agent_onboarding":
         steps[0].status = "active";
         break;
+      case "starting_agent_vnc":
+        steps[0].status = "complete";
+        steps[1].status = "active";
+        break;
       case "connecting_ws":
         steps[0].status = "complete";
         steps[1].status = "complete";
@@ -2355,11 +2369,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         steps[1].status = "complete";
         steps[2].status = "active";
         break;
-      case "handshaking":
+      case "opening_guacamole":
         steps[0].status = "complete";
         steps[1].status = "complete";
         steps[2].status = "complete";
         steps[3].status = "active";
+        break;
+      case "handshaking":
+      case "waiting_frame":
+        steps[0].status = "complete";
+        steps[1].status = "complete";
+        steps[2].status = "complete";
+        steps[3].status = "complete";
+        steps[4].status = "active";
         break;
       case "auth_failed":
         steps[0].status = "complete";
@@ -2390,8 +2412,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     !isConnected &&
     (loading ||
       vncStage === "requesting_tunnel" ||
+      vncStage === "starting_agent_vnc" ||
       vncStage === "connecting_ws" ||
+      vncStage === "opening_guacamole" ||
       vncStage === "handshaking" ||
+      vncStage === "waiting_frame" ||
       vncStage === "retrying");
   const showConnectionFlow =
     !isConnected &&

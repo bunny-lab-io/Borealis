@@ -962,6 +962,13 @@ class SiteWorkerSocketRuntime:
                     session_id=session_id,
                     participant_id=participant_id,
                 ),
+                on_first_frame=lambda opcode: self._notify_vnc_session_event(
+                    event="first_frame",
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    participant_id=participant_id,
+                    reason=str(opcode or ""),
+                ),
                 on_close=lambda reason: self._notify_vnc_session_event(
                     event="close",
                     agent_id=agent_id,

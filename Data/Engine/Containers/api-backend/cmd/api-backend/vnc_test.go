@@ -208,6 +208,116 @@ func TestRequestVNCServerCredentialRejectsAgentNotReady(t *testing.T) {
 	}
 }
 
+func TestRequestVNCStartReadyConsumesWorkerCallEnvelope(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/call" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		if body["event_name"] != "vnc_start" || body["hostname"] != "LAB-CAMERA-01" {
+			t.Fatalf("unexpected worker body %#v", body)
+		}
+		if body["timeout_seconds"] != float64(12) {
+			t.Fatalf("unexpected timeout %#v", body["timeout_seconds"])
+		}
+		payload := body["payload"].(map[string]any)
+		if payload["session_id"] != "session-1" || payload["agent_id"] != "LAB-CAMERA-01_SYSTEM" {
+			t.Fatalf("unexpected start payload %#v", payload)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called": true,
+			"response": map[string]any{
+				"status": "ok",
+				"ready":  true,
+			},
+		})
+	}))
+	defer worker.Close()
+
+	response, status, workerErr := requestVNCStartReady(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-CAMERA-01",
+		"system",
+		map[string]any{
+			"agent_id":   "LAB-CAMERA-01_SYSTEM",
+			"session_id": "session-1",
+			"reason":     "vnc_establish",
+		},
+		12,
+	)
+	if workerErr != nil || status != http.StatusOK {
+		t.Fatalf("expected ready start, status=%d error=%#v", status, workerErr)
+	}
+	if response["ready"] != true {
+		t.Fatalf("unexpected response %#v", response)
+	}
+}
+
+func TestRequestVNCStartReadyRejectsAgentNotReady(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called": true,
+			"response": map[string]any{
+				"status": "ok",
+				"ready":  false,
+				"detail": "UltraVNC listener still settling",
+			},
+		})
+	}))
+	defer worker.Close()
+
+	_, status, workerErr := requestVNCStartReady(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-CAMERA-01",
+		"system",
+		map[string]any{"agent_id": "LAB-CAMERA-01_SYSTEM", "session_id": "session-1"},
+		1,
+	)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", status)
+	}
+	if cleanText(workerErr["error"]) != "vnc_agent_not_ready" || cleanText(workerErr["detail"]) != "UltraVNC listener still settling" {
+		t.Fatalf("unexpected error %#v", workerErr)
+	}
+}
+
+func TestVNCRecordProxyFirstFrameUpdatesSessionSnapshot(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	session, participant, created := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "12345678", CredentialRevision: 1},
+		true,
+	)
+	if !created {
+		t.Fatalf("expected new session")
+	}
+	runtime.recordProxyFirstFrame(session.SessionID, participant.ParticipantID, "size")
+	snapshot := runtime.sessionSnapshot(session, "operator")
+	if snapshot["first_frame_at"] == nil {
+		t.Fatalf("first frame was not recorded in session snapshot: %#v", snapshot)
+	}
+}
+
+func TestVNCPendingStopCancelledOnEstablish(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	runtime.scheduleVNCStop(nil, nil, "LAB-CAMERA-01", "system", "agent-1", "operator_disconnect")
+	runtime.cancelPendingStop("agent-1", "vnc_establish")
+	runtime.mu.Lock()
+	_, exists := runtime.stops["agent-1"]
+	runtime.mu.Unlock()
+	if exists {
+		t.Fatalf("pending stop was not cancelled")
+	}
+}
+
 func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_failed"}) {
 		t.Fatalf("expected vnc_auth_failed to request auth retry")
@@ -223,12 +333,14 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 	cases := map[string]float64{
 		"live_credentials": defaultVNCLiveCredentialWaitSeconds,
+		"start_ready":      defaultVNCStartReadyWaitSeconds,
 		"recovery_ready":   defaultVNCRecoveryReadyWaitSeconds,
 		"restart_ready":    defaultVNCRestartReadyWaitSeconds,
 		"auth_retry_ready": defaultVNCAuthRetryReadyWaitSeconds,
 	}
 	minimums := map[string]float64{
 		"live_credentials": 30,
+		"start_ready":      30,
 		"recovery_ready":   20,
 		"restart_ready":    20,
 		"auth_retry_ready": 20,
@@ -236,6 +348,25 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 	for name, got := range cases {
 		if got < minimums[name] {
 			t.Fatalf("%s wait too short for slow agents: got %.1fs want >= %.1fs", name, got, minimums[name])
+		}
+	}
+}
+
+func TestNormalizePerformancePreferencePreservesSpeedBias(t *testing.T) {
+	cases := map[any]int{
+		-4:    -2,
+		-2:    -2,
+		-1:    -1,
+		0:     0,
+		1:     1,
+		2:     2,
+		4:     2,
+		" -2": -2,
+		"2":   2,
+	}
+	for input, expected := range cases {
+		if got := normalizePerformancePreference(input); got != expected {
+			t.Fatalf("normalizePerformancePreference(%#v)=%d want %d", input, got, expected)
 		}
 	}
 }
