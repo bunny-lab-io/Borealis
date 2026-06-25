@@ -14,6 +14,7 @@ from pathlib import Path
 
 from Data.Engine.auth import device_purge_state, jwt_service
 from Data.Engine.db import dbapi as sqlite3
+from Data.Engine.services.RemoteDesktop import rfb_probe
 from Data.Engine.services.RemoteDesktop.rfb_probe import VncAuthProbeResult
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 from Data.Engine.services.job_scheduler import worker_socket
@@ -657,6 +658,29 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.session_id == "vnc-session-1"
     assert session.participant_id == "participant-1"
     assert session.performance_preference == 2
+
+
+def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
+    called = False
+
+    def _probe(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return VncAuthProbeResult(True, False, "unexpected_probe")
+
+    monkeypatch.delenv("BOREALIS_VNC_AUTH_PROBE", raising=False)
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.20",
+        5900,
+        "secretpw",
+        timeout_seconds=0.25,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == VncAuthProbeResult(False, True, "auth_probe_disabled")
+    assert called is False
 
 
 def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:

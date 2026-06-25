@@ -918,6 +918,13 @@ func requestVNCServerCredential(ctx context.Context, auth *authService, route *a
 	if request := cleanText(raw["request_id"]); request != "" && request != requestID {
 		return vncCredential{}, errors.New("credential_request_mismatch")
 	}
+	if status := cleanText(raw["status"]); status != "" && !strings.EqualFold(status, "ok") {
+		return vncCredential{}, errors.New(firstText(cleanText(raw["detail"]), cleanText(raw["error"]), status))
+	}
+	if _, ok := raw["ready"]; ok && !boolFromAny(raw["ready"]) {
+		detail := firstText(cleanText(raw["detail"]), cleanText(raw["service_state"]), "vnc_agent_not_ready")
+		return vncCredential{}, errors.New(detail)
+	}
 	password := cleanText(firstNonEmpty(raw["controller_password"], raw["vnc_password"], raw["password"]))
 	if len(password) > 8 {
 		password = password[:8]

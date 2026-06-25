@@ -392,6 +392,7 @@ func TestRoutineAlwaysOnEnsureDoesNotWriteSteadyStateLogs(t *testing.T) {
 func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 	calls := []string{}
 	queryCount := 0
+	started := false
 	manager := &Manager{
 		serviceName: serviceName,
 		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
@@ -403,11 +404,17 @@ func TestEnsureServiceRestartsRunningServiceWhenConfigChanged(t *testing.T) {
 			switch args[0] {
 			case "query":
 				queryCount++
+				if started {
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				}
 				if queryCount == 1 {
 					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
 				}
 				return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
-			case "config", "failure", "stop", "start":
+			case "start":
+				started = true
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			case "config", "failure", "stop":
 				return commandResult{Stdout: "ok", ExitCode: 0}, nil
 			default:
 				return commandResult{Stdout: "ok", ExitCode: 0}, nil
@@ -450,10 +457,140 @@ func TestEnsureServiceLeavesRunningServiceAloneWhenConfigUnchanged(t *testing.T)
 	}
 }
 
+func TestEnsureServiceForceKillsStuckStopPendingService(t *testing.T) {
+	oldTransitionWait := serviceTransitionWait
+	oldForceKillWait := serviceTransitionForceKillWait
+	oldAlreadyRunningWait := serviceAlreadyRunningVerifyWait
+	serviceTransitionWait = time.Millisecond
+	serviceTransitionForceKillWait = time.Millisecond
+	serviceAlreadyRunningVerifyWait = time.Millisecond
+	defer func() {
+		serviceTransitionWait = oldTransitionWait
+		serviceTransitionForceKillWait = oldForceKillWait
+		serviceAlreadyRunningVerifyWait = oldAlreadyRunningWait
+	}()
+
+	calls := []string{}
+	killed := false
+	started := false
+	manager := &Manager{
+		serviceName: serviceName,
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			call := name + " " + strings.Join(args, " ")
+			calls = append(calls, call)
+			if name == "taskkill.exe" {
+				if strings.Join(args, " ") == "/PID 4242 /F" {
+					killed = true
+					return commandResult{Stdout: "SUCCESS", ExitCode: 0}, nil
+				}
+				return commandResult{Stdout: "unexpected pid", ExitCode: 1}, errors.New("unexpected pid")
+			}
+			if name != "sc.exe" || len(args) == 0 {
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			}
+			switch args[0] {
+			case "query":
+				if started {
+					return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+				}
+				if killed {
+					return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
+				}
+				return commandResult{Stdout: "STATE              : 3  STOP_PENDING", ExitCode: 0}, nil
+			case "queryex":
+				return commandResult{Stdout: "PID                : 4242", ExitCode: 0}, nil
+			case "start":
+				started = true
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			case "config", "failure":
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			default:
+				return commandResult{Stdout: "ok", ExitCode: 0}, nil
+			}
+		},
+	}
+
+	if err := manager.ensureService(context.Background(), "", "vnc_establish"); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(calls, "taskkill.exe /PID 4242 /F") {
+		t.Fatalf("expected stuck service process kill, got %#v", calls)
+	}
+	if !containsCall(calls, "sc.exe start "+serviceName) {
+		t.Fatalf("expected service restart, got %#v", calls)
+	}
+}
+
+func TestEnsureAlwaysOnClearsReadyWhenServiceStopPending(t *testing.T) {
+	oldTransitionWait := serviceTransitionWait
+	oldForceKillWait := serviceTransitionForceKillWait
+	serviceTransitionWait = time.Millisecond
+	serviceTransitionForceKillWait = time.Millisecond
+	defer func() {
+		serviceTransitionWait = oldTransitionWait
+		serviceTransitionForceKillWait = oldForceKillWait
+	}()
+
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	t.Setenv("BOREALIS_VNC_CONFIG_DIR", configDir)
+	exePath := filepath.Join(dir, "winvnc.exe")
+	if err := os.WriteFile(exePath, []byte("stub"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	manager := &Manager{
+		supported:          true,
+		configPath:         filepath.Join(dir, "agent.json"),
+		logPath:            filepath.Join(dir, "vnc.log"),
+		serviceName:        serviceName,
+		vncExe:             exePath,
+		port:               port,
+		allowedIPs:         "10.255.0.1/32",
+		controllerPassword: "bootpass",
+		lastReady:          true,
+		lastServiceState:   "RUNNING",
+		lastListenerState:  "listening",
+		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "sc.exe" && len(args) > 0 {
+				switch args[0] {
+				case "query":
+					return commandResult{Stdout: "STATE              : 3  STOP_PENDING", ExitCode: 0}, nil
+				case "queryex":
+					return commandResult{Stdout: "PID                : 0", ExitCode: 0}, nil
+				case "config", "failure":
+					return commandResult{Stdout: "ok", ExitCode: 0}, nil
+				}
+			}
+			return commandResult{Stdout: "ok", ExitCode: 0}, nil
+		},
+	}
+
+	err = manager.ensureAlwaysOn(context.Background(), "vnc_establish")
+	if err == nil {
+		t.Fatal("expected STOP_PENDING service to fail readiness")
+	}
+	if manager.lastReady {
+		t.Fatalf("expected lastReady to be cleared")
+	}
+	if manager.lastServiceState != "STOP_PENDING" || manager.lastListenerState != "listening" {
+		t.Fatalf("unexpected state service=%s listener=%s", manager.lastServiceState, manager.lastListenerState)
+	}
+}
+
 func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
 	manager := &Manager{
 		serviceName: serviceName,
 		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
+			if name == "sc.exe" && len(args) > 0 && args[0] == "query" {
+				return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
+			}
 			return commandResult{Stdout: "[SC] StartService FAILED 1056:\n\nAn instance of the service is already running.", ExitCode: 1056}, errors.New("exit status 1056")
 		},
 	}

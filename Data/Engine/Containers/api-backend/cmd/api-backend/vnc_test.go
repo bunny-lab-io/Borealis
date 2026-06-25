@@ -171,6 +171,43 @@ func TestRequestVNCServerCredentialConsumesWorkerCallEnvelope(t *testing.T) {
 	}
 }
 
+func TestRequestVNCServerCredentialRejectsAgentNotReady(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode worker request: %v", err)
+		}
+		payload := body["payload"].(map[string]any)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"called": true,
+			"response": map[string]any{
+				"status":         "error",
+				"error":          "vnc_service_not_ready",
+				"detail":         "UltraVNC service is STOP_PENDING",
+				"request_id":     payload["request_id"],
+				"ready":          false,
+				"service_state":  "STOP_PENDING",
+				"listener_state": "listening",
+			},
+		})
+	}))
+	defer worker.Close()
+
+	_, err := requestVNCServerCredential(
+		context.Background(),
+		vncTestAuth(&fakeVNCStore{}),
+		routeForTestWorker(t, worker.URL),
+		"LAB-CA-01",
+		"system",
+		"LAB-CA-01_SYSTEM",
+		"vnc_establish",
+		1,
+	)
+	if err == nil || err.Error() != "UltraVNC service is STOP_PENDING" {
+		t.Fatalf("expected agent readiness error, got %v", err)
+	}
+}
+
 func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_failed"}) {
 		t.Fatalf("expected vnc_auth_failed to request auth retry")

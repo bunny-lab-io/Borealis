@@ -30,6 +30,12 @@ const (
 	credentialRotationInterval = 24 * time.Hour
 )
 
+var (
+	serviceTransitionWait           = 12 * time.Second
+	serviceTransitionForceKillWait  = 5 * time.Second
+	serviceAlreadyRunningVerifyWait = 4 * time.Second
+)
+
 type AuthClient interface {
 	PostJSON(ctx context.Context, path string, requestPayload any, responsePayload any) (any, error)
 	AgentID() string
@@ -274,7 +280,10 @@ func (m *Manager) HandleCredentialRequest(ctx context.Context, payload any) (any
 	if fastPath {
 		return m.credentialPayload(requestID, reason), nil
 	}
-	_ = m.ensureAlwaysOn(ctx, reason)
+	if err := m.ensureAlwaysOn(ctx, reason); err != nil {
+		m.logf("VNC credential request ensure failed reason=%s request_id=%s error=%v", reason, requestID, err)
+		return m.credentialErrorPayload(requestID, reason, err), nil
+	}
 	return m.credentialPayload(requestID, reason), nil
 }
 
@@ -320,19 +329,24 @@ func (m *Manager) Health() RoleHealth {
 	if started {
 		serviceState = m.queryServiceState(context.Background(), service)
 		ready = m.listenerReady(port)
+		serviceReady := ready && isServiceRunning(serviceState)
 		listenerState = "not_listening"
 		if ready {
 			listenerState = "listening"
-			lastReadyAt = time.Now().Unix()
-			m.mu.Lock()
-			m.lastReady = true
-			m.lastReadyAt = lastReadyAt
-			m.lastServiceState = serviceState
-			m.lastListenerState = listenerState
-			m.mu.Unlock()
 		}
+		m.mu.Lock()
+		m.lastReady = serviceReady
+		m.lastServiceState = serviceState
+		m.lastListenerState = listenerState
+		if serviceReady {
+			lastReadyAt = time.Now().Unix()
+			m.lastReadyAt = lastReadyAt
+			m.lastError = ""
+		}
+		m.mu.Unlock()
 	}
 	displayTopology, displayVirtualBounds := m.displaySnapshot()
+	serviceReady := ready && isServiceRunning(serviceState)
 	details := map[string]any{
 		"running_status":              displayServiceState(serviceState),
 		"service_state":               displayServiceState(serviceState),
@@ -343,7 +357,7 @@ func (m *Manager) Health() RoleHealth {
 		"last_service_error":          lastError,
 		"listener_state":              listenerState,
 		"listener_ready":              strconv.FormatBool(ready),
-		"ready":                       strconv.FormatBool(ready && isServiceRunning(serviceState)),
+		"ready":                       strconv.FormatBool(serviceReady),
 		"last_ready_at":               strconv.FormatInt(lastReadyAt, 10),
 		"active_session_id":           activeSessionID,
 		"credential_revision":         strconv.FormatInt(revision, 10),
@@ -355,7 +369,7 @@ func (m *Manager) Health() RoleHealth {
 		"display_virtual_bounds_json": jsonText(displayVirtualBounds),
 		"runtime":                     "go",
 	}
-	if ready && isServiceRunning(serviceState) {
+	if serviceReady {
 		return RoleHealth{
 			Status:     "healthy",
 			StatusCode: "healthy",
@@ -511,16 +525,27 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 		reloadReason = "initial_config_sync"
 	}
 	if err := m.ensureService(ctx, reloadReason, reason); err != nil {
-		m.setError(err.Error())
+		serviceState := m.queryServiceState(ctx, m.serviceName)
+		listenerState := "not_listening"
+		if m.listenerReady(port) {
+			listenerState = "listening"
+		}
+		m.mu.Lock()
+		m.lastReady = false
+		m.lastServiceState = serviceState
+		m.lastListenerState = listenerState
+		m.lastError = err.Error()
+		m.mu.Unlock()
 		return err
 	}
 	m.mu.Lock()
 	m.serviceConfigLoaded = true
 	m.mu.Unlock()
-	ready := m.waitForListener(port, 8*time.Second)
+	listenerReady := m.waitForListener(port, 8*time.Second)
 	serviceState := m.queryServiceState(ctx, m.serviceName)
+	ready := listenerReady && isServiceRunning(serviceState)
 	listenerState := "not_listening"
-	if ready {
+	if listenerReady {
 		listenerState = "listening"
 	}
 	m.mu.Lock()
@@ -531,7 +556,11 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 		m.lastReadyAt = time.Now().Unix()
 		m.lastError = ""
 	} else {
-		m.lastError = fmt.Sprintf("VNC listener not ready on port %d", port)
+		if listenerReady && !isServiceRunning(serviceState) {
+			m.lastError = fmt.Sprintf("VNC service %s while listener accepts TCP on port %d", displayServiceState(serviceState), port)
+		} else {
+			m.lastError = fmt.Sprintf("VNC listener not ready on port %d", port)
+		}
 	}
 	m.mu.Unlock()
 	if ready {
@@ -541,6 +570,9 @@ func (m *Manager) ensureAlwaysOn(ctx context.Context, reason string) error {
 			m.logf("VNC service ready port=%d reason=%s", port, reason)
 		}
 		return nil
+	}
+	if listenerReady && !isServiceRunning(serviceState) {
+		return fmt.Errorf("VNC service %s while listener accepts TCP on port %d", displayServiceState(serviceState), port)
 	}
 	return fmt.Errorf("VNC listener not ready on port %d", port)
 }
@@ -565,6 +597,38 @@ func (m *Manager) credentialPayload(requestID string, reason string) map[string]
 		"display_topology":       displayTopology,
 		"display_virtual_bounds": displayVirtualBounds,
 		"ready":                  ready,
+		"service_state":          serviceState,
+		"listener_state":         listenerState,
+		"port":                   port,
+		"auth_verified":          false,
+		"auth_verify_reason":     "local_probe_disabled",
+	}
+}
+
+func (m *Manager) credentialErrorPayload(requestID string, reason string, err error) map[string]any {
+	m.mu.Lock()
+	port := m.port
+	serviceState := m.lastServiceState
+	listenerState := m.lastListenerState
+	m.mu.Unlock()
+	detail := ""
+	if err != nil {
+		detail = strings.TrimSpace(err.Error())
+	}
+	if detail == "" {
+		detail = "VNC service not ready"
+	}
+	displayTopology, displayVirtualBounds := m.displaySnapshot()
+	return map[string]any{
+		"status":                 "error",
+		"error":                  "vnc_service_not_ready",
+		"detail":                 detail,
+		"agent_id":               m.agentID(),
+		"request_id":             requestID,
+		"reason":                 reason,
+		"display_topology":       displayTopology,
+		"display_virtual_bounds": displayVirtualBounds,
+		"ready":                  false,
 		"service_state":          serviceState,
 		"listener_state":         listenerState,
 		"port":                   port,
@@ -622,6 +686,10 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string, reason
 		state = m.queryServiceState(ctx, service)
 	}
 	_ = m.configureService(ctx, service)
+	state = m.stabilizeServiceState(ctx, service, state, reason)
+	if isServicePending(state) {
+		return fmt.Errorf("UltraVNC service is %s", displayServiceState(state))
+	}
 	if state == "RUNNING" {
 		if strings.TrimSpace(reloadReason) != "" {
 			return m.restartService(ctx, service, reloadReason)
@@ -636,16 +704,40 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string, reason
 	return m.startService(ctx, service)
 }
 
+func (m *Manager) stabilizeServiceState(ctx context.Context, service string, state string, reason string) string {
+	if !isServicePending(state) {
+		return state
+	}
+	m.logf("VNC service pending service=%s state=%s reason=%s", service, displayServiceState(state), reason)
+	stableState := m.waitForServiceStable(ctx, service, serviceTransitionWait)
+	if !isServicePending(stableState) {
+		return stableState
+	}
+	if strings.EqualFold(stableState, "STOP_PENDING") && m.forceKillServiceProcess(ctx, service, reason) {
+		stableState = m.waitForServiceStable(ctx, service, serviceTransitionForceKillWait)
+	}
+	return stableState
+}
+
 func (m *Manager) startService(ctx context.Context, service string) error {
 	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "start", service)
 	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
-	if err != nil && !isServiceAlreadyRunning(result, output, err) {
+	alreadyRunning := isServiceAlreadyRunning(result, output, err)
+	if err != nil && !alreadyRunning {
 		return err
 	}
-	if result.ExitCode != 0 && !isServiceAlreadyRunning(result, output, err) {
+	if result.ExitCode != 0 && !alreadyRunning {
 		return fmt.Errorf("UltraVNC service start failed: %s", output)
 	}
 	m.logf("VNC service start requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
+	verifyWait := serviceTransitionWait
+	if alreadyRunning {
+		verifyWait = serviceAlreadyRunningVerifyWait
+	}
+	state := m.waitForServiceStable(ctx, service, verifyWait)
+	if !isServiceRunning(state) {
+		return fmt.Errorf("UltraVNC service start did not reach RUNNING; state=%s", displayServiceState(state))
+	}
 	return nil
 }
 
@@ -682,12 +774,78 @@ func (m *Manager) waitForServiceNotRunning(ctx context.Context, service string, 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		state := m.queryServiceState(ctx, service)
-		if !isServiceRunning(state) {
+		if !isServiceRunning(state) && !isServicePending(state) {
 			return true
 		}
-		time.Sleep(250 * time.Millisecond)
+		sleepRemaining(deadline, 250*time.Millisecond)
 	}
-	return !isServiceRunning(m.queryServiceState(ctx, service))
+	state := m.queryServiceState(ctx, service)
+	return !isServiceRunning(state) && !isServicePending(state)
+}
+
+func (m *Manager) waitForServiceStable(ctx context.Context, service string, timeout time.Duration) string {
+	deadline := time.Now().Add(timeout)
+	lastState := ""
+	for time.Now().Before(deadline) {
+		lastState = m.queryServiceState(ctx, service)
+		if !isServicePending(lastState) {
+			return lastState
+		}
+		sleepRemaining(deadline, 250*time.Millisecond)
+	}
+	if lastState == "" {
+		lastState = m.queryServiceState(ctx, service)
+	}
+	return lastState
+}
+
+func (m *Manager) forceKillServiceProcess(ctx context.Context, service string, reason string) bool {
+	pid := m.queryServicePID(ctx, service)
+	if pid <= 0 {
+		m.logf("VNC service pending force-kill skipped service=%s reason=%s pid=0", service, reason)
+		return false
+	}
+	result, err := m.runner(ctx, 20*time.Second, "taskkill.exe", "/PID", strconv.Itoa(pid), "/F")
+	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
+	if err != nil || result.ExitCode != 0 {
+		m.logf("VNC service pending force-kill failed service=%s reason=%s pid=%d exit_code=%d error=%v output=%s", service, reason, pid, result.ExitCode, err, compactLogText(output))
+		return false
+	}
+	m.logf("VNC service pending force-kill completed service=%s reason=%s pid=%d output=%s", service, reason, pid, compactLogText(output))
+	return true
+}
+
+func (m *Manager) queryServicePID(ctx context.Context, service string) int {
+	result, err := m.runner(ctx, 10*time.Second, "sc.exe", "queryex", service)
+	if err != nil || result.ExitCode != 0 {
+		return 0
+	}
+	for _, line := range strings.Split(result.Stdout+"\n"+result.Stderr, "\n") {
+		if !strings.Contains(strings.ToUpper(line), "PID") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		pid, err := strconv.Atoi(fields[len(fields)-1])
+		if err == nil && pid > 0 {
+			return pid
+		}
+	}
+	return 0
+}
+
+func sleepRemaining(deadline time.Time, maxSleep time.Duration) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return
+	}
+	if remaining < maxSleep {
+		time.Sleep(remaining)
+		return
+	}
+	time.Sleep(maxSleep)
 }
 
 func (m *Manager) createService(ctx context.Context, service string) error {
@@ -1137,7 +1295,12 @@ func displayServiceState(value string) string {
 
 func isServiceRunning(value string) bool {
 	normalized := strings.ToUpper(strings.TrimSpace(value))
-	return normalized == "RUNNING" || normalized == "START_PENDING"
+	return normalized == "RUNNING"
+}
+
+func isServicePending(value string) bool {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	return strings.HasSuffix(normalized, "_PENDING")
 }
 
 func fileExists(path string) bool {
