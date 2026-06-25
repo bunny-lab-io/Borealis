@@ -30,6 +30,20 @@ func TestOperatorRealtimeHubBroadcastsGoOwnedEvents(t *testing.T) {
 	expectRealtimeEvent(t, events, "borealis_notification")
 }
 
+func TestOperatorRealtimeHubTracksSubscriberPresence(t *testing.T) {
+	hub := newOperatorRealtimeHub()
+	events := hub.subscribe()
+	defer hub.unsubscribe(events)
+	expectRealtimeEvent(t, events, "server_operator_presence_changed")
+	if got := hub.subscriberCount(); got != 1 {
+		t.Fatalf("expected one subscriber, got %d", got)
+	}
+	hub.unsubscribe(events)
+	if got := hub.subscriberCount(); got != 0 {
+		t.Fatalf("expected no subscribers, got %d", got)
+	}
+}
+
 func TestOperatorRealtimeRejectsUnknownDeviceEvent(t *testing.T) {
 	hub := newOperatorRealtimeHub()
 	if err := hub.broadcastDeviceEvent(context.Background(), "device_processes_changed", map[string]any{}); err == nil {
@@ -67,12 +81,15 @@ func TestWriteSSEEventEncodesNamedPayload(t *testing.T) {
 
 func expectRealtimeEvent(t *testing.T, events <-chan operatorRealtimeEvent, name string) {
 	t.Helper()
-	select {
-	case event := <-events:
-		if event.Name != name {
-			t.Fatalf("expected event %s, got %+v", name, event)
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Name == name {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for event %s", name)
 		}
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for event %s", name)
 	}
 }

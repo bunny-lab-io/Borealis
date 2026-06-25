@@ -349,6 +349,117 @@ func TestDeviceServiceActionMarksPendingAndEmitsWorkerEvent(t *testing.T) {
 	}
 }
 
+func TestDeviceServiceActionRetriesTransientSocketGap(t *testing.T) {
+	originalGrace := serviceActionSocketGrace
+	originalPoll := serviceActionSocketPoll
+	serviceActionSocketGrace = 200 * time.Millisecond
+	serviceActionSocketPoll = time.Millisecond
+	t.Cleanup(func() {
+		serviceActionSocketGrace = originalGrace
+		serviceActionSocketPoll = originalPoll
+	})
+
+	eventAttempts := 0
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/event" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		eventAttempts++
+		if eventAttempts == 1 {
+			_ = json.NewEncoder(w).Encode(map[string]any{"emitted": false})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"emitted": true})
+	}))
+	defer worker.Close()
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		serviceSnapshot: deviceServicesSnapshot{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Reported: 1700000000,
+			Route:    routeForTestWorker(t, worker.URL),
+			Services: []map[string]any{
+				{
+					"service_id":  "spooler",
+					"name":        "Spooler",
+					"status_code": "running",
+					"status":      "Running",
+					"captured_at": int64(1700000000),
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/services/LAB-OPERATOR-01/action", bytes.NewReader([]byte(`{"service_name":"Spooler","action":"restart"}`)))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if eventAttempts != 2 {
+		t.Fatalf("expected two service event attempts, got %d", eventAttempts)
+	}
+	if store.persistedServiceHost != "LAB-OPERATOR-01" {
+		t.Fatalf("expected service snapshot persisted after retry, got host=%q", store.persistedServiceHost)
+	}
+}
+
+func TestDeviceServiceActionReturnsUnavailableWhenSocketStaysMissing(t *testing.T) {
+	originalGrace := serviceActionSocketGrace
+	originalPoll := serviceActionSocketPoll
+	serviceActionSocketGrace = 0
+	serviceActionSocketPoll = time.Millisecond
+	t.Cleanup(func() {
+		serviceActionSocketGrace = originalGrace
+		serviceActionSocketPoll = originalPoll
+	})
+
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/remote-ops/host-service/event" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"emitted": false})
+	}))
+	defer worker.Close()
+	store := &fakeSoftwareIconStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		serviceSnapshot: deviceServicesSnapshot{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Reported: 1700000000,
+			Route:    routeForTestWorker(t, worker.URL),
+			Services: []map[string]any{
+				{
+					"service_id":  "spooler",
+					"name":        "Spooler",
+					"status_code": "running",
+					"status":      "Running",
+					"captured_at": int64(1700000000),
+				},
+			},
+		},
+	}
+	mux := http.NewServeMux()
+	registerSoftwareRoutes(mux, softwareIconTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/services/LAB-OPERATOR-01/action", bytes.NewReader([]byte(`{"service_name":"Spooler","action":"restart"}`)))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.persistedServiceHost != "" {
+		t.Fatalf("did not expect persisted pending state when socket stayed missing")
+	}
+}
+
 func TestDeviceServicesHandlerPropagatesStoreNotFound(t *testing.T) {
 	store := &fakeSoftwareIconStore{
 		profile:       operatorProfile{Username: "operator", Role: "Admin"},

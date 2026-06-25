@@ -3,7 +3,13 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,11 +36,11 @@ var composeServiceSpecs = []struct {
 	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
 
-func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
-	mux.HandleFunc("/api/server/overview", serverOverviewHandler(auth))
+func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, realtime *operatorRealtimeHub, _ http.Handler) {
+	mux.HandleFunc("/api/server/overview", serverOverviewHandler(auth, realtime))
 }
 
-func serverOverviewHandler(auth *authService) http.HandlerFunc {
+func serverOverviewHandler(auth *authService, realtime *operatorRealtimeHub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
@@ -46,7 +52,7 @@ func serverOverviewHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		payload, err := collectServerOverviewPayload(ctx, auth.store)
+		payload, err := collectServerOverviewPayload(ctx, auth.store, realtime)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -55,7 +61,7 @@ func serverOverviewHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func collectServerOverviewPayload(ctx context.Context, store operatorStore) (map[string]any, error) {
+func collectServerOverviewPayload(ctx context.Context, store operatorStore, realtime *operatorRealtimeHub) (map[string]any, error) {
 	workerPayload := map[string]any{
 		"active_count":              int64(0),
 		"manager_active_count":      int64(0),
@@ -97,7 +103,7 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore) (map
 		"site_worker_settings":   collectSiteWorkerSettingsPayload(),
 		"agent_release_channels": releasePayload,
 		"remote_desktop":         collectOverviewRemoteDesktopPayload(),
-		"operator_session_count": int64(0),
+		"operator_session_count": overviewOperatorSessionCount(realtime),
 		"workers":                workerPayload,
 	}, nil
 }
@@ -238,15 +244,217 @@ func collectOverviewWireGuardPayload(ctx context.Context, store operatorStore) m
 func collectOverviewPublicEdgePayload() map[string]any {
 	endpointHost := firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_HOST")), strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")))
 	endpointPort := parseIntDefault(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_PORT"), parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_PORT"), 30000))
+	fqdn := strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME"))
+	acmePath := overviewACMEStoragePath()
+	certificates, certificateReadError := collectOverviewACMECertificates(acmePath, fqdn)
 	return map[string]any{
 		"enabled":            parseTruthy(os.Getenv("BOREALIS_PUBLIC_EDGE_ENABLED")),
-		"fqdn":               strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
-		"acme_email":         "",
+		"fqdn":               fqdn,
+		"acme_email":         overviewACMEEmail(),
 		"public_base_url":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
 		"public_vnc_path":    firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_VNC_PATH")), "/remote-desktop/vnc"),
 		"wireguard_endpoint": endpointDisplay(endpointHost, endpointPort),
-		"certificates":       []any{},
+		"certificates":       certificates,
+		"certificate_count":  len(certificates),
+		"acme_storage_path":  acmePath,
+		"acme_read_error":    certificateReadError,
 	}
+}
+
+func overviewOperatorSessionCount(realtime *operatorRealtimeHub) int64 {
+	if realtime == nil {
+		return 0
+	}
+	return realtime.subscriberCount()
+}
+
+func overviewACMEEmail() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_ACME_EMAIL")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_TRAEFIK_ACME_EMAIL")); value != "" {
+		return value
+	}
+	if value := cleanText(overviewTraefikSettings()["acme_email"]); value != "" {
+		return value
+	}
+	return ""
+}
+
+func overviewACMEStoragePath() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_TRAEFIK_ACME_STORAGE_PATH")); value != "" {
+		return value
+	}
+	if value := cleanText(overviewTraefikSettings()["acme_storage_path"]); value != "" {
+		return value
+	}
+	return filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "acme.json")
+}
+
+func overviewTraefikSettings() map[string]any {
+	settingsPath := strings.TrimSpace(os.Getenv("BOREALIS_TRAEFIK_SETTINGS_PATH"))
+	if settingsPath == "" {
+		settingsPath = filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "Settings.json")
+	}
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		return map[string]any{}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return map[string]any{}
+	}
+	return payload
+}
+
+func collectOverviewACMECertificates(acmePath string, fqdn string) ([]any, string) {
+	acmePath = strings.TrimSpace(acmePath)
+	if acmePath == "" {
+		return []any{}, "acme_path_unavailable"
+	}
+	content, err := os.ReadFile(acmePath)
+	if err != nil {
+		return []any{}, err.Error()
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return []any{}, err.Error()
+	}
+	rows := []any{}
+	for resolverName, resolverRaw := range payload {
+		resolver, ok := resolverRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		certificates, _ := resolver["Certificates"].([]any)
+		if len(certificates) == 0 {
+			certificates, _ = resolver["certificates"].([]any)
+		}
+		for _, certRaw := range certificates {
+			certEntry, ok := certRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if row := overviewACMECertificateRow(resolverName, certEntry, fqdn); row != nil {
+				rows = append(rows, row)
+			}
+		}
+	}
+	return rows, ""
+}
+
+func overviewACMECertificateRow(resolverName string, certEntry map[string]any, fqdn string) map[string]any {
+	certificatePEM := cleanText(certEntry["certificate"])
+	if certificatePEM == "" {
+		certificatePEM = cleanText(certEntry["Certificate"])
+	}
+	if certificatePEM == "" {
+		return nil
+	}
+	decoded, err := base64.StdEncoding.DecodeString(certificatePEM)
+	if err == nil && len(decoded) > 0 {
+		certificatePEM = string(decoded)
+	}
+	block, _ := pem.Decode([]byte(certificatePEM))
+	if block == nil {
+		return map[string]any{
+			"name":     overviewACMEDomainName(certEntry, fqdn),
+			"resolver": cleanText(resolverName),
+			"status":   "parse_failed",
+			"severity": "critical",
+			"source":   "traefik_acme",
+		}
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return map[string]any{
+			"name":     overviewACMEDomainName(certEntry, fqdn),
+			"resolver": cleanText(resolverName),
+			"status":   "parse_failed",
+			"severity": "critical",
+			"source":   "traefik_acme",
+		}
+	}
+	fingerprint := sha256.Sum256(cert.Raw)
+	domains := overviewACMEDomains(certEntry, cert)
+	name := firstText(overviewACMEDomainName(certEntry, fqdn), cert.Subject.CommonName, fqdn)
+	now := time.Now().UTC()
+	daysRemaining := int64(cert.NotAfter.UTC().Sub(now).Hours() / 24)
+	severity := "healthy"
+	status := "valid"
+	if !cert.NotAfter.After(now) {
+		severity = "critical"
+		status = "expired"
+	} else if daysRemaining <= 30 {
+		severity = "warning"
+		status = "expiring"
+	}
+	return map[string]any{
+		"name":               name,
+		"domains":            domains,
+		"resolver":           cleanText(resolverName),
+		"source":             "traefik_acme",
+		"status":             status,
+		"severity":           severity,
+		"not_before":         cert.NotBefore.UTC().Format(time.RFC3339),
+		"expires_at":         cert.NotAfter.UTC().Format(time.RFC3339),
+		"days_remaining":     daysRemaining,
+		"issuer":             cert.Issuer.String(),
+		"subject":            cert.Subject.String(),
+		"serial_number":      cert.SerialNumber.String(),
+		"sha256_fingerprint": strings.ToUpper(hex.EncodeToString(fingerprint[:])),
+		"store":              firstText(cleanText(certEntry["Store"]), cleanText(certEntry["store"])),
+	}
+}
+
+func overviewACMEDomainName(certEntry map[string]any, fqdn string) string {
+	if domain, ok := certEntry["domain"].(map[string]any); ok {
+		if value := cleanText(domain["main"]); value != "" {
+			return value
+		}
+	}
+	if domain, ok := certEntry["Domain"].(map[string]any); ok {
+		if value := cleanText(domain["main"]); value != "" {
+			return value
+		}
+	}
+	return strings.TrimSpace(fqdn)
+}
+
+func overviewACMEDomains(certEntry map[string]any, cert *x509.Certificate) []any {
+	seen := map[string]bool{}
+	values := []any{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	if domain, ok := certEntry["domain"].(map[string]any); ok {
+		add(cleanText(domain["main"]))
+		if sans, ok := domain["sans"].([]any); ok {
+			for _, san := range sans {
+				add(cleanText(san))
+			}
+		}
+	}
+	if domain, ok := certEntry["Domain"].(map[string]any); ok {
+		add(cleanText(domain["main"]))
+		if sans, ok := domain["sans"].([]any); ok {
+			for _, san := range sans {
+				add(cleanText(san))
+			}
+		}
+	}
+	if cert != nil {
+		add(cert.Subject.CommonName)
+		for _, name := range cert.DNSNames {
+			add(name)
+		}
+	}
+	return values
 }
 
 func collectOverviewSecurityPayload() map[string]any {

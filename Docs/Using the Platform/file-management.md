@@ -77,3 +77,4 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
     - Large transfers use site-worker temp-file staging behind Go API proxy routes plus device-authenticated pull/push endpoints.
     - Folder uploads use a manifest so nested paths do not need to fit in one socket payload.
     - Transfer progress doubles as a cancellation checkpoint.
+    - Inline text editing uses `@uiw/react-codemirror` plus Borealis-owned CodeMirror extensions. Vite dedupes `@codemirror/*` packages and npm overrides `@codemirror/state` so extension `instanceof` checks do not fail when editor setup and app extensions load through different dependency paths.

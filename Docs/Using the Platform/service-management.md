@@ -45,8 +45,7 @@ Pending state is shown until fresh agent service inventory confirms the result.
 
     ### Source map
 
-    - Service API: `Data/Engine/Containers/api-backend/data/services/API/devices/services.py`
-    - Service inventory API: `Data/Engine/Containers/api-backend/data/services/API/devices/service_inventory.py`
+    - Service API: `Data/Engine/Containers/api-backend/cmd/api-backend/device_services.go`
     - Service tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Service_List.jsx`
     - Agent service role: `Data/Agent/internal/roles/service_management/`
 
@@ -54,4 +53,5 @@ Pending state is shown until fresh agent service inventory confirms the result.
 
     - Service inventory is stored in the `devices.services` JSON payload.
     - Operator actions are merged into UI state as pending until a fresh agent inventory snapshot confirms final service state.
+    - Service-control dispatch retries transient SYSTEM socket gaps for a short grace window, then returns `agent_unavailable` with HTTP `503` if the Agent socket remains unavailable.
     - Watchdogs can use service state and service pending timeout rules.

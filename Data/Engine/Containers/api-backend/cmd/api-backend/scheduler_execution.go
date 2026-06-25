@@ -508,6 +508,10 @@ func (m *goSchedulerManager) scheduledAnsibleTargetSpecs(ctx context.Context, re
 }
 
 func scheduledSSHPrivateKeyContent(credential map[string]any) (string, error) {
+	return ansibleSSHPrivateKeyContent(credential, "scheduled Ansible runs")
+}
+
+func ansibleSSHPrivateKeyContent(credential map[string]any, contextLabel string) (string, error) {
 	privateKey := normalizeSSHPrivateKeyMaterial(cleanText(credential["private_key"]))
 	if privateKey == "" {
 		return "", nil
@@ -515,7 +519,7 @@ func scheduledSSHPrivateKeyContent(credential map[string]any) (string, error) {
 	password := cleanText(credential["password"])
 	if cleanText(credential["private_key_passphrase"]) != "" {
 		if password == "" {
-			return "", errors.New("Passphrase-protected SSH private keys require a credential password for scheduled Ansible runs.")
+			return "", fmt.Errorf("Passphrase-protected SSH private keys require a credential password for %s.", contextLabel)
 		}
 		return "", nil
 	}

@@ -6,6 +6,7 @@ const GO_REALTIME_EVENTS = [
   "device_inventory_changed",
   "device_services_changed",
   "borealis_notification",
+  "server_operator_presence_changed",
 ];
 
 function hasAuthCookie() {

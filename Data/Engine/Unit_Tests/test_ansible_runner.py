@@ -9,6 +9,7 @@ import json
 import logging
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -97,6 +98,23 @@ def _write_ansible_collections_manifest(project_root: Path) -> Path:
 def _mark_collection_installed(collections_root: Path, name: str) -> None:
     namespace, collection = name.split(".", 1)
     (collections_root / "ansible_collections" / namespace / collection).mkdir(parents=True, exist_ok=True)
+
+
+def test_runner_normalizes_staged_ssh_private_key_runtime_file(tmp_path: Path) -> None:
+    runner = EngineAnsibleRunner(socketio=_DummySocketIO(), db_conn_factory=lambda: sqlite3.connect(":memory:"))
+    raw_key = "-----BEGIN OPENSSH PRIVATE KEY-----\\r\\nbody\\n-----END OPENSSH PRIVATE KEY-----"
+
+    runner._stage_runtime_files(
+        tmp_path,
+        [{"relative_path": "auth/id_borealis_ssh", "content": raw_key, "mode": 0o600}],
+    )
+
+    key_path = tmp_path / "auth" / "id_borealis_ssh"
+    staged = key_path.read_text(encoding="utf-8")
+    assert "\\n" not in staged
+    assert "\r" not in staged
+    assert staged == "-----BEGIN OPENSSH PRIVATE KEY-----\nbody\n-----END OPENSSH PRIVATE KEY-----\n"
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
 
 
 def test_ansible_collections_stage_and_install_missing_collections(tmp_path: Path, monkeypatch) -> None:

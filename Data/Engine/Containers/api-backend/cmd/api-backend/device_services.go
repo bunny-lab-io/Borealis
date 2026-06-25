@@ -23,6 +23,8 @@ const (
 )
 
 var internalTokenContext = []byte("borealis-job-scheduler-internal-v1")
+var serviceActionSocketGrace = 8 * time.Second
+var serviceActionSocketPoll = 500 * time.Millisecond
 
 type deviceServicesStore interface {
 	loadDeviceServices(ctx context.Context, profile operatorProfile, hostname string) (deviceServicesSnapshot, int, error)
@@ -137,7 +139,7 @@ func deviceServiceActionHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		if snapshot.Route == nil {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "agent_unavailable"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "agent_unavailable"})
 			return
 		}
 		eventPayload := map[string]any{
@@ -149,14 +151,20 @@ func deviceServiceActionHandler(auth *authService) http.HandlerFunc {
 			"requested_by":  firstText(cleanText(profile.Username), "unknown"),
 			"service_label": serviceActionLabel(action),
 		}
-		result, _, workerErr := emitWorkerHostServiceEvent(r.Context(), auth, snapshot.Route, map[string]any{
+		result, workerStatus, workerErr := emitServiceControlEventWithSocketGrace(r.Context(), auth, snapshot.Route, map[string]any{
 			"hostname":     snapshot.Hostname,
 			"service_mode": "system",
 			"event_name":   "service_control_action",
 			"payload":      eventPayload,
-		}, 6*time.Second)
+		})
 		if workerErr != nil || !boolFromAny(result["emitted"]) {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "agent_unavailable"})
+			if workerErr == nil {
+				workerErr = map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
+			}
+			if workerStatus == 0 {
+				workerStatus = http.StatusServiceUnavailable
+			}
+			writeJSON(w, workerStatus, workerErr)
 			return
 		}
 		persistCtx, persistCancel := requestTimeout(r.Context(), auth)
@@ -178,6 +186,64 @@ func deviceServiceActionHandler(auth *authService) http.HandlerFunc {
 			"count":        len(updatedServices),
 			"services":     updatedServices,
 		})
+	}
+}
+
+func emitServiceControlEventWithSocketGrace(ctx context.Context, auth *authService, route *agentWorkerRoute, body map[string]any) (map[string]any, int, map[string]any) {
+	deadline := time.Now().Add(serviceActionSocketGrace)
+	var lastResult map[string]any
+	lastStatus := http.StatusServiceUnavailable
+	lastErr := map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
+	for {
+		result, status, workerErr := emitWorkerHostServiceEvent(ctx, auth, route, body, 6*time.Second)
+		if workerErr == nil && boolFromAny(result["emitted"]) {
+			return result, http.StatusOK, nil
+		}
+		lastResult = result
+		if workerErr != nil {
+			lastStatus = status
+			lastErr = workerErr
+		} else {
+			lastStatus = http.StatusServiceUnavailable
+			lastErr = map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
+		}
+		if !serviceControlDispatchRetryable(result, lastStatus, lastErr) {
+			return lastResult, lastStatus, lastErr
+		}
+		if serviceActionSocketGrace <= 0 || time.Now().After(deadline) {
+			return lastResult, lastStatus, lastErr
+		}
+		wait := serviceActionSocketPoll
+		if wait <= 0 {
+			wait = 500 * time.Millisecond
+		}
+		if remaining := time.Until(deadline); remaining < wait {
+			wait = remaining
+		}
+		if wait <= 0 {
+			return lastResult, lastStatus, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return lastResult, http.StatusServiceUnavailable, map[string]any{"error": "request_canceled", "message": "The service action request was canceled."}
+		case <-time.After(wait):
+		}
+	}
+}
+
+func serviceControlDispatchRetryable(result map[string]any, status int, payload map[string]any) bool {
+	if result != nil && boolFromAny(result["emitted"]) {
+		return false
+	}
+	errorCode := strings.ToLower(strings.TrimSpace(cleanText(payload["error"])))
+	switch errorCode {
+	case "", "agent_unavailable", "socket_unavailable", "site_worker_unavailable", "timeout", "worker_error":
+		return status == 0 ||
+			status == http.StatusConflict ||
+			status == http.StatusServiceUnavailable ||
+			status == http.StatusGatewayTimeout
+	default:
+		return false
 	}
 }
 

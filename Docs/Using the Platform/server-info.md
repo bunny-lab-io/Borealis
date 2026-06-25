@@ -71,6 +71,8 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     ### Runtime behavior
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
+    - Public-edge certificate health reads Traefik `acme.json` from the Engine state path, decodes base64 PEM certificate material, and reports expiry, severity, domains, resolver, and fingerprint in `/api/server/overview`.
+    - Active Operator Sessions counts live `/api/realtime/events` SSE subscribers. The realtime hub emits `server_operator_presence_changed` when subscribers connect or disconnect so Server Info can refresh without waiting for the next poll.
     - Service actions queue work items so API request can return before service changes interrupt runtime.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.

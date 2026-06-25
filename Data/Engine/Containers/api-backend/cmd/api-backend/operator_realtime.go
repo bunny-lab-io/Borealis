@@ -94,12 +94,15 @@ func operatorRealtimeEventsHandler(auth *authService, hub *operatorRealtimeHub) 
 
 func (h *operatorRealtimeHub) subscribe() chan operatorRealtimeEvent {
 	ch := make(chan operatorRealtimeEvent, 32)
+	var count int
 	h.mu.Lock()
 	if h.subscribers == nil {
 		h.subscribers = map[chan operatorRealtimeEvent]struct{}{}
 	}
 	h.subscribers[ch] = struct{}{}
+	count = len(h.subscribers)
 	h.mu.Unlock()
+	h.emitOperatorPresenceChanged(count)
 	return ch
 }
 
@@ -107,9 +110,30 @@ func (h *operatorRealtimeHub) unsubscribe(ch chan operatorRealtimeEvent) {
 	if h == nil || ch == nil {
 		return
 	}
+	var count int
 	h.mu.Lock()
 	delete(h.subscribers, ch)
+	count = len(h.subscribers)
 	h.mu.Unlock()
+	h.emitOperatorPresenceChanged(count)
+}
+
+func (h *operatorRealtimeHub) subscriberCount() int64 {
+	if h == nil {
+		return 0
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return int64(len(h.subscribers))
+}
+
+func (h *operatorRealtimeHub) emitOperatorPresenceChanged(count int) {
+	if h == nil {
+		return
+	}
+	_ = h.emit("server_operator_presence_changed", map[string]any{
+		"operator_session_count": int64(maxInt64(int64(count), 0)),
+	})
 }
 
 func (h *operatorRealtimeHub) emit(eventName string, payload map[string]any) error {

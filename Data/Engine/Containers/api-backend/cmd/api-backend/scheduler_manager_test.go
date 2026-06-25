@@ -314,6 +314,16 @@ func TestScheduledSSHPrivateKeyContentRejectsInvalidKeyWithoutPassword(t *testin
 	}
 }
 
+func TestAnsibleSSHPrivateKeyContentUsesContextInPassphraseError(t *testing.T) {
+	_, err := ansibleSSHPrivateKeyContent(map[string]any{
+		"private_key":            testOpenSSHPrivateKey(t),
+		"private_key_passphrase": "phrase",
+	}, "workflow Ansible runs")
+	if err == nil || !strings.Contains(err.Error(), "workflow Ansible runs") {
+		t.Fatalf("expected workflow context in passphrase error, got %v", err)
+	}
+}
+
 func TestApplyScheduledSSHCredentialHostVarsUsesDocumentedAuthFlags(t *testing.T) {
 	hostVars := map[string]any{}
 	applyScheduledSSHCredentialHostVars(hostVars, map[string]any{

@@ -1409,13 +1409,11 @@ func (s *postgresOperatorStore) workflowAnsibleTargetSpecs(ctx context.Context, 
 	privateKeyPath := ""
 	runtimeFiles := []any{}
 	if transport == "ssh" && credential != nil {
-		privateKey := workflowNormalizePrivateKey(cleanText(credential["private_key"]))
-		passphrase := cleanText(credential["private_key_passphrase"])
-		password := cleanText(credential["password"])
-		if privateKey != "" && passphrase != "" && password == "" {
-			return nil, nil, errors.New("Passphrase-protected SSH private keys require a credential password for workflow Ansible runs.")
+		privateKey, err := ansibleSSHPrivateKeyContent(credential, "workflow Ansible runs")
+		if err != nil {
+			return nil, nil, err
 		}
-		if privateKey != "" && passphrase == "" {
+		if privateKey != "" {
 			privateKeyPath = "{{BOREALIS_RUNTIME_DIR}}/auth/id_borealis_ssh"
 			runtimeFiles = append(runtimeFiles, map[string]any{"relative_path": "auth/id_borealis_ssh", "content": privateKey, "mode": 384})
 		}
@@ -1589,10 +1587,6 @@ func workflowAnsibleRouteSiteID(specs []any) int64 {
 		}
 	}
 	return 0
-}
-
-func workflowNormalizePrivateKey(value string) string {
-	return normalizeSSHPrivateKeyMaterial(value)
 }
 
 func workflowApplySSHCredentialHostVars(hostVars map[string]any, credential map[string]any, privateKeyPath string) {

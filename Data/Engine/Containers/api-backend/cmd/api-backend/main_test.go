@@ -2713,7 +2713,7 @@ func TestServerOverviewHandlerRequiresAdmin(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverOverviewHandler(auth).ServeHTTP(recorder, request)
+	serverOverviewHandler(auth, nil).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2735,11 +2735,14 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 		"workers":      []any{map[string]any{"worker_guid": "worker-1", "status": "running"}},
 	}
 	store.githubToken = map[string]any{"has_token": true, "reset_required": false, "reset_at": int64(0)}
+	realtime := newOperatorRealtimeHub()
+	events := realtime.subscribe()
+	defer realtime.unsubscribe(events)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/server/overview", nil)
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverOverviewHandler(auth).ServeHTTP(recorder, request)
+	serverOverviewHandler(auth, realtime).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
@@ -2764,6 +2767,9 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	workers := payload["workers"].(map[string]any)
 	if got := workers["active_count"]; got != float64(1) {
 		t.Fatalf("expected worker active count 1, got %#v", got)
+	}
+	if got := payload["operator_session_count"]; got != float64(1) {
+		t.Fatalf("expected operator session count 1, got %#v", got)
 	}
 }
 
