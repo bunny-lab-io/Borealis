@@ -27,6 +27,7 @@ import {
   GRID_WRAPPER_SX,
   formatTimestamp,
   gridTheme,
+  promptRequiredSuppressionReason,
   severityColor,
 } from "../Automation/Watchdogs/shared.jsx";
 
@@ -257,13 +258,18 @@ export default function ActiveAlerts() {
   const toggleSelectedQueue = useCallback(async () => {
     if (!selectedRows.length || !queueToggleMode) return;
     const desiredState = queueToggleMode === "reopen" ? "open" : "suppressed";
-    const reason =
-      desiredState === "suppressed"
-        ? window.prompt("Optional suppression reason for the selected alerts:", "Temporarily suppressed from Alerts.") ||
-          "Temporarily suppressed from Alerts."
-        : "";
-    setActionBusy(true);
     setError("");
+    let reason = "";
+    if (desiredState === "suppressed") {
+      const promptedReason = promptRequiredSuppressionReason("Suppression reason required for the selected alerts:");
+      if (promptedReason === null) return;
+      if (!promptedReason) {
+        setError("Enter a suppression reason before suppressing selected alerts.");
+        return;
+      }
+      reason = promptedReason;
+    }
+    setActionBusy(true);
     try {
       await Promise.all(
         selectedRows.map((row) =>

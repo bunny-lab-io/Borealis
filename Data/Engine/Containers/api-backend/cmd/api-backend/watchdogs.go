@@ -513,14 +513,20 @@ func watchdogIncidentStateUpdate(w http.ResponseWriter, r *http.Request, auth *a
 	}
 	body := map[string]any{}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body)
+	requestedState := firstText(cleanText(body["state"]), "open")
+	requestedReason := cleanText(body["reason"])
+	if normalizeIncidentMutationState(requestedState) == "suppressed" && cleanSingleLine(requestedReason) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": []string{"Suppression reason is required."}})
+		return
+	}
 	ctx, cancel := watchdogTimeoutContext(r.Context(), auth)
 	defer cancel()
 	incident, validationErrors, err := store.updateWatchdogIncidentState(
 		ctx,
 		profile,
 		incidentID,
-		firstText(cleanText(body["state"]), "open"),
-		cleanText(body["reason"]),
+		requestedState,
+		requestedReason,
 	)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -1243,7 +1249,10 @@ func (s *postgresOperatorStore) upsertDeviceWatchdogOverride(ctx context.Context
 	if state == "" {
 		state = "suppressed"
 	}
-	reason := cleanSingleLine(firstText(cleanText(body["reason"]), fmt.Sprintf("Temporarily %s by operator.", state)))
+	reason := cleanSingleLine(cleanText(body["reason"]))
+	if !clearOverride && reason == "" {
+		return nil, []string{"Suppression reason is required."}, nil
+	}
 	now := time.Now().Unix()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -1332,7 +1341,7 @@ func upsertWatchdogOverrideStateTx(ctx context.Context, tx *sql.Tx, watchdogID i
 			       resolution_reason=$1,
 			       updated_at=$2
 			 WHERE id=$3
-		`, state, now, incidentID.Int64); err != nil {
+		`, reason, now, incidentID.Int64); err != nil {
 			return err
 		}
 	}
@@ -1479,6 +1488,9 @@ func (s *postgresOperatorStore) updateWatchdogIncidentState(ctx context.Context,
 	desiredState := normalizeIncidentMutationState(state)
 	if desiredState == "" {
 		return nil, []string{"Unsupported incident state transition."}, nil
+	}
+	if desiredState == "suppressed" && cleanSingleLine(reason) == "" {
+		return nil, []string{"Suppression reason is required."}, nil
 	}
 	target, found, err := s.findVisibleWatchdogIncident(ctx, profile, incidentID, "all")
 	if err != nil {
