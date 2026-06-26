@@ -141,7 +141,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 7. Prune empty legacy runtime paths.
 8. Resolve public hostname and ACME email.
 9. Detect deployment profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
-10. Compute service input hashes from source, Dockerfile, build context, target mode, and dependency inputs.
+10. Compute service input hashes from each service's declared source, Dockerfile, build context, target mode, and dependency inputs.
 11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
 12. Write `Engine/Deploy/image-manifest.json`.
 13. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
@@ -177,6 +177,8 @@ Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
+- Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
+- `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.

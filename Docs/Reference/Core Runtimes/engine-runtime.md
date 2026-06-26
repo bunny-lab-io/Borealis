@@ -45,7 +45,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - TLS and signing certificates live under `Engine/Services/api-backend/secrets/Certificates/`.
     - Bundled official assemblies live under `Data/Engine/Containers/api-backend/data/Official_Assemblies/`; managed Aurora checkout lives under `Engine/Services/api-backend/cache/Aurora/`.
     - The Compose project name is `borealis-engine`.
-    - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`.
+    - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`. Hashes use declared service inputs, not the repo-wide Git commit.
+    - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` prepares that binary only after one of those images is known to need a Docker rebuild, then reuses it within the same deploy pass.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
     - Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
