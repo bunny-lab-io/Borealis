@@ -83,6 +83,14 @@ During deployment, Borealis will install missing dependencies, prepare runtime c
     curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch optimization/agent-context-socket-consolidation deploy prod
     ```
 
+### Docker Storage Cleanup
+Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images, clears Docker builder cache, and removes Engine Buildx cache exports so old image tags and build snapshots do not fill root storage over time.
+
+`site-worker` images are handled carefully because the scheduler may need the current image even when no site-worker container is running. Borealis keeps the current site-worker image available and removes stale site-worker tags separately.
+
+!!! warning "Shared Docker Hosts"
+    Engine hosts should be dedicated to Borealis. Docker cleanup removes unused images and build cache from the host, which may affect unrelated Docker workloads if you co-host them. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` before deploy only when you intentionally need to preserve unused Docker images or build cache.
+
 ### Configure the Engine
 You will be asked as series of questions during initial setup for a new engine.  The questions will be generally straight-forward and not too complicated.
 

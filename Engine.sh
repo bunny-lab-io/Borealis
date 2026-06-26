@@ -1407,6 +1407,98 @@ build_images() {
   done
 }
 
+engine_docker_cleanup_enabled() {
+  case "${BOREALIS_SKIP_DOCKER_PRUNE:-0}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+prune_stale_site_worker_images() {
+  local active_tag="${IMAGE_TAGS[site-worker]:-}"
+  [[ -n "${active_tag}" ]] || return 0
+  local stale_images=()
+  mapfile -t stale_images < <(
+    docker image ls \
+      --filter "label=io.borealis.service=site-worker" \
+      --format '{{.Repository}}:{{.Tag}}' \
+      | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
+  )
+  ((${#stale_images[@]} > 0)) || return 0
+  log_status "Docker cleanup" "Pruning stale site-worker images" "${C_YELLOW}"
+  local image=""
+  for image in "${stale_images[@]}"; do
+    if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
+      printf '[%s] Failed to remove stale site-worker image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
+    fi
+  done
+}
+
+restore_required_engine_images() {
+  local mode="$1"
+  local missing_services=()
+  local service=""
+  for service in "${BUILD_ROLES[@]}"; do
+    local tag="${IMAGE_TAGS[${service}]:-}"
+    [[ -n "${tag}" ]] || continue
+    if ! docker image inspect "${tag}" >/dev/null 2>&1; then
+      missing_services+=("${service}")
+    fi
+  done
+  ((${#missing_services[@]} > 0)) || return 0
+
+  log_status "Docker cleanup" "Restoring required images" "${C_YELLOW}"
+  GO_API_BACKEND_BINARY_PREPARED=0
+  for service in "${missing_services[@]}"; do
+    build_service_image "${service}" "${mode}"
+  done
+}
+
+prune_engine_build_cache_exports() {
+  local cache_root="${DEPLOY_DIR}/cache/buildkit"
+  [[ -d "${cache_root}" ]] || return 0
+  log_status "Docker cleanup" "Clearing Engine build cache" "${C_YELLOW}"
+  if ! find "${cache_root}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + >> "${BUILD_LOG}" 2>&1; then
+    log_status "Docker cleanup" "Engine build cache cleanup failed" "${C_RED}"
+    printf '[%s] Failed to clear Engine Buildx cache export directory %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
+  fi
+}
+
+prune_engine_docker_storage() {
+  local mode="$1"
+  if ! engine_docker_cleanup_enabled; then
+    log_status "Docker cleanup" "Skipped" "${C_DIM}"
+    printf '[%s] Docker cleanup skipped because BOREALIS_SKIP_DOCKER_PRUNE is set\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    return 0
+  fi
+
+  local cleanup_failed=0
+  log_status "Docker cleanup" "Pruning inactive images" "${C_YELLOW}"
+  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" >> "${BUILD_LOG}" 2>&1; then
+    cleanup_failed=1
+    log_status "Docker cleanup" "Image prune failed" "${C_RED}"
+  fi
+
+  prune_stale_site_worker_images
+  restore_required_engine_images "${mode}"
+
+  log_status "Docker cleanup" "Pruning builder cache" "${C_YELLOW}"
+  if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then
+    cleanup_failed=1
+    log_status "Docker cleanup" "Builder prune failed" "${C_RED}"
+  fi
+
+  prune_engine_build_cache_exports
+
+  if [[ "${cleanup_failed}" -eq 0 ]]; then
+    log_status "Docker cleanup" "Complete" "${C_GREEN}"
+  else
+    log_status "Docker cleanup" "Completed with warnings" "${C_YELLOW}"
+  fi
+}
+
 write_image_manifest() {
   local mode="$1"
   python3 - "${IMAGE_MANIFEST}" "${mode}" "${BUILD_ROLES[@]}" <<PY
@@ -1877,6 +1969,7 @@ deploy_engine() {
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Compose" "Already Up-to-Date" "${C_GREEN}"
     write_deploy_manifest "${mode}" "skipped"
+    prune_engine_docker_storage "${mode}"
     log_webui_url
     return 0
   fi
@@ -1884,12 +1977,14 @@ deploy_engine() {
     log_status "Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
     compose_base up -d --no-deps --no-build "${target_services[@]}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
+    prune_engine_docker_storage "${mode}"
     log_webui_url
     return 0
   fi
   log_status "Compose" "Reconciling Stack" "${C_YELLOW}"
   compose_base up -d --no-build
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
+  prune_engine_docker_storage "${mode}"
   log_webui_url
 }
 
@@ -1921,6 +2016,7 @@ service_action() {
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
+      prune_engine_docker_storage "${mode}"
       log_webui_url
       ;;
     reload)
