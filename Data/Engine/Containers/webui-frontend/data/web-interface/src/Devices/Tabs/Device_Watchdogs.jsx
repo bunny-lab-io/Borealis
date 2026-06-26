@@ -21,7 +21,12 @@ import {
 } from "@mui/icons-material";
 
 import { APP_PATHS } from "../../app/routes/paths.js";
-import { formatTimestamp, severityColor, summarizeRuleResults } from "../../Automation/Watchdogs/shared.jsx";
+import {
+  formatTimestamp,
+  promptRequiredSuppressionReason,
+  severityColor,
+  summarizeRuleResults,
+} from "../../Automation/Watchdogs/shared.jsx";
 
 function SectionShell({ title, subtitle, action, children }) {
   return (
@@ -192,12 +197,18 @@ export default function DeviceWatchdogsTab({
   const saveOverride = useCallback(
     async ({ watchdogId, clear = false }) => {
       if (!resolvedDeviceKey || !watchdogId) return;
-      const reason = clear
-        ? ""
-        : window.prompt("Optional suppression reason for this device:", "Temporarily suppressed for this device.") ||
-          "Temporarily suppressed for this device.";
-      setActionBusy(true);
       setError("");
+      let reason = "";
+      if (!clear) {
+        const promptedReason = promptRequiredSuppressionReason("Suppression reason required for this device:");
+        if (promptedReason === null) return;
+        if (!promptedReason) {
+          setError("Enter a suppression reason before suppressing this watchdog for the device.");
+          return;
+        }
+        reason = promptedReason;
+      }
+      setActionBusy(true);
       try {
         const response = await fetch(`/api/devices/${encodeURIComponent(resolvedDeviceKey)}/watchdogs/overrides`, {
           method: "POST",

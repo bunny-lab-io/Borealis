@@ -23,11 +23,15 @@ Clicking the same status pill again clears that filter back to all alerts.
 - `Suppressed`: operator muted current incident without marking condition fixed.
 - `Resolved`: condition cleared, policy disabled/archived, target disappeared, or telemetry became stale long enough to auto-resolve.
 
+Suppressing alerts requires a reason. If the reason prompt is cancelled or left blank, Borealis leaves the alert open and does not change incident state.
+
 Offline-only incidents are purged when the device checks back in.
 
 ## Device-Level Alerts
 
 Device Summary has a `Watchdogs` tab for active incidents, effective watchdog assignments, and device-level overrides. Use it when one device needs local context or a one-device suppression.
+
+Device-level suppressions also require a reason so other operators can tell why the shared watchdog policy was muted for one endpoint.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -55,5 +59,6 @@ Device Summary has a `Watchdogs` tab for active incidents, effective watchdog as
     ### Runtime behavior
 
     - Queue-level suppression is an incident state transition.
+    - Queue-level suppression and device-level watchdog override suppression require non-empty `reason` values.
     - Device-level suppressions live separately in `watchdog_device_overrides`.
     - Incident rows include watchdog, device, site, severity, title, sampled data, acknowledgement metadata, and timestamps.

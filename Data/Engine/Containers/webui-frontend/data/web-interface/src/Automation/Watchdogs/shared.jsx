@@ -139,6 +139,15 @@ export function severityColor(severity) {
   return "#fcd34d";
 }
 
+export function promptRequiredSuppressionReason(message) {
+  const promptFn =
+    typeof window !== "undefined" && typeof window.prompt === "function" ? window.prompt.bind(window) : null;
+  if (!promptFn) return "";
+  const value = promptFn(message, "");
+  if (value === null) return null;
+  return String(value || "").trim();
+}
+
 export function summarizeRuleResults(sample) {
   const entries = Array.isArray(sample?.results) ? sample.results : [];
   return entries

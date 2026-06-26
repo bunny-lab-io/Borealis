@@ -524,6 +524,16 @@ func TestDeviceWatchdogOverrideHandlerReturnsValidationErrors(t *testing.T) {
 	}
 }
 
+func TestDeviceWatchdogOverrideHandlerRequiresSuppressionReason(t *testing.T) {
+	store := &fakeWatchdogStore{overrideErrors: []string{"Suppression reason is required."}}
+	recorder := httptest.NewRecorder()
+	deviceWatchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/devices/LAB-OPERATOR-01/watchdogs/overrides", `{"watchdog_id":7,"state":"suppressed","reason":"  "}`))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestWatchdogIncidentAcknowledgeUsesGoRoute(t *testing.T) {
 	store := &fakeWatchdogStore{
 		ackIncident: map[string]any{"id": int64(12), "watchdog_id": int64(4), "hostname": "host-1"},
@@ -559,6 +569,21 @@ func TestWatchdogIncidentStateUpdatePassesPayload(t *testing.T) {
 	}
 	if store.stateID != 12 || store.stateValue != "suppressed" || store.stateReason != "maintenance" {
 		t.Fatalf("unexpected state update id=%d state=%q reason=%q", store.stateID, store.stateValue, store.stateReason)
+	}
+}
+
+func TestWatchdogIncidentStateUpdateRequiresSuppressionReason(t *testing.T) {
+	store := &fakeWatchdogStore{
+		stateIncident: map[string]any{"id": int64(12), "watchdog_id": int64(4), "hostname": "host-1", "state": "suppressed"},
+	}
+	recorder := httptest.NewRecorder()
+	watchdogTestMux(store).ServeHTTP(recorder, watchdogJSONRequest(http.MethodPost, "/api/watchdogs/incidents/12/state", `{"state":"suppressed","reason":"  "}`))
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.stateID != 0 {
+		t.Fatalf("blank suppression reason should be rejected before store call, got id=%d", store.stateID)
 	}
 }
 
