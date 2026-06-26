@@ -150,6 +150,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 16. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
 17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
 18. Write `Engine/Deploy/deploy-manifest.json`.
+19. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports after successful reconciliation.
 
 Build order follows `Engine.sh` local build roles. `docker-proxy` is an external image and is not locally built.
 ```text
@@ -176,9 +177,11 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
+- Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and clear Engine Buildx cache exports under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
+- `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags separately.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.

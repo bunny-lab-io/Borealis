@@ -49,6 +49,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` prepares that binary only after one of those images is known to need a Docker rebuild, then reuses it within the same deploy pass.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
+    - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, Docker builder cache, and Engine Buildx cache exports. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
+    - The current `site-worker` image is preserved even when no site-worker container is running. Stale site-worker tags are removed separately so scheduler-launched workers can still start after cleanup.
     - Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
     - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
     - Image tag changes and WebUI mode changes are kept out of shared service state hashes; a WebUI-only image change or prod/dev mode flip should run scoped Compose reconciliation for `webui-frontend` only when the rest of the stack is healthy.
