@@ -1057,6 +1057,367 @@ const DescriptionCellEditor = React.memo(function DescriptionCellEditor({
   );
 });
 
+function getDeviceReadinessToneStyles(tone) {
+  if (tone === "danger") {
+    return {
+      border: "rgba(248,113,113,0.42)",
+      background: "linear-gradient(135deg, rgba(127,29,29,0.42), rgba(15,23,42,0.74))",
+      icon: "#fca5a5",
+      accent: "#fca5a5",
+    };
+  }
+  if (tone === "warning") {
+    return {
+      border: "rgba(250,204,21,0.42)",
+      background: "linear-gradient(135deg, rgba(113,63,18,0.42), rgba(15,23,42,0.74))",
+      icon: "#fde68a",
+      accent: "#fde68a",
+    };
+  }
+  if (tone === "ready") {
+    return {
+      border: "rgba(52,211,153,0.38)",
+      background: "linear-gradient(135deg, rgba(6,78,59,0.38), rgba(15,23,42,0.74))",
+      icon: MAGIC_UI.accentC,
+      accent: MAGIC_UI.accentC,
+    };
+  }
+  return {
+    border: MAGIC_UI.panelBorder,
+    background: "linear-gradient(135deg, rgba(15,23,42,0.82), rgba(7,11,24,0.72))",
+    icon: MAGIC_UI.accentA,
+    accent: MAGIC_UI.accentA,
+  };
+}
+
+function DeviceReadinessStatusPill({ id, label, value, tone = "muted", onClick = null, valueColor = "" }) {
+  const toneStyles = getDeviceReadinessToneStyles(tone);
+  return (
+    <Box
+      component={onClick ? "button" : "div"}
+      type={onClick ? "button" : undefined}
+      key={id}
+      onClick={onClick || undefined}
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.8,
+        minHeight: 30,
+        px: 1.15,
+        borderRadius: 999,
+        border: `1px solid ${toneStyles.border}`,
+        background: "rgba(2,6,23,0.44)",
+        minWidth: 0,
+        cursor: onClick ? "pointer" : "default",
+        font: "inherit",
+        textDecoration: "none",
+        "&:hover": onClick
+          ? {
+              borderColor: "rgba(125,183,255,0.52)",
+              background: "rgba(125,211,252,0.07)",
+            }
+          : undefined,
+        "&:focus-visible": onClick
+          ? {
+              outline: `2px solid ${BOREALIS_LINK_COLOR}`,
+              outlineOffset: 2,
+            }
+          : undefined,
+      }}
+    >
+      <Typography
+        component="span"
+        sx={{
+          color: MAGIC_UI.textMuted,
+          fontSize: "0.68rem",
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+          fontWeight: 700,
+          lineHeight: 1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        component="span"
+        title={String(value || "")}
+        sx={{
+          color: valueColor || toneStyles.accent,
+          fontSize: "0.76rem",
+          fontWeight: 700,
+          lineHeight: 1.1,
+          minWidth: 0,
+          maxWidth: { xs: 180, md: 260 },
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          textDecoration: "none",
+        }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+function getDeviceReadinessConnectionRowMeta(tone) {
+  if (tone === "danger") {
+    return {
+      color: "#fca5a5",
+      border: "rgba(248,113,113,0.28)",
+      hoverBorder: "rgba(248,113,113,0.68)",
+      background: "rgba(248,113,113,0.06)",
+      hoverBackground: "rgba(248,113,113,0.11)",
+      Icon: ErrorOutlineRoundedIcon,
+    };
+  }
+  if (tone === "warning") {
+    return {
+      color: "#fde68a",
+      border: "rgba(250,204,21,0.28)",
+      hoverBorder: "rgba(250,204,21,0.68)",
+      background: "rgba(250,204,21,0.06)",
+      hoverBackground: "rgba(250,204,21,0.11)",
+      Icon: WarningAmberRoundedIcon,
+    };
+  }
+  if (tone === "ready") {
+    return {
+      color: MAGIC_UI.accentC,
+      border: "rgba(52,211,153,0.28)",
+      hoverBorder: "rgba(52,211,153,0.68)",
+      background: "rgba(52,211,153,0.06)",
+      hoverBackground: "rgba(52,211,153,0.11)",
+      Icon: CheckCircleRoundedIcon,
+    };
+  }
+  return {
+    color: MAGIC_UI.accentA,
+    border: "rgba(125,211,252,0.24)",
+    hoverBorder: "rgba(125,211,252,0.6)",
+    background: "rgba(125,211,252,0.05)",
+    hoverBackground: "rgba(125,211,252,0.1)",
+    Icon: HelpOutlineRoundedIcon,
+  };
+}
+
+function renderDeviceReadinessConnectionTooltip(row) {
+  return (
+    <Box sx={{ maxWidth: 300 }}>
+      <Typography sx={{ color: "#fff", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.25 }}>
+        {row.label}: {row.value}
+      </Typography>
+      <Typography sx={{ color: "rgba(226,232,240,0.86)", fontSize: "0.68rem", lineHeight: 1.35, mt: 0.45 }}>
+        {row.detail}
+      </Typography>
+    </Box>
+  );
+}
+
+function DeviceReadinessConnectionRow({ row, index }) {
+  const rowMeta = getDeviceReadinessConnectionRowMeta(row.tone);
+  const RowIcon = rowMeta.Icon;
+  return (
+    <Tooltip key={`${row.group || "connection"}-${row.label}-${index}`} title={renderDeviceReadinessConnectionTooltip(row)} arrow placement="right">
+      <Box sx={{ minWidth: 0, width: "100%" }}>
+        <Box
+          sx={{
+            width: "100%",
+            minHeight: 31,
+            px: 0.65,
+            py: 0.4,
+            borderRadius: 1.3,
+            border: `1px solid ${rowMeta.border}`,
+            background: rowMeta.background,
+            color: MAGIC_UI.textBright,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-start",
+            gap: 0.65,
+            textAlign: "left",
+            overflow: "hidden",
+            cursor: "help",
+            "&:hover": {
+              borderColor: rowMeta.hoverBorder,
+              background: rowMeta.hoverBackground,
+            },
+          }}
+        >
+          <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
+          <Box sx={{ minWidth: 0, flex: 1 }}>
+            <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
+              {row.label}
+            </Typography>
+            <Typography sx={{ mt: 0.1, color: rowMeta.color, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
+              {row.value}
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+    </Tooltip>
+  );
+}
+
+const DeviceReadinessHeader = React.memo(function DeviceReadinessHeader({
+  engineConnection,
+  roleHealthSummary,
+  agentManagementSummary,
+  agentManagementGroups,
+  agentHealthRows,
+}) {
+  const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
+  const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
+  const readinessPills = useMemo(
+    () => [
+      {
+        id: "engine-connection",
+        label: "Agent Management",
+        value: engineConnection.value,
+        tone: engineConnection.tone,
+        valueColor: BOREALIS_LINK_COLOR,
+        onClick: (event) => setAgentManagementAnchor(event.currentTarget),
+      },
+      {
+        id: "roles",
+        label: "Roles",
+        value: roleHealthSummary.label,
+        tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
+        valueColor: BOREALIS_LINK_COLOR,
+        onClick: (event) => setRoleHealthAnchor(event.currentTarget),
+      },
+    ],
+    [
+      engineConnection.tone,
+      engineConnection.value,
+      roleHealthSummary.count,
+      roleHealthSummary.label,
+      roleHealthSummary.unhealthyCount,
+    ]
+  );
+
+  return (
+    <>
+      <Box
+        sx={{
+          borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
+          background:
+            "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
+            "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
+          px: { xs: 1.5, md: 2 },
+          py: 1.15,
+          display: "flex",
+          alignItems: "center",
+          minWidth: 0,
+        }}
+      >
+        <Stack
+          direction="row"
+          spacing={0.75}
+          useFlexGap
+          flexWrap="wrap"
+          justifyContent="flex-start"
+          sx={{ minWidth: 0 }}
+        >
+          {readinessPills.map((pill) => (
+            <DeviceReadinessStatusPill key={pill.id} {...pill} />
+          ))}
+        </Stack>
+      </Box>
+      <Menu
+        anchorEl={agentManagementAnchor}
+        open={Boolean(agentManagementAnchor)}
+        onClose={() => setAgentManagementAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 0.8,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: 430,
+            maxWidth: "calc(100vw - 40px)",
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+            p: 1.1,
+          }}
+        >
+          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
+            Agent management connection
+          </Typography>
+          <Typography sx={{ mt: 0.2, color: engineConnection.tone === "ready" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
+            {agentManagementSummary}
+          </Typography>
+          <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
+            {agentManagementGroups.map((group, groupIndex) => (
+              <Box key={group.label} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
+                <Typography
+                  sx={{
+                    mb: 0.35,
+                    color: MAGIC_UI.textMuted,
+                    fontSize: "0.58rem",
+                    fontWeight: 800,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {group.label}
+                </Typography>
+                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+                  {group.rows.map((row, index) => (
+                    <DeviceReadinessConnectionRow key={`${row.group || "connection"}-${row.label}-${index}`} row={row} index={index} />
+                  ))}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      </Menu>
+      <Menu
+        anchorEl={roleHealthAnchor}
+        open={Boolean(roleHealthAnchor)}
+        onClose={() => setRoleHealthAnchor(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+        transformOrigin={{ vertical: "top", horizontal: "left" }}
+        PaperProps={{
+          sx: {
+            bgcolor: "rgba(8,12,24,0.98)",
+            color: "#fff",
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            borderRadius: 2,
+            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
+            p: 0.8,
+            mt: 0.7,
+            overflow: "visible",
+          },
+        }}
+      >
+        <RuntimeRoleHealthBreakdown
+          runtimeRows={agentHealthRows}
+          sx={{
+            width: 430,
+            maxWidth: "calc(100vw - 40px)",
+            border: "none",
+            boxShadow: "none",
+            background: "transparent",
+          }}
+        />
+      </Menu>
+    </>
+  );
+});
+
 export default function DeviceSummary() {
   const loaderData = useLoaderData();
   const location = useLocation();
@@ -1175,8 +1536,6 @@ export default function DeviceSummary() {
   const [summaryDataReady, setSummaryDataReady] = useState(() => Boolean(loaderSnapshot));
   const [tunnelInfo, setTunnelInfo] = useState(TUNNEL_INFO_IDLE);
   const [menuAnchor, setMenuAnchor] = useState(null);
-  const [agentManagementAnchor, setAgentManagementAnchor] = useState(null);
-  const [roleHealthAnchor, setRoleHealthAnchor] = useState(null);
   const [expandedDeviceNavSections, setExpandedDeviceNavSections] = useState({
     inventory: true,
     backend: true,
@@ -3709,252 +4068,6 @@ export default function DeviceSummary() {
     [activityHostname]
   );
 
-  const getToneStyles = (tone) => {
-    if (tone === "danger") {
-      return {
-        border: "rgba(248,113,113,0.42)",
-        background: "linear-gradient(135deg, rgba(127,29,29,0.42), rgba(15,23,42,0.74))",
-        icon: "#fca5a5",
-        accent: "#fca5a5",
-      };
-    }
-    if (tone === "warning") {
-      return {
-        border: "rgba(250,204,21,0.42)",
-        background: "linear-gradient(135deg, rgba(113,63,18,0.42), rgba(15,23,42,0.74))",
-        icon: "#fde68a",
-        accent: "#fde68a",
-      };
-    }
-    if (tone === "ready") {
-      return {
-        border: "rgba(52,211,153,0.38)",
-        background: "linear-gradient(135deg, rgba(6,78,59,0.38), rgba(15,23,42,0.74))",
-        icon: MAGIC_UI.accentC,
-        accent: MAGIC_UI.accentC,
-      };
-    }
-    return {
-      border: MAGIC_UI.panelBorder,
-      background: "linear-gradient(135deg, rgba(15,23,42,0.82), rgba(7,11,24,0.72))",
-      icon: MAGIC_UI.accentA,
-      accent: MAGIC_UI.accentA,
-    };
-  };
-
-  const renderStatusPill = ({ id, label, value, tone = "muted", onClick = null, valueColor = "" }) => {
-    const toneStyles = getToneStyles(tone);
-    return (
-      <Box
-        component={onClick ? "button" : "div"}
-        type={onClick ? "button" : undefined}
-        key={id}
-        onClick={onClick || undefined}
-        sx={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.8,
-          minHeight: 30,
-          px: 1.15,
-          borderRadius: 999,
-          border: `1px solid ${toneStyles.border}`,
-          background: "rgba(2,6,23,0.44)",
-          minWidth: 0,
-          cursor: onClick ? "pointer" : "default",
-          font: "inherit",
-          textDecoration: "none",
-          "&:hover": onClick
-            ? {
-                borderColor: "rgba(125,183,255,0.52)",
-                background: "rgba(125,211,252,0.07)",
-              }
-            : undefined,
-          "&:focus-visible": onClick
-            ? {
-                outline: `2px solid ${BOREALIS_LINK_COLOR}`,
-                outlineOffset: 2,
-              }
-            : undefined,
-        }}
-      >
-        <Typography
-          component="span"
-          sx={{
-            color: MAGIC_UI.textMuted,
-            fontSize: "0.68rem",
-            letterSpacing: 0.4,
-            textTransform: "uppercase",
-            fontWeight: 700,
-            lineHeight: 1,
-            whiteSpace: "nowrap",
-          }}
-        >
-          {label}
-        </Typography>
-        <Typography
-          component="span"
-          title={String(value || "")}
-          sx={{
-            color: valueColor || toneStyles.accent,
-            fontSize: "0.76rem",
-            fontWeight: 700,
-            lineHeight: 1.1,
-            minWidth: 0,
-            maxWidth: { xs: 180, md: 260 },
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            textDecoration: "none",
-          }}
-        >
-          {value}
-        </Typography>
-      </Box>
-    );
-  };
-
-  const getConnectionRowMeta = (tone) => {
-    if (tone === "danger") {
-      return {
-        color: "#fca5a5",
-        border: "rgba(248,113,113,0.28)",
-        hoverBorder: "rgba(248,113,113,0.68)",
-        background: "rgba(248,113,113,0.06)",
-        hoverBackground: "rgba(248,113,113,0.11)",
-        Icon: ErrorOutlineRoundedIcon,
-      };
-    }
-    if (tone === "warning") {
-      return {
-        color: "#fde68a",
-        border: "rgba(250,204,21,0.28)",
-        hoverBorder: "rgba(250,204,21,0.68)",
-        background: "rgba(250,204,21,0.06)",
-        hoverBackground: "rgba(250,204,21,0.11)",
-        Icon: WarningAmberRoundedIcon,
-      };
-    }
-    if (tone === "ready") {
-      return {
-        color: MAGIC_UI.accentC,
-        border: "rgba(52,211,153,0.28)",
-        hoverBorder: "rgba(52,211,153,0.68)",
-        background: "rgba(52,211,153,0.06)",
-        hoverBackground: "rgba(52,211,153,0.11)",
-        Icon: CheckCircleRoundedIcon,
-      };
-    }
-    return {
-      color: MAGIC_UI.accentA,
-      border: "rgba(125,211,252,0.24)",
-      hoverBorder: "rgba(125,211,252,0.6)",
-      background: "rgba(125,211,252,0.05)",
-      hoverBackground: "rgba(125,211,252,0.1)",
-      Icon: HelpOutlineRoundedIcon,
-    };
-  };
-
-  const renderConnectionTooltip = (row) => (
-    <Box sx={{ maxWidth: 300 }}>
-      <Typography sx={{ color: "#fff", fontSize: "0.72rem", fontWeight: 800, lineHeight: 1.25 }}>
-        {row.label}: {row.value}
-      </Typography>
-      <Typography sx={{ color: "rgba(226,232,240,0.86)", fontSize: "0.68rem", lineHeight: 1.35, mt: 0.45 }}>
-        {row.detail}
-      </Typography>
-    </Box>
-  );
-
-  const renderConnectionDetailRow = (row, index) => {
-    const rowMeta = getConnectionRowMeta(row.tone);
-    const RowIcon = rowMeta.Icon;
-    return (
-      <Tooltip key={`${row.group || "connection"}-${row.label}-${index}`} title={renderConnectionTooltip(row)} arrow placement="right">
-        <Box sx={{ minWidth: 0, width: "100%" }}>
-          <Box
-            sx={{
-              width: "100%",
-              minHeight: 31,
-              px: 0.65,
-              py: 0.4,
-              borderRadius: 1.3,
-              border: `1px solid ${rowMeta.border}`,
-              background: rowMeta.background,
-              color: MAGIC_UI.textBright,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-start",
-              gap: 0.65,
-              textAlign: "left",
-              overflow: "hidden",
-              cursor: "help",
-              "&:hover": {
-                borderColor: rowMeta.hoverBorder,
-                background: rowMeta.hoverBackground,
-              },
-            }}
-          >
-            <RowIcon sx={{ color: rowMeta.color, fontSize: 15, flexShrink: 0 }} />
-            <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.66rem", fontWeight: 740, lineHeight: 1.12 }} noWrap>
-                {row.label}
-              </Typography>
-              <Typography sx={{ mt: 0.1, color: rowMeta.color, fontSize: "0.59rem", fontWeight: 700, lineHeight: 1.1 }} noWrap>
-                {row.value}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-      </Tooltip>
-    );
-  };
-
-  const readinessPills = [
-    {
-      id: "engine-connection",
-      label: "Agent Management",
-      value: engineConnection.value,
-      tone: engineConnection.tone,
-      valueColor: BOREALIS_LINK_COLOR,
-      onClick: (event) => setAgentManagementAnchor(event.currentTarget),
-    },
-    {
-      id: "roles",
-      label: "Roles",
-      value: roleHealthSummary.label,
-      tone: roleHealthSummary.unhealthyCount > 0 ? "danger" : roleHealthSummary.count > 0 ? "ready" : "muted",
-      valueColor: BOREALIS_LINK_COLOR,
-      onClick: (event) => setRoleHealthAnchor(event.currentTarget),
-    },
-  ];
-
-  const renderReadinessHeader = () => (
-    <Box
-      sx={{
-        borderBottom: `1px solid ${MAGIC_UI.panelBorder}`,
-        background:
-          "linear-gradient(135deg, rgba(7,11,24,0.92), rgba(15,23,42,0.78)), " +
-          "radial-gradient(120% 120% at 0% 0%, rgba(125,211,252,0.12), transparent 55%)",
-        px: { xs: 1.5, md: 2 },
-        py: 1.15,
-        display: "flex",
-        alignItems: "center",
-        minWidth: 0,
-      }}
-    >
-      <Stack
-        direction="row"
-        spacing={0.75}
-        useFlexGap
-        flexWrap="wrap"
-        justifyContent="flex-start"
-        sx={{ minWidth: 0 }}
-      >
-        {readinessPills.map(renderStatusPill)}
-      </Stack>
-    </Box>
-  );
-
   const renderDeviceNavBadge = (badge) =>
     badge ? (
       <Box
@@ -4358,94 +4471,6 @@ export default function DeviceSummary() {
         </MenuItem>
       </Menu>
       <Menu
-        anchorEl={agentManagementAnchor}
-        open={Boolean(agentManagementAnchor)}
-        onClose={() => setAgentManagementAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.98)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 2,
-            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
-            p: 0.8,
-            mt: 0.7,
-            overflow: "visible",
-          },
-        }}
-      >
-        <Box
-          sx={{
-            width: 430,
-            maxWidth: "calc(100vw - 40px)",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-            p: 1.1,
-          }}
-        >
-          <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "0.78rem", fontWeight: 760, lineHeight: 1.2 }}>
-            Agent management connection
-          </Typography>
-          <Typography sx={{ mt: 0.2, color: engineConnection.tone === "ready" ? MAGIC_UI.accentA : MAGIC_UI.textMuted, fontSize: "0.67rem", lineHeight: 1.25 }}>
-            {agentManagementSummary}
-          </Typography>
-          <Box sx={{ mt: 0.9, display: "flex", flexDirection: "column", gap: 0.85 }}>
-            {agentManagementGroups.map((group, groupIndex) => (
-              <Box key={group.label} sx={{ minWidth: 0, mt: groupIndex > 0 ? 0.7 : 0 }}>
-                <Typography
-                  sx={{
-                    mb: 0.35,
-                    color: MAGIC_UI.textMuted,
-                    fontSize: "0.58rem",
-                    fontWeight: 800,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                  }}
-                >
-                  {group.label}
-                </Typography>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
-                  {group.rows.map(renderConnectionDetailRow)}
-                </Box>
-              </Box>
-            ))}
-          </Box>
-        </Box>
-      </Menu>
-      <Menu
-        anchorEl={roleHealthAnchor}
-        open={Boolean(roleHealthAnchor)}
-        onClose={() => setRoleHealthAnchor(null)}
-        anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
-        transformOrigin={{ vertical: "top", horizontal: "left" }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.98)",
-            color: "#fff",
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            borderRadius: 2,
-            boxShadow: "0 24px 70px rgba(2,6,23,0.68)",
-            p: 0.8,
-            mt: 0.7,
-            overflow: "visible",
-          },
-        }}
-      >
-        <RuntimeRoleHealthBreakdown
-          runtimeRows={agentHealthRows}
-          sx={{
-            width: 430,
-            maxWidth: "calc(100vw - 40px)",
-            border: "none",
-            boxShadow: "none",
-            background: "transparent",
-          }}
-        />
-      </Menu>
-      <Menu
         anchorReference="anchorPosition"
         anchorPosition={releaseChannelMenuPosition || undefined}
         open={Boolean(releaseChannelMenuPosition)}
@@ -4605,7 +4630,13 @@ export default function DeviceSummary() {
             boxShadow: MAGIC_UI.glow,
           }}
         >
-          {renderReadinessHeader()}
+          <DeviceReadinessHeader
+            engineConnection={engineConnection}
+            roleHealthSummary={roleHealthSummary}
+            agentManagementSummary={agentManagementSummary}
+            agentManagementGroups={agentManagementGroups}
+            agentHealthRows={agentHealthRows}
+          />
           <Box
             id="device-summary-workspace-scrollhost"
             sx={{
