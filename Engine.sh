@@ -89,6 +89,7 @@ declare -A IMAGE_HASHES
 declare -A DOCKERFILES
 declare -A BUILD_CONTEXTS
 declare -A BUILD_STATUSES
+GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
@@ -1160,7 +1161,6 @@ compute_service_hash() {
 import hashlib
 import json
 import pathlib
-import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -1213,16 +1213,6 @@ digest.update(
     f"context={entry.get('context')}\n"
     f"target={targets.get(mode) or ''}\n".encode("utf-8")
 )
-if service == "api-backend":
-    try:
-        commit = subprocess.check_output(
-            ["git", "-C", str(root), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        commit = ""
-    digest.update(f"api_backend_version={commit}\n".encode("utf-8"))
 for rel in sorted(files, key=lambda p: str(p)):
     path = root / rel
     digest.update(str(rel).encode("utf-8") + b"\0")
@@ -1295,9 +1285,14 @@ prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
     api-backend|job-scheduler)
+      if [[ "${GO_API_BACKEND_BINARY_PREPARED}" == "1" ]]; then
+        printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+        return 0
+      fi
       log_status "${service}" "Building Go binary" "${C_YELLOW}"
       BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
         "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1
+      GO_API_BACKEND_BINARY_PREPARED=1
       ;;
   esac
 }
@@ -1305,7 +1300,6 @@ prepare_service_build_artifacts() {
 build_service_image() {
   local service="$1"
   local mode="$2"
-  prepare_service_build_artifacts "${service}"
   local image_hash
   image_hash="$(compute_service_hash "${service}" "${mode}")"
   local tag="borealis-engine/${service}:sha-${image_hash:0:12}"
@@ -1341,6 +1335,20 @@ build_service_image() {
     fi
   fi
 
+  prepare_service_build_artifacts "${service}"
+  local prepared_hash
+  prepared_hash="$(compute_service_hash "${service}" "${mode}")"
+  if [[ "${prepared_hash}" != "${image_hash}" ]]; then
+    image_hash="${prepared_hash}"
+    tag="borealis-engine/${service}:sha-${image_hash:0:12}"
+    IMAGE_HASHES["${service}"]="${image_hash}"
+    IMAGE_TAGS["${service}"]="${tag}"
+    if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
+      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      printf '[%s] %s unchanged after artifact preparation as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
+      return 0
+    fi
+  fi
   log_status "${service}" "(Re)Building" "${C_YELLOW}"
   {
     printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
@@ -1392,6 +1400,7 @@ build_images() {
   fi
   local service=""
   : > "${BUILD_LOG}"
+  GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${selected[@]}"; do
     validate_build_role "${service}"
     build_service_image "${service}" "${mode}"
