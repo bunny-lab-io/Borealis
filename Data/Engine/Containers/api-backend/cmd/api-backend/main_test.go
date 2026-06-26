@@ -1847,10 +1847,28 @@ func TestAgentSocketConnectionHandlerAggregatesSiteWorkerSnapshots(t *testing.T)
 		})
 	}))
 	defer worker.Close()
+	workerTwo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/agents" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agents": map[string]any{
+				"LAB-DOCKER-02_18CAE439-2849-472B-A799-6814C32A210B_SYSTEM": map[string]any{
+					"agent_id":     "LAB-DOCKER-02_18CAE439-2849-472B-A799-6814C32A210B_SYSTEM",
+					"guid":         "18CAE439-2849-472B-A799-6814C32A210B",
+					"hostname":     "lab-docker-02",
+					"service_mode": "system",
+				},
+			},
+		})
+	}))
+	defer workerTwo.Close()
 
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Operator"})
 	route := routeForTestWorker(t, worker.URL)
-	store.agentSocketRoutes = []agentWorkerRoute{*route}
+	routeTwo := routeForTestWorker(t, workerTwo.URL)
+	routeTwo.WorkerGUID = "worker-2"
+	store.agentSocketRoutes = []agentWorkerRoute{*route, *routeTwo}
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/agent-sockets", nil)
@@ -1870,12 +1888,20 @@ func TestAgentSocketConnectionHandlerAggregatesSiteWorkerSnapshots(t *testing.T)
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Count != 1 || len(payload.Agents) != 1 {
+	if payload.Count != 2 || len(payload.Agents) != 2 {
 		t.Fatalf("unexpected socket payload %+v", payload)
 	}
-	agent := payload.Agents[0]
-	if agent["agent_guid"] != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" || agent["hostname"] != "lab-operator-01" {
-		t.Fatalf("unexpected agent socket row %+v", agent)
+	byHost := map[string]map[string]any{}
+	for _, agent := range payload.Agents {
+		byHost[cleanText(agent["hostname"])] = agent
+	}
+	agent := byHost["lab-operator-01"]
+	if agent == nil || agent["agent_guid"] != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" {
+		t.Fatalf("unexpected agent socket rows %+v", payload.Agents)
+	}
+	secondAgent := byHost["lab-docker-02"]
+	if secondAgent == nil || secondAgent["agent_guid"] != "18CAE439-2849-472B-A799-6814C32A210B" {
+		t.Fatalf("expected second same-site worker socket row, got %+v", payload.Agents)
 	}
 	if agent["connected"] != true || agent["service_mode"] != "system" {
 		t.Fatalf("expected connected system socket, got %+v", agent)

@@ -92,7 +92,6 @@ func (s *postgresOperatorStore) listAgentSocketRoutes(ctx context.Context, profi
 	defer rows.Close()
 
 	routes := []agentWorkerRoute{}
-	seenSites := map[int64]bool{}
 	for rows.Next() {
 		var route agentWorkerRoute
 		if err := rows.Scan(
@@ -106,10 +105,9 @@ func (s *postgresOperatorStore) listAgentSocketRoutes(ctx context.Context, profi
 		); err != nil {
 			return nil, err
 		}
-		if route.SiteID <= 0 || seenSites[route.SiteID] {
+		if route.SiteID <= 0 {
 			continue
 		}
-		seenSites[route.SiteID] = true
 		routes = append(routes, route)
 	}
 	return routes, rows.Err()

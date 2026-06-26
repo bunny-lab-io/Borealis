@@ -351,6 +351,7 @@ const ROLE_HEALTHY_STATUS_CODES = Object.freeze(
     "complete",
     "completed",
     "not_applicable",
+    "no_desktop_environment_active",
     "unsupported",
   ])
 );
