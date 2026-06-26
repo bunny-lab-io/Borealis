@@ -81,6 +81,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Device List status is derived from `devices.last_seen`, normalized `agent_role_health`, and `/api/agent-sockets` site-worker socket state.
     - `GET /api/devices` still keeps `status` as heartbeat-derived `Online` or `Offline` for API compatibility; Device List maps that data into `Healthy`, `Unhealthy`, or `Offline`.
     - `/api/agent-sockets` queries each active site-worker route for visible sites and reads every worker `/agents` registry snapshot.
+    - The `system:engine_socket` role-health row can confirm site-worker socket connectivity when it reports `healthy`, even if `/api/agent-sockets` misses the device during a refresh race.
     - Heavy inventory lands through `/api/agent/details`; heartbeat carries lightweight metrics and metadata deltas.
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.

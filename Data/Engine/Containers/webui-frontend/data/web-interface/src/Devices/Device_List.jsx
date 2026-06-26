@@ -416,11 +416,35 @@ function resolveAgentSocketConnected(lookup, { agentId = "", guid = "", hostname
   return false;
 }
 
+function compactRoleHealthKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function roleHealthStatusCode(role) {
+  return String(role?.status_code || role?.status || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+}
+
+function isEngineSocketRole(role) {
+  const keys = [
+    role?.role_id,
+    role?.role_name,
+    role?.role_label,
+    role?.label,
+    role?.name,
+  ].map(compactRoleHealthKey);
+  return keys.some((key) => key === "systemenginesocket" || key === "enginesocket");
+}
+
+function agentRoleHealthReportsSocketConnected(agentRoleHealth) {
+  const roles = Array.isArray(agentRoleHealth?.roles) ? agentRoleHealth.roles : [];
+  return roles.some((role) => isEngineSocketRole(role) && roleHealthStatusCode(role) === "healthy");
+}
+
 function agentRoleHealthNeedsAttention(agentRoleHealth) {
   const roles = Array.isArray(agentRoleHealth?.roles) ? agentRoleHealth.roles : [];
   if (!roles.length) return true;
   return roles.some((role) => {
-    const status = String(role?.status_code || role?.status || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const status = roleHealthStatusCode(role);
     if (!status) return true;
     return !ROLE_HEALTHY_STATUS_CODES.has(status);
   });
@@ -437,12 +461,14 @@ function resolveDeviceHealthStatus({ device, summary, lastSeen, connectionType, 
   const heartbeatStatus = statusFromHeartbeat(lastSeen);
   if (heartbeatStatus === "Offline") return DEVICE_HEALTH_STATUSES.offline;
   if (connectionType) return DEVICE_HEALTH_STATUSES.healthy;
-  if (agentSocketConnected === false) return DEVICE_HEALTH_STATUSES.unhealthy;
   const roleHealth =
     device?.agent_role_health ||
     summary?.agent_role_health ||
     device?.details?.summary?.agent_role_health ||
     null;
+  if (agentSocketConnected === false && !agentRoleHealthReportsSocketConnected(roleHealth)) {
+    return DEVICE_HEALTH_STATUSES.unhealthy;
+  }
   if (agentRoleHealthNeedsAttention(roleHealth)) return DEVICE_HEALTH_STATUSES.unhealthy;
   return DEVICE_HEALTH_STATUSES.healthy;
 }
