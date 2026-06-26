@@ -334,6 +334,118 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
 }
 
+const DEVICE_HEALTH_STATUSES = Object.freeze({
+  healthy: "Healthy",
+  unhealthy: "Unhealthy",
+  offline: "Offline",
+});
+
+const ROLE_HEALTHY_STATUS_CODES = Object.freeze(
+  new Set([
+    "healthy",
+    "loaded",
+    "ok",
+    "online",
+    "running",
+    "ready",
+    "complete",
+    "completed",
+    "not_applicable",
+    "unsupported",
+  ])
+);
+
+function normalizeDeviceHealthLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[_\s-]+/g, "_");
+  if (!normalized) return "";
+  if (normalized === "healthy" || normalized === "online") return DEVICE_HEALTH_STATUSES.healthy;
+  if (normalized === "unhealthy" || normalized === "degraded" || normalized === "recovering") {
+    return DEVICE_HEALTH_STATUSES.unhealthy;
+  }
+  if (normalized === "offline" || normalized === "down") return DEVICE_HEALTH_STATUSES.offline;
+  return "";
+}
+
+function normalizeAgentSocketMode(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[_\s-]+/g, "");
+  if (["system", "service", "svc", "systemservice"].includes(normalized)) return "system";
+  if (["currentuser", "interactive", "user"].includes(normalized)) return "currentuser";
+  return "";
+}
+
+function createAgentSocketLookup(records, available = true) {
+  const lookup = {
+    available,
+    agentIds: new Set(),
+    guids: new Set(),
+    hostnames: new Set(),
+    hostModes: new Set(),
+  };
+  (Array.isArray(records) ? records : []).forEach((record) => {
+    if (!record || typeof record !== "object") return;
+    const agentId = String(record.agent_id || "").trim().toLowerCase();
+    const guid = String(record.agent_guid || record.guid || "").trim().toLowerCase();
+    const hostname = String(record.hostname || "").trim().toLowerCase();
+    const serviceMode = normalizeAgentSocketMode(record.service_mode) || "system";
+    if (agentId) lookup.agentIds.add(agentId);
+    if (guid) lookup.guids.add(guid);
+    if (hostname) {
+      lookup.hostnames.add(hostname);
+      lookup.hostModes.add(`${hostname}|${serviceMode}`);
+      const helperContexts = Array.isArray(record.helper_contexts) ? record.helper_contexts : [];
+      helperContexts.forEach((context) => {
+        const helperMode = normalizeAgentSocketMode(context);
+        if (helperMode) lookup.hostModes.add(`${hostname}|${helperMode}`);
+      });
+    }
+  });
+  return lookup;
+}
+
+function resolveAgentSocketConnected(lookup, { agentId = "", guid = "", hostname = "", serviceMode = "system" } = {}) {
+  if (!lookup || lookup.available === false) return null;
+  const agentKey = String(agentId || "").trim().toLowerCase();
+  const guidKey = String(guid || "").trim().toLowerCase();
+  const hostKey = String(hostname || "").trim().toLowerCase();
+  const modeKey = normalizeAgentSocketMode(serviceMode) || "system";
+  if (agentKey && lookup.agentIds?.has(agentKey)) return true;
+  if (guidKey && lookup.guids?.has(guidKey)) return true;
+  if (hostKey && lookup.hostModes?.has(`${hostKey}|${modeKey}`)) return true;
+  if (hostKey && lookup.hostnames?.has(hostKey)) return true;
+  return false;
+}
+
+function agentRoleHealthNeedsAttention(agentRoleHealth) {
+  const roles = Array.isArray(agentRoleHealth?.roles) ? agentRoleHealth.roles : [];
+  if (!roles.length) return true;
+  return roles.some((role) => {
+    const status = String(role?.status_code || role?.status || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (!status) return true;
+    return !ROLE_HEALTHY_STATUS_CODES.has(status);
+  });
+}
+
+function resolveDeviceHealthStatus({ device, summary, lastSeen, connectionType, agentSocketConnected }) {
+  const explicit = normalizeDeviceHealthLabel(
+    device?.device_health_status ||
+      device?.agent_health_status ||
+      summary?.device_health_status ||
+      summary?.agent_health_status
+  );
+  if (explicit) return explicit;
+  const heartbeatStatus = statusFromHeartbeat(lastSeen);
+  if (heartbeatStatus === "Offline") return DEVICE_HEALTH_STATUSES.offline;
+  if (connectionType) return DEVICE_HEALTH_STATUSES.healthy;
+  if (agentSocketConnected === false) return DEVICE_HEALTH_STATUSES.unhealthy;
+  const roleHealth =
+    device?.agent_role_health ||
+    summary?.agent_role_health ||
+    device?.details?.summary?.agent_role_health ||
+    null;
+  if (agentRoleHealthNeedsAttention(roleHealth)) return DEVICE_HEALTH_STATUSES.unhealthy;
+  return DEVICE_HEALTH_STATUSES.healthy;
+}
+
 function extractGuidFromAgentId(value) {
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
   if (!text) return "";
@@ -371,6 +483,7 @@ function normalizeDeviceCollection(
   {
     tunnelLookup = new Map(),
     tunnelStatusLookup = new Map(),
+    agentSocketLookup = createAgentSocketLookup([], false),
   } = {}
 ) {
   const safeList = Array.isArray(list) ? list : [];
@@ -392,7 +505,6 @@ function normalizeDeviceCollection(
     const guidRaw = (device.agent_guid || summary.agent_guid || "").trim();
     const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
     const lastSeen = Number(device.last_seen || summary.last_seen || 0) || 0;
-    const status = device.status || statusFromHeartbeat(lastSeen);
 
     if (guidRaw && !summary.agent_guid) {
       summary.agent_guid = guidRaw;
@@ -456,6 +568,20 @@ function normalizeDeviceCollection(
     const connectionLabel =
       connectionType === "ssh" ? "SSH" : connectionType === "winrm" ? "WinRM" : "";
     const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || "").trim();
+    const agentSocketConnected = resolveAgentSocketConnected(agentSocketLookup, {
+      agentId,
+      guid: guidRaw,
+      hostname,
+      serviceMode: "system",
+    });
+    const status = device.status || summary.status || statusFromHeartbeat(lastSeen);
+    const healthStatus = resolveDeviceHealthStatus({
+      device,
+      summary,
+      lastSeen,
+      connectionType,
+      agentSocketConnected,
+    });
 
     const memoryList = Array.isArray(device.memory) ? device.memory : [];
     const networkList = Array.isArray(device.network) ? device.network : [];
@@ -477,6 +603,7 @@ function normalizeDeviceCollection(
       id: rowKey,
       hostname,
       status,
+      healthStatus,
       lastSeen,
       lastSeenDisplay: formatLastSeen(lastSeen),
       os: osName,
@@ -491,6 +618,13 @@ function normalizeDeviceCollection(
       createdIso: device.created_at_iso || "",
       agentGuid: guidRaw,
       agentId,
+      agentSocketConnected,
+      agentSocketStatus:
+        agentSocketConnected === null
+          ? "Unknown"
+          : agentSocketConnected
+            ? "Connected"
+            : "Disconnected",
       domain,
       internalIp,
       externalIp,
@@ -537,14 +671,17 @@ export async function loadDeviceListPageData(request) {
   const progress = createRouteRequestPlan(request, 5);
   try {
     await requireAuthenticatedRequest(request, progress);
-    const [devicesPayload, viewsPayload, sitesPayload] = await Promise.all([
+    const [devicesPayload, socketPayload, viewsPayload, sitesPayload] = await Promise.all([
       progress.fetchJson("/api/devices"),
+      progress.fetchJson("/api/agent-sockets").catch(() => ({ agents: [], unavailable: true })),
       progress.fetchJson("/api/device_list_views").catch(() => ({ views: [] })),
       progress.fetchJson("/api/sites").catch(() => ({ sites: [] })),
     ]);
 
     return {
-      rows: normalizeDeviceCollection(devicesPayload?.devices || []),
+      rows: normalizeDeviceCollection(devicesPayload?.devices || [], {
+        agentSocketLookup: createAgentSocketLookup(socketPayload?.agents || [], !socketPayload?.unavailable),
+      }),
       views: Array.isArray(viewsPayload?.views) ? viewsPayload.views : [],
       sites: Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : [],
       initialError: "",
@@ -835,7 +972,8 @@ export default function DeviceList({
   const heroStats = useMemo(() => {
     const now = Date.now() / 1000;
     const siteSet = new Set();
-    let online = 0;
+    let healthy = 0;
+    let unhealthy = 0;
     let offline = 0;
     let stale = 0;
     rows.forEach((row) => {
@@ -852,15 +990,18 @@ export default function DeviceList({
         siteSet.add(siteName);
       }
       const statusRaw =
-        row.status ||
-        row.summary?.status ||
+        row.healthStatus ||
+        row.summary?.health_status ||
         statusFromHeartbeat(lastSeen);
-      if ((statusRaw || "").toLowerCase() === "online") online += 1;
+      const normalizedStatus = normalizeDeviceHealthLabel(statusRaw);
+      if (normalizedStatus === DEVICE_HEALTH_STATUSES.healthy) healthy += 1;
+      else if (normalizedStatus === DEVICE_HEALTH_STATUSES.unhealthy) unhealthy += 1;
       else offline += 1;
     });
     return {
       total: rows.length,
-      online,
+      healthy,
+      unhealthy,
       offline,
       sites: siteSet.size,
       stale,
@@ -916,6 +1057,21 @@ export default function DeviceList({
     return { fetched, peerByAgent, statusByAgent };
   }, []);
 
+  const fetchAgentSocketLookup = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/agent-sockets', {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!resp.ok) return createAgentSocketLookup([], false);
+      const payload = await resp.json();
+      return createAgentSocketLookup(payload?.agents || [], true);
+    } catch (err) {
+      console.warn('Failed to fetch agent socket list', err);
+      return createAgentSocketLookup([], false);
+    }
+  }, []);
+
   const applyTunnelTelemetry = useCallback((telemetry) => {
     const fetched = Boolean(telemetry?.fetched);
     const peerByAgent = telemetry?.peerByAgent instanceof Map ? telemetry.peerByAgent : new Map();
@@ -948,7 +1104,10 @@ export default function DeviceList({
     if (showLoading) setLoading(true);
 
     try {
-      const tunnelTelemetry = await fetchTunnelTelemetry();
+      const [tunnelTelemetry, agentSocketLookup] = await Promise.all([
+        fetchTunnelTelemetry(),
+        fetchAgentSocketLookup(),
+      ]);
       const tunnelLookup = tunnelTelemetry.fetched
         ? tunnelTelemetry.peerByAgent
         : tunnelPeerCacheRef.current || new Map();
@@ -967,6 +1126,7 @@ export default function DeviceList({
       const normalized = normalizeDeviceCollection(payload?.devices || [], {
         tunnelLookup,
         tunnelStatusLookup,
+        agentSocketLookup,
       });
       setRows(filterDeviceRowsByMode(normalized, filterMode));
       setRouteLoadError("");
@@ -978,7 +1138,7 @@ export default function DeviceList({
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
+  }, [filterMode, fetchTunnelTelemetry, fetchAgentSocketLookup, applyTunnelTelemetry]);
 
   const hasWireguardColumn = useMemo(
     () => columns.some((col) => col.id === "wireguardPeerIp"),
@@ -1195,6 +1355,18 @@ export default function DeviceList({
 
   const statusTokenTheme = useMemo(
     () => ({
+      Healthy: {
+        text: "#00d18c",
+        background: "rgba(0, 209, 140, 0.16)",
+        border: "1px solid rgba(0, 209, 140, 0.45)",
+        dot: "#00d18c",
+      },
+      Unhealthy: {
+        text: "#ffb347",
+        background: "rgba(255, 179, 71, 0.16)",
+        border: "1px solid rgba(255, 179, 71, 0.45)",
+        dot: "#ffb347",
+      },
       Online: {
         text: "#00d18c",
         background: "rgba(0, 209, 140, 0.16)",
@@ -1707,12 +1879,13 @@ export default function DeviceList({
       switch (col.id) {
         case "status":
           return {
-            field: "status",
+            colId: "status",
+            field: "healthStatus",
             headerName: col.label,
             cellRenderer: statusCellRenderer,
             cellClass: "status-pill-cell",
-            width: 112,
-            minWidth: 112,
+            width: 128,
+            minWidth: 128,
             flex: 0,
           };
         case "site":

@@ -137,6 +137,9 @@ type fakeOperatorStore struct {
 	serverWorkerErr      error
 	workerHistory        int
 	workerContainers     bool
+	agentSocketRoutes    []agentWorkerRoute
+	agentSocketProfile   operatorProfile
+	agentSocketErr       error
 	githubToken          map[string]any
 	githubTokenRecord    githubTokenRecord
 	githubTokenErr       error
@@ -204,6 +207,16 @@ func (s *fakeOperatorStore) listDevices(_ context.Context, profile operatorProfi
 		devices = append(devices, copyDevice)
 	}
 	return devices, nil
+}
+
+func (s *fakeOperatorStore) listAgentSocketRoutes(_ context.Context, profile operatorProfile) ([]agentWorkerRoute, error) {
+	s.agentSocketProfile = profile
+	if s.agentSocketErr != nil {
+		return nil, s.agentSocketErr
+	}
+	routes := make([]agentWorkerRoute, len(s.agentSocketRoutes))
+	copy(routes, s.agentSocketRoutes)
+	return routes, nil
 }
 
 func (s *fakeOperatorStore) getDeviceByGUID(_ context.Context, profile operatorProfile, guid string) (map[string]any, int, error) {
@@ -1813,6 +1826,59 @@ func TestAgentListHandlerReturnsLegacyMapping(t *testing.T) {
 	}
 	if got := userAgent["service_mode"]; got != "currentuser" {
 		t.Fatalf("expected currentuser mode, got %#v", got)
+	}
+}
+
+func TestAgentSocketConnectionHandlerAggregatesSiteWorkerSnapshots(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/agents" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agents": map[string]any{
+				"LAB-OPERATOR-01_2540DA38-E2B1-45B9-9113-BF7CF0E1778A_SYSTEM": map[string]any{
+					"agent_id":        "LAB-OPERATOR-01_2540DA38-E2B1-45B9-9113-BF7CF0E1778A_SYSTEM",
+					"guid":            "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+					"hostname":        "lab-operator-01",
+					"service_mode":    "system",
+					"helper_contexts": []any{"currentuser"},
+				},
+			},
+		})
+	}))
+	defer worker.Close()
+
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Operator"})
+	route := routeForTestWorker(t, worker.URL)
+	store.agentSocketRoutes = []agentWorkerRoute{*route}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/agent-sockets", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	agentSocketConnectionHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.agentSocketProfile.Username != "operator" {
+		t.Fatalf("expected operator profile, got %+v", store.agentSocketProfile)
+	}
+	var payload struct {
+		Count  int              `json:"count"`
+		Agents []map[string]any `json:"agents"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Count != 1 || len(payload.Agents) != 1 {
+		t.Fatalf("unexpected socket payload %+v", payload)
+	}
+	agent := payload.Agents[0]
+	if agent["agent_guid"] != "2540DA38-E2B1-45B9-9113-BF7CF0E1778A" || agent["hostname"] != "lab-operator-01" {
+		t.Fatalf("unexpected agent socket row %+v", agent)
+	}
+	if agent["connected"] != true || agent["service_mode"] != "system" {
+		t.Fatalf("expected connected system socket, got %+v", agent)
 	}
 }
 

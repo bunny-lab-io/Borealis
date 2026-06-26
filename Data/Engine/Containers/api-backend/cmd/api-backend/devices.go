@@ -81,6 +81,7 @@ type deviceRow struct {
 
 func registerDeviceRoutes(mux *http.ServeMux, auth *authService, runtime devicePurgeRuntime, broadcaster watchdogIncidentBroadcaster) {
 	mux.HandleFunc("GET /api/agents", agentListHandler(auth))
+	mux.HandleFunc("GET /api/agent-sockets", agentSocketConnectionHandler(auth))
 	mux.HandleFunc("GET /api/devices", deviceListHandler(auth))
 	mux.HandleFunc("GET /api/devices/{device_id}/watchdogs", deviceWatchdogsHandler(auth))
 	mux.HandleFunc("POST /api/devices/{device_id}/watchdogs/overrides", deviceWatchdogOverrideHandler(auth, broadcaster))

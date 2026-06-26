@@ -1,6 +1,6 @@
 # Device Auditing
 
-Device Auditing is the normal starting point for understanding a managed endpoint. Use it to read current inventory, online state, role health, software, services, sessions, activity history, and device-specific operational tabs.
+Device Auditing is the normal starting point for understanding a managed endpoint. Use it to read current inventory, health status, role health, software, services, sessions, activity history, and device-specific operational tabs.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Device_List.png" alt="Borealis Device Inventory page" loading="lazy">
@@ -23,14 +23,15 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Services`, `Processes`, `File Management`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
 - `Activity History` shows quick job and automation output tied to the device.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
-- `Agent Health` shows startup flow and role health separately from online/offline status.
+- `Agent Health` shows startup flow and role health behind the Device List status.
 
 ## Understand Status
 
-- `Online` means the Engine saw a recent heartbeat.
+- `Healthy` means the Agent has a recent heartbeat, is connected to its site-worker management socket, and all applicable roles report healthy or not-applicable state.
+- `Unhealthy` means the Agent has a recent heartbeat, but the management socket is disconnected, role health is stale or degraded, or no role-health report is available yet.
 - `Offline` means heartbeat age exceeded the online window.
-- Agent Health explains startup and role state; it does not replace online/offline status.
-- Stale inventory means the device may be online but a specific role has not published fresh data yet.
+- Agent Health explains the role or startup signal behind an unhealthy status.
+- Stale inventory means the device may have a recent heartbeat but a specific role has not published fresh data yet.
 
 !!! tip
 
@@ -48,6 +49,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     ### API endpoints
 
     - `GET /api/devices` - device list scoped to operator site access.
+    - `GET /api/agent-sockets` - active site-worker Agent socket snapshot scoped to operator site access.
     - `GET /api/devices/search?hostname=<query>` - shared hostname search.
     - `GET /api/devices/<guid>` - device summary by GUID.
     - `GET /api/device/details/<hostname>` - detailed device payload.
@@ -66,14 +68,19 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
     ### Source map
 
-    - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/`
+    - Device APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go`
+    - Agent socket API: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_sockets.go`
+    - Device List UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Device Summary UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
     - Agent audit role: `Data/Agent/internal/roles/device_audit/`
+    - Site-worker socket registry: `Data/Engine/Containers/api-backend/data/services/remote_ops/agent_socket_registry.py`
 
     ### Runtime behavior
 
-    - Online/offline status is derived from `devices.last_seen`.
+    - Device List status is derived from `devices.last_seen`, normalized `agent_role_health`, and `/api/agent-sockets` site-worker socket state.
+    - `GET /api/devices` still keeps `status` as heartbeat-derived `Online` or `Offline` for API compatibility; Device List maps that data into `Healthy`, `Unhealthy`, or `Offline`.
+    - `/api/agent-sockets` queries the active site-worker route for each visible site and reads the worker `/agents` registry snapshot once per site.
     - Heavy inventory lands through `/api/agent/details`; heartbeat carries lightweight metrics and metadata deltas.
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.
