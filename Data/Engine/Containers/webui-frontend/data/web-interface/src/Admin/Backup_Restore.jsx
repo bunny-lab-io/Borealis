@@ -32,20 +32,15 @@ const PAGE_SUBTITLE =
 const RESTORE_CONFIRMATION = "RESTORE ENGINE CONFIG BACKUP";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const backupAnalysisGridTheme = themeQuartz.withParams({
-  accentColor: "#38bdf8",
-  backgroundColor: "rgba(15, 23, 42, 0.88)",
-  borderColor: "rgba(148, 163, 184, 0.18)",
+  accentColor: "#7dd3fc",
+  backgroundColor: "#070b1a",
   browserColorScheme: "dark",
-  chromeBackgroundColor: "rgba(15, 23, 42, 0.96)",
-  foregroundColor: "#dbeafe",
-  headerBackgroundColor: "rgba(15, 23, 42, 0.98)",
-  headerTextColor: "#f8fafc",
-  oddRowBackgroundColor: "rgba(15, 23, 42, 0.7)",
-  rowHoverColor: "rgba(56, 189, 248, 0.12)",
-  selectedRowBackgroundColor: "rgba(56, 189, 248, 0.2)",
-  fontFamily: gridFontFamily,
-  "--ag-font-family": gridFontFamily,
+  fontFamily: { googleFont: "IBM Plex Sans" },
+  foregroundColor: "#f4f7ff",
+  headerFontSize: 13,
 });
+const backupAnalysisGridThemeClass = backupAnalysisGridTheme.themeName || "ag-theme-quartz";
+const iconFontFamily = '"Quartz Regular"';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -108,6 +103,26 @@ function BackupRestoreTool({ mode }) {
         headerName: "Count",
         width: 120,
         type: "numericColumn",
+        cellClass: "auto-col-tight",
+        cellRenderer: (params) => (
+          <Box
+            component="span"
+            sx={{
+              minWidth: 44,
+              px: 1,
+              py: 0.25,
+              borderRadius: 999,
+              border: "1px solid rgba(125, 211, 252, 0.28)",
+              background: "rgba(14, 165, 233, 0.12)",
+              color: "#e0f2fe",
+              fontWeight: 800,
+              lineHeight: 1.4,
+              textAlign: "center",
+            }}
+          >
+            {Number(params.value || 0).toLocaleString()}
+          </Box>
+        ),
         valueFormatter: (params) => Number(params.value || 0).toLocaleString(),
       },
     ],
@@ -394,11 +409,57 @@ function BackupRestoreTool({ mode }) {
 
           {analysisRows.length ? (
             <Box
+              className={backupAnalysisGridThemeClass}
               sx={{
                 border: "1px solid rgba(148, 163, 184, 0.2)",
                 borderRadius: 2,
                 overflow: "hidden",
-                background: "rgba(15, 23, 42, 0.58)",
+                background: "rgba(15, 23, 42, 0.72)",
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 18px 48px rgba(0, 0, 0, 0.26)",
+                "--ag-font-family": gridFontFamily,
+                "--ag-icon-font-family": iconFontFamily,
+                "& .ag-root-wrapper": {
+                  border: "none",
+                  borderRadius: 0,
+                  background: "transparent",
+                },
+                "& .ag-header": {
+                  backgroundColor: "rgba(15,23,42,0.92)",
+                  borderBottom: "1px solid rgba(148,163,184,0.25)",
+                },
+                "& .ag-header-cell-label": {
+                  color: "#e2e8f0",
+                  fontWeight: 700,
+                  letterSpacing: 0.3,
+                },
+                "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  textAlign: "left",
+                  padding: "8px 12px 8px 18px",
+                },
+                "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+                  width: "100%",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-start",
+                  padding: 0,
+                },
+                "& .ag-center-cols-container .ag-cell.auto-col-tight, & .ag-pinned-left-cols-container .ag-cell.auto-col-tight, & .ag-pinned-right-cols-container .ag-cell.auto-col-tight": {
+                  paddingLeft: "12px",
+                  paddingRight: "9px",
+                },
+                "& .ag-row": {
+                  borderColor: "rgba(255,255,255,0.04)",
+                  transition: "background 0.2s ease",
+                },
+                "& .ag-row:nth-of-type(even)": {
+                  backgroundColor: "rgba(15,23,42,0.42)",
+                },
+                "& .ag-row-hover": {
+                  backgroundColor: "rgba(73,156,196,0.18) !important",
+                },
               }}
             >
               <Box sx={{ height: 320, minHeight: 240 }}>
@@ -409,7 +470,6 @@ function BackupRestoreTool({ mode }) {
                   defaultColDef={analysisDefaultColDef}
                   domLayout="normal"
                   suppressCellFocus
-                  rowSelection="single"
                   getRowId={(params) => params.data?.id || params.data?.name}
                 />
               </Box>

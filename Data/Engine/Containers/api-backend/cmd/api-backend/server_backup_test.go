@@ -296,6 +296,10 @@ func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
 	payload.Tables["engine.credentials"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("11"), "name": "Domain Admin"}}}
 	payload.Tables["engine.users"] = engineBackupTable{Columns: []string{"id", "username"}, Rows: []map[string]any{{"id": json.Number("12"), "username": "operator"}}}
 	payload.Tables["engine.metadata_field_definitions"] = engineBackupTable{Columns: []string{"field_number", "display_name"}, Rows: []map[string]any{{"field_number": json.Number("1"), "display_name": "Asset Tag"}}}
+	payload.Tables["engine.device_keys"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": "key-1", "guid": "agent-guid-1"}}}
+	payload.Tables["engine.refresh_tokens"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": "token-1", "guid": "agent-guid-1"}}}
+	payload.Tables["engine.device_approvals"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": json.Number("14"), "guid": "agent-guid-1"}}}
+	payload.Tables["engine.device_metadata_fields"] = engineBackupTable{Columns: []string{"device_guid", "field_number", "value"}, Rows: []map[string]any{{"device_guid": "agent-guid-1", "field_number": json.Number("1"), "value": "A-100"}}}
 	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
 	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
@@ -333,6 +337,25 @@ func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
 		if counts[id] != expected {
 			t.Fatalf("expected %s count %d, got %d in %#v", id, expected, counts[id], rows)
 		}
+	}
+	for _, hiddenID := range []string{"device_keys", "refresh_tokens", "device_approvals", "metadata_values"} {
+		if _, ok := counts[hiddenID]; ok {
+			t.Fatalf("analysis should not display %s rows: %#v", hiddenID, rows)
+		}
+	}
+	if counts["files"] != 1 {
+		t.Fatalf("expected files count 1, got %d in %#v", counts["files"], rows)
+	}
+	foundFilesLabel := false
+	for _, row := range rows {
+		item := asMap(row)
+		if cleanText(item["id"]) == "files" {
+			foundFilesLabel = cleanText(item["name"]) == "Engine Settings and Secret Files"
+			break
+		}
+	}
+	if !foundFilesLabel {
+		t.Fatalf("analysis should use human-friendly file label: %#v", rows)
 	}
 	if store.restored != nil {
 		t.Fatalf("analyze must not restore payload")
@@ -487,4 +510,32 @@ func TestEngineBackupSoftwareIconAssetsUseIconHashKey(t *testing.T) {
 		return
 	}
 	t.Fatalf("software_icon_assets backup spec missing")
+}
+
+func TestEngineBackupTrustSpecsExcludeApprovalsAndLimitActiveRows(t *testing.T) {
+	specs := map[string]engineBackupTableSpec{}
+	for _, spec := range engineBackupTableSpecs() {
+		specs[spec.Name] = spec
+	}
+
+	approvals := specs["engine.device_approvals"]
+	if approvals.Export || approvals.Restore {
+		t.Fatalf("device approvals should be cleanup-only, got export=%v restore=%v", approvals.Export, approvals.Restore)
+	}
+	if !engineBackupKnownTableSet()["engine.device_approvals"] {
+		t.Fatalf("device approvals should remain known so older backups validate")
+	}
+
+	deviceKeys := specs["engine.device_keys"]
+	if deviceKeys.LatestPartitionBy != "guid" || len(deviceKeys.ActiveNullColumns) != 1 || deviceKeys.ActiveNullColumns[0] != "retired_at" {
+		t.Fatalf("device keys must export latest active row per guid, got %#v", deviceKeys)
+	}
+
+	refreshTokens := specs["engine.refresh_tokens"]
+	if refreshTokens.LatestPartitionBy != "guid" || len(refreshTokens.ActiveNullColumns) != 1 || refreshTokens.ActiveNullColumns[0] != "revoked_at" {
+		t.Fatalf("refresh tokens must export latest active row per guid, got %#v", refreshTokens)
+	}
+	if len(refreshTokens.ActiveAfterNow) != 1 || refreshTokens.ActiveAfterNow[0] != "expires_at" {
+		t.Fatalf("refresh tokens must skip expired rows, got %#v", refreshTokens.ActiveAfterNow)
+	}
 }

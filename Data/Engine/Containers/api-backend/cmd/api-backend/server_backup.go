@@ -28,11 +28,14 @@ const (
 )
 
 type engineBackupTableSpec struct {
-	Name         string
-	OrderBy      []string
-	Export       bool
-	Restore      bool
-	ResetSerials bool
+	Name              string
+	OrderBy           []string
+	Export            bool
+	Restore           bool
+	ResetSerials      bool
+	LatestPartitionBy string
+	ActiveNullColumns []string
+	ActiveAfterNow    []string
 }
 
 type engineBackupColumn struct {
@@ -475,7 +478,7 @@ func validateEngineBackupPayload(payload engineBackupPayload, key []byte, docume
 	if payload.Kind != engineBackupKind || payload.SchemaVersion != engineBackupSchemaVersion {
 		return backupUserError(http.StatusBadRequest, "invalid_backup_payload", "Encrypted backup payload is not a Borealis Engine backup.")
 	}
-	tableNames := engineBackupRestoreTableSet()
+	tableNames := engineBackupKnownTableSet()
 	for name := range payload.Tables {
 		if !tableNames[name] {
 			return backupUserError(http.StatusBadRequest, "unknown_table_id", "Backup contains unsupported table "+name+".")
@@ -509,9 +512,6 @@ func analyzeEngineBackupPayload(payload engineBackupPayload) map[string]any {
 	summary := []engineBackupAnalysisRow{
 		{ID: "sites", Name: "Sites", Count: engineBackupTableRowCount(payload, "engine.sites")},
 		{ID: "devices", Name: "Devices", Count: engineBackupTableRowCount(payload, "engine.devices")},
-		{ID: "device_keys", Name: "Device Trust Keys", Count: engineBackupTableRowCount(payload, "engine.device_keys")},
-		{ID: "refresh_tokens", Name: "Agent Refresh Tokens", Count: engineBackupTableRowCount(payload, "engine.refresh_tokens")},
-		{ID: "device_approvals", Name: "Device Approvals", Count: engineBackupTableRowCount(payload, "engine.device_approvals")},
 		{ID: "users", Name: "Users", Count: engineBackupTableRowCount(payload, "engine.users")},
 		{ID: "credentials", Name: "Credentials", Count: engineBackupTableRowCount(payload, "engine.credentials")},
 		{ID: "directory_providers", Name: "Directory Providers", Count: engineBackupTableRowCount(payload, "engine.directory_providers")},
@@ -522,7 +522,6 @@ func analyzeEngineBackupPayload(payload engineBackupPayload) map[string]any {
 		{ID: "filters", Name: "Filters", Count: engineBackupTableRowCount(payload, "engine.device_filters")},
 		{ID: "saved_views", Name: "Saved Views", Count: engineBackupTableRowCount(payload, "engine.device_list_views")},
 		{ID: "metadata_fields", Name: "Metadata Fields", Count: engineBackupTableRowCount(payload, "engine.metadata_field_definitions")},
-		{ID: "metadata_values", Name: "Device Metadata Values", Count: engineBackupTableRowCount(payload, "engine.device_metadata_fields")},
 		{ID: "software_inventory", Name: "Software Inventory Rows", Count: engineBackupTableRowCount(payload, "engine.device_software_inventory")},
 		{ID: "software_icons", Name: "Software Icon Assets", Count: engineBackupTableRowCount(payload, "engine.software_icon_assets")},
 		{ID: "assemblies", Name: "Assemblies", Count: engineBackupTableRowCount(payload, "assemblies.official_assemblies", "assemblies.community_assemblies", "assemblies.user_created_assemblies")},
@@ -532,7 +531,7 @@ func analyzeEngineBackupPayload(payload engineBackupPayload) map[string]any {
 		{ID: "watchdog_sites", Name: "Watchdog Site Scopes", Count: engineBackupTableRowCount(payload, "engine.watchdog_sites")},
 		{ID: "watchdog_targets", Name: "Watchdog Targets", Count: engineBackupTableRowCount(payload, "engine.watchdog_targets")},
 		{ID: "watchdog_overrides", Name: "Watchdog Device Overrides", Count: engineBackupTableRowCount(payload, "engine.watchdog_device_overrides")},
-		{ID: "files", Name: "Config and Key Files", Count: len(payload.Files)},
+		{ID: "files", Name: "Engine Settings and Secret Files", Count: len(payload.Files)},
 	}
 	totalRows := 0
 	for _, table := range payload.Tables {
@@ -662,9 +661,85 @@ func exportEngineBackupTable(ctx context.Context, tx *sql.Tx, spec engineBackupT
 		columnNames = append(columnNames, column.Name)
 		columnByName[column.Name] = column
 	}
+	if strings.TrimSpace(spec.LatestPartitionBy) != "" {
+		return exportEngineBackupLatestActiveTable(ctx, tx, spec, columns, selectColumns, columnNames, columnByName)
+	}
 	orderBy := engineBackupOrderBy(spec, columnByName)
 	query := fmt.Sprintf("SELECT %s FROM %s%s", strings.Join(selectColumns, ", "), quoteQualifiedBackupName(spec.Name), orderBy)
 	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return engineBackupTable{}, err
+	}
+	defer rows.Close()
+	result := engineBackupTable{Columns: columnNames, Rows: []map[string]any{}}
+	for rows.Next() {
+		values := make([]any, len(columns))
+		dest := make([]any, len(columns))
+		for i := range values {
+			dest[i] = &values[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return engineBackupTable{}, err
+		}
+		row := map[string]any{}
+		for i, value := range values {
+			row[columns[i].Name] = normalizeEngineBackupScannedValue(value, columns[i])
+		}
+		result.Rows = append(result.Rows, row)
+	}
+	return result, rows.Err()
+}
+
+func exportEngineBackupLatestActiveTable(ctx context.Context, tx *sql.Tx, spec engineBackupTableSpec, columns []engineBackupColumn, selectColumns []string, columnNames []string, columnByName map[string]engineBackupColumn) (engineBackupTable, error) {
+	partitionBy := strings.TrimSpace(spec.LatestPartitionBy)
+	if _, ok := columnByName[partitionBy]; !ok {
+		return engineBackupTable{Columns: columnNames, Rows: []map[string]any{}}, nil
+	}
+	args := []any{}
+	whereParts := []string{}
+	for _, column := range spec.ActiveNullColumns {
+		if _, ok := columnByName[column]; !ok {
+			continue
+		}
+		quoted := quoteBackupIdentifier(column)
+		whereParts = append(whereParts, fmt.Sprintf("(%s IS NULL OR BTRIM(CAST(%s AS text))='')", quoted, quoted))
+	}
+	nowArg := ""
+	for _, column := range spec.ActiveAfterNow {
+		if _, ok := columnByName[column]; !ok {
+			continue
+		}
+		if nowArg == "" {
+			args = append(args, isoUTC(time.Now().UTC()))
+			nowArg = fmt.Sprintf("$%d", len(args))
+		}
+		quoted := quoteBackupIdentifier(column)
+		whereParts = append(whereParts, fmt.Sprintf("BTRIM(CAST(%s AS text)) > %s", quoted, nowArg))
+	}
+	whereSQL := ""
+	if len(whereParts) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereParts, " AND ")
+	}
+	orderParts := []string{}
+	for _, column := range spec.OrderBy {
+		if _, ok := columnByName[column]; ok && column != partitionBy {
+			orderParts = append(orderParts, quoteBackupIdentifier(column)+" DESC NULLS LAST")
+		}
+	}
+	if len(orderParts) == 0 {
+		orderParts = append(orderParts, quoteBackupIdentifier(partitionBy))
+	}
+	query := fmt.Sprintf(
+		"SELECT %s FROM (SELECT %s, ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s) AS borealis_backup_rank FROM %s%s) AS borealis_backup_latest WHERE borealis_backup_rank=1 ORDER BY %s",
+		strings.Join(selectColumns, ", "),
+		strings.Join(selectColumns, ", "),
+		quoteBackupIdentifier(partitionBy),
+		strings.Join(orderParts, ", "),
+		quoteQualifiedBackupName(spec.Name),
+		whereSQL,
+		quoteBackupIdentifier(partitionBy),
+	)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return engineBackupTable{}, err
 	}
@@ -1142,14 +1217,14 @@ func engineBackupTableSpecs() []engineBackupTableSpec {
 		{Name: "engine.github_token", OrderBy: []string{"id"}, Export: true, Restore: true},
 		{Name: "engine.agent_service_account", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.devices", OrderBy: []string{"hostname", "guid"}, Export: true, Restore: true},
-		{Name: "engine.device_keys", OrderBy: []string{"guid", "id"}, Export: true, Restore: true},
-		{Name: "engine.refresh_tokens", OrderBy: []string{"guid", "id"}, Export: true, Restore: true},
+		{Name: "engine.device_keys", OrderBy: []string{"added_at", "id"}, Export: true, Restore: true, LatestPartitionBy: "guid", ActiveNullColumns: []string{"retired_at"}},
+		{Name: "engine.refresh_tokens", OrderBy: []string{"last_used_at", "created_at", "id"}, Export: true, Restore: true, LatestPartitionBy: "guid", ActiveNullColumns: []string{"revoked_at"}, ActiveAfterNow: []string{"expires_at"}},
 		{Name: "engine.device_purge_barriers", OrderBy: []string{"guid"}, Export: true, Restore: true},
 		{Name: "engine.device_vpn_config", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_vpn_ip_leases", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_vpn_key_leases", OrderBy: []string{"agent_id"}, Export: true, Restore: true},
 		{Name: "engine.device_sites", OrderBy: []string{"site_id", "device_hostname"}, Export: true, Restore: true},
-		{Name: "engine.device_approvals", OrderBy: []string{"created_at", "id"}, Export: true, Restore: true},
+		{Name: "engine.device_approvals", OrderBy: []string{"created_at", "id"}, Export: false, Restore: false},
 		{Name: "engine.user_passkeys", OrderBy: []string{"user_id", "id"}, Export: true, Restore: true, ResetSerials: true},
 		{Name: "engine.user_site_assignments", OrderBy: []string{"user_id", "site_id"}, Export: true, Restore: true},
 		{Name: "engine.directory_provider_group_mappings", OrderBy: []string{"provider_id", "id"}, Export: true, Restore: true, ResetSerials: true},
@@ -1193,6 +1268,7 @@ func engineBackupDeleteOrder() []string {
 		"engine.ansible_play_recaps",
 		"engine.activity_history",
 		"engine.enrollment_code_failures",
+		"engine.device_approvals",
 		"engine.notifications",
 	}
 	specs := engineBackupTableSpecs()
@@ -1212,12 +1288,10 @@ func engineBackupDeleteOrder() []string {
 	return ordered
 }
 
-func engineBackupRestoreTableSet() map[string]bool {
+func engineBackupKnownTableSet() map[string]bool {
 	result := map[string]bool{}
 	for _, spec := range engineBackupTableSpecs() {
-		if spec.Restore {
-			result[spec.Name] = true
-		}
+		result[spec.Name] = true
 	}
 	return result
 }

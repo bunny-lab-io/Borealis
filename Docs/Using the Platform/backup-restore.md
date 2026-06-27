@@ -13,9 +13,9 @@ Backups are encrypted JSON files. Borealis uses the Aegis Cipher as the backup m
 2. Select **Export**.
 3. Store the downloaded encrypted JSON file where operators with access understand that the Aegis Cipher is still required to decrypt it.
 
-The export contains Engine configuration, sites, agents, identities, LDAP/directory settings, credentials, Aegis state, saved automation content, scheduled job definitions, watchdog definitions, filters, saved views, metadata definitions and values, and Engine trust/key material.
+The export contains Engine configuration, sites, agents, identities, LDAP/directory settings, credentials, Aegis state, saved automation content, scheduled job definitions, watchdog definitions, filters, saved views, metadata definitions and values, and Engine trust/key material. Device trust exports include only the latest active device key and refresh token per agent.
 
-It does not contain logs, device activity history, scheduled job run history, workflow run history, watchdog incident history, scheduler queues, or worker runtime state.
+It does not contain logs, pending device approvals, device activity history, scheduled job run history, workflow run history, watchdog incident history, scheduler queues, or worker runtime state.
 
 ## Restore During First Setup
 
@@ -66,17 +66,18 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
     - Analyze uses the same decrypt and validation path as restore, but does not clear current state or import rows.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
-    - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
+    - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears pending device approvals, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
 
     ### Included state
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.
     - Sites, enrollment codes, auto-approval settings, device-site assignments, and operator site assignments.
-    - Agents, device keys, refresh tokens, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, release/settings JSON, software override JSON, and software blocklist JSON.
+    - Agents, latest active device key per agent, latest active refresh token per agent, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, release/settings JSON, software override JSON, and software blocklist JSON.
     - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, filters, saved views, metadata definitions/values, and current software inventory.
 
     ### Excluded state
     - Engine logs and rotated logs.
     - Engine service log files are removed from mounted log roots during restore so the restored Engine starts from a clean log surface after restart.
+    - Pending device approvals.
     - Device activity history.
     - Scheduled job runs, run targets, onboarding run events, and run activity links.
     - Workflow runs, node runs, and child job rows.
