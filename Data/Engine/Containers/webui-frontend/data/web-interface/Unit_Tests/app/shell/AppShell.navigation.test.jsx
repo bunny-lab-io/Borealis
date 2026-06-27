@@ -1,5 +1,5 @@
 import React from "react";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { AuthContext } from "@/app/providers/AuthContext.jsx";
@@ -57,6 +57,49 @@ function buildAuthValue() {
 }
 
 describe("AppShell buffered navigation", () => {
+  it("renders breadcrumbs in the page header instead of the top app bar", () => {
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: (
+            <AuthContext.Provider value={buildAuthValue()}>
+              <PageChromeProvider>
+                <AppShell />
+              </PageChromeProvider>
+            </AuthContext.Provider>
+          ),
+          children: [
+            {
+              index: true,
+              element: <div>Home Page</div>,
+              handle: {
+                title: "Home",
+                breadcrumb: "Home",
+                navKey: "home",
+                pageKey: "home",
+              },
+            },
+          ],
+        },
+      ],
+      {
+        initialEntries: ["/"],
+      }
+    );
+
+    render(<RouterProvider router={router} />);
+
+    const topBar = screen.getByTestId("app-top-bar");
+    expect(within(topBar).queryByRole("navigation", { name: "Page breadcrumb" })).not.toBeInTheDocument();
+
+    const pageHeaderBreadcrumbs = screen.getByTestId("page-header-breadcrumbs");
+    expect(
+      within(pageHeaderBreadcrumbs).getAllByRole("navigation", { name: "Page breadcrumb" }).length
+    ).toBeGreaterThan(0);
+    expect(within(pageHeaderBreadcrumbs).getAllByText("Home").length).toBeGreaterThan(0);
+  });
+
   it("keeps the current page visible while the next route loader is pending", async () => {
     let resolveSlowRoute;
     const router = createMemoryRouter(

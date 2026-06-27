@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState, useSyncExternalStore 
 import {
   AppBar,
   Box,
-  Breadcrumbs,
   Button,
   CircularProgress,
   Dialog,
@@ -22,6 +21,7 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   LockReset as LockResetIcon,
   Logout as LogoutIcon,
+  MoreHoriz as MoreHorizIcon,
   NavigateNext as NavigateNextIcon,
   VpnKey as VpnKeyIcon,
 } from "@mui/icons-material";
@@ -48,11 +48,13 @@ import { useAuth } from "../providers/AuthContext.jsx";
 import { usePageChrome } from "../providers/PageChromeContext.jsx";
 import {
   APP_DOCUMENT_TITLE,
+  buildBreadcrumbDisplayItems,
   buildBreadcrumbItems,
   formatDocumentTitle,
   resolveActiveNavKey,
   resolveCurrentPageKey,
   resolvePageChromeDefaults,
+  resolveRememberedBreadcrumbTargetKey,
 } from "../routes/breadcrumbs.js";
 import { APP_PATHS } from "../routes/paths.js";
 import {
@@ -108,6 +110,189 @@ function formatPasskeyTransportLabel(transports) {
     .join(", ");
 }
 
+const BREADCRUMB_DESKTOP_MAX_ITEMS = 6;
+const BREADCRUMB_MOBILE_MAX_ITEMS = 3;
+
+const BREADCRUMB_RAIL_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  minWidth: 0,
+  maxWidth: "100%",
+  px: 1,
+  py: 0.45,
+  borderRadius: 1.25,
+  border: "1px solid rgba(125,211,252,0.20)",
+  background:
+    "linear-gradient(135deg, rgba(8,12,24,0.56), rgba(15,23,42,0.34))",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04)",
+  backdropFilter: "blur(8px)",
+};
+
+const BREADCRUMB_LINK_SX = {
+  minWidth: 0,
+  px: 0.65,
+  py: 0.15,
+  borderRadius: 1,
+  color: "#bfdbfe",
+  fontSize: "0.78rem",
+  fontWeight: 600,
+  lineHeight: 1.45,
+  textTransform: "none",
+  justifyContent: "flex-start",
+  maxWidth: { xs: 142, sm: 180, lg: 240 },
+  "& .MuiButton-endIcon": { ml: 0.35 },
+  "&:hover": {
+    color: "#f8fbff",
+    backgroundColor: "rgba(125,211,252,0.10)",
+  },
+};
+
+const BREADCRUMB_CURRENT_SX = {
+  px: 0.65,
+  py: 0.15,
+  minWidth: 0,
+  maxWidth: { xs: 150, sm: 220, lg: 300 },
+  color: "#f8fbff",
+  fontSize: "0.78rem",
+  fontWeight: 700,
+  lineHeight: 1.45,
+};
+
+const BREADCRUMB_MENU_PAPER_SX = {
+  mt: 0.8,
+  minWidth: 190,
+  border: "1px solid rgba(125,211,252,0.20)",
+  background:
+    "linear-gradient(165deg, rgba(8,12,24,0.98), rgba(15,23,42,0.96))",
+  color: "#dbeafe",
+  boxShadow: "0 18px 48px rgba(2,8,23,0.46)",
+};
+
+function BreadcrumbLabel({ children, sx }) {
+  return (
+    <Typography component="span" noWrap sx={sx}>
+      {children}
+    </Typography>
+  );
+}
+
+function BreadcrumbTrail({ items, maxItems, navigate, sx }) {
+  const [menuState, setMenuState] = useState({ anchorEl: null, items: [] });
+  const visibleItems = useMemo(
+    () => buildBreadcrumbDisplayItems(items, { maxItems }),
+    [items, maxItems]
+  );
+
+  const closeMenu = useCallback(() => {
+    setMenuState({ anchorEl: null, items: [] });
+  }, []);
+
+  const openMenu = useCallback((event, menuItems) => {
+    setMenuState({ anchorEl: event.currentTarget, items: menuItems || [] });
+  }, []);
+
+  const navigateTo = useCallback(
+    (target) => {
+      if (!target) {
+        return;
+      }
+      navigate(target);
+    },
+    [navigate]
+  );
+
+  const handleMenuItemClick = useCallback(
+    (item) => {
+      closeMenu();
+      if (item?.disabled) {
+        return;
+      }
+      if (typeof item?.onClick === "function") {
+        item.onClick();
+        return;
+      }
+      navigateTo(item?.to);
+    },
+    [closeMenu, navigateTo]
+  );
+
+  if (!visibleItems.length) {
+    return null;
+  }
+
+  return (
+    <Box component="nav" aria-label="Page breadcrumb" sx={{ ...BREADCRUMB_RAIL_SX, ...sx }}>
+      {visibleItems.map((item, index) => {
+        const menuItems = Array.isArray(item.menuItems) ? item.menuItems : [];
+        const hasMenu = menuItems.length > 0;
+        const isLast = index === visibleItems.length - 1;
+        const isCurrent = isLast && !item.to;
+        const buttonSx = isCurrent ? { ...BREADCRUMB_LINK_SX, color: "#f8fbff" } : BREADCRUMB_LINK_SX;
+
+        return (
+          <React.Fragment key={item.id}>
+            {index > 0 ? (
+              <NavigateNextIcon
+                aria-hidden="true"
+                sx={{ mx: 0.15, fontSize: 15, color: "rgba(148,163,184,0.72)", flexShrink: 0 }}
+              />
+            ) : null}
+
+            {item.overflow ? (
+              <Tooltip title="Show Hidden Breadcrumbs">
+                <Button
+                  type="button"
+                  aria-label="Show hidden breadcrumbs"
+                  onClick={(event) => openMenu(event, menuItems)}
+                  sx={{ ...BREADCRUMB_LINK_SX, px: 0.45, minWidth: 28 }}
+                >
+                  <MoreHorizIcon sx={{ fontSize: 18 }} />
+                </Button>
+              </Tooltip>
+            ) : item.to || hasMenu ? (
+              <Button
+                type="button"
+                endIcon={hasMenu ? <KeyboardArrowDownIcon sx={{ fontSize: 16 }} /> : null}
+                onClick={(event) => {
+                  if (hasMenu) {
+                    openMenu(event, menuItems);
+                    return;
+                  }
+                  navigateTo(item.to);
+                }}
+                sx={buttonSx}
+              >
+                <BreadcrumbLabel sx={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {item.label}
+                </BreadcrumbLabel>
+              </Button>
+            ) : (
+              <BreadcrumbLabel sx={BREADCRUMB_CURRENT_SX}>{item.label}</BreadcrumbLabel>
+            )}
+          </React.Fragment>
+        );
+      })}
+      <Menu
+        anchorEl={menuState.anchorEl}
+        open={Boolean(menuState.anchorEl)}
+        onClose={closeMenu}
+        PaperProps={{ sx: BREADCRUMB_MENU_PAPER_SX }}
+      >
+        {menuState.items.map((item) => (
+          <MenuItem
+            key={item.id || item.label}
+            disabled={Boolean(item.disabled)}
+            onClick={() => handleMenuItemClick(item)}
+            sx={{ fontSize: "0.84rem", color: "inherit" }}
+          >
+            {item.label}
+          </MenuItem>
+        ))}
+      </Menu>
+    </Box>
+  );
+}
+
 export default function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -158,6 +343,7 @@ export default function AppShell() {
   const [managePasskeyAction, setManagePasskeyAction] = useState({ id: null, type: "" });
   const [newPasskeyLabel, setNewPasskeyLabel] = useState("");
   const [removePasskeyTarget, setRemovePasskeyTarget] = useState(null);
+  const [rememberedBreadcrumbTargets, setRememberedBreadcrumbTargets] = useState({});
 
   const defaultChrome = useMemo(() => resolvePageChromeDefaults(matches), [matches]);
   const activeNavKey = useMemo(() => resolveActiveNavKey(matches), [matches]);
@@ -175,14 +361,20 @@ export default function AppShell() {
       controls: pageChrome.controls?.length ? pageChrome.controls : defaultChrome.controls || [],
       breadcrumbLabel:
         pageChrome.breadcrumbLabel || pageChrome.title || defaultChrome.title || "",
+      breadcrumbs: pageChrome.breadcrumbs || [],
+      breadcrumbsReplace: Boolean(pageChrome.breadcrumbsReplace),
+      breadcrumbMenuItems: pageChrome.breadcrumbMenuItems || [],
       navigationSidebar: pageChrome.navigationSidebar || null,
     }),
     [defaultChrome, pageChrome]
   );
 
   const breadcrumbs = useMemo(
-    () => buildBreadcrumbItems(matches, resolvedChrome),
-    [matches, resolvedChrome]
+    () =>
+      buildBreadcrumbItems(matches, resolvedChrome, {
+        rememberedTargets: rememberedBreadcrumbTargets,
+      }),
+    [matches, rememberedBreadcrumbTargets, resolvedChrome]
   );
 
   const hasPageHeader = Boolean(
@@ -222,6 +414,23 @@ export default function AppShell() {
 
     document.title = formatDocumentTitle(resolvedChrome.title);
   }, [resolvedChrome.title]);
+
+  useEffect(() => {
+    const targetKey = resolveRememberedBreadcrumbTargetKey(matches);
+    if (!targetKey) {
+      return;
+    }
+    const target = `${location.pathname}${location.search || ""}`;
+    setRememberedBreadcrumbTargets((current) => {
+      if (current[targetKey] === target) {
+        return current;
+      }
+      return {
+        ...current,
+        [targetKey]: target,
+      };
+    });
+  }, [location.pathname, location.search, matches]);
 
   useEffect(() => {
     if (isBufferedRoutePending && navigation.location) {
@@ -581,7 +790,7 @@ export default function AppShell() {
             borderBottom: "1px solid rgba(125,183,255,0.20)",
           }}
         >
-          <Toolbar sx={{ minHeight: 40, alignItems: "center", gap: 1 }}>
+          <Toolbar data-testid="app-top-bar" sx={{ minHeight: 40, alignItems: "center", gap: 1 }}>
             <Box
               component="img"
               src="/Borealis_Logo_Full.png"
@@ -598,45 +807,6 @@ export default function AppShell() {
               }}
             >
               <GlobalDeviceSearch onSelectDevice={handleGlobalDeviceSelect} />
-            </Box>
-
-            <Box sx={{ ml: 2, display: "flex", alignItems: "center" }}>
-              <Breadcrumbs
-                separator={<NavigateNextIcon fontSize="inherit" sx={{ color: "#6b6b6b" }} />}
-                aria-label="breadcrumb"
-                sx={{
-                  color: "#9aa0a6",
-                  fontSize: "0.825rem",
-                  "& .MuiBreadcrumbs-separator": { mx: 0.6 },
-                }}
-              >
-                {breadcrumbs.map((item) =>
-                  item.to ? (
-                    <Button
-                      key={item.id}
-                      onClick={() => navigate(item.to)}
-                      size="small"
-                      sx={{
-                        color: "#cde1ff",
-                        textTransform: "none",
-                        minWidth: 0,
-                        p: 0,
-                        fontSize: "0.825rem",
-                      }}
-                    >
-                      {item.label}
-                    </Button>
-                  ) : (
-                    <Typography
-                      key={item.id}
-                      component="span"
-                      sx={{ color: "#f5f5f5", fontSize: "0.825rem" }}
-                    >
-                      {item.label}
-                    </Typography>
-                  )
-                )}
-              </Breadcrumbs>
             </Box>
 
             <Box sx={{ flexGrow: 1 }} />
@@ -736,6 +906,26 @@ export default function AppShell() {
           >
             {hasPageHeader ? (
               <Box sx={{ px: 3, pt: 3, pb: 1.5, flexShrink: 0 }}>
+                {breadcrumbs.length ? (
+                  <Box data-testid="page-header-breadcrumbs" sx={{ mb: 1.1, minWidth: 0 }}>
+                    <BreadcrumbTrail
+                      items={breadcrumbs}
+                      maxItems={BREADCRUMB_DESKTOP_MAX_ITEMS}
+                      navigate={navigate}
+                      sx={{
+                        display: { xs: "none", md: "inline-flex" },
+                      }}
+                    />
+                    <BreadcrumbTrail
+                      items={breadcrumbs}
+                      maxItems={BREADCRUMB_MOBILE_MAX_ITEMS}
+                      navigate={navigate}
+                      sx={{
+                        display: { xs: "inline-flex", md: "none" },
+                      }}
+                    />
+                  </Box>
+                ) : null}
                 <Box
                   sx={{
                     display: "flex",

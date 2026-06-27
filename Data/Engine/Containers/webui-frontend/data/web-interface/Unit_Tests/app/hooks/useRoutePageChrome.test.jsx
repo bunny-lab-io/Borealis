@@ -38,7 +38,12 @@ describe("useRoutePageChrome", () => {
         }}
       >
         <Harness
-          meta={{ title: "Devices", subtitle: "Inventory" }}
+          meta={{
+            title: "Devices",
+            subtitle: "Inventory",
+            breadcrumbs: [{ id: "inventory", label: "Inventory" }],
+            breadcrumbMenuItems: [{ id: "devices", label: "Devices", to: "/devices" }],
+          }}
           onValue={() => {}}
         />
       </PageChromeContext.Provider>
@@ -52,8 +57,12 @@ describe("useRoutePageChrome", () => {
         subtitle: "Inventory",
         Icon: null,
         breadcrumbLabel: "",
+        breadcrumbs: [{ id: "inventory", label: "Inventory" }],
+        breadcrumbsReplace: false,
+        breadcrumbMenuItems: [{ id: "devices", label: "Devices", to: "/devices" }],
         actions: [],
         controls: [],
+        navigationSidebar: null,
       },
       EMPTY_PAGE_CHROME,
     ]);

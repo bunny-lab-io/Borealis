@@ -46,6 +46,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 ## Styling and Layout
 - Borealis uses a MagicUI styling language with glass panels, gradients, and Quartz-themed AG Grid tables.
 - The full MagicUI and AG Grid specification is embedded in the Codex Agent section below.
+- Breadcrumbs live in the shared page header above the page title. They should help operators move back through the route hierarchy and, on detail pages, back to the last remembered collection URL when one exists.
 - Workflow Runtime v1 node-shell and port-row styling rules live in [Workflows](../Using%20the%20Platform/Assemblies/workflows.md). Use that document as the source of truth for workflow node title sizing, status badges, named port rows, and Action-vs-data edge behavior.
 - Workflow Runtime v1 naming and edge-label behavior also live there. In particular, use `Device Filter` and `List of Devices` for the targeting nodes, keep workflow data edges dashed Borealis blue, and let target edges auto-label with device counts when available.
 - Workflow node inspection also follows that document: the node sidebar `Debug Info` tab is available in both authoring mode and run-snapshot mode, with authoring previews clearly treated as pre-runtime estimates rather than executed results.
@@ -323,12 +324,25 @@ Treat this document as the single source of truth for Borealis WebUI design rule
 
     #### Page-Level Tabs
     - Header ownership: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` owns the page title, subtitle, icon, and the page action rail. Routed pages should publish header metadata through `useRoutePageChrome()` or `usePageChrome()`.
+    - Breadcrumb ownership: `AppShell.jsx` also owns the shared breadcrumb rail. Do not render duplicate page-local breadcrumbs in routed pages.
     - Header action contract:
     ```jsx
     useRoutePageChrome({
       title: pageTitle,
       subtitle: pageSubtitle,
       Icon: PageIcon,
+      breadcrumbLabel: pageTitle,
+      breadcrumbs: [
+        { id: "workspace", label: "Backend Tools", to: "/devices/lab-docker-02?tab=remote_ops&view=shell" },
+        {
+          id: "workspace-view",
+          label: "Files",
+          menuItems: [
+            { id: "shell", label: "Shell", to: "/devices/lab-docker-02?tab=remote_ops&view=shell" },
+            { id: "services", label: "Services", to: "/devices/lab-docker-02?tab=remote_ops&view=services" },
+          ],
+        },
+      ],
       controls: [statusSelectControl],
       actions: [
         { id: "refresh", label: "Refresh", icon: <RefreshIcon />, tone: "secondary", onClick: loadData },
@@ -336,6 +350,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
       ],
     });
     ```
+    - Breadcrumb route source: route `handle.breadcrumb` values define the base trail. `breadcrumbLabel` overrides the current route label; `breadcrumbs` appends contextual depth such as device workspace/view crumbs; `breadcrumbsReplace` may replace the route trail for standalone special surfaces.
+    - Breadcrumb menu source: use `breadcrumbMenuItems` for current-page menu options or per-crumb `menuItems` for contextual sibling navigation. Menu items support `id`, `label`, `to`, `onClick`, and `disabled`.
+    - Remembered collection URLs: `AppShell.jsx` remembers collection routes where `handle.navKey === handle.pageKey`, including query strings. Parent crumbs on nested pages should use that remembered target so `Devices` can return to `/devices?site=<id>` instead of bare `/devices`.
+    - Device Summary breadcrumbs: publish active workspace/view crumbs from existing `tab` and `view` query parameters. Example trail: `Devices / lab-docker-02 / Backend Tools / Files`.
+    - Responsive behavior: desktop shows the full rail until it exceeds the helper limit; narrow widths keep the first crumb, an ellipsis menu, and the current crumb. Breadcrumb text must truncate inside its own control instead of widening the page header.
     - Shared implementation: use `Data/Engine/Containers/webui-frontend/data/web-interface/src/Page_Header_Actions.jsx` for the action-rail renderer and the shared button/control tokens. Standalone pages that render without App should use the same `PageHeaderActionRail` component locally instead of re-creating header buttons.
     - Action rail placement: the rail lives inside the shared header band in normal document flow, aligned to the top-right of the page title block. Do not use `position: "fixed"` for page-level actions.
     - Rail ordering: pages declare actions in their final left-to-right display order. Supporting actions should be listed first and primary actions should be listed last so the main CTA stays on the far right.

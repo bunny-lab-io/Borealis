@@ -290,6 +290,21 @@ const WORKSPACE_VIEW_OPTIONS = Object.freeze({
   inventory: ["summary", "software"],
   config: ["metadata"],
 });
+const WORKSPACE_VIEW_LABELS = Object.freeze({
+  remote_ops: {
+    shell: "Shell",
+    files: "Files",
+    processes: "Processes",
+    services: "Services",
+  },
+  inventory: {
+    summary: "Overview",
+    software: "Installed Software",
+  },
+  config: {
+    metadata: "Metadata",
+  },
+});
 const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
   command: { workspace: "inventory", view: "summary" },
   device_summary: { workspace: "inventory", view: "summary" },
@@ -340,6 +355,19 @@ const createDeviceWorkspaceSearch = (currentSearch, workspaceKey, viewKey = "") 
     params.delete("view");
   }
   return params.toString() ? `?${params.toString()}` : "";
+};
+
+const getWorkspaceLabel = (workspaceKey) =>
+  WORKSPACES.find((workspace) => workspace.key === workspaceKey)?.label || "Workspace";
+
+const getWorkspaceViewLabel = (workspaceKey, viewKey) =>
+  WORKSPACE_VIEW_LABELS[workspaceKey]?.[viewKey] || "";
+
+const buildDeviceWorkspaceTarget = (deviceId, currentSearch, workspaceKey, viewKey = "") => {
+  if (!deviceId) {
+    return "";
+  }
+  return `${APP_PATHS.device(deviceId)}${createDeviceWorkspaceSearch(currentSearch, workspaceKey, viewKey)}`;
 };
 
 const resolveDeviceId = (device) =>
@@ -4374,11 +4402,80 @@ export default function DeviceSummary() {
       workspaceBadges,
     ]
   );
+  const deviceWorkspaceMenuItems = useMemo(() => {
+    const menuItems = [];
+    WORKSPACES.forEach((workspace) => {
+      const viewOptions = WORKSPACE_VIEW_OPTIONS[workspace.key] || [];
+      if (!viewOptions.length) {
+        menuItems.push({
+          id: `device-workspace-${workspace.key}`,
+          label: workspace.label,
+          to: buildDeviceWorkspaceTarget(deviceId, location.search, workspace.key),
+          disabled: activeWorkspaceKey === workspace.key,
+        });
+        return;
+      }
+      viewOptions.forEach((viewKey) => {
+        menuItems.push({
+          id: `device-workspace-${workspace.key}-${viewKey}`,
+          label: `${workspace.label} - ${getWorkspaceViewLabel(workspace.key, viewKey)}`,
+          to: buildDeviceWorkspaceTarget(deviceId, location.search, workspace.key, viewKey),
+          disabled:
+            activeWorkspaceKey === workspace.key &&
+            normalizeWorkspaceView(workspace.key, activeWorkspaceView) === viewKey,
+        });
+      });
+    });
+    if (deviceId) {
+      menuItems.push({
+        id: "device-workspace-remote-desktop",
+        label: "Remote Desktop",
+        to: APP_PATHS.deviceRemoteDesktop(deviceId),
+      });
+    }
+    return menuItems;
+  }, [activeWorkspaceKey, activeWorkspaceView, deviceId, location.search]);
+  const deviceBreadcrumbItems = useMemo(() => {
+    const workspaceLabel = getWorkspaceLabel(activeWorkspaceKey);
+    const normalizedView = normalizeWorkspaceView(activeWorkspaceKey, activeWorkspaceView);
+    const viewLabel = getWorkspaceViewLabel(activeWorkspaceKey, normalizedView);
+    const defaultView = WORKSPACE_VIEW_DEFAULTS[activeWorkspaceKey] || normalizedView || "";
+    const workspaceTarget = buildDeviceWorkspaceTarget(
+      deviceId,
+      location.search,
+      activeWorkspaceKey,
+      defaultView
+    );
+    const items = [
+      {
+        id: `device-workspace-${activeWorkspaceKey}`,
+        label: workspaceLabel,
+        to: viewLabel ? workspaceTarget : null,
+        menuItems: deviceWorkspaceMenuItems,
+      },
+    ];
+    if (viewLabel) {
+      items.push({
+        id: `device-workspace-${activeWorkspaceKey}-${normalizedView}`,
+        label: viewLabel,
+        menuItems: deviceWorkspaceMenuItems,
+      });
+    }
+    return items;
+  }, [
+    activeWorkspaceKey,
+    activeWorkspaceView,
+    deviceId,
+    deviceWorkspaceMenuItems,
+    location.search,
+  ]);
 
   useRoutePageChrome({
     title: displayHostname,
     subtitle: pageSubtitle,
     Icon: DeviceSummaryPageIcon,
+    breadcrumbLabel: displayHostname,
+    breadcrumbs: deviceBreadcrumbItems,
     actions: pageHeaderActions,
     navigationSidebar: deviceNavigationSidebar,
   });

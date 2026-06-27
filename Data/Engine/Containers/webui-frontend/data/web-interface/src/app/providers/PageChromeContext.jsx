@@ -1,12 +1,17 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
 
+const EMPTY_ITEMS = Object.freeze([]);
+
 export const EMPTY_PAGE_CHROME = {
   title: "",
   subtitle: "",
   Icon: null,
-  actions: [],
-  controls: [],
+  actions: EMPTY_ITEMS,
+  controls: EMPTY_ITEMS,
   breadcrumbLabel: "",
+  breadcrumbs: EMPTY_ITEMS,
+  breadcrumbsReplace: false,
+  breadcrumbMenuItems: EMPTY_ITEMS,
   navigationSidebar: null,
 };
 
@@ -23,6 +28,11 @@ function normalizePageChrome(meta) {
     controls: Array.isArray(meta.controls) ? meta.controls.filter(Boolean) : [],
     breadcrumbLabel:
       typeof meta.breadcrumbLabel === "string" ? meta.breadcrumbLabel : typeof meta.title === "string" ? meta.title : "",
+    breadcrumbs: Array.isArray(meta.breadcrumbs) ? meta.breadcrumbs.filter(Boolean) : [],
+    breadcrumbsReplace: Boolean(meta.breadcrumbsReplace),
+    breadcrumbMenuItems: Array.isArray(meta.breadcrumbMenuItems)
+      ? meta.breadcrumbMenuItems.filter(Boolean)
+      : [],
     navigationSidebar: meta.navigationSidebar || null,
   };
 }

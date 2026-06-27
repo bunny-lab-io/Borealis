@@ -13,6 +13,11 @@ export function useRoutePageChrome(pageChrome) {
     typeof pageChrome?.breadcrumbLabel === "string" ? pageChrome.breadcrumbLabel : "";
   const actions = Array.isArray(pageChrome?.actions) ? pageChrome.actions : EMPTY_ITEMS;
   const controls = Array.isArray(pageChrome?.controls) ? pageChrome.controls : EMPTY_ITEMS;
+  const breadcrumbs = Array.isArray(pageChrome?.breadcrumbs) ? pageChrome.breadcrumbs : EMPTY_ITEMS;
+  const breadcrumbsReplace = Boolean(pageChrome?.breadcrumbsReplace);
+  const breadcrumbMenuItems = Array.isArray(pageChrome?.breadcrumbMenuItems)
+    ? pageChrome.breadcrumbMenuItems
+    : EMPTY_ITEMS;
   const navigationSidebar = pageChrome?.navigationSidebar || null;
 
   useEffect(() => {
@@ -22,6 +27,9 @@ export function useRoutePageChrome(pageChrome) {
         subtitle,
         Icon,
         breadcrumbLabel,
+        breadcrumbs,
+        breadcrumbsReplace,
+        breadcrumbMenuItems,
         actions,
         controls,
         navigationSidebar,
@@ -33,5 +41,19 @@ export function useRoutePageChrome(pageChrome) {
     return () => {
       resetPageChrome();
     };
-  }, [Icon, actions, breadcrumbLabel, controls, hasPageChrome, navigationSidebar, resetPageChrome, setPageChrome, subtitle, title]);
+  }, [
+    Icon,
+    actions,
+    breadcrumbLabel,
+    breadcrumbMenuItems,
+    breadcrumbs,
+    breadcrumbsReplace,
+    controls,
+    hasPageChrome,
+    navigationSidebar,
+    resetPageChrome,
+    setPageChrome,
+    subtitle,
+    title,
+  ]);
 }
