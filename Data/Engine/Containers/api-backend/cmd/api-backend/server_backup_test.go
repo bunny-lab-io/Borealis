@@ -406,3 +406,19 @@ func TestEngineBackupClearRuntimeLogsOnlyAllowsEngineServiceLogRoots(t *testing.
 		t.Fatalf("unsafe log file should remain: %v", err)
 	}
 }
+
+func TestEngineBackupSoftwareIconAssetsUseIconHashKey(t *testing.T) {
+	for _, spec := range engineBackupTableSpecs() {
+		if spec.Name != "engine.software_icon_assets" {
+			continue
+		}
+		if spec.ResetSerials {
+			t.Fatalf("software_icon_assets has no id serial and must not reset serials")
+		}
+		if len(spec.OrderBy) != 1 || spec.OrderBy[0] != "icon_hash" {
+			t.Fatalf("software_icon_assets must order by icon_hash, got %#v", spec.OrderBy)
+		}
+		return
+	}
+	t.Fatalf("software_icon_assets backup spec missing")
+}

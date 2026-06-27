@@ -1047,7 +1047,7 @@ func engineBackupTableSpecs() []engineBackupTableSpec {
 		{Name: "engine.metadata_field_definitions", OrderBy: []string{"field_number"}, Export: true, Restore: true},
 		{Name: "engine.device_metadata_fields", OrderBy: []string{"device_guid", "field_number"}, Export: true, Restore: true},
 		{Name: "engine.device_software_inventory", OrderBy: []string{"device_guid", "name_normalized", "id"}, Export: true, Restore: true, ResetSerials: true},
-		{Name: "engine.software_icon_assets", OrderBy: []string{"id"}, Export: true, Restore: true, ResetSerials: true},
+		{Name: "engine.software_icon_assets", OrderBy: []string{"icon_hash"}, Export: true, Restore: true},
 		{Name: "assemblies.official_catalog_state", OrderBy: []string{"assembly_guid"}, Export: true, Restore: true},
 		{Name: "assemblies.official_assemblies", OrderBy: []string{"assembly_guid"}, Export: true, Restore: true},
 		{Name: "assemblies.community_assemblies", OrderBy: []string{"assembly_guid"}, Export: true, Restore: true},
