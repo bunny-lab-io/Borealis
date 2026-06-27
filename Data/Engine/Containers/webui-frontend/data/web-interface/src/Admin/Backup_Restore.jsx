@@ -294,7 +294,15 @@ function BackupRestoreTool({ mode }) {
   };
 
   return (
-    <Stack spacing={2.5} sx={{ minWidth: 0 }}>
+    <Stack
+      spacing={2.5}
+      sx={{
+        minWidth: 0,
+        minHeight: 0,
+        height: isBootstrap ? "auto" : "100%",
+        display: "flex",
+      }}
+    >
       {!isBootstrap ? (
         <Box
           sx={{
@@ -335,9 +343,13 @@ function BackupRestoreTool({ mode }) {
           borderRadius: 2,
           p: 2.5,
           background: "rgba(69, 10, 10, 0.18)",
+          display: "flex",
+          flexDirection: "column",
+          flex: isBootstrap ? "0 0 auto" : "1 1 auto",
+          minHeight: 0,
         }}
       >
-        <Stack spacing={2}>
+        <Stack spacing={2} sx={{ minHeight: 0, height: "100%" }}>
           <Box>
             <Typography variant="subtitle1" sx={{ fontWeight: 700, color: "#fff1f2" }}>
               Restore Encrypted Backup
@@ -416,6 +428,8 @@ function BackupRestoreTool({ mode }) {
                 overflow: "hidden",
                 background: "rgba(15, 23, 42, 0.72)",
                 boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), 0 18px 48px rgba(0, 0, 0, 0.26)",
+                flex: isBootstrap ? "0 0 auto" : "1 1 0",
+                minHeight: isBootstrap ? 240 : 0,
                 "--ag-font-family": gridFontFamily,
                 "--ag-icon-font-family": iconFontFamily,
                 "& .ag-root-wrapper": {
@@ -462,7 +476,7 @@ function BackupRestoreTool({ mode }) {
                 },
               }}
             >
-              <Box sx={{ height: 320, minHeight: 240 }}>
+              <Box sx={{ height: isBootstrap ? 320 : "100%", minHeight: isBootstrap ? 240 : 0 }}>
                 <AgGridReact
                   theme={backupAnalysisGridTheme}
                   rowData={analysisRows}
@@ -577,7 +591,7 @@ export default function BackupRestore({ mode = "admin" }) {
   }
 
   return (
-    <PageBodyFrame variant="content_panel" fillHeight={false}>
+    <PageBodyFrame variant="content_panel" fillHeight contentSx={{ height: "100%", minHeight: 0 }}>
       <BackupRestoreTool mode="admin" />
     </PageBodyFrame>
   );

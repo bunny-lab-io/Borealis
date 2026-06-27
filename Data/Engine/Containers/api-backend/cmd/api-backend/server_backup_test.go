@@ -290,16 +290,27 @@ func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
 	state := engineBackupTestState(t, key)
 	payload := engineBackupTestPayload(t, state)
 	payload.Tables["engine.device_filters"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("8"), "name": "Servers"}}}
+	payload.Tables["engine.device_filter_sites"] = engineBackupTable{Columns: []string{"filter_id", "site_id"}, Rows: []map[string]any{{"filter_id": json.Number("8"), "site_id": json.Number("4")}}}
 	payload.Tables["engine.watchdogs"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("9"), "name": "CPU"}}}
+	payload.Tables["engine.watchdog_targets"] = engineBackupTable{Columns: []string{"id", "watchdog_id"}, Rows: []map[string]any{{"id": json.Number("15"), "watchdog_id": json.Number("9")}}}
+	payload.Tables["engine.watchdog_device_overrides"] = engineBackupTable{Columns: []string{"id", "watchdog_id"}, Rows: []map[string]any{{"id": json.Number("16"), "watchdog_id": json.Number("9")}}}
 	payload.Tables["engine.scheduled_jobs"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("10"), "name": "Patch"}}}
 	payload.Tables["assemblies.user_created_assemblies"] = engineBackupTable{Columns: []string{"assembly_guid", "name"}, Rows: []map[string]any{{"assembly_guid": "asm-1", "name": "Restart Service"}}}
 	payload.Tables["engine.credentials"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("11"), "name": "Domain Admin"}}}
 	payload.Tables["engine.users"] = engineBackupTable{Columns: []string{"id", "username"}, Rows: []map[string]any{{"id": json.Number("12"), "username": "operator"}}}
+	payload.Tables["engine.user_site_assignments"] = engineBackupTable{Columns: []string{"user_id", "site_id"}, Rows: []map[string]any{{"user_id": json.Number("12"), "site_id": json.Number("4")}}}
 	payload.Tables["engine.metadata_field_definitions"] = engineBackupTable{Columns: []string{"field_number", "display_name"}, Rows: []map[string]any{{"field_number": json.Number("1"), "display_name": "Asset Tag"}}}
+	payload.Tables["engine.directory_providers"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("13"), "name": "LDAP"}}}
+	payload.Tables["engine.directory_provider_group_mappings"] = engineBackupTable{Columns: []string{"id", "provider_id"}, Rows: []map[string]any{{"id": json.Number("17"), "provider_id": json.Number("13")}}}
+	payload.Tables["engine.directory_provider_site_mappings"] = engineBackupTable{Columns: []string{"id", "provider_id"}, Rows: []map[string]any{{"id": json.Number("18"), "provider_id": json.Number("13")}}}
+	payload.Tables["engine.device_sites"] = engineBackupTable{Columns: []string{"device_hostname", "site_id"}, Rows: []map[string]any{{"device_hostname": "LAB-AGENT-01", "site_id": json.Number("4")}}}
 	payload.Tables["engine.device_keys"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": "key-1", "guid": "agent-guid-1"}}}
 	payload.Tables["engine.refresh_tokens"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": "token-1", "guid": "agent-guid-1"}}}
 	payload.Tables["engine.device_approvals"] = engineBackupTable{Columns: []string{"id", "guid"}, Rows: []map[string]any{{"id": json.Number("14"), "guid": "agent-guid-1"}}}
 	payload.Tables["engine.device_metadata_fields"] = engineBackupTable{Columns: []string{"device_guid", "field_number", "value"}, Rows: []map[string]any{{"device_guid": "agent-guid-1", "field_number": json.Number("1"), "value": "A-100"}}}
+	payload.Tables["engine.device_software_inventory"] = engineBackupTable{Columns: []string{"id", "device_guid"}, Rows: []map[string]any{{"id": json.Number("19"), "device_guid": "agent-guid-1"}}}
+	payload.Tables["engine.software_icon_assets"] = engineBackupTable{Columns: []string{"icon_hash"}, Rows: []map[string]any{{"icon_hash": "abc"}}}
+	payload.Tables["engine.device_list_views"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("20"), "name": "Temporary View"}}}
 	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
 	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
@@ -324,21 +335,23 @@ func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
 		counts[cleanText(item["id"])] = int(coerceInt64(item["count"]))
 	}
 	for id, expected := range map[string]int{
-		"devices":         1,
-		"filters":         1,
-		"watchdogs":       1,
-		"scheduled_jobs":  1,
-		"assemblies":      1,
-		"sites":           1,
-		"credentials":     1,
-		"users":           1,
-		"metadata_fields": 1,
+		"devices":             1,
+		"filters":             1,
+		"watchdogs":           1,
+		"scheduled_jobs":      1,
+		"assemblies":          1,
+		"sites":               1,
+		"credentials":         1,
+		"users":               1,
+		"directory_providers": 1,
+		"metadata_fields":     1,
+		"software_inventory":  1,
 	} {
 		if counts[id] != expected {
 			t.Fatalf("expected %s count %d, got %d in %#v", id, expected, counts[id], rows)
 		}
 	}
-	for _, hiddenID := range []string{"device_keys", "refresh_tokens", "device_approvals", "metadata_values"} {
+	for _, hiddenID := range []string{"device_keys", "refresh_tokens", "device_approvals", "metadata_values", "saved_views", "directory_role_mappings", "directory_site_mappings", "user_site_assignments", "device_site_assignments", "software_icons", "watchdog_targets", "watchdog_overrides"} {
 		if _, ok := counts[hiddenID]; ok {
 			t.Fatalf("analysis should not display %s rows: %#v", hiddenID, rows)
 		}
@@ -347,15 +360,25 @@ func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
 		t.Fatalf("expected files count 1, got %d in %#v", counts["files"], rows)
 	}
 	foundFilesLabel := false
+	foundDeviceFiltersLabel := false
+	foundSoftwareInventoryLabel := false
 	for _, row := range rows {
 		item := asMap(row)
 		if cleanText(item["id"]) == "files" {
 			foundFilesLabel = cleanText(item["name"]) == "Engine Settings and Secret Files"
-			break
+		}
+		if cleanText(item["id"]) == "filters" {
+			foundDeviceFiltersLabel = cleanText(item["name"]) == "Device Filters"
+		}
+		if cleanText(item["id"]) == "software_inventory" {
+			foundSoftwareInventoryLabel = cleanText(item["name"]) == "Software Inventory"
 		}
 	}
 	if !foundFilesLabel {
 		t.Fatalf("analysis should use human-friendly file label: %#v", rows)
+	}
+	if !foundDeviceFiltersLabel || !foundSoftwareInventoryLabel {
+		t.Fatalf("analysis should use requested labels: %#v", rows)
 	}
 	if store.restored != nil {
 		t.Fatalf("analyze must not restore payload")
@@ -537,5 +560,13 @@ func TestEngineBackupTrustSpecsExcludeApprovalsAndLimitActiveRows(t *testing.T) 
 	}
 	if len(refreshTokens.ActiveAfterNow) != 1 || refreshTokens.ActiveAfterNow[0] != "expires_at" {
 		t.Fatalf("refresh tokens must skip expired rows, got %#v", refreshTokens.ActiveAfterNow)
+	}
+
+	savedViews := specs["engine.device_list_views"]
+	if savedViews.Export || savedViews.Restore {
+		t.Fatalf("saved views should be cleanup-only, got export=%v restore=%v", savedViews.Export, savedViews.Restore)
+	}
+	if !engineBackupKnownTableSet()["engine.device_list_views"] {
+		t.Fatalf("saved views should remain known so older backups validate")
 	}
 }
