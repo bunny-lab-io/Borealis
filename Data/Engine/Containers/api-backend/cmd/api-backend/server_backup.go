@@ -57,9 +57,9 @@ type engineBackupPayload struct {
 	SchemaVersion int                          `json:"schema_version"`
 	CreatedAt     string                       `json:"created_at"`
 	Source        map[string]any               `json:"source"`
-	Tables        map[string]engineBackupTable  `json:"tables"`
-	Files         map[string]engineBackupFile   `json:"files"`
-	Counts        map[string]map[string]int     `json:"counts"`
+	Tables        map[string]engineBackupTable `json:"tables"`
+	Files         map[string]engineBackupFile  `json:"files"`
+	Counts        map[string]map[string]int    `json:"counts"`
 }
 
 type encryptedEngineBackupDocument struct {
@@ -211,14 +211,14 @@ func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.Hand
 			bootstrapPayload = publicBootstrapState(nextState)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":            "ok",
-			"restart_required":  true,
-			"unlock_required":   true,
-			"confirmation":      req.Confirmation,
-			"tables_restored":   result.TablesRestored,
-			"rows_restored":     result.RowsRestored,
-			"files_restored":    result.FilesRestored,
-			"bootstrap_state":   bootstrapPayload,
+			"status":           "ok",
+			"restart_required": true,
+			"unlock_required":  true,
+			"confirmation":     req.Confirmation,
+			"tables_restored":  result.TablesRestored,
+			"rows_restored":    result.RowsRestored,
+			"files_restored":   result.FilesRestored,
+			"bootstrap_state":  bootstrapPayload,
 		})
 	}
 }
@@ -258,7 +258,7 @@ func readEngineBackupRestoreRequest(w http.ResponseWriter, r *http.Request) (eng
 		return engineBackupRestoreRequest{}, false
 	}
 	if req.Confirmation != engineBackupConfirmationText {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "confirmation_required", "message": "Typed confirmation must match "+engineBackupConfirmationText+"."})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "confirmation_required", "message": "Typed confirmation must match " + engineBackupConfirmationText + "."})
 		return engineBackupRestoreRequest{}, false
 	}
 	backupRaw := raw["backup"]
@@ -508,11 +508,11 @@ func (s *postgresOperatorStore) exportEngineBackupPayload(ctx context.Context) (
 		SchemaVersion: engineBackupSchemaVersion,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		Source: map[string]any{
-			"engine":          "Borealis",
-			"api_version":     version,
-			"generated_by":    "api-backend",
-			"backup_scope":    "engine_configuration",
-			"excluded_scope":  []string{"logs", "device_activity_history", "scheduled_job_history", "workflow_run_history", "watchdog_incident_history", "scheduler_runtime_state"},
+			"engine":         "Borealis",
+			"api_version":    version,
+			"generated_by":   "api-backend",
+			"backup_scope":   "engine_configuration",
+			"excluded_scope": []string{"logs", "device_activity_history", "scheduled_job_history", "workflow_run_history", "watchdog_incident_history", "scheduler_runtime_state"},
 		},
 		Tables: map[string]engineBackupTable{},
 		Files:  map[string]engineBackupFile{},

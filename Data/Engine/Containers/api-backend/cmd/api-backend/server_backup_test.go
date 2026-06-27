@@ -104,6 +104,15 @@ func newEngineBackupTestAuth(store *engineBackupTestStore, aegis *engineBackupTe
 	}
 }
 
+func addEngineBackupAuthCookie(t *testing.T, request *http.Request, auth *authService, role string) {
+	t.Helper()
+	token, err := auth.verifier.signPayload(map[string]any{"u": "operator", "r": role})
+	if err != nil {
+		t.Fatalf("sign auth token: %v", err)
+	}
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: token})
+}
+
 func engineBackupTestState(t *testing.T, key []byte) aegisState {
 	t.Helper()
 	token, err := aegisEncryptText(aegisVerificationPlaintext, key)
@@ -196,7 +205,7 @@ func TestEngineBackupExportRejectsNonAdmin(t *testing.T) {
 	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "User"}, payload: engineBackupTestPayload(t, state)}
 	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
 	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
-	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	addEngineBackupAuthCookie(t, request, auth, "User")
 	recorder := httptest.NewRecorder()
 
 	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
@@ -212,7 +221,7 @@ func TestEngineBackupExportRejectsLockedAegis(t *testing.T) {
 	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, payload: engineBackupTestPayload(t, state)}
 	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state, locked: true}, bootstrapPhaseLoginRequired)
 	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
-	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	addEngineBackupAuthCookie(t, request, auth, "Admin")
 	recorder := httptest.NewRecorder()
 
 	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
@@ -229,7 +238,7 @@ func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
 	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, payload: sourcePayload}
 	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
 	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
-	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	addEngineBackupAuthCookie(t, request, auth, "Admin")
 	recorder := httptest.NewRecorder()
 
 	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
