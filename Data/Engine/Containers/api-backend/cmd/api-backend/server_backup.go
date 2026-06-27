@@ -77,6 +77,7 @@ type engineBackupRestoreResult struct {
 	TablesRestored int `json:"tables_restored"`
 	RowsRestored   int `json:"rows_restored"`
 	FilesRestored  int `json:"files_restored"`
+	LogsCleared    int `json:"logs_cleared"`
 }
 
 type engineBackupDataStore interface {
@@ -213,6 +214,7 @@ func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.Hand
 			"tables_restored":  result.TablesRestored,
 			"rows_restored":    result.RowsRestored,
 			"files_restored":   result.FilesRestored,
+			"logs_cleared":     result.LogsCleared,
 			"bootstrap_state":  bootstrapPayload,
 		})
 	}
@@ -691,6 +693,7 @@ func (s *postgresOperatorStore) restoreEngineBackupPayload(ctx context.Context, 
 	}
 	committedFiles = true
 	result.FilesRestored = filesRestored
+	result.LogsCleared = clearEngineBackupRuntimeLogs()
 	return result, nil
 }
 
@@ -940,6 +943,80 @@ func cleanupEngineBackupStagedFiles(staged []engineBackupStagedFile) {
 	for _, file := range staged {
 		_ = os.Remove(file.TmpPath)
 	}
+}
+
+func clearEngineBackupRuntimeLogs() int {
+	total := 0
+	for _, root := range engineBackupLogRoots() {
+		cleared, err := clearEngineBackupLogRoot(root)
+		if err == nil {
+			total += cleared
+		}
+	}
+	return total
+}
+
+func engineBackupLogRoots() []string {
+	engineRoot := firstText(cleanText(os.Getenv("BOREALIS_ENGINE_ROOT")), filepath.Join(projectRoot(), "Engine"))
+	roots := []string{
+		resolveLogRoot(),
+		filepath.Join(engineRoot, "Services", "traefik-edge", "logs"),
+		filepath.Join(engineRoot, "Services", "wireguard-tunnel", "logs"),
+		filepath.Join(engineRoot, "Services", "remote-desktop-guacd", "logs"),
+		filepath.Join(engineRoot, "Services", "webui-frontend", "logs"),
+		filepath.Join(engineRoot, "Services", "postgres-db", "logs"),
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, root := range roots {
+		cleaned := filepath.Clean(strings.TrimSpace(root))
+		if cleaned == "." || seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		out = append(out, cleaned)
+	}
+	return out
+}
+
+func clearEngineBackupLogRoot(root string) (int, error) {
+	if !isEngineBackupLogRoot(root) {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	cleared := 0
+	for _, entry := range entries {
+		path := filepath.Join(root, entry.Name())
+		if err := os.RemoveAll(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return cleared, err
+		}
+		cleared++
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return cleared, err
+	}
+	return cleared, nil
+}
+
+func isEngineBackupLogRoot(root string) bool {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "" || root == "." || root == string(os.PathSeparator) {
+		return false
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	if filepath.Base(abs) != "logs" {
+		return false
+	}
+	return strings.Contains(abs, string(os.PathSeparator)+"Engine"+string(os.PathSeparator)+"Services"+string(os.PathSeparator))
 }
 
 func engineBackupTableSpecs() []engineBackupTableSpec {

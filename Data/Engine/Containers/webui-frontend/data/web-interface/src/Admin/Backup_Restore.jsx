@@ -39,7 +39,8 @@ function restoreSuccessMessage(payload) {
   const tableCount = Number(payload?.tables_restored || 0);
   const rowCount = Number(payload?.rows_restored || 0);
   const fileCount = Number(payload?.files_restored || 0);
-  return `Restored ${tableCount} tables, ${rowCount} rows, and ${fileCount} files. API restart and Aegis unlock required.`;
+  const logCount = Number(payload?.logs_cleared || 0);
+  return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. API restart and Aegis unlock required.`;
 }
 
 function BackupRestoreTool({ mode }) {

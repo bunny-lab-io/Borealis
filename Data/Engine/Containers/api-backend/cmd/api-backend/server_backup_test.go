@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +40,7 @@ func (s *engineBackupTestStore) restoreEngineBackupPayload(_ context.Context, pa
 	for _, table := range payload.Tables {
 		rows += len(table.Rows)
 	}
-	return engineBackupRestoreResult{TablesRestored: len(payload.Tables), RowsRestored: rows, FilesRestored: len(payload.Files)}, nil
+	return engineBackupRestoreResult{TablesRestored: len(payload.Tables), RowsRestored: rows, FilesRestored: len(payload.Files), LogsCleared: 3}, nil
 }
 
 type engineBackupTestAegis struct {
@@ -353,5 +355,54 @@ func TestEngineBackupBootstrapRestoreImportsAndClearsKey(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), `"restart_required":true`) {
 		t.Fatalf("restore response must require restart: %s", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), `"logs_cleared":3`) {
+		t.Fatalf("restore response must report cleared logs: %s", recorder.Body.String())
+	}
+}
+
+func TestEngineBackupClearRuntimeLogsOnlyAllowsEngineServiceLogRoots(t *testing.T) {
+	root := t.TempDir()
+	logRoot := filepath.Join(root, "Engine", "Services", "api-backend", "logs")
+	if err := os.MkdirAll(filepath.Join(logRoot, "VPN_Tunnel"), 0o755); err != nil {
+		t.Fatalf("create log root: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(logRoot, "engine.log"),
+		filepath.Join(logRoot, "engine.log.2026-06-01"),
+		filepath.Join(logRoot, "VPN_Tunnel", "tunnel.log"),
+	} {
+		if err := os.WriteFile(path, []byte("log\n"), 0o600); err != nil {
+			t.Fatalf("write log %s: %v", path, err)
+		}
+	}
+	cleared, err := clearEngineBackupLogRoot(logRoot)
+	if err != nil {
+		t.Fatalf("clear engine log root: %v", err)
+	}
+	if cleared != 3 {
+		t.Fatalf("expected 3 log entries cleared, got %d", cleared)
+	}
+	if entries, err := os.ReadDir(logRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("expected empty log root, entries=%v err=%v", entries, err)
+	}
+
+	unsafeRoot := filepath.Join(root, "logs")
+	if err := os.MkdirAll(unsafeRoot, 0o755); err != nil {
+		t.Fatalf("create unsafe log root: %v", err)
+	}
+	unsafeFile := filepath.Join(unsafeRoot, "keep.log")
+	if err := os.WriteFile(unsafeFile, []byte("keep\n"), 0o600); err != nil {
+		t.Fatalf("write unsafe log: %v", err)
+	}
+	cleared, err = clearEngineBackupLogRoot(unsafeRoot)
+	if err != nil {
+		t.Fatalf("unsafe log root should be ignored without error: %v", err)
+	}
+	if cleared != 0 {
+		t.Fatalf("unsafe log root should not clear files, got %d", cleared)
+	}
+	if _, err := os.Stat(unsafeFile); err != nil {
+		t.Fatalf("unsafe log file should remain: %v", err)
 	}
 }

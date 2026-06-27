@@ -61,7 +61,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - Inner payload uses the fixed Borealis backup encryption path: AES-256-GCM with the Aegis-derived key.
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
-    - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
+    - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
 
     ### Included state
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.
@@ -71,6 +71,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
 
     ### Excluded state
     - Engine logs and rotated logs.
+    - Engine service log files are removed from mounted log roots during restore so the restored Engine starts from a clean log surface after restart.
     - Device activity history.
     - Scheduled job runs, run targets, onboarding run events, and run activity links.
     - Workflow runs, node runs, and child job rows.
