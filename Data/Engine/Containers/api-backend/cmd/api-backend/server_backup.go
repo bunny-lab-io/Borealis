@@ -22,7 +22,6 @@ import (
 const (
 	engineBackupKind             = "borealis.engine.config_backup"
 	engineBackupSchemaVersion    = 1
-	engineBackupCipher           = "AES-256-GCM"
 	engineBackupConfirmationText = "RESTORE ENGINE CONFIG BACKUP"
 	engineBackupBinaryMarker     = "__borealis_binary_b64"
 	engineBackupTimeout          = 5 * time.Minute
@@ -56,7 +55,6 @@ type engineBackupPayload struct {
 	Kind          string                       `json:"kind"`
 	SchemaVersion int                          `json:"schema_version"`
 	CreatedAt     string                       `json:"created_at"`
-	Source        map[string]any               `json:"source"`
 	Tables        map[string]engineBackupTable `json:"tables"`
 	Files         map[string]engineBackupFile  `json:"files"`
 	Counts        map[string]map[string]int    `json:"counts"`
@@ -66,9 +64,6 @@ type encryptedEngineBackupDocument struct {
 	Kind          string          `json:"kind"`
 	SchemaVersion int             `json:"schema_version"`
 	CreatedAt     string          `json:"created_at"`
-	Source        map[string]any  `json:"source"`
-	Encryption    string          `json:"encryption"`
-	KDFName       string          `json:"kdf_name"`
 	KDFParams     json.RawMessage `json:"kdf_params"`
 	NonceB64      string          `json:"nonce_b64"`
 	CiphertextB64 string          `json:"ciphertext_b64"`
@@ -324,7 +319,7 @@ func aegisStateFromBackupDocument(document encryptedEngineBackupDocument) (aegis
 	if document.Kind != engineBackupKind || document.SchemaVersion != engineBackupSchemaVersion {
 		return aegisState{}, backupUserError(http.StatusBadRequest, "unsupported_backup", "Backup format is not supported by this Engine.")
 	}
-	if strings.TrimSpace(document.KDFName) == "" || len(document.KDFParams) == 0 {
+	if len(document.KDFParams) == 0 {
 		return aegisState{}, backupUserError(http.StatusBadRequest, "invalid_backup", "Backup is missing Aegis KDF metadata.")
 	}
 	params := strings.TrimSpace(string(document.KDFParams))
@@ -334,7 +329,7 @@ func aegisStateFromBackupDocument(document encryptedEngineBackupDocument) (aegis
 	params = canonicalEngineBackupJSONText(params)
 	return aegisState{
 		Configured:    true,
-		KDFName:       strings.TrimSpace(document.KDFName),
+		KDFName:       aegisKDFName,
 		KDFParamsJSON: params,
 	}, nil
 }
@@ -356,9 +351,6 @@ func encryptEngineBackupPayload(payload engineBackupPayload, key []byte, state a
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
 		CreatedAt:     payload.CreatedAt,
-		Source:        payload.Source,
-		Encryption:    engineBackupCipher,
-		KDFName:       state.KDFName,
 		KDFParams:     params,
 		NonceB64:      base64.StdEncoding.EncodeToString(nonce),
 		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
@@ -368,9 +360,6 @@ func encryptEngineBackupPayload(payload engineBackupPayload, key []byte, state a
 func decryptEngineBackupPayload(document encryptedEngineBackupDocument, key []byte) (engineBackupPayload, error) {
 	if document.Kind != engineBackupKind || document.SchemaVersion != engineBackupSchemaVersion {
 		return engineBackupPayload{}, backupUserError(http.StatusBadRequest, "unsupported_backup", "Backup format is not supported by this Engine.")
-	}
-	if strings.TrimSpace(document.Encryption) != engineBackupCipher {
-		return engineBackupPayload{}, backupUserError(http.StatusBadRequest, "unsupported_encryption", "Backup encryption is not supported by this Engine.")
 	}
 	nonce, err := base64.StdEncoding.DecodeString(strings.TrimSpace(document.NonceB64))
 	if err != nil || len(nonce) != aegisNonceLength {
@@ -507,16 +496,9 @@ func (s *postgresOperatorStore) exportEngineBackupPayload(ctx context.Context) (
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
-		Source: map[string]any{
-			"engine":         "Borealis",
-			"api_version":    version,
-			"generated_by":   "api-backend",
-			"backup_scope":   "engine_configuration",
-			"excluded_scope": []string{"logs", "device_activity_history", "scheduled_job_history", "workflow_run_history", "watchdog_incident_history", "scheduler_runtime_state"},
-		},
-		Tables: map[string]engineBackupTable{},
-		Files:  map[string]engineBackupFile{},
-		Counts: map[string]map[string]int{},
+		Tables:        map[string]engineBackupTable{},
+		Files:         map[string]engineBackupFile{},
+		Counts:        map[string]map[string]int{},
 	}
 	for _, spec := range engineBackupTableSpecs() {
 		if !spec.Export {

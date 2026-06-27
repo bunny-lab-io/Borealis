@@ -133,7 +133,6 @@ func engineBackupTestPayload(t *testing.T, state aegisState) engineBackupPayload
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
 		CreatedAt:     "2026-06-27T00:00:00Z",
-		Source:        map[string]any{"engine": "Borealis"},
 		Tables: map[string]engineBackupTable{
 			"engine.aegis_cipher_state": {
 				Columns: []string{"id", "kdf_name", "kdf_params_json", "verification_token"},
@@ -250,6 +249,11 @@ func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
 	for _, plaintext := range []string{"ldaps://ldap.example.test", "LAB-AGENT-01", "SITE-CODE", "directory-secret"} {
 		if strings.Contains(body, plaintext) {
 			t.Fatalf("backup response leaked plaintext %q: %s", plaintext, body)
+		}
+	}
+	for _, redundantField := range []string{"backup_scope", "excluded_scope", "generated_by", "api_version", "encryption", "kdf_name", "source"} {
+		if strings.Contains(body, `"`+redundantField+`"`) {
+			t.Fatalf("backup response included redundant field %q: %s", redundantField, body)
 		}
 	}
 	var doc encryptedEngineBackupDocument
