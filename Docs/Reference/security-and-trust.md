@@ -11,6 +11,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Front-door operator bootstrap: Borealis now requires the Aegis Cipher before it will render any login UI after first setup or restart.
 - Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
 - Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and the GitHub API token.
+- Engine configuration backups: encrypted JSON exports use the Aegis-derived key and require the same Aegis Cipher for import.
 - Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
 - On supported Windows deployments, only the SYSTEM Borealis runtime authenticates to the Engine; per-session helpers are local-only and inherit no Borealis token or socket identity.
 
@@ -32,6 +33,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - First deployment now follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
 - Every later Engine restart follows `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
 - Aegis setup and unlock moved to public bootstrap endpoints under `/api/bootstrap/*`; the normal authenticated Aegis page actions are now rotation and force reset only.
+- Backup/Restore uses the same Aegis-derived key for AES-256-GCM backup encryption. Restores import the source `aegis_cipher_state` unchanged, so the backup does not rotate the Aegis Cipher.
 - Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys stored operator auth secrets, reusable credential secrets, and the GitHub token, then requires a fresh Aegis setup plus administrator account recovery before operators can use the Engine again.
 - Usernames, display names, roles, site assignments, passkey labels, and other non-secret operator metadata stay plaintext so Borealis can still identify recovery targets and render admin-facing status once the Engine is recovered.
 
@@ -205,6 +207,7 @@ sequenceDiagram
     - `POST /api/bootstrap/admin/setup` (No Authentication, bootstrap only) - create the first administrator after Aegis setup.
     - `POST /api/bootstrap/admin/recover` (No Authentication, bootstrap only) - recover an existing administrator after Aegis force reset.
     - `POST /api/bootstrap/admin/mfa/verify` (No Authentication, bootstrap MFA pending) - finalize first-admin setup or admin recovery and issue the normal operator session.
+    - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - restore an encrypted Engine configuration backup before normal login is enabled.
     - `POST /api/auth/login` (No Authentication, bootstrap phase `login_required` only) - operator login.
     - `POST /api/auth/logout` (Token Authenticated) - operator logout.
     - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new Aegis-protected password hash.

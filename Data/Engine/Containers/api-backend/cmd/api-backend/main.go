@@ -73,6 +73,7 @@ func main() {
 	registerRealtimeRoutes(mux, auth, operatorRealtime)
 	registerAuthRoutes(mux, auth, fallback)
 	registerAegisRoutes(mux, auth)
+	registerBackupRoutes(mux, auth)
 	if err := registerAgentTokenRoutes(mux, auth, operatorRealtime); err != nil {
 		log.Fatalf("failed to initialise Agent token routes: %v", err)
 	}

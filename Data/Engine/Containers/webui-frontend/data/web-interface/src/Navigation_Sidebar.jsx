@@ -36,6 +36,7 @@ import {
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
   LabelRounded as MetadataFieldsIcon,
+  BackupRounded as BackupRestoreIcon,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { APP_PATHS } from "./app/routes/paths.js";
@@ -225,6 +226,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Engine Status",
         navKey: "engine-status",
         to: APP_PATHS.engineStatus,
+      },
+      {
+        icon: BackupRestoreIcon,
+        label: "Backup/Restore",
+        navKey: "backup-restore",
+        to: APP_PATHS.backupRestore,
       },
       {
         icon: MetadataFieldsIcon,

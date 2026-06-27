@@ -47,6 +47,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/user_site_assignments/assign` (Admin) - replace site assignments for selected operators.
     - `GET /api/github/token` (Admin) - GitHub API token status.
     - `POST /api/github/token` (Admin) - update GitHub API token.
+    - `GET /api/server/backup/export` (Admin) - export encrypted Engine configuration backup JSON. Requires Aegis configured and unlocked.
+    - `POST /api/server/backup/restore` (Admin) - sterilize current Engine configuration/trust state, import encrypted backup JSON, clear operator cookies, and return `restart_required: true`.
+    - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - import encrypted backup JSON before normal login is enabled. Requires the source Aegis Cipher and typed confirmation `RESTORE ENGINE CONFIG BACKUP`.
 
     ### Enrollment and Tokens
     - `POST /api/agent/enroll/request` (No Authentication) - submit enrollment request.

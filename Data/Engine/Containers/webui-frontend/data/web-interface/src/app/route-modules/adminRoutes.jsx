@@ -4,6 +4,7 @@ import LogManagement from "../../Admin/Log_Management.jsx";
 import DevTools from "../../DevTools/Dev_Tools.jsx";
 import EngineStatus from "../../Admin/Engine_Status.jsx";
 import MetadataFieldList, { loadMetadataFieldsPageData } from "../../Admin/Metadata_Field_List.jsx";
+import BackupRestore from "../../Admin/Backup_Restore.jsx";
 
 export async function ServerRouteLoader({ request }) {
   return loadServerOverviewPageData(request);
@@ -19,6 +20,14 @@ export function EngineStatusRoute() {
 
 export function LogsRoute() {
   return <LogManagement />;
+}
+
+export function BackupRestoreRoute() {
+  return <BackupRestore mode="admin" />;
+}
+
+export function BootstrapBackupRestoreRoute() {
+  return <BackupRestore mode="bootstrap" />;
 }
 
 export async function MetadataFieldsRouteLoader({ request }) {

@@ -1,0 +1,342 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+type engineBackupTestStore struct {
+	profile  operatorProfile
+	payload  engineBackupPayload
+	restored *engineBackupPayload
+}
+
+func (s *engineBackupTestStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
+	profile := s.profile
+	if profile.Username == "" {
+		profile.Username = username
+	}
+	if profile.Role == "" {
+		profile.Role = fallbackRole
+	}
+	return profile, nil
+}
+
+func (s *engineBackupTestStore) exportEngineBackupPayload(_ context.Context) (engineBackupPayload, error) {
+	return s.payload, nil
+}
+
+func (s *engineBackupTestStore) restoreEngineBackupPayload(_ context.Context, payload engineBackupPayload) (engineBackupRestoreResult, error) {
+	copyPayload := payload
+	s.restored = &copyPayload
+	rows := 0
+	for _, table := range payload.Tables {
+		rows += len(table.Rows)
+	}
+	return engineBackupRestoreResult{TablesRestored: len(payload.Tables), RowsRestored: rows, FilesRestored: len(payload.Files)}, nil
+}
+
+type engineBackupTestAegis struct {
+	key        []byte
+	state      aegisState
+	clearCount int
+	locked     bool
+}
+
+func (a *engineBackupTestAegis) status(_ context.Context) (map[string]any, error) {
+	return map[string]any{"configured": true, "locked": a.locked}, nil
+}
+
+func (a *engineBackupTestAegis) setupWithCipher(_ context.Context, cipherText string) (map[string]any, error) {
+	return map[string]any{"configured": true, "locked": false}, nil
+}
+
+func (a *engineBackupTestAegis) unlockWithCipher(_ context.Context, cipherText string) (map[string]any, error) {
+	return map[string]any{"configured": true, "locked": false}, nil
+}
+
+func (a *engineBackupTestAegis) rotateWithCipher(_ context.Context, currentCipher string, newCipher string) (map[string]any, error) {
+	return map[string]any{"configured": true, "locked": false}, nil
+}
+
+func (a *engineBackupTestAegis) forceReset(_ context.Context) (map[string]any, error) {
+	return map[string]any{"configured": false, "locked": false}, nil
+}
+
+func (a *engineBackupTestAegis) decryptSecretText(_ context.Context, value any) (string, error) {
+	return cleanText(value), nil
+}
+
+func (a *engineBackupTestAegis) encryptSecretText(_ context.Context, value string) (string, error) {
+	return value, nil
+}
+
+func (a *engineBackupTestAegis) engineBackupExportKey(_ context.Context) ([]byte, aegisState, error) {
+	if a.locked {
+		return nil, aegisState{}, errAegisLocked
+	}
+	return append([]byte(nil), a.key...), a.state, nil
+}
+
+func (a *engineBackupTestAegis) engineBackupRestoreKey(_ context.Context, cipherText string, document encryptedEngineBackupDocument) ([]byte, error) {
+	if strings.TrimSpace(cipherText) != "correct-cipher" {
+		return nil, errAegisInvalidCipher
+	}
+	return append([]byte(nil), a.key...), nil
+}
+
+func (a *engineBackupTestAegis) engineBackupClearActiveKey() {
+	a.clearCount++
+}
+
+func newEngineBackupTestAuth(store *engineBackupTestStore, aegis *engineBackupTestAegis, phase string) *authService {
+	return &authService{
+		verifier:      &tokenVerifier{secret: []byte("test-secret"), maxAge: time.Hour, now: time.Now},
+		store:         store,
+		bootstrapGate: &authLoginTestGate{state: map[string]any{"phase": phase, "configured": true, "locked": false}},
+		aegis:         aegis,
+		timeout:       time.Second,
+	}
+}
+
+func engineBackupTestState(t *testing.T, key []byte) aegisState {
+	t.Helper()
+	token, err := aegisEncryptText(aegisVerificationPlaintext, key)
+	if err != nil {
+		t.Fatalf("encrypt verification token: %v", err)
+	}
+	return aegisState{
+		Configured:        true,
+		KDFName:           aegisKDFName,
+		KDFParamsJSON:     `{"salt_b64":"dGVzdC1zYWx0","n":32768,"r":8,"p":1,"length":32}`,
+		VerificationToken: token,
+	}
+}
+
+func engineBackupTestPayload(t *testing.T, state aegisState) engineBackupPayload {
+	t.Helper()
+	return engineBackupPayload{
+		Kind:          engineBackupKind,
+		SchemaVersion: engineBackupSchemaVersion,
+		CreatedAt:     "2026-06-27T00:00:00Z",
+		Source:        map[string]any{"engine": "Borealis"},
+		Tables: map[string]engineBackupTable{
+			"engine.aegis_cipher_state": {
+				Columns: []string{"id", "kdf_name", "kdf_params_json", "verification_token"},
+				Rows: []map[string]any{{
+					"id":                 json.Number("1"),
+					"kdf_name":           state.KDFName,
+					"kdf_params_json":    state.KDFParamsJSON,
+					"verification_token": state.VerificationToken,
+				}},
+			},
+			"engine.directory_providers": {
+				Columns: []string{"id", "name", "server_urls_json", "bind_password_encrypted"},
+				Rows: []map[string]any{{
+					"id":                      json.Number("7"),
+					"name":                    "Lab LDAP",
+					"server_urls_json":        `["ldaps://ldap.example.test"]`,
+					"bind_password_encrypted": "aegis:v1:directory-secret",
+				}},
+			},
+			"engine.sites": {
+				Columns: []string{"id", "name", "enrollment_code"},
+				Rows: []map[string]any{{
+					"id":              json.Number("4"),
+					"name":            "Bunny Lab",
+					"enrollment_code": "SITE-CODE",
+				}},
+			},
+			"engine.devices": {
+				Columns: []string{"guid", "hostname", "agent_id"},
+				Rows: []map[string]any{{
+					"guid":     "agent-guid-1",
+					"hostname": "LAB-AGENT-01",
+					"agent_id": "agent-id-1",
+				}},
+			},
+		},
+		Files: map[string]engineBackupFile{
+			"engine_secret": {ContentB64: "c2VjcmV0", Mode: 0o600},
+		},
+		Counts: map[string]map[string]int{},
+	}
+}
+
+func encryptedEngineBackupTestDocument(t *testing.T, payload engineBackupPayload, key []byte, state aegisState) encryptedEngineBackupDocument {
+	t.Helper()
+	doc, err := encryptEngineBackupPayload(payload, key, state)
+	if err != nil {
+		t.Fatalf("encrypt backup: %v", err)
+	}
+	return doc
+}
+
+func engineBackupRestoreJSON(t *testing.T, doc encryptedEngineBackupDocument, cipher string, confirmation string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"cipher":       cipher,
+		"confirmation": confirmation,
+		"backup":       doc,
+	})
+	if err != nil {
+		t.Fatalf("marshal restore request: %v", err)
+	}
+	return string(body)
+}
+
+func TestEngineBackupExportRejectsNonAdmin(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "User"}, payload: engineBackupTestPayload(t, state)}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
+	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	recorder := httptest.NewRecorder()
+
+	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden for non-admin, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestEngineBackupExportRejectsLockedAegis(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, payload: engineBackupTestPayload(t, state)}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state, locked: true}, bootstrapPhaseLoginRequired)
+	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	recorder := httptest.NewRecorder()
+
+	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusLocked || !strings.Contains(recorder.Body.String(), "locked") {
+		t.Fatalf("expected locked Aegis rejection, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	sourcePayload := engineBackupTestPayload(t, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, payload: sourcePayload}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
+	request := httptest.NewRequest(http.MethodGet, "/api/server/backup/export", nil)
+	request.AddCookie(&http.Cookie{Name: authCookieName, Value: testAuthToken})
+	recorder := httptest.NewRecorder()
+
+	engineBackupExportHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected export ok, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	for _, plaintext := range []string{"ldaps://ldap.example.test", "LAB-AGENT-01", "SITE-CODE", "directory-secret"} {
+		if strings.Contains(body, plaintext) {
+			t.Fatalf("backup response leaked plaintext %q: %s", plaintext, body)
+		}
+	}
+	var doc encryptedEngineBackupDocument
+	if err := json.Unmarshal(recorder.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode backup document: %v", err)
+	}
+	restored, err := decryptEngineBackupPayload(doc, key)
+	if err != nil {
+		t.Fatalf("decrypt exported backup: %v", err)
+	}
+	if restored.Tables["engine.devices"].Rows[0]["hostname"] != "LAB-AGENT-01" {
+		t.Fatalf("decrypted payload missing device row: %#v", restored.Tables["engine.devices"].Rows)
+	}
+}
+
+func TestEngineBackupBootstrapRestoreOnlyBeforeLoginRequired(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
+	request := httptest.NewRequest(http.MethodPost, "/api/bootstrap/backup/restore", strings.NewReader(engineBackupRestoreJSON(t, doc, "correct-cipher", engineBackupConfirmationText)))
+	recorder := httptest.NewRecorder()
+
+	engineBackupRestoreHandler(auth, true).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "bootstrap_restore_unavailable") {
+		t.Fatalf("expected bootstrap restore conflict after login enabled, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestEngineBackupRestoreRejectsWrongCipher(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseAegisSetupRequired)
+	request := httptest.NewRequest(http.MethodPost, "/api/bootstrap/backup/restore", strings.NewReader(engineBackupRestoreJSON(t, doc, "wrong-cipher", engineBackupConfirmationText)))
+	recorder := httptest.NewRecorder()
+
+	engineBackupRestoreHandler(auth, true).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized || !strings.Contains(recorder.Body.String(), "invalid_cipher") {
+		t.Fatalf("expected invalid cipher, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.restored != nil {
+		t.Fatalf("restore should not run after wrong cipher")
+	}
+}
+
+func TestEngineBackupRestoreRejectsUnknownIDs(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	payload.Tables["engine.unknown_config"] = engineBackupTable{Columns: []string{"id"}, Rows: []map[string]any{{"id": json.Number("1")}}}
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseAegisSetupRequired)
+	request := httptest.NewRequest(http.MethodPost, "/api/bootstrap/backup/restore", strings.NewReader(engineBackupRestoreJSON(t, doc, "correct-cipher", engineBackupConfirmationText)))
+	recorder := httptest.NewRecorder()
+
+	engineBackupRestoreHandler(auth, true).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "unknown_table_id") {
+		t.Fatalf("expected unknown table rejection, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.restored != nil {
+		t.Fatalf("restore should not run after unknown IDs")
+	}
+}
+
+func TestEngineBackupBootstrapRestoreImportsAndClearsKey(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	aegis := &engineBackupTestAegis{key: key, state: state}
+	auth := newEngineBackupTestAuth(store, aegis, bootstrapPhaseAegisSetupRequired)
+	request := httptest.NewRequest(http.MethodPost, "/api/bootstrap/backup/restore", strings.NewReader(engineBackupRestoreJSON(t, doc, "correct-cipher", engineBackupConfirmationText)))
+	recorder := httptest.NewRecorder()
+
+	engineBackupRestoreHandler(auth, true).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected restore ok, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.restored == nil || store.restored.Tables["engine.sites"].Rows[0]["name"] != "Bunny Lab" {
+		t.Fatalf("restore payload was not imported: %#v", store.restored)
+	}
+	if aegis.clearCount != 1 {
+		t.Fatalf("expected active Aegis key clear after restore, got %d", aegis.clearCount)
+	}
+	if !strings.Contains(recorder.Body.String(), `"restart_required":true`) {
+		t.Fatalf("restore response must require restart: %s", recorder.Body.String())
+	}
+}

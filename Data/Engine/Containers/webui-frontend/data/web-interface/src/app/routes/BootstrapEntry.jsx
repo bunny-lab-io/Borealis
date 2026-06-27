@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Button, TextField, Typography } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 import { sha512 } from "../utils/crypto.js";
+import { APP_PATHS } from "./paths.js";
 
 function resolveCopy(phase, hasPendingMfa) {
   if (hasPendingMfa) {
@@ -48,6 +50,7 @@ export default function BootstrapEntry({
   refreshBootstrapState,
   onAuthenticated,
 }) {
+  const navigate = useNavigate();
   const [cipher, setCipher] = useState("");
   const [confirmCipher, setConfirmCipher] = useState("");
   const [username, setUsername] = useState("admin");
@@ -534,6 +537,24 @@ export default function BootstrapEntry({
               >
                 {copy.action}
               </Button>
+              {phase === "aegis_setup_required" && !hasPendingMfa ? (
+                <Button
+                  type="button"
+                  variant="outlined"
+                  onClick={() => navigate(APP_PATHS.bootstrapBackupRestore)}
+                  disabled={isSubmitting}
+                  sx={{
+                    mt: 0.5,
+                    borderRadius: "14px",
+                    textTransform: "none",
+                    fontWeight: 700,
+                    color: "#dbeafe",
+                    borderColor: "rgba(125, 211, 252, 0.45)",
+                  }}
+                >
+                  Restore Engine Config Backup
+                </Button>
+              ) : null}
             </Box>
           </div>
         </div>
