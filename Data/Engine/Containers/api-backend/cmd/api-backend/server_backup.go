@@ -54,7 +54,6 @@ type engineBackupFile struct {
 type engineBackupPayload struct {
 	Kind          string                       `json:"kind"`
 	SchemaVersion int                          `json:"schema_version"`
-	CreatedAt     string                       `json:"created_at"`
 	Tables        map[string]engineBackupTable `json:"tables"`
 	Files         map[string]engineBackupFile  `json:"files"`
 	Counts        map[string]map[string]int    `json:"counts"`
@@ -63,7 +62,6 @@ type engineBackupPayload struct {
 type encryptedEngineBackupDocument struct {
 	Kind          string          `json:"kind"`
 	SchemaVersion int             `json:"schema_version"`
-	CreatedAt     string          `json:"created_at"`
 	KDFParams     json.RawMessage `json:"kdf_params"`
 	NonceB64      string          `json:"nonce_b64"`
 	CiphertextB64 string          `json:"ciphertext_b64"`
@@ -352,7 +350,6 @@ func encryptEngineBackupPayload(payload engineBackupPayload, key []byte, state a
 	return encryptedEngineBackupDocument{
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
-		CreatedAt:     payload.CreatedAt,
 		KDFParams:     params,
 		NonceB64:      base64.StdEncoding.EncodeToString(nonce),
 		CiphertextB64: base64.StdEncoding.EncodeToString(ciphertext),
@@ -497,7 +494,6 @@ func (s *postgresOperatorStore) exportEngineBackupPayload(ctx context.Context) (
 	payload := engineBackupPayload{
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
-		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 		Tables:        map[string]engineBackupTable{},
 		Files:         map[string]engineBackupFile{},
 		Counts:        map[string]map[string]int{},

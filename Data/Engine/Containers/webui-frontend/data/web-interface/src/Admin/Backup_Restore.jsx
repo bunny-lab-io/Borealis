@@ -13,12 +13,12 @@ import {
 import {
   BackupRounded as BackupIcon,
   DownloadRounded as DownloadIcon,
-  LockRounded as LockIcon,
   RestoreRounded as RestoreIcon,
   UploadFileRounded as UploadFileIcon,
 } from "@mui/icons-material";
 import { Navigate, useNavigate } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
 import { APP_PATHS } from "../app/routes/paths.js";
@@ -45,6 +45,7 @@ function restoreSuccessMessage(payload) {
 function BackupRestoreTool({ mode }) {
   const navigate = useNavigate();
   const { refreshBootstrapState } = useAuth();
+  const notifyOperator = useAppNotifications({ title: "Backup/Restore", icon: "settings", variant: "success" });
   const fileInputRef = useRef(null);
   const [backupFileName, setBackupFileName] = useState("");
   const [backupDocument, setBackupDocument] = useState(null);
@@ -113,7 +114,10 @@ function BackupRestoreTool({ mode }) {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setNotice({ severity: "success", message: "Encrypted Engine configuration backup exported." });
+      await notifyOperator({
+        message: "Encrypted Engine configuration backup exported.",
+        variant: "success",
+      });
     } catch (error) {
       setNotice({
         severity: "error",
@@ -162,19 +166,6 @@ function BackupRestoreTool({ mode }) {
 
   return (
     <Stack spacing={2.5} sx={{ minWidth: 0 }}>
-      <Alert
-        severity="info"
-        icon={<LockIcon fontSize="inherit" />}
-        sx={{
-          borderRadius: 2,
-          border: "1px solid rgba(125, 211, 252, 0.28)",
-          background: "rgba(14, 116, 144, 0.14)",
-          color: "#dff7ff",
-        }}
-      >
-        Backup files are encrypted with the Aegis Cipher. Import on any new or existing Engine instance requires the same Aegis Cipher; no separate backup password is used.
-      </Alert>
-
       {!isBootstrap ? (
         <Box
           sx={{
@@ -194,7 +185,7 @@ function BackupRestoreTool({ mode }) {
               Export Encrypted Backup
             </Typography>
             <Typography variant="body2" sx={{ color: "rgba(226, 232, 240, 0.72)", mt: 0.5 }}>
-              Current Engine configuration, trust, user content, and protected secrets.
+              Current Engine configuration, trust, user content, and protected secrets.  Backup files are encrypted using the existing Aegis Cipher.
             </Typography>
           </Box>
           <Button
@@ -261,23 +252,31 @@ function BackupRestoreTool({ mode }) {
             </Typography>
           </Stack>
 
-          <TextField
-            label="Aegis Cipher"
-            type="password"
-            value={cipher}
-            onChange={(event) => setCipher(event.target.value)}
-            disabled={isRestoring}
-            fullWidth
-            InputProps={{ sx: { borderRadius: 2 } }}
-          />
-          <TextField
-            label={`Type ${RESTORE_CONFIRMATION}`}
-            value={confirmation}
-            onChange={(event) => setConfirmation(event.target.value)}
-            disabled={isRestoring}
-            fullWidth
-            InputProps={{ sx: { borderRadius: 2 } }}
-          />
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" },
+              gap: 2,
+            }}
+          >
+            <TextField
+              label="Aegis Cipher"
+              type="password"
+              value={cipher}
+              onChange={(event) => setCipher(event.target.value)}
+              disabled={isRestoring}
+              fullWidth
+              InputProps={{ sx: { borderRadius: 2 } }}
+            />
+            <TextField
+              label={`Type ${RESTORE_CONFIRMATION}`}
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              disabled={isRestoring}
+              fullWidth
+              InputProps={{ sx: { borderRadius: 2 } }}
+            />
+          </Box>
 
           <Divider sx={{ borderColor: "rgba(248, 113, 113, 0.24)" }} />
 

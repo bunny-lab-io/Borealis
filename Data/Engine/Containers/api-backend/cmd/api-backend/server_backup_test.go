@@ -132,7 +132,6 @@ func engineBackupTestPayload(t *testing.T, state aegisState) engineBackupPayload
 	return engineBackupPayload{
 		Kind:          engineBackupKind,
 		SchemaVersion: engineBackupSchemaVersion,
-		CreatedAt:     "2026-06-27T00:00:00Z",
 		Tables: map[string]engineBackupTable{
 			"engine.aegis_cipher_state": {
 				Columns: []string{"id", "kdf_name", "kdf_params_json", "verification_token"},
@@ -254,7 +253,7 @@ func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
 			t.Fatalf("backup response leaked plaintext %q: %s", plaintext, body)
 		}
 	}
-	for _, redundantField := range []string{"backup_scope", "excluded_scope", "generated_by", "api_version", "encryption", "kdf_name", "source"} {
+	for _, redundantField := range []string{"backup_scope", "excluded_scope", "generated_by", "api_version", "encryption", "kdf_name", "source", "created_at"} {
 		if strings.Contains(body, `"`+redundantField+`"`) {
 			t.Fatalf("backup response included redundant field %q: %s", redundantField, body)
 		}

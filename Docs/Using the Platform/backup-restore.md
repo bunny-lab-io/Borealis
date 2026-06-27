@@ -57,7 +57,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - Aegis setup entry point: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/routes/BootstrapEntry.jsx`
 
     ### Runtime behavior
-    - Outer backup JSON contains `kind`, `schema_version`, `created_at`, `kdf_params`, `nonce_b64`, and `ciphertext_b64`.
+    - Outer backup JSON contains `kind`, `schema_version`, `kdf_params`, `nonce_b64`, and `ciphertext_b64`.
     - Inner payload uses the fixed Borealis backup encryption path: AES-256-GCM with the Aegis-derived key.
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
