@@ -73,6 +73,12 @@ type engineBackupRestoreRequest struct {
 	Backup       encryptedEngineBackupDocument
 }
 
+type engineBackupAnalysisRow struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
 type engineBackupRestoreResult struct {
 	TablesRestored int `json:"tables_restored"`
 	RowsRestored   int `json:"rows_restored"`
@@ -103,7 +109,9 @@ func (e engineBackupUserError) Error() string {
 
 func registerBackupRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("GET /api/server/backup/export", engineBackupExportHandler(auth))
+	mux.HandleFunc("POST /api/server/backup/analyze", engineBackupAnalyzeHandler(auth, false))
 	mux.HandleFunc("POST /api/server/backup/restore", engineBackupRestoreHandler(auth, false))
+	mux.HandleFunc("POST /api/bootstrap/backup/analyze", engineBackupAnalyzeHandler(auth, true))
 	mux.HandleFunc("POST /api/bootstrap/backup/restore", engineBackupRestoreHandler(auth, true))
 }
 
@@ -146,6 +154,53 @@ func engineBackupExportHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
+func engineBackupAnalyzeHandler(auth *authService, bootstrapOnly bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		ctx, cancel := engineBackupRequestTimeout(r.Context(), auth)
+		defer cancel()
+		if bootstrapOnly {
+			state, err := currentBootstrapState(ctx, auth)
+			if err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "bootstrap_state_unavailable", "message": err.Error()})
+				return
+			}
+			if cleanText(state["phase"]) == bootstrapPhaseLoginRequired {
+				payload := publicBootstrapState(state)
+				payload["error"] = "bootstrap_restore_unavailable"
+				payload["message"] = "Bootstrap backup analysis is only available before normal login is enabled."
+				writeJSON(w, http.StatusConflict, payload)
+				return
+			}
+		} else if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+		_, aegis, ok := engineBackupServices(auth)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "backup_restore_unavailable"})
+			return
+		}
+		req, ok := readEngineBackupRequest(w, r, false)
+		if !ok {
+			return
+		}
+		payload, err := decryptAndValidateEngineBackup(ctx, aegis, req)
+		if err != nil {
+			engineBackupWriteError(w, err)
+			return
+		}
+		analysis := analyzeEngineBackupPayload(payload)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":   "ok",
+			"analysis": analysis,
+		})
+	}
+}
+
 func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -176,22 +231,12 @@ func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.Hand
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "backup_restore_unavailable"})
 			return
 		}
-		req, ok := readEngineBackupRestoreRequest(w, r)
+		req, ok := readEngineBackupRequest(w, r, true)
 		if !ok {
 			return
 		}
-		key, err := aegis.engineBackupRestoreKey(ctx, req.Cipher, req.Backup)
+		payload, err := decryptAndValidateEngineBackup(ctx, aegis, req)
 		if err != nil {
-			payload, status := aegisErrorBody(err)
-			writeJSON(w, status, payload)
-			return
-		}
-		payload, err := decryptEngineBackupPayload(req.Backup, key)
-		if err != nil {
-			engineBackupWriteError(w, err)
-			return
-		}
-		if err := validateEngineBackupPayload(payload, key, req.Backup); err != nil {
 			engineBackupWriteError(w, err)
 			return
 		}
@@ -220,6 +265,21 @@ func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.Hand
 	}
 }
 
+func decryptAndValidateEngineBackup(ctx context.Context, aegis engineBackupAegisService, req engineBackupRestoreRequest) (engineBackupPayload, error) {
+	key, err := aegis.engineBackupRestoreKey(ctx, req.Cipher, req.Backup)
+	if err != nil {
+		return engineBackupPayload{}, err
+	}
+	payload, err := decryptEngineBackupPayload(req.Backup, key)
+	if err != nil {
+		return engineBackupPayload{}, err
+	}
+	if err := validateEngineBackupPayload(payload, key, req.Backup); err != nil {
+		return engineBackupPayload{}, err
+	}
+	return payload, nil
+}
+
 func engineBackupServices(auth *authService) (engineBackupDataStore, engineBackupAegisService, bool) {
 	if auth == nil {
 		return nil, nil, false
@@ -237,7 +297,7 @@ func engineBackupRequestTimeout(parent context.Context, auth *authService) (cont
 	return context.WithTimeout(parent, timeout)
 }
 
-func readEngineBackupRestoreRequest(w http.ResponseWriter, r *http.Request) (engineBackupRestoreRequest, bool) {
+func readEngineBackupRequest(w http.ResponseWriter, r *http.Request, requireConfirmation bool) (engineBackupRestoreRequest, bool) {
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 128<<20))
 	decoder.UseNumber()
 	var raw map[string]json.RawMessage
@@ -254,7 +314,7 @@ func readEngineBackupRestoreRequest(w http.ResponseWriter, r *http.Request) (eng
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cipher_required", "message": "Aegis Cipher is required."})
 		return engineBackupRestoreRequest{}, false
 	}
-	if req.Confirmation != engineBackupConfirmationText {
+	if requireConfirmation && req.Confirmation != engineBackupConfirmationText {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "confirmation_required", "message": "Typed confirmation must match " + engineBackupConfirmationText + "."})
 		return engineBackupRestoreRequest{}, false
 	}
@@ -443,6 +503,59 @@ func validateEngineBackupPayload(payload engineBackupPayload, key []byte, docume
 		return errAegisInvalidCipher
 	}
 	return nil
+}
+
+func analyzeEngineBackupPayload(payload engineBackupPayload) map[string]any {
+	summary := []engineBackupAnalysisRow{
+		{ID: "sites", Name: "Sites", Count: engineBackupTableRowCount(payload, "engine.sites")},
+		{ID: "devices", Name: "Devices", Count: engineBackupTableRowCount(payload, "engine.devices")},
+		{ID: "device_keys", Name: "Device Trust Keys", Count: engineBackupTableRowCount(payload, "engine.device_keys")},
+		{ID: "refresh_tokens", Name: "Agent Refresh Tokens", Count: engineBackupTableRowCount(payload, "engine.refresh_tokens")},
+		{ID: "device_approvals", Name: "Device Approvals", Count: engineBackupTableRowCount(payload, "engine.device_approvals")},
+		{ID: "users", Name: "Users", Count: engineBackupTableRowCount(payload, "engine.users")},
+		{ID: "credentials", Name: "Credentials", Count: engineBackupTableRowCount(payload, "engine.credentials")},
+		{ID: "directory_providers", Name: "Directory Providers", Count: engineBackupTableRowCount(payload, "engine.directory_providers")},
+		{ID: "directory_role_mappings", Name: "Directory Role Mappings", Count: engineBackupTableRowCount(payload, "engine.directory_provider_group_mappings")},
+		{ID: "directory_site_mappings", Name: "Directory Site Mappings", Count: engineBackupTableRowCount(payload, "engine.directory_provider_site_mappings")},
+		{ID: "user_site_assignments", Name: "User Site Assignments", Count: engineBackupTableRowCount(payload, "engine.user_site_assignments")},
+		{ID: "device_site_assignments", Name: "Device Site Assignments", Count: engineBackupTableRowCount(payload, "engine.device_sites")},
+		{ID: "filters", Name: "Filters", Count: engineBackupTableRowCount(payload, "engine.device_filters")},
+		{ID: "saved_views", Name: "Saved Views", Count: engineBackupTableRowCount(payload, "engine.device_list_views")},
+		{ID: "metadata_fields", Name: "Metadata Fields", Count: engineBackupTableRowCount(payload, "engine.metadata_field_definitions")},
+		{ID: "metadata_values", Name: "Device Metadata Values", Count: engineBackupTableRowCount(payload, "engine.device_metadata_fields")},
+		{ID: "software_inventory", Name: "Software Inventory Rows", Count: engineBackupTableRowCount(payload, "engine.device_software_inventory")},
+		{ID: "software_icons", Name: "Software Icon Assets", Count: engineBackupTableRowCount(payload, "engine.software_icon_assets")},
+		{ID: "assemblies", Name: "Assemblies", Count: engineBackupTableRowCount(payload, "assemblies.official_assemblies", "assemblies.community_assemblies", "assemblies.user_created_assemblies")},
+		{ID: "scheduled_jobs", Name: "Scheduled Jobs", Count: engineBackupTableRowCount(payload, "engine.scheduled_jobs")},
+		{ID: "workflow_webhooks", Name: "Workflow Webhooks", Count: engineBackupTableRowCount(payload, "engine.workflow_webhooks")},
+		{ID: "watchdogs", Name: "Watchdogs", Count: engineBackupTableRowCount(payload, "engine.watchdogs")},
+		{ID: "watchdog_sites", Name: "Watchdog Site Scopes", Count: engineBackupTableRowCount(payload, "engine.watchdog_sites")},
+		{ID: "watchdog_targets", Name: "Watchdog Targets", Count: engineBackupTableRowCount(payload, "engine.watchdog_targets")},
+		{ID: "watchdog_overrides", Name: "Watchdog Device Overrides", Count: engineBackupTableRowCount(payload, "engine.watchdog_device_overrides")},
+		{ID: "files", Name: "Config and Key Files", Count: len(payload.Files)},
+	}
+	totalRows := 0
+	for _, table := range payload.Tables {
+		totalRows += len(table.Rows)
+	}
+	return map[string]any{
+		"summary":     summary,
+		"table_count": len(payload.Tables),
+		"row_count":   totalRows,
+		"file_count":  len(payload.Files),
+	}
+}
+
+func engineBackupTableRowCount(payload engineBackupPayload, names ...string) int {
+	count := 0
+	for _, name := range names {
+		table, ok := payload.Tables[name]
+		if !ok {
+			continue
+		}
+		count += len(table.Rows)
+	}
+	return count
 }
 
 func canonicalEngineBackupJSONText(value string) string {

@@ -207,6 +207,7 @@ sequenceDiagram
     - `POST /api/bootstrap/admin/setup` (No Authentication, bootstrap only) - create the first administrator after Aegis setup.
     - `POST /api/bootstrap/admin/recover` (No Authentication, bootstrap only) - recover an existing administrator after Aegis force reset.
     - `POST /api/bootstrap/admin/mfa/verify` (No Authentication, bootstrap MFA pending) - finalize first-admin setup or admin recovery and issue the normal operator session.
+    - `POST /api/bootstrap/backup/analyze` (No Authentication, bootstrap only) - decrypt and validate encrypted Engine configuration backup JSON before normal login is enabled, then return high-level import counts without changing state.
     - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - restore an encrypted Engine configuration backup before normal login is enabled.
     - `POST /api/auth/login` (No Authentication, bootstrap phase `login_required` only) - operator login.
     - `POST /api/auth/logout` (Token Authenticated) - operator logout.

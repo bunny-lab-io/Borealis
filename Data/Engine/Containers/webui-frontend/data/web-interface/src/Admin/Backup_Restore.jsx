@@ -13,9 +13,12 @@ import {
 import {
   BackupRounded as BackupIcon,
   DownloadRounded as DownloadIcon,
+  ManageSearchRounded as AnalyzeIcon,
   RestoreRounded as RestoreIcon,
   UploadFileRounded as UploadFileIcon,
 } from "@mui/icons-material";
+import { AgGridReact } from "ag-grid-react";
+import { AllCommunityModule, ModuleRegistry, themeQuartz } from "ag-grid-community";
 import { Navigate, useNavigate } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
@@ -27,6 +30,24 @@ const PAGE_TITLE = "Backup or Restore Engine Configuration";
 const PAGE_SUBTITLE =
   "Export or import an encrypted JSON file of all Engine settings excluding logs, device activity history, and scheduled job history.";
 const RESTORE_CONFIRMATION = "RESTORE ENGINE CONFIG BACKUP";
+const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
+const backupAnalysisGridTheme = themeQuartz.withParams({
+  accentColor: "#38bdf8",
+  backgroundColor: "rgba(15, 23, 42, 0.88)",
+  borderColor: "rgba(148, 163, 184, 0.18)",
+  browserColorScheme: "dark",
+  chromeBackgroundColor: "rgba(15, 23, 42, 0.96)",
+  foregroundColor: "#dbeafe",
+  headerBackgroundColor: "rgba(15, 23, 42, 0.98)",
+  headerTextColor: "#f8fafc",
+  oddRowBackgroundColor: "rgba(15, 23, 42, 0.7)",
+  rowHoverColor: "rgba(56, 189, 248, 0.12)",
+  selectedRowBackgroundColor: "rgba(56, 189, 248, 0.2)",
+  fontFamily: gridFontFamily,
+  "--ag-font-family": gridFontFamily,
+});
+
+ModuleRegistry.registerModules([AllCommunityModule]);
 
 function filenameFromDisposition(header) {
   const raw = String(header || "");
@@ -52,25 +73,66 @@ function BackupRestoreTool({ mode }) {
   const [backupDocument, setBackupDocument] = useState(null);
   const [cipher, setCipher] = useState("");
   const [confirmation, setConfirmation] = useState("");
+  const [analysisRows, setAnalysisRows] = useState([]);
+  const [analysisSignature, setAnalysisSignature] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [notice, setNotice] = useState(null);
 
   const isBootstrap = mode === "bootstrap";
+  const backupSignature = useMemo(
+    () => `${backupFileName}|${backupDocument?.ciphertext_b64 || ""}|${cipher.trim()}`,
+    [backupDocument, backupFileName, cipher]
+  );
+  const analysisReady = Boolean(analysisRows.length > 0 && analysisSignature === backupSignature);
+  const canAnalyze = useMemo(
+    () => Boolean(backupDocument) && cipher.trim().length > 0 && !isAnalyzing && !isRestoring,
+    [backupDocument, cipher, isAnalyzing, isRestoring]
+  );
   const canRestore = useMemo(
     () =>
       Boolean(backupDocument) &&
       cipher.trim().length > 0 &&
+      analysisReady &&
       confirmation.trim() === RESTORE_CONFIRMATION &&
+      !isAnalyzing &&
       !isRestoring,
-    [backupDocument, cipher, confirmation, isRestoring]
+    [analysisReady, backupDocument, cipher, confirmation, isAnalyzing, isRestoring]
   );
+  const analysisColumnDefs = useMemo(
+    () => [
+      { field: "name", headerName: "Content", flex: 1, minWidth: 220 },
+      {
+        field: "count",
+        headerName: "Count",
+        width: 120,
+        type: "numericColumn",
+        valueFormatter: (params) => Number(params.value || 0).toLocaleString(),
+      },
+    ],
+    []
+  );
+  const analysisDefaultColDef = useMemo(
+    () => ({
+      sortable: true,
+      resizable: true,
+      filter: false,
+    }),
+    []
+  );
+
+  const clearAnalysis = () => {
+    setAnalysisRows([]);
+    setAnalysisSignature("");
+  };
 
   const handleFileSelect = async (event) => {
     const file = event.target.files?.[0];
     setNotice(null);
     setBackupDocument(null);
     setBackupFileName("");
+    clearAnalysis();
     if (!file) return;
     try {
       const text = await file.text();
@@ -89,6 +151,11 @@ function BackupRestoreTool({ mode }) {
         fileInputRef.current.value = "";
       }
     }
+  };
+
+  const handleCipherChange = (event) => {
+    setCipher(event.target.value);
+    clearAnalysis();
   };
 
   const handleExport = async () => {
@@ -162,6 +229,52 @@ function BackupRestoreTool({ mode }) {
       });
     } finally {
       setIsRestoring(false);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    if (!canAnalyze) return;
+    setIsAnalyzing(true);
+    setNotice(null);
+    clearAnalysis();
+    const signature = backupSignature;
+    try {
+      const endpoint = isBootstrap
+        ? "/api/bootstrap/backup/analyze"
+        : "/api/server/backup/analyze";
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          cipher,
+          backup: backupDocument,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.message || payload?.error || "Backup analysis failed.");
+      }
+      const rows = Array.isArray(payload?.analysis?.summary)
+        ? payload.analysis.summary.map((row) => ({
+            id: String(row?.id || row?.name || ""),
+            name: String(row?.name || row?.id || ""),
+            count: Number(row?.count || 0),
+          }))
+        : [];
+      if (!rows.length) {
+        throw new Error("Backup analysis returned no import summary.");
+      }
+      setAnalysisRows(rows);
+      setAnalysisSignature(signature);
+    } catch (error) {
+      clearAnalysis();
+      setNotice({
+        severity: "error",
+        message: error instanceof Error ? error.message : "Backup analysis failed.",
+      });
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -264,8 +377,8 @@ function BackupRestoreTool({ mode }) {
               label="Aegis Cipher"
               type="password"
               value={cipher}
-              onChange={(event) => setCipher(event.target.value)}
-              disabled={isRestoring}
+              onChange={handleCipherChange}
+              disabled={isAnalyzing || isRestoring}
               fullWidth
               InputProps={{ sx: { borderRadius: 2 } }}
             />
@@ -273,28 +386,69 @@ function BackupRestoreTool({ mode }) {
               label={`Type ${RESTORE_CONFIRMATION}`}
               value={confirmation}
               onChange={(event) => setConfirmation(event.target.value)}
-              disabled={isRestoring}
+              disabled={isAnalyzing || isRestoring}
               fullWidth
               InputProps={{ sx: { borderRadius: 2 } }}
             />
           </Box>
 
+          {analysisRows.length ? (
+            <Box
+              sx={{
+                border: "1px solid rgba(148, 163, 184, 0.2)",
+                borderRadius: 2,
+                overflow: "hidden",
+                background: "rgba(15, 23, 42, 0.58)",
+              }}
+            >
+              <Box sx={{ height: 320, minHeight: 240 }}>
+                <AgGridReact
+                  theme={backupAnalysisGridTheme}
+                  rowData={analysisRows}
+                  columnDefs={analysisColumnDefs}
+                  defaultColDef={analysisDefaultColDef}
+                  domLayout="normal"
+                  suppressCellFocus
+                  rowSelection="single"
+                  getRowId={(params) => params.data?.id || params.data?.name}
+                />
+              </Box>
+            </Box>
+          ) : null}
+
           <Divider sx={{ borderColor: "rgba(248, 113, 113, 0.24)" }} />
 
-          <Button
-            variant="contained"
-            color="error"
-            startIcon={<RestoreIcon />}
-            onClick={handleRestore}
-            disabled={!canRestore}
-            sx={{ alignSelf: { xs: "stretch", sm: "flex-start" }, borderRadius: 2, textTransform: "none", fontWeight: 800 }}
-          >
-            Import
-          </Button>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ xs: "stretch", sm: "center" }}>
+            <Button
+              variant="outlined"
+              startIcon={<AnalyzeIcon />}
+              onClick={handleAnalyze}
+              disabled={!canAnalyze}
+              sx={{
+                borderRadius: 2,
+                textTransform: "none",
+                fontWeight: 800,
+                color: "#e0f2fe",
+                borderColor: "rgba(125, 211, 252, 0.42)",
+              }}
+            >
+              Analyze
+            </Button>
+            <Button
+              variant="contained"
+              color="error"
+              startIcon={<RestoreIcon />}
+              onClick={handleRestore}
+              disabled={!canRestore}
+              sx={{ borderRadius: 2, textTransform: "none", fontWeight: 800 }}
+            >
+              Import
+            </Button>
+          </Stack>
         </Stack>
       </Box>
 
-      {isExporting || isRestoring ? <LinearProgress sx={{ borderRadius: 999 }} /> : null}
+      {isExporting || isAnalyzing || isRestoring ? <LinearProgress sx={{ borderRadius: 999 }} /> : null}
       {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
     </Stack>
   );

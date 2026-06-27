@@ -23,9 +23,10 @@ On a fresh Engine, the Aegis setup screen shows **Restore Engine Config Backup**
 
 1. Select the encrypted JSON backup file.
 2. Enter the Aegis Cipher used by the source Engine.
-3. Type `RESTORE ENGINE CONFIG BACKUP`.
-4. Select **Import**.
-5. Restart the API service, then unlock Aegis when prompted.
+3. Select **Analyze** and review the import counts.
+4. Type `RESTORE ENGINE CONFIG BACKUP`.
+5. Select **Import**.
+6. Restart the API service, then unlock Aegis when prompted.
 
 Agents keep trust when the restored Engine remains reachable at the same public hostname or FQDN they already trust.
 
@@ -35,9 +36,10 @@ Agents keep trust when the restored Engine remains reachable at the same public 
 2. Open **Admin Settings > Backup/Restore**.
 3. Select the encrypted JSON backup file.
 4. Enter the Aegis Cipher used by the source Engine.
-5. Type `RESTORE ENGINE CONFIG BACKUP`.
-6. Select **Import**.
-7. Restart the API service, then unlock Aegis when prompted.
+5. Select **Analyze** and review the import counts.
+6. Type `RESTORE ENGINE CONFIG BACKUP`.
+7. Select **Import**.
+8. Restart the API service, then unlock Aegis when prompted.
 
 !!! danger
     Import does not merge. Current users, sites, directory settings, credentials, agents, trust keys, filters, scheduled job definitions, watchdog definitions, and automation content are cleared before the backup is imported.
@@ -46,7 +48,9 @@ Agents keep trust when the restored Engine remains reachable at the same public 
 
     ### API endpoints
     - `GET /api/server/backup/export` (Admin) - returns an encrypted JSON attachment. Requires Aegis configured and unlocked.
+    - `POST /api/server/backup/analyze` (Admin) - decrypts and validates backup JSON, then returns high-level import counts without modifying Engine state.
     - `POST /api/server/backup/restore` (Admin) - restores an encrypted backup from normal Engine operation.
+    - `POST /api/bootstrap/backup/analyze` (No Authentication, bootstrap only) - decrypts and validates backup JSON before normal login is enabled, then returns high-level import counts without modifying Engine state.
     - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - restores an encrypted backup before normal login is enabled.
 
     ### Source map
@@ -60,6 +64,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - Outer backup JSON contains `kind`, `schema_version`, `kdf_params`, `nonce_b64`, and `ciphertext_b64`.
     - Inner payload uses the fixed Borealis backup encryption path: AES-256-GCM with the Aegis-derived key.
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
+    - Analyze uses the same decrypt and validation path as restore, but does not clear current state or import rows.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
     - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
 

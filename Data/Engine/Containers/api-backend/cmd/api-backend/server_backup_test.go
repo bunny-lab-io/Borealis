@@ -199,6 +199,18 @@ func engineBackupRestoreJSON(t *testing.T, doc encryptedEngineBackupDocument, ci
 	return string(body)
 }
 
+func engineBackupAnalyzeJSON(t *testing.T, doc encryptedEngineBackupDocument, cipher string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"cipher": cipher,
+		"backup": doc,
+	})
+	if err != nil {
+		t.Fatalf("marshal analyze request: %v", err)
+	}
+	return string(body)
+}
+
 func TestEngineBackupExportRejectsNonAdmin(t *testing.T) {
 	key := []byte("0123456789abcdef0123456789abcdef")
 	state := engineBackupTestState(t, key)
@@ -270,6 +282,60 @@ func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
 	}
 	if restored.Tables["engine.devices"].Rows[0]["hostname"] != "LAB-AGENT-01" {
 		t.Fatalf("decrypted payload missing device row: %#v", restored.Tables["engine.devices"].Rows)
+	}
+}
+
+func TestEngineBackupAnalyzeReturnsImportSummary(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	payload.Tables["engine.device_filters"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("8"), "name": "Servers"}}}
+	payload.Tables["engine.watchdogs"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("9"), "name": "CPU"}}}
+	payload.Tables["engine.scheduled_jobs"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("10"), "name": "Patch"}}}
+	payload.Tables["assemblies.user_created_assemblies"] = engineBackupTable{Columns: []string{"assembly_guid", "name"}, Rows: []map[string]any{{"assembly_guid": "asm-1", "name": "Restart Service"}}}
+	payload.Tables["engine.credentials"] = engineBackupTable{Columns: []string{"id", "name"}, Rows: []map[string]any{{"id": json.Number("11"), "name": "Domain Admin"}}}
+	payload.Tables["engine.users"] = engineBackupTable{Columns: []string{"id", "username"}, Rows: []map[string]any{{"id": json.Number("12"), "username": "operator"}}}
+	payload.Tables["engine.metadata_field_definitions"] = engineBackupTable{Columns: []string{"field_number", "display_name"}, Rows: []map[string]any{{"field_number": json.Number("1"), "display_name": "Asset Tag"}}}
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	auth := newEngineBackupTestAuth(store, &engineBackupTestAegis{key: key, state: state}, bootstrapPhaseLoginRequired)
+	request := httptest.NewRequest(http.MethodPost, "/api/server/backup/analyze", strings.NewReader(engineBackupAnalyzeJSON(t, doc, "correct-cipher")))
+	addEngineBackupAuthCookie(t, request, auth, "Admin")
+	recorder := httptest.NewRecorder()
+
+	engineBackupAnalyzeHandler(auth, false).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected analyze ok, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode analyze response: %v", err)
+	}
+	analysis := asMap(response["analysis"])
+	rows := jsonArray(analysis["summary"])
+	counts := map[string]int{}
+	for _, row := range rows {
+		item := asMap(row)
+		counts[cleanText(item["id"])] = int(coerceInt64(item["count"]))
+	}
+	for id, expected := range map[string]int{
+		"devices":         1,
+		"filters":         1,
+		"watchdogs":       1,
+		"scheduled_jobs":  1,
+		"assemblies":      1,
+		"sites":           1,
+		"credentials":     1,
+		"users":           1,
+		"metadata_fields": 1,
+	} {
+		if counts[id] != expected {
+			t.Fatalf("expected %s count %d, got %d in %#v", id, expected, counts[id], rows)
+		}
+	}
+	if store.restored != nil {
+		t.Fatalf("analyze must not restore payload")
 	}
 }
 
