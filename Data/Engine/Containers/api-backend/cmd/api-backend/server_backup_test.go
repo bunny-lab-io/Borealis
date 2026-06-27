@@ -246,6 +246,9 @@ func TestEngineBackupExportEncryptsPlaintext(t *testing.T) {
 		t.Fatalf("expected export ok, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
+	if !strings.Contains(body, "\n  \"schema_version\":") || !strings.HasSuffix(body, "\n") {
+		t.Fatalf("backup response should be indented JSON, got %s", body)
+	}
 	for _, plaintext := range []string{"ldaps://ldap.example.test", "LAB-AGENT-01", "SITE-CODE", "directory-secret"} {
 		if strings.Contains(body, plaintext) {
 			t.Fatalf("backup response leaked plaintext %q: %s", plaintext, body)

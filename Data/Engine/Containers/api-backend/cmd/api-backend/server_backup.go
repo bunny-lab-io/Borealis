@@ -141,7 +141,9 @@ func engineBackupExportHandler(auth *authService) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(document)
+		encoder := json.NewEncoder(w)
+		encoder.SetIndent("", "  ")
+		_ = encoder.Encode(document)
 	}
 }
 
