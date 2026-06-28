@@ -179,6 +179,8 @@ Build cache:
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
 - Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and clear Engine Buildx cache exports under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
+- `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
+- `job-scheduler` uses an Alpine runtime image with the Go scheduler mode, Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags separately.
@@ -337,7 +339,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` launches the short-lived helper container with `/opt/Borealis` and the Docker socket mounted while the API returns immediately.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` launches a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.
@@ -393,6 +395,11 @@ docker compose \
 API liveness:
 ```sh
 curl -fsS http://127.0.0.1:5000/health
+```
+
+Container API healthcheck:
+```sh
+docker exec borealis-engine-api-backend borealis-api-backend-go api-healthcheck
 ```
 
 WebUI liveness:

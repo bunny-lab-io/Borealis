@@ -44,7 +44,7 @@ services:
       remote-desktop-guacd:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "borealis-api-healthcheck"]
+      test: ["CMD", "borealis-api-backend-go", "api-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 18

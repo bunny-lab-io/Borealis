@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -41,6 +42,14 @@ func main() {
 
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+
+	if apiHealthcheckMode() {
+		if err := runGoAPIHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("Go api-backend healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if schedulerHealthcheckMode() {
 		if err := runGoJobSchedulerHealthcheck(rootCtx, cfg); err != nil {
@@ -182,6 +191,20 @@ func schedulerManagerMode() bool {
 	return false
 }
 
+func apiHealthcheckMode() bool {
+	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+	if role == "api-healthcheck" || role == "api-backend-healthcheck" {
+		return true
+	}
+	for _, arg := range os.Args[1:] {
+		normalized := strings.ToLower(strings.TrimSpace(arg))
+		if normalized == "api-healthcheck" || normalized == "api-backend-healthcheck" {
+			return true
+		}
+	}
+	return false
+}
+
 func schedulerHealthcheckMode() bool {
 	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
 	if role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck" {
@@ -194,6 +217,35 @@ func schedulerHealthcheckMode() bool {
 		}
 	}
 	return false
+}
+
+func runGoAPIHealthcheck(ctx context.Context, cfg gatewayConfig) error {
+	host := envDefault("BOREALIS_API_HEALTH_HOST", cfg.ListenHost)
+	port := envDefault("BOREALIS_API_HEALTH_PORT", cfg.ListenPort)
+	host = strings.TrimSpace(host)
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	port = strings.TrimSpace(port)
+	if port == "" {
+		port = "5000"
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	url := "http://" + net.JoinHostPort(host, port) + "/health"
+	req, err := http.NewRequestWithContext(checkCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API healthcheck returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func loadConfig() (gatewayConfig, error) {

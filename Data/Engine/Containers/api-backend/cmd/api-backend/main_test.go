@@ -977,25 +977,31 @@ func TestEnvDurationSecondsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestSchedulerModeDetectionSeparatesManagerAndHealthcheck(t *testing.T) {
+func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 	originalArgs := os.Args
 	t.Cleanup(func() { os.Args = originalArgs })
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "")
 	os.Args = []string{"api-backend", "job-scheduler"}
-	if !schedulerManagerMode() || schedulerHealthcheckMode() {
+	if !schedulerManagerMode() || schedulerHealthcheckMode() || apiHealthcheckMode() {
 		t.Fatalf("expected job-scheduler arg to select manager only")
 	}
 
 	os.Args = []string{"api-backend", "job-scheduler-healthcheck"}
-	if schedulerManagerMode() || !schedulerHealthcheckMode() {
+	if schedulerManagerMode() || !schedulerHealthcheckMode() || apiHealthcheckMode() {
 		t.Fatalf("expected job-scheduler-healthcheck arg to select healthcheck only")
 	}
 
 	os.Args = []string{"api-backend"}
 	t.Setenv("BOREALIS_PROCESS_ROLE", "scheduler-healthcheck")
-	if schedulerManagerMode() || !schedulerHealthcheckMode() {
+	if schedulerManagerMode() || !schedulerHealthcheckMode() || apiHealthcheckMode() {
 		t.Fatalf("expected scheduler-healthcheck role to select healthcheck only")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "")
+	os.Args = []string{"api-backend", "api-healthcheck"}
+	if schedulerManagerMode() || schedulerHealthcheckMode() || !apiHealthcheckMode() {
+		t.Fatalf("expected api-healthcheck arg to select API healthcheck only")
 	}
 }
 
@@ -1012,6 +1018,48 @@ func TestHealthAndStatusHandlersReportGoBackend(t *testing.T) {
 	statusHandler(cfg).ServeHTTP(statusRecorder, httptest.NewRequest(http.MethodGet, "/api/system/go-backend/status", nil))
 	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), `"status":"running"`) || strings.Contains(statusRecorder.Body.String(), "legacy") {
 		t.Fatalf("unexpected status response code=%d body=%s", statusRecorder.Code, statusRecorder.Body.String())
+	}
+}
+
+func TestRunGoAPIHealthcheckUsesConfiguredEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Fatalf("unexpected healthcheck path %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	endpoint := strings.TrimPrefix(server.URL, "http://")
+	host, port, ok := strings.Cut(endpoint, ":")
+	if !ok {
+		t.Fatalf("unexpected test server endpoint %q", server.URL)
+	}
+	t.Setenv("BOREALIS_API_HEALTH_HOST", host)
+	t.Setenv("BOREALIS_API_HEALTH_PORT", port)
+
+	cfg := gatewayConfig{ListenHost: "192.0.2.1", ListenPort: "1"}
+	if err := runGoAPIHealthcheck(context.Background(), cfg); err != nil {
+		t.Fatalf("expected API healthcheck to pass: %v", err)
+	}
+}
+
+func TestRunGoAPIHealthcheckFallsBackFromWildcardHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	endpoint := strings.TrimPrefix(server.URL, "http://")
+	_, port, ok := strings.Cut(endpoint, ":")
+	if !ok {
+		t.Fatalf("unexpected test server endpoint %q", server.URL)
+	}
+	t.Setenv("BOREALIS_API_HEALTH_PORT", port)
+
+	cfg := gatewayConfig{ListenHost: "0.0.0.0", ListenPort: "1"}
+	if err := runGoAPIHealthcheck(context.Background(), cfg); err != nil {
+		t.Fatalf("expected wildcard host API healthcheck to pass: %v", err)
 	}
 }
 

@@ -1,7 +1,5 @@
-#!/usr/bin/env bash
-set -o errexit
-set -o nounset
-set -o pipefail
+#!/bin/sh
+set -eu
 
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"

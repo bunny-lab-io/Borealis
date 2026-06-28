@@ -37,7 +37,10 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 
 | Service | Dependency | License |
 | :--- | :--- | :--- |
-| api-backend | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
+| api-backend | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
+| api-backend | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
+| api-backend | Git | [GPL-2.0-only](https://github.com/git/git/blob/master/COPYING) |
+| api-backend | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
 | api-backend | golang.org/x/crypto v0.33.0 (Go scrypt KDF support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
@@ -53,37 +56,14 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
 | api-backend | github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) | [MIT](https://github.com/x448/float16/blob/master/LICENSE) |
 | api-backend | golang.org/x/sys v0.30.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
-| api-backend | Docker CLI (`docker-ce-cli`, container service-action helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
-| api-backend | Docker Compose plugin (container service-action helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
-| api-backend | Docker Buildx plugin / BuildKit (container image rebuild helper) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
-| api-backend | Flask | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| api-backend | flask-cors | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | Flask-SocketIO | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | eventlet | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | cryptography | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
-| api-backend | PyJWT | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | pyotp | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | qrcode | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
-| api-backend | webauthn | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
-| api-backend | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
-| api-backend | requests | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| api-backend | aiohttp | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
-| api-backend | python-socketio | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | websockets | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| api-backend | packaging | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
-| api-backend | regex | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
-| api-backend | SQLAlchemy | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | alembic | [MIT](https://spdx.org/licenses/MIT.html) |
-| api-backend | psycopg (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
-| api-backend | ldap3 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
-| api-backend | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
-| api-backend | Tesseract OCR | [Apache-2.0](https://github.com/tesseract-ocr/tesseract/blob/main/LICENSE) |
-| api-backend | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
-| job-scheduler | Debian container base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines plus package licenses](https://www.debian.org/legal/licenses/) |
+| job-scheduler | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
+| job-scheduler | Bash | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
+| job-scheduler | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
 | job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
-| job-scheduler | Docker CLI (`docker-ce-cli`, site-worker container launcher) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
-| job-scheduler | Docker Compose plugin (Engine service orchestration helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
-| job-scheduler | Docker Buildx plugin / BuildKit (container image rebuild helper) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
+| job-scheduler | Docker CLI (`docker-cli`, site-worker container launcher) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
+| job-scheduler | Docker Compose plugin (`docker-cli-compose`, Engine service orchestration helper) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| job-scheduler | Python 3 (used by detached `Engine.sh --service` helpers for manifest/env work) | [PSF License](https://docs.python.org/3/license.html) |
+| job-scheduler | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |
 | remote-desktop-guacd | Apache Guacamole Server container image (`guacamole/guacd:1.6.0`) | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
 | remote-desktop-guacd | Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |

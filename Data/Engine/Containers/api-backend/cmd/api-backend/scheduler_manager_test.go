@@ -9,6 +9,8 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -193,6 +195,51 @@ func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	t.Setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
 	if got := schedulerSiteWorkerSocketIOAsyncMode(); got != "threading" {
 		t.Fatalf("expected explicit threading, got %q", got)
+	}
+}
+
+func TestSchedulerManagerServiceActionUsesSchedulerImageForHelper(t *testing.T) {
+	tmp := t.TempDir()
+	capturePath := filepath.Join(tmp, "docker-args.txt")
+	dockerPath := filepath.Join(tmp, "docker")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(capturePath) + "\nprintf 'helper-id\\n'\n"
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_DOCKER_BIN", dockerPath)
+	t.Setenv("BOREALIS_API_BACKEND_IMAGE", "borealis-engine/api-backend:test")
+	t.Setenv("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:test")
+
+	manager := &goSchedulerManager{projectRoot: "/opt/Borealis"}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "webui-frontend",
+		"action":      map[string]any{"action": "restart"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	raw, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	joined := "\n" + strings.Join(args, "\n") + "\n"
+	for _, expected := range []string{
+		"\nrun\n",
+		"\n--entrypoint\n",
+		"\n/bin/bash\n",
+		"\nborealis-engine/job-scheduler:test\n",
+		"\n-lc\n",
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "borealis-engine/api-backend:test") {
+		t.Fatalf("helper should not use api-backend image:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
+		t.Fatalf("helper command missing Engine.sh service action:\n%s", joined)
 	}
 }
 
