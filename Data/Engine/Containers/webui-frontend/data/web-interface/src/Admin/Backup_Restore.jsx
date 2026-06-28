@@ -103,7 +103,8 @@ function BackupRestoreTool({ mode }) {
         headerName: "Count",
         width: 120,
         type: "numericColumn",
-        cellClass: "auto-col-tight",
+        headerClass: "analysis-count-header",
+        cellClass: "auto-col-tight analysis-count-cell",
         cellRenderer: (params) => (
           <Box
             component="span"
@@ -464,6 +465,13 @@ function BackupRestoreTool({ mode }) {
                   paddingLeft: "12px",
                   paddingRight: "9px",
                 },
+                "& .ag-header-cell.analysis-count-header .ag-header-cell-label": {
+                  justifyContent: "center",
+                },
+                "& .ag-center-cols-container .ag-cell.analysis-count-cell, & .ag-pinned-left-cols-container .ag-cell.analysis-count-cell, & .ag-pinned-right-cols-container .ag-cell.analysis-count-cell": {
+                  justifyContent: "center",
+                  textAlign: "center",
+                },
                 "& .ag-row": {
                   borderColor: "rgba(255,255,255,0.04)",
                   transition: "background 0.2s ease",
@@ -516,7 +524,7 @@ function BackupRestoreTool({ mode }) {
               disabled={!canRestore}
               sx={{ borderRadius: 2, textTransform: "none", fontWeight: 800 }}
             >
-              Import
+              Import / Restore
             </Button>
           </Stack>
         </Stack>
