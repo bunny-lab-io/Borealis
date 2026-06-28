@@ -1004,7 +1004,7 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	if dockerBin == "" {
 		return errors.New("docker CLI unavailable")
 	}
-	image := envDefault("BOREALIS_API_BACKEND_IMAGE", "borealis-engine/api-backend:local")
+	image := schedulerServiceActionHelperImage()
 	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
 	commandParts := []string{"bash", "Engine.sh", "--service", serviceKey, actionName}
 	if actionMode != "" {
@@ -2386,6 +2386,10 @@ func schedulerComposeEnvFile(projectRoot string) string {
 
 func schedulerDesiredSiteWorkerImage() string {
 	return envDefault("BOREALIS_SITE_WORKER_IMAGE", "borealis-engine/site-worker:local")
+}
+
+func schedulerServiceActionHelperImage() string {
+	return envDefault("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:local")
 }
 
 func schedulerSiteWorkerSocketIOAsyncMode() string {
