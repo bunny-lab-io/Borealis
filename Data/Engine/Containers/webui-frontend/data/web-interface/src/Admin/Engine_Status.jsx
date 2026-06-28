@@ -15,7 +15,6 @@ import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
-import { formatDockerStats, hasDockerStats } from "../app/utils/dockerStats.js";
 
 const WORKER_HISTORY_SECONDS = 60;
 const WORKER_CLOSE_SECONDS = 60;
@@ -324,46 +323,6 @@ function WorkflowLikeCard({ data, children, hasOutput = false, hasInput = false,
   );
 }
 
-function DockerStatsInline({ stats }) {
-  if (!hasDockerStats(stats)) return null;
-  const formatted = formatDockerStats(stats);
-  const metrics = [
-    { label: "CPU", value: formatted.cpu },
-    { label: "MEM", value: formatted.memoryPercent, title: formatted.memory },
-    { label: "NET", value: formatted.network, title: "Input / Output" },
-    { label: "DISK", value: formatted.block, title: "Read / Write" },
-  ];
-  return (
-    <Box sx={{ mt: 0.45, display: "flex", flexWrap: "wrap", gap: 0.35, minWidth: 0 }}>
-      {metrics.map((metric) => (
-        <Tooltip key={metric.label} title={metric.title || ""} placement="top">
-          <Box
-            component="span"
-            sx={{
-              minWidth: 0,
-              maxWidth: "100%",
-              borderRadius: 999,
-              border: "1px solid rgba(148,163,184,0.22)",
-              background: "rgba(15,23,42,0.38)",
-              px: 0.58,
-              py: 0.18,
-              color: COLORS.muted,
-              fontSize: "0.56rem",
-              fontWeight: 800,
-              lineHeight: 1.05,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {metric.label} <Box component="span" sx={{ color: COLORS.text }}>{metric.value}</Box>
-          </Box>
-        </Tooltip>
-      ))}
-    </Box>
-  );
-}
-
 const WorkerNode = memo(({ data }) => {
   const showWorkerDetails = !data.isService;
   return (
@@ -380,7 +339,6 @@ const WorkerNode = memo(({ data }) => {
             {data.serviceState}
           </Typography>
         ) : null}
-        <DockerStatsInline stats={data.dockerStats} />
         {showWorkerDetails && !data.isManager ? (
           <Box sx={{ mt: 0.55, display: "flex", flexWrap: "wrap", gap: 0.65 }}>
             <Box sx={{ borderRadius: 999, border: "1px solid rgba(148,163,184,0.24)", background: "rgba(15,23,42,0.42)", px: 0.85, py: 0.32, color: COLORS.muted, fontSize: "0.67rem", lineHeight: 1 }}>
@@ -885,7 +843,6 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
         siteLabel: siteName || `Site ${siteId}`,
         connectedDeviceCount,
         connectedDeviceLabel: showConnectedStatus ? connectedLabel : "",
-        dockerStats: worker?.docker_stats || null,
         idleRemainingSeconds:
           dismissInactive && workerTone === "idle" && connectedDeviceCount <= 0
             ? idleTtlSeconds - Math.max(0, nowSeconds - Number(worker?.idle_since || nowSeconds))
@@ -1003,7 +960,6 @@ export function buildGraphAt(payload, navigate, nowSeconds, options = {}) {
         isManager: false,
         hasInput: key !== "api-backend",
         hasOutput: SERVICE_OUTPUT_KEYS.has(key),
-        dockerStats: row?.docker_stats || null,
         actions: serviceActionButtons(row, onServiceAction),
       },
       draggable: false,

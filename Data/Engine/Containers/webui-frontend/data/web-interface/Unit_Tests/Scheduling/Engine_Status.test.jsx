@@ -6,7 +6,7 @@ describe("active site workers canvas mapping", () => {
     const graph = buildGraphAt(
       {
         services: [
-          { key: "api-backend", label: "API Backend", status: "healthy", docker_state: "running", docker_stats: { cpu_percent: 6.74, memory_percent: 0.44 }, actions: [{ id: "restart", label: "Restart", action: "restart" }] },
+          { key: "api-backend", label: "API Backend", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
           { key: "postgres-db", label: "Postgres", status: "healthy", docker_state: "running", actions: [{ id: "restart", label: "Restart", action: "restart" }] },
           { key: "webui-frontend", label: "Web UI", status: "healthy", docker_state: "running", actions: [{ id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" }] },
           { key: "traefik-edge", label: "Traefik Edge", status: "warning", docker_state: "running", actions: [{ id: "reload", label: "Reload", action: "reload" }] },
@@ -36,7 +36,6 @@ describe("active site workers canvas mapping", () => {
     expect(graph.nodes.find((node) => node.id === "service:docker-proxy")?.position.y).toBeGreaterThan(graph.nodes.find((node) => node.id === "service:job-scheduler")?.position.y);
     expect(graph.nodes.find((node) => node.id === "service:docker-proxy")?.data.startedLabel).toBe("Up 3 minutes");
     expect(graph.nodes.find((node) => node.id === "service:wireguard-tunnel")?.data.actions[0].label).toBe("Reconcile");
-    expect(graph.nodes.find((node) => node.id === "service:api-backend")?.data.dockerStats.cpu_percent).toBe(6.74);
   });
 
   it("uses service job scheduler as site-worker parent when available", () => {

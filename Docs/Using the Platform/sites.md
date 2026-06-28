@@ -29,7 +29,9 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
 
 ## Read Worker Resource Usage
 
-The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, memory, Net I/O, and Disk I/O columns to spot workers under load before re-deploying one.
+The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends to spot workers under load before re-deploying one.
+
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. Navigating away from Sites clears that short history.
 
 !!! tip
 
@@ -46,7 +48,7 @@ The Sites grid shows live Docker resource usage for each active site-worker when
     - `POST /api/sites/assign` - assign devices to site.
     - `POST /api/sites/rename` - rename site.
     - `POST /api/sites/<site_id>/auto-approval` - set or clear temporary site auto-approval.
-    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status, including Docker stats when `docker-proxy` responds.
+    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status, including site-worker Docker stats and Docker inspect size metadata when `docker-proxy` responds.
 
     ### Related documentation
 
@@ -67,4 +69,5 @@ The Sites grid shows live Docker resource usage for each active site-worker when
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
-    - Site-worker resource usage comes from the Docker stats payload attached to each worker row by the Engine API.
+    - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API.
+    - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.

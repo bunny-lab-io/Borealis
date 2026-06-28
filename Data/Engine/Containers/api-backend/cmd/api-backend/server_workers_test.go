@@ -233,3 +233,57 @@ func TestDockerContainerStatsReadsDockerProxyStatsEndpoint(t *testing.T) {
 		t.Fatalf("expected docker proxy stats, got %#v", stats)
 	}
 }
+
+func TestDockerInspectContainerRequestsSizeMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/containers/site-worker-1/json" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("size"); got != "1" {
+			t.Fatalf("expected size=1, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":         "abcdef1234567890",
+			"SizeRootFs": 576716800,
+			"SizeRw":     52428800,
+			"HostConfig": map[string]any{
+				"StorageOpt": map[string]any{"size": "120G"},
+			},
+		})
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_DOCKER_PROXY_URL", server.URL)
+
+	inspected := dockerInspectContainer("site-worker-1")
+	row := map[string]any{}
+	applyDockerInspectSizeMetadata(row, inspected)
+
+	if got := row["container_size_rootfs_bytes"]; got != int64(576716800) {
+		t.Fatalf("expected rootfs size, got %#v", row)
+	}
+	if got := row["container_size_rw_bytes"]; got != int64(52428800) {
+		t.Fatalf("expected rw size, got %#v", row)
+	}
+	if got := row["container_storage_limit_bytes"]; got != int64(120*1024*1024*1024) {
+		t.Fatalf("expected storage limit, got %#v", row)
+	}
+	if got := row["container_storage_limit_source"]; got != "HostConfig.StorageOpt.size" {
+		t.Fatalf("expected storage source, got %#v", row)
+	}
+}
+
+func TestDockerInspectStorageLimitPrefersDiskQuota(t *testing.T) {
+	limit, source := dockerInspectStorageLimit(map[string]any{
+		"HostConfig": map[string]any{
+			"DiskQuota": 987654321,
+			"StorageOpt": map[string]any{
+				"size": "120G",
+			},
+		},
+	})
+
+	if limit != int64(987654321) || source != "HostConfig.DiskQuota" {
+		t.Fatalf("expected disk quota storage limit, got limit=%d source=%q", limit, source)
+	}
+}

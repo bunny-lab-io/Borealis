@@ -877,6 +877,7 @@ func attachWorkerContainerMetadata(rows []map[string]any) []map[string]any {
 				row["container_image"] = image
 			}
 		}
+		applyDockerInspectSizeMetadata(row, inspected)
 	}
 	attachDockerStatsToRows(rows, func(row map[string]any) string {
 		return cleanText(row["container_name"])
@@ -889,7 +890,110 @@ func dockerInspectContainer(containerName string) map[string]any {
 	if containerName == "" {
 		return map[string]any{}
 	}
-	return dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/json")
+	return dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/json?size=1")
+}
+
+func applyDockerInspectSizeMetadata(row map[string]any, inspected map[string]any) {
+	if row == nil || inspected == nil {
+		return
+	}
+	if value, ok := dockerInspectInt64(inspected, "SizeRootFs"); ok {
+		row["container_size_rootfs_bytes"] = maxInt64(value, 0)
+	}
+	if value, ok := dockerInspectInt64(inspected, "SizeRw"); ok {
+		row["container_size_rw_bytes"] = maxInt64(value, 0)
+	}
+	if limit, source := dockerInspectStorageLimit(inspected); limit > 0 {
+		row["container_storage_limit_bytes"] = limit
+		row["container_storage_limit_source"] = source
+	}
+}
+
+func dockerInspectInt64(payload map[string]any, key string) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	value, ok := payload[key]
+	if !ok {
+		return 0, false
+	}
+	return coerceInt64(value), true
+}
+
+func dockerInspectStorageLimit(inspected map[string]any) (int64, string) {
+	hostConfig := mapStringAny(inspected["HostConfig"])
+	if value, ok := dockerInspectInt64(hostConfig, "DiskQuota"); ok && value > 0 {
+		return value, "HostConfig.DiskQuota"
+	}
+	storageOpt := mapStringAny(hostConfig["StorageOpt"])
+	for _, key := range []string{"size", "Size", "dm.basesize", "dm.size"} {
+		if value, ok := storageOpt[key]; ok {
+			if parsed := parseDockerSizeBytes(value); parsed > 0 {
+				return parsed, "HostConfig.StorageOpt." + key
+			}
+		}
+	}
+	return 0, ""
+}
+
+func parseDockerSizeBytes(value any) int64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return parsed
+		}
+		floatParsed, err := typed.Float64()
+		if err == nil {
+			return int64(floatParsed)
+		}
+	case string:
+		raw := strings.TrimSpace(typed)
+		if raw == "" {
+			return 0
+		}
+		upper := strings.ToUpper(strings.ReplaceAll(raw, " ", ""))
+		multipliers := []struct {
+			suffix string
+			value  float64
+		}{
+			{"KIB", 1024},
+			{"MIB", 1024 * 1024},
+			{"GIB", 1024 * 1024 * 1024},
+			{"TIB", 1024 * 1024 * 1024 * 1024},
+			{"KB", 1000},
+			{"MB", 1000 * 1000},
+			{"GB", 1000 * 1000 * 1000},
+			{"TB", 1000 * 1000 * 1000 * 1000},
+			{"K", 1024},
+			{"M", 1024 * 1024},
+			{"G", 1024 * 1024 * 1024},
+			{"T", 1024 * 1024 * 1024 * 1024},
+			{"B", 1},
+		}
+		multiplier := float64(1)
+		numeric := upper
+		for _, unit := range multipliers {
+			if strings.HasSuffix(upper, unit.suffix) {
+				multiplier = unit.value
+				numeric = strings.TrimSuffix(upper, unit.suffix)
+				break
+			}
+		}
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(numeric), 64)
+		if err == nil && parsed > 0 {
+			return int64(parsed * multiplier)
+		}
+	}
+	return 0
 }
 
 func dockerContainerStats(containerName string) map[string]any {

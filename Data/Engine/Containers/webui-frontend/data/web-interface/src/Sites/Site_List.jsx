@@ -36,7 +36,15 @@ import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
-import { formatDockerStats, hasDockerStats } from "../app/utils/dockerStats.js";
+import {
+  appendDockerStatsHistory,
+  dockerStatsHistoryKey,
+  formatDockerStatBytes,
+  formatDockerStatPercent,
+  formatDockerStatRate,
+  hasDockerStats,
+  pruneDockerStatsHistory,
+} from "../app/utils/dockerStats.js";
 import {
   createRouteRequestPlan,
   getRouteErrorMessage,
@@ -63,7 +71,7 @@ const iconFontFamily = '"Quartz Regular"';
 const WORKER_HISTORY_SECONDS = 300;
 const WORKER_REMOVE_SECONDS = 30;
 const TASK_REMOVE_SECONDS = 60;
-const SITE_WORKER_REFRESH_MS = 15000;
+const SITE_WORKER_REFRESH_MS = 5000;
 const BASE_ROW_HEIGHT = 56;
 const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
 const DEFAULT_INSTALL_BRANCH = "main";
@@ -824,6 +832,10 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_name: containerName,
         site_worker_container_id: String(worker?.container_id || "").trim() || "Unknown",
         site_worker_container_id_full: String(worker?.container_id_full || "").trim(),
+        site_worker_container_size_rootfs_bytes: Number(worker?.container_size_rootfs_bytes || 0),
+        site_worker_container_size_rw_bytes: Number(worker?.container_size_rw_bytes || 0),
+        site_worker_container_storage_limit_bytes: Number(worker?.container_storage_limit_bytes || 0),
+        site_worker_container_storage_limit_source: String(worker?.container_storage_limit_source || "").trim(),
         site_worker_status_label: status.label,
         site_worker_status_tone: status.tone,
         site_worker_docker_stats: worker?.docker_stats || null,
@@ -879,6 +891,10 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_name: "",
         site_worker_container_id: "N/A",
         site_worker_container_id_full: "",
+        site_worker_container_size_rootfs_bytes: 0,
+        site_worker_container_size_rw_bytes: 0,
+        site_worker_container_storage_limit_bytes: 0,
+        site_worker_container_storage_limit_source: "",
         site_worker_status_label: "No Online Devices",
         site_worker_status_tone: "no_online",
         site_worker_docker_stats: null,
@@ -898,6 +914,33 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         { sensitivity: "base", numeric: true }
       )
     );
+}
+
+function recordSiteWorkerResourceHistory(historyMap, payload, sampledAtMs = Date.now()) {
+  if (!(historyMap instanceof Map)) return 0;
+  const workerRowsBySite = buildWorkerRowsBySite(payload, Math.floor(sampledAtMs / 1000));
+  const activeKeys = new Set();
+  workerRowsBySite.forEach((row) => {
+    const key = dockerStatsHistoryKey(row);
+    if (!key) return;
+    activeKeys.add(key);
+    appendDockerStatsHistory(historyMap, row, sampledAtMs);
+  });
+  pruneDockerStatsHistory(historyMap, activeKeys);
+  return activeKeys.size;
+}
+
+function attachResourceHistoryToRows(rows, historyMap) {
+  if (!Array.isArray(rows) || !(historyMap instanceof Map)) return rows;
+  return rows.map((row) => {
+    const key = dockerStatsHistoryKey(row);
+    const history = key ? historyMap.get(key) : null;
+    return {
+      ...row,
+      site_worker_resource_history_key: key,
+      site_worker_resource_history: Array.isArray(history) ? history : [],
+    };
+  });
 }
 
 async function fetchSiteWorkerPayloadRoute(progress) {
@@ -1190,50 +1233,134 @@ function SiteWorkerContainerCell(params) {
   );
 }
 
-function DockerStatsMetric({ label, value, title }) {
+function latestResourceSample(samples, fallback) {
+  return Array.isArray(samples) && samples.length ? samples[samples.length - 1] : fallback;
+}
+
+function resourceHistoryMax(samples, key) {
+  return (Array.isArray(samples) ? samples : []).reduce((max, sample) => {
+    const value = Number(sample?.[key] || 0);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
+}
+
+function resourceSparklinePoints(samples, key, maxValue) {
+  const values = Array.isArray(samples) && samples.length ? samples : [];
+  if (!values.length) return "";
+  const width = 72;
+  const height = 18;
+  const topPad = 2;
+  const bottomPad = 2;
+  const safeMax = Math.max(1, Number(maxValue || 0));
+  const pointFor = (sample, index, count) => {
+    const rawValue = Math.max(0, Number(sample?.[key] || 0));
+    const x = count <= 1 ? width : (index / (count - 1)) * width;
+    const y = height - bottomPad - Math.min(1, rawValue / safeMax) * (height - topPad - bottomPad);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  };
+  if (values.length === 1) {
+    const point = pointFor(values[0], 0, 1).split(",");
+    return `0,${point[1]} ${width},${point[1]}`;
+  }
+  return values.map((sample, index) => pointFor(sample, index, values.length)).join(" ");
+}
+
+function ResourceTrendPanel({ label, value, scaleLabel, tooltip, color, samples, valueKey, maxValue }) {
+  const points = resourceSparklinePoints(samples, valueKey, maxValue);
   return (
-    <Tooltip title={title || ""} placement="top">
+    <Tooltip title={tooltip || ""} placement="top">
       <Box
         sx={{
+          height: 46,
           minWidth: 0,
           borderRadius: 1,
           border: "1px solid rgba(148,163,184,0.22)",
           background: "rgba(15,23,42,0.36)",
-          px: 0.7,
-          py: 0.35,
+          px: 0.45,
+          py: 0.3,
           display: "flex",
-          alignItems: "center",
+          flexDirection: "column",
           justifyContent: "space-between",
-          gap: 0.55,
+          overflow: "hidden",
         }}
       >
-        <Typography
-          component="span"
+        <Box
           sx={{
-            color: "rgba(148,163,184,0.86)",
-            fontSize: "0.56rem",
-            fontWeight: 800,
-            lineHeight: 1,
-            textTransform: "uppercase",
-            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 0.35,
+            minWidth: 0,
           }}
         >
-          {label}
-        </Typography>
+          <Typography
+            component="span"
+            sx={{
+              color: "rgba(148,163,184,0.88)",
+              fontSize: "0.49rem",
+              fontWeight: 900,
+              lineHeight: 1,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {label}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              color: MAGIC_UI.textBright,
+              fontSize: "0.56rem",
+              fontWeight: 900,
+              lineHeight: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {value}
+          </Typography>
+        </Box>
+        <Box
+          component="svg"
+          viewBox="0 0 72 18"
+          preserveAspectRatio="none"
+          sx={{
+            width: "100%",
+            height: 18,
+            display: "block",
+            overflow: "visible",
+          }}
+        >
+          <line x1="0" y1="17" x2="72" y2="17" stroke="rgba(148,163,184,0.18)" strokeWidth="1" />
+          {points ? (
+            <polyline
+              points={points}
+              fill="none"
+              stroke={color}
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
+        </Box>
         <Typography
           component="span"
           sx={{
-            color: MAGIC_UI.textBright,
-            fontSize: "0.67rem",
+            color: "rgba(148,163,184,0.72)",
+            fontSize: "0.47rem",
             fontWeight: 800,
             lineHeight: 1,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             minWidth: 0,
+            textAlign: "right",
           }}
         >
-          {value}
+          {scaleLabel}
         </Typography>
       </Box>
     </Tooltip>
@@ -1249,21 +1376,84 @@ function SiteWorkerStatsCell(params) {
       </Typography>
     );
   }
-  const formatted = formatDockerStats(stats);
+  const history = Array.isArray(params?.data?.site_worker_resource_history) ? params.data.site_worker_resource_history : [];
+  const fallbackSample = {
+    cpuPercent: Math.max(0, Number(stats.cpu_percent || 0)),
+    memoryUsageBytes: Math.max(0, Number(stats.memory_usage_bytes || 0)),
+    memoryLimitBytes: Math.max(0, Number(stats.memory_limit_bytes || 0)),
+    netInputBps: 0,
+    netOutputBps: 0,
+    netTotalBps: 0,
+    diskUsageBytes: Math.max(0, Number(params?.data?.site_worker_container_size_rootfs_bytes || 0)),
+    diskWritableBytes: Math.max(0, Number(params?.data?.site_worker_container_size_rw_bytes || 0)),
+    diskLimitBytes: Math.max(0, Number(params?.data?.site_worker_container_storage_limit_bytes || 0)),
+    diskLimitSource: String(params?.data?.site_worker_container_storage_limit_source || "").trim(),
+  };
+  const samples = history.length ? history : [fallbackSample];
+  const latest = latestResourceSample(samples, fallbackSample);
+  const cpuMax = Math.max(resourceHistoryMax(samples, "cpuPercent"), latest.cpuPercent);
+  const ramMax = latest.memoryLimitBytes > 0
+    ? latest.memoryLimitBytes
+    : Math.max(resourceHistoryMax(samples, "memoryUsageBytes"), latest.memoryUsageBytes);
+  const netMax = Math.max(resourceHistoryMax(samples, "netTotalBps"), latest.netTotalBps);
+  const diskMax = latest.diskLimitBytes > 0
+    ? latest.diskLimitBytes
+    : Math.max(resourceHistoryMax(samples, "diskUsageBytes"), latest.diskUsageBytes);
+  const metrics = [
+    {
+      label: "CPU",
+      value: formatDockerStatPercent(latest.cpuPercent),
+      scaleLabel: formatDockerStatPercent(cpuMax),
+      tooltip: `Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
+      color: "#7dd3fc",
+      valueKey: "cpuPercent",
+      maxValue: cpuMax,
+    },
+    {
+      label: "RAM",
+      value: formatDockerStatBytes(latest.memoryUsageBytes),
+      scaleLabel: latest.memoryLimitBytes > 0 ? formatDockerStatBytes(latest.memoryLimitBytes) : formatDockerStatBytes(ramMax),
+      tooltip: latest.memoryLimitBytes > 0
+        ? `${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
+        : `${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
+      color: "#c084fc",
+      valueKey: "memoryUsageBytes",
+      maxValue: ramMax,
+    },
+    {
+      label: "NET",
+      value: formatDockerStatRate(latest.netTotalBps),
+      scaleLabel: formatDockerStatRate(netMax),
+      tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
+      color: "#34d399",
+      valueKey: "netTotalBps",
+      maxValue: netMax,
+    },
+    {
+      label: "DISK",
+      value: formatDockerStatBytes(latest.diskUsageBytes),
+      scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
+      tooltip: latest.diskLimitBytes > 0
+        ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
+        : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
+      color: "#fbbf24",
+      valueKey: "diskUsageBytes",
+      maxValue: diskMax,
+    },
+  ];
   return (
     <Box
       sx={{
         width: "100%",
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-        gap: 0.45,
+        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gap: 0.4,
       }}
     >
-      <DockerStatsMetric label="CPU" value={formatted.cpu} />
-      <DockerStatsMetric label="MEM" value={formatted.memoryPercent} title={formatted.memory} />
-      <DockerStatsMetric label="NET" value={formatted.network} title="Input / Output" />
-      <DockerStatsMetric label="DISK" value={formatted.block} title="Read / Write" />
+      {metrics.map((metric) => (
+        <ResourceTrendPanel key={metric.label} samples={samples} {...metric} />
+      ))}
     </Box>
   );
 }
@@ -1804,6 +1994,8 @@ export default function SiteList() {
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
   const siteWorkerRefreshInFlightRef = useRef(false);
+  const resourceHistoryRef = useRef(new Map());
+  const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
     icon: "locationcity",
@@ -1816,8 +2008,8 @@ export default function SiteList() {
     [notify]
   );
   const displayRows = useMemo(
-    () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
-    [nowSeconds, rows, siteWorkerPayload]
+    () => attachResourceHistoryToRows(mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds), resourceHistoryRef.current),
+    [nowSeconds, resourceHistoryVersion, rows, siteWorkerPayload]
   );
 
   const handleOpenDevicesForSite = useCallback(
@@ -1963,6 +2155,11 @@ export default function SiteList() {
   }, [initialInstallServerUrl, initialRows, initialSiteWorkerPayload, loaderData]);
 
   useEffect(() => {
+    recordSiteWorkerResourceHistory(resourceHistoryRef.current, siteWorkerPayload, Date.now());
+    setResourceHistoryVersion((version) => version + 1);
+  }, [siteWorkerPayload]);
+
+  useEffect(() => {
     const intervalId = setInterval(() => {
       setNowSeconds(Math.floor(Date.now() / 1000));
     }, 1000);
@@ -2033,6 +2230,7 @@ export default function SiteList() {
         autoSizeHandleRef.current = null;
       }
       gridApiRef.current = null;
+      resourceHistoryRef.current.clear();
     };
   }, []);
 
