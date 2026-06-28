@@ -85,16 +85,6 @@ const INSTALL_OS_OPTIONS = [
   { id: "linux", label: "Linux" },
 ];
 
-const TONE_STYLES = {
-  running: { border: "rgba(125,211,252,0.5)", bg: "rgba(14,116,144,0.2)", text: "#bae6fd" },
-  idle: { border: "rgba(52,211,153,0.34)", bg: "rgba(6,78,59,0.16)", text: "#bbf7d0" },
-  pending: { border: "rgba(251,191,36,0.5)", bg: "rgba(120,53,15,0.2)", text: "#fde68a" },
-  failed: { border: "rgba(251,113,133,0.52)", bg: "rgba(127,29,29,0.22)", text: "#fecdd3" },
-  stopped: { border: "rgba(148,163,184,0.3)", bg: "rgba(30,41,59,0.22)", text: "#cbd5e1" },
-  no_online: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.18)", text: "#94a3b8" },
-  unknown: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.2)", text: "#cbd5e1" },
-};
-
 const TASK_SECTIONS = [
   { key: "success", label: "Success", color: "#00d18c" },
   { key: "running", label: "Running", color: "#58a6ff" },
@@ -352,24 +342,6 @@ const SITE_CONTEXT_MENU_GROUP_LABELS = {
 };
 
 const SITE_CONTEXT_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
-
-function titleCase(value) {
-  return String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function durationLabel(seconds) {
-  const value = Math.max(0, Math.ceil(Number(seconds || 0)));
-  if (value >= 60) {
-    const minutes = Math.floor(value / 60);
-    const remainder = value % 60;
-    return `${minutes}m${String(remainder).padStart(2, "0")}s`;
-  }
-  return `${value}s`;
-}
 
 function connectedDeviceCount(worker) {
   const direct = [
@@ -741,34 +713,9 @@ export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.no
   return normalized;
 }
 
-function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds = null) {
-  const normalized = String(worker?.status || "").trim().toLowerCase();
-  const connected = connectedDeviceCount(worker);
-  if (removalRemainingSeconds != null) {
-    return { label: `Removing in ${durationLabel(removalRemainingSeconds)}`, tone: "stopped" };
-  }
-  if (connected > 0 && !["lost", "stopped", "failed"].includes(normalized)) {
-    return { label: "Running", tone: "running" };
-  }
-  if (normalized === "idle") {
-    const idleSince = Number(worker?.idle_since || nowSeconds);
-    const remaining = Math.max(0, Math.ceil(Number(idleTtlSeconds || 300) - Math.max(0, nowSeconds - idleSince)));
-    if (remaining > 0) {
-      return { label: `Tearing Down in ${durationLabel(remaining)}`, tone: "idle" };
-    }
-    return { label: "Idle", tone: "idle" };
-  }
-  if (normalized === "running") return { label: "Running", tone: "running" };
-  if (normalized === "starting") return { label: "Starting", tone: "pending" };
-  if (normalized === "lost") return { label: "Lost", tone: "failed" };
-  if (normalized === "stopped") return { label: "Stopped", tone: "stopped" };
-  return { label: titleCase(normalized || "unknown"), tone: "unknown" };
-}
-
 function buildWorkerRowsBySite(payload, nowSeconds) {
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
   const taskGroupsByWorker = buildTaskGroupsByWorker(payload, nowSeconds);
-  const idleTtlSeconds = Math.max(300, Number(payload?.worker_idle_ttl_seconds || 300));
   const newestActiveBySite = new Map();
   workers.forEach((worker) => {
     const siteId = Number(worker?.site_id || 0);
@@ -810,10 +757,6 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
       const siteId = Number(worker?.site_id || 0);
       const workerGuid = String(worker?.worker_guid || "").trim();
       const containerName = String(worker?.container_name || "").trim();
-      const removalRemainingSeconds = isTerminalWorker(worker)
-        ? WORKER_REMOVE_SECONDS - terminalWorkerAgeSeconds(worker, nowSeconds)
-        : null;
-      const status = workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds);
       const taskGroups =
         (workerGuid && taskGroupsByWorker.get(workerGuid)) ||
         (containerName && taskGroupsByWorker.get(containerName)) ||
@@ -836,8 +779,6 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_size_rw_bytes: Number(worker?.container_size_rw_bytes || 0),
         site_worker_container_storage_limit_bytes: Number(worker?.container_storage_limit_bytes || 0),
         site_worker_container_storage_limit_source: String(worker?.container_storage_limit_source || "").trim(),
-        site_worker_status_label: status.label,
-        site_worker_status_tone: status.tone,
         site_worker_docker_stats: worker?.docker_stats || null,
         connected_devices: deviceCounts.connected_devices,
         site_device_count: deviceCounts.site_device_count,
@@ -895,8 +836,6 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_size_rw_bytes: 0,
         site_worker_container_storage_limit_bytes: 0,
         site_worker_container_storage_limit_source: "",
-        site_worker_status_label: "No Online Devices",
-        site_worker_status_tone: "no_online",
         site_worker_docker_stats: null,
         connected_devices: 0,
         site_device_count: total,
@@ -1055,50 +994,6 @@ function stopGridRowSelectionEvent(event) {
   }
 }
 
-function StatusPill({ label, tone }) {
-  const style = TONE_STYLES[tone] || TONE_STYLES.unknown;
-  return (
-    <Box
-      component="span"
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 0,
-        maxWidth: "100%",
-        px: 0.85,
-        py: 0.25,
-        minHeight: 20,
-        borderRadius: 999,
-        border: `1px solid ${style.border}`,
-        background: style.bg,
-        color: style.text,
-        fontSize: "11px",
-        fontWeight: 700,
-        lineHeight: 1,
-        gap: 0.5,
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        verticalAlign: "middle",
-      }}
-    >
-      <Box
-        component="span"
-        sx={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          backgroundColor: style.text,
-          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
-          flexShrink: 0,
-        }}
-      />
-      {label}
-    </Box>
-  );
-}
-
 function TaskResultsBar({ counts }) {
   const total = Math.max(1, Number(counts?.total_tasks || 0));
   return (
@@ -1172,63 +1067,27 @@ function TaskExpiryCountdown({ group }) {
 
 function SiteWorkerContainerCell(params) {
   const row = params?.data || {};
-  const onRecreate = params?.context?.onRecreate;
-  const busy = params?.context?.recreateBusyId === row.site_worker_guid;
-  const canRecreate = Boolean(row.site_worker_guid);
+  if (!hasDockerStats(row.site_worker_docker_stats)) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          Site Worker Not Running
+        </Typography>
+      </Box>
+    );
+  }
   return (
     <Box
       sx={{
         display: "flex",
         alignItems: "center",
-        justifyContent: "flex-start",
-        gap: 0.9,
+        justifyContent: "center",
         width: "100%",
         height: "100%",
         minWidth: 0,
       }}
     >
-      <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
-      {canRecreate ? (
-        <Box
-          component="button"
-          type="button"
-          disabled={busy}
-          onMouseDown={stopGridRowSelectionEvent}
-          onClick={(event) => {
-            stopGridRowSelectionEvent(event);
-            if (busy) return;
-            onRecreate?.(row);
-          }}
-          sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            p: 0,
-            m: 0,
-            border: 0,
-            background: "transparent",
-            color: BOREALIS_LINK_COLOR,
-            cursor: busy ? "default" : "pointer",
-            font: "inherit",
-            fontSize: "0.82rem",
-            fontWeight: 700,
-            lineHeight: 1.45,
-            textDecoration: "none",
-            whiteSpace: "nowrap",
-            transition: "color 160ms ease, opacity 160ms ease",
-            "&:hover": busy
-              ? undefined
-              : {
-                  color: BOREALIS_LINK_HOVER_COLOR,
-                  textDecoration: "underline",
-                },
-            "&:disabled": {
-              opacity: 0.6,
-            },
-          }}
-        >
-          {busy ? "Re-Deploy Queued" : "Re-Deploy Site Worker"}
-        </Box>
-      ) : null}
+      <SiteWorkerStatsCell data={row} />
     </Box>
   );
 }
@@ -1987,9 +1846,6 @@ export default function SiteList() {
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
-  const [recreateConfirmRow, setRecreateConfirmRow] = useState(null);
-  const [recreateBusyId, setRecreateBusyId] = useState("");
-  const [recreateError, setRecreateError] = useState("");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
@@ -2432,26 +2288,16 @@ export default function SiteList() {
     {
       headerName: "Site Worker Container",
       field: "site_worker_container_id",
-      minWidth: 300,
-      flex: 0.95,
-      filter: false,
-      suppressHeaderMenuButton: true,
-      suppressHeaderContextMenu: true,
-      cellRendererParams: {
-        suppressMouseEventHandling: () => true,
-      },
-      cellRenderer: SiteWorkerContainerCell,
-    },
-    {
-      headerName: "Resource Usage",
-      field: "site_worker_docker_stats",
-      minWidth: 360,
-      flex: 1.05,
+      minWidth: 540,
+      flex: 1.45,
       filter: false,
       suppressHeaderMenuButton: true,
       suppressHeaderContextMenu: true,
       cellClass: "center-col",
-      cellRenderer: SiteWorkerStatsCell,
+      cellRendererParams: {
+        suppressMouseEventHandling: () => true,
+      },
+      cellRenderer: SiteWorkerContainerCell,
     },
     {
       headerName: "Connected Devices",
@@ -2589,50 +2435,6 @@ export default function SiteList() {
     if (!hasSelectedSites) return;
     setDeleteOpen(true);
   }, [handleCloseSiteContextMenu, hasSelectedSites, selectedIds]);
-
-  const openRecreateDialog = useCallback((row) => {
-    setRecreateError("");
-    setRecreateConfirmRow(row || null);
-  }, []);
-
-  const closeRecreateDialog = useCallback(() => {
-    if (recreateBusyId) return;
-    setRecreateConfirmRow(null);
-    setRecreateError("");
-  }, [recreateBusyId]);
-
-  const confirmRecreate = useCallback(async () => {
-    const workerGuid = String(recreateConfirmRow?.site_worker_guid || "").trim();
-    if (!workerGuid) return;
-    setRecreateBusyId(workerGuid);
-    setRecreateError("");
-    try {
-      const response = await fetch(`/api/server/workers/${encodeURIComponent(workerGuid)}/recreate`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
-      }
-      await sendNotification(`Re-deploy queued for ${recreateConfirmRow?.name || "site worker"}.`);
-      setRecreateConfirmRow(null);
-      await fetchSites();
-    } catch (error) {
-      const message = error?.message || "Unable to queue site-worker re-deploy.";
-      setRecreateError(message);
-      await sendNotification({
-        title: "Site Worker Re-Deploy Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setRecreateBusyId("");
-    }
-  }, [fetchSites, recreateConfirmRow, sendNotification]);
 
   useEffect(() => {
     if (!hasSelectedSites) {
@@ -2816,10 +2618,8 @@ export default function SiteList() {
   const gridContext = useMemo(
     () => ({
       navigate,
-      onRecreate: openRecreateDialog,
-      recreateBusyId,
     }),
-    [navigate, openRecreateDialog, recreateBusyId]
+    [navigate]
   );
 
   return (
@@ -3069,37 +2869,6 @@ export default function SiteList() {
           </Box>
         </Box>
       </PageBodyFrame>
-
-      <Dialog open={Boolean(recreateConfirmRow)} onClose={closeRecreateDialog} PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
-        <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
-              Re-Deploy Site Worker
-            </Typography>
-            <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
-              {recreateConfirmRow?.name ? `Site: ${recreateConfirmRow.name}` : "Site worker container"}
-            </Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
-          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem", lineHeight: 1.55 }}>
-            Borealis will stop this site-worker container. Job Scheduler will deploy a replacement when same-site Agent or task demand remains.
-          </Typography>
-          {recreateError ? (
-            <Alert severity="error" variant="outlined" sx={{ mt: 2, color: "#fecdd3", borderColor: "rgba(251,113,133,0.42)" }}>
-              {recreateError}
-            </Alert>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
-          <Button onClick={closeRecreateDialog} sx={SITE_DIALOG_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
-            Cancel
-          </Button>
-          <Button onClick={confirmRecreate} sx={SITE_DIALOG_DANGER_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
-            {recreateBusyId ? "Queuing..." : "Re-Deploy"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <CreateSiteDialog
         open={createOpen}

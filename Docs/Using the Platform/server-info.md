@@ -42,7 +42,6 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/overview` - dashboard snapshot.
     - `GET /api/server/time` - server clock.
     - `GET /api/server/workers` - active/recent worker state.
-    - `POST /api/server/workers/<worker_guid>/recreate` - queue a site-worker container re-create.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `GET /api/server/agent-release-channels` - read Agent update channel targets.
     - `PUT /api/server/agent-release-channels` - update default channel or repo and refresh cached artifacts.

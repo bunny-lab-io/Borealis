@@ -29,9 +29,9 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
 
 ## Read Worker Resource Usage
 
-The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends to spot workers under load before re-deploying one.
+The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends inside the Site Worker Container column to spot workers under load.
 
-Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. Navigating away from Sites clears that short history.
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
 
 !!! tip
 
