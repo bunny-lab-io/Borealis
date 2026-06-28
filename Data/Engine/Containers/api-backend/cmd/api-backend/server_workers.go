@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -877,16 +878,39 @@ func attachWorkerContainerMetadata(rows []map[string]any) []map[string]any {
 			}
 		}
 	}
+	attachDockerStatsToRows(rows, func(row map[string]any) string {
+		return cleanText(row["container_name"])
+	})
 	return rows
 }
 
 func dockerInspectContainer(containerName string) map[string]any {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("BOREALIS_DOCKER_PROXY_URL")), "/")
-	if base == "" || strings.TrimSpace(containerName) == "" {
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return map[string]any{}
+	}
+	return dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/json")
+}
+
+func dockerContainerStats(containerName string) map[string]any {
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return map[string]any{}
+	}
+	raw := dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/stats?stream=false")
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	return normalizeDockerContainerStats(raw)
+}
+
+func dockerProxyJSON(path string) map[string]any {
+	base := dockerProxyBaseURL()
+	if base == "" || strings.TrimSpace(path) == "" {
 		return map[string]any{}
 	}
 	client := http.Client{Timeout: 2500 * time.Millisecond}
-	requestURL := base + "/containers/" + url.PathEscape(strings.TrimSpace(containerName)) + "/json"
+	requestURL := base + path
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return map[string]any{}
@@ -905,6 +929,156 @@ func dockerInspectContainer(containerName string) map[string]any {
 		return map[string]any{}
 	}
 	return payload
+}
+
+func dockerProxyBaseURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("BOREALIS_DOCKER_PROXY_URL")), "/")
+}
+
+func attachDockerStatsToRows(rows []map[string]any, containerName func(map[string]any) string) {
+	if len(rows) == 0 || dockerProxyBaseURL() == "" {
+		return
+	}
+	type statsResult struct {
+		index int
+		stats map[string]any
+	}
+	const maxConcurrentStatsReads = 6
+	sem := make(chan struct{}, maxConcurrentStatsReads)
+	results := make(chan statsResult, len(rows))
+	var wg sync.WaitGroup
+	for index, row := range rows {
+		name := strings.TrimSpace(containerName(row))
+		if name == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(rowIndex int, container string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			stats := dockerContainerStats(container)
+			if len(stats) > 0 {
+				results <- statsResult{index: rowIndex, stats: stats}
+			}
+		}(index, name)
+	}
+	wg.Wait()
+	close(results)
+	for result := range results {
+		rows[result.index]["docker_stats"] = result.stats
+	}
+}
+
+func normalizeDockerContainerStats(payload map[string]any) map[string]any {
+	cpuStats := mapStringAny(payload["cpu_stats"])
+	precpuStats := mapStringAny(payload["precpu_stats"])
+	cpuUsage := mapStringAny(cpuStats["cpu_usage"])
+	precpuUsage := mapStringAny(precpuStats["cpu_usage"])
+	cpuDelta := coerceFloat64(cpuUsage["total_usage"]) - coerceFloat64(precpuUsage["total_usage"])
+	systemDelta := coerceFloat64(cpuStats["system_cpu_usage"]) - coerceFloat64(precpuStats["system_cpu_usage"])
+	onlineCPUs := coerceFloat64(cpuStats["online_cpus"])
+	if onlineCPUs <= 0 {
+		if perCPU, ok := cpuUsage["percpu_usage"].([]any); ok {
+			onlineCPUs = float64(len(perCPU))
+		}
+	}
+	cpuPercent := float64(0)
+	if cpuDelta > 0 && systemDelta > 0 && onlineCPUs > 0 {
+		cpuPercent = round2((cpuDelta / systemDelta) * onlineCPUs * 100)
+	}
+
+	memoryStats := mapStringAny(payload["memory_stats"])
+	memoryUsage := coerceInt64(memoryStats["usage"])
+	memoryLimit := coerceInt64(memoryStats["limit"])
+	memoryStatValues := mapStringAny(memoryStats["stats"])
+	memoryCache := firstPositiveDockerStatInt64(
+		coerceInt64(memoryStatValues["total_inactive_file"]),
+		coerceInt64(memoryStatValues["inactive_file"]),
+		coerceInt64(memoryStatValues["cache"]),
+	)
+	if memoryCache > 0 && memoryUsage > memoryCache {
+		memoryUsage -= memoryCache
+	}
+	memoryPercent := float64(0)
+	if memoryLimit > 0 && memoryUsage >= 0 {
+		memoryPercent = round2((float64(memoryUsage) / float64(memoryLimit)) * 100)
+	}
+
+	var networkInput int64
+	var networkOutput int64
+	if networks, ok := payload["networks"].(map[string]any); ok {
+		for _, networkValue := range networks {
+			networkPayload := mapStringAny(networkValue)
+			networkInput += coerceInt64(networkPayload["rx_bytes"])
+			networkOutput += coerceInt64(networkPayload["tx_bytes"])
+		}
+	}
+
+	var blockInput int64
+	var blockOutput int64
+	blkioStats := mapStringAny(payload["blkio_stats"])
+	if entries, ok := blkioStats["io_service_bytes_recursive"].([]any); ok {
+		for _, entryValue := range entries {
+			entry := mapStringAny(entryValue)
+			switch strings.ToLower(cleanText(entry["op"])) {
+			case "read":
+				blockInput += coerceInt64(entry["value"])
+			case "write":
+				blockOutput += coerceInt64(entry["value"])
+			}
+		}
+	}
+
+	pidsStats := mapStringAny(payload["pids_stats"])
+	result := map[string]any{
+		"cpu_percent":        cpuPercent,
+		"memory_usage_bytes": maxInt64(memoryUsage, 0),
+		"memory_limit_bytes": maxInt64(memoryLimit, 0),
+		"memory_percent":     memoryPercent,
+		"net_input_bytes":    maxInt64(networkInput, 0),
+		"net_output_bytes":   maxInt64(networkOutput, 0),
+		"block_input_bytes":  maxInt64(blockInput, 0),
+		"block_output_bytes": maxInt64(blockOutput, 0),
+		"pids":               maxInt64(coerceInt64(pidsStats["current"]), 0),
+	}
+	if readAt := cleanText(payload["read"]); readAt != "" {
+		result["read_at"] = readAt
+	}
+	return result
+}
+
+func firstPositiveDockerStatInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func coerceFloat64(value any) float64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case float64:
+		return typed
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err == nil {
+			return parsed
+		}
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func payloadTargetCount(payload map[string]any) any {

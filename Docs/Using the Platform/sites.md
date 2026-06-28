@@ -27,6 +27,10 @@ Use `Onboard Devices` from the Sites page when the Engine should attempt local-n
 
 Onboarding jobs still send agents through Device Approvals. Successful remote install means the agent reached Borealis, not that it is trusted yet.
 
+## Read Worker Resource Usage
+
+The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, memory, Net I/O, and Disk I/O columns to spot workers under load before re-deploying one.
+
 !!! tip
 
     Keep one site per customer, lab, or security boundary. Filters and scheduled jobs become easier to reason about when site scope matches real ownership.
@@ -42,7 +46,7 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
     - `POST /api/sites/assign` - assign devices to site.
     - `POST /api/sites/rename` - rename site.
     - `POST /api/sites/<site_id>/auto-approval` - set or clear temporary site auto-approval.
-    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status.
+    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status, including Docker stats when `docker-proxy` responds.
 
     ### Related documentation
 
@@ -63,3 +67,4 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
+    - Site-worker resource usage comes from the Docker stats payload attached to each worker row by the Engine API.

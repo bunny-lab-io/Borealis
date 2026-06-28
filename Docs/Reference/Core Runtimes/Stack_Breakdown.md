@@ -13,7 +13,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 ## Stack Services
 | Service | Container | Main responsibility | Host network endpoint |
 | --- | --- | --- | --- |
-| `docker-proxy` | `borealis-engine-docker-proxy` | Read-only Docker API proxy for Engine Status and Server Info container status reads | `127.0.0.1:2375` |
+| `docker-proxy` | `borealis-engine-docker-proxy` | Read-only Docker API proxy for Engine Status and Server Info container status/stat reads | `127.0.0.1:2375` |
 | `postgres-db` | `borealis-engine-postgres-db` | PostgreSQL database and persisted DB state | `127.0.0.1:5432` |
 | `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
@@ -24,7 +24,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 
 Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
 
-`job-scheduler` owns `/var/run/docker.sock` for controlled service actions and site-worker lifecycle. `api-backend` does not mount Docker socket in container mode; it reads container status through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then falls back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
+`job-scheduler` owns `/var/run/docker.sock` for controlled service actions and site-worker lifecycle. `api-backend` does not mount Docker socket in container mode; it reads container status and stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then falls back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -90,7 +90,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 127.0.0.1:2375 -> 2375
 ```
 
-The proxy grants only Docker container read APIs and denies POST operations. Do not expose `2375` beyond loopback.
+The proxy grants only Docker container read APIs, including status and stats, and denies POST operations. Do not expose `2375` beyond loopback.
 
 `postgres-db`:
 ```text

@@ -139,3 +139,97 @@ func TestFilterScheduledDispatchWorkPrefersRunState(t *testing.T) {
 		t.Fatalf("unexpected filtered rows %#v", filtered)
 	}
 }
+
+func dockerStatsFixture() map[string]any {
+	return map[string]any{
+		"read": "2026-06-28T12:00:00Z",
+		"cpu_stats": map[string]any{
+			"cpu_usage": map[string]any{
+				"total_usage": 150000000,
+				"percpu_usage": []any{
+					10000000,
+					20000000,
+					30000000,
+					40000000,
+				},
+			},
+			"system_cpu_usage": 600000000,
+			"online_cpus":      4,
+		},
+		"precpu_stats": map[string]any{
+			"cpu_usage": map[string]any{
+				"total_usage": 50000000,
+			},
+			"system_cpu_usage": 400000000,
+		},
+		"memory_stats": map[string]any{
+			"usage": 104857600,
+			"limit": 1073741824,
+			"stats": map[string]any{
+				"inactive_file": 16777216,
+			},
+		},
+		"networks": map[string]any{
+			"eth0": map[string]any{"rx_bytes": 1024, "tx_bytes": 512},
+			"wg0":  map[string]any{"rx_bytes": 2048, "tx_bytes": 1536},
+		},
+		"blkio_stats": map[string]any{
+			"io_service_bytes_recursive": []any{
+				map[string]any{"op": "Read", "value": 4096},
+				map[string]any{"op": "Write", "value": 8192},
+			},
+		},
+		"pids_stats": map[string]any{
+			"current": 7,
+		},
+	}
+}
+
+func TestNormalizeDockerContainerStats(t *testing.T) {
+	stats := normalizeDockerContainerStats(dockerStatsFixture())
+
+	if got := stats["cpu_percent"]; got != float64(200) {
+		t.Fatalf("expected cpu percent 200, got %#v", got)
+	}
+	if got := stats["memory_usage_bytes"]; got != int64(88080384) {
+		t.Fatalf("expected cache-adjusted memory usage, got %#v", got)
+	}
+	if got := stats["memory_percent"]; got != 8.2 {
+		t.Fatalf("expected memory percent 8.2, got %#v", got)
+	}
+	if got := stats["net_input_bytes"]; got != int64(3072) {
+		t.Fatalf("expected network input bytes, got %#v", got)
+	}
+	if got := stats["net_output_bytes"]; got != int64(2048) {
+		t.Fatalf("expected network output bytes, got %#v", got)
+	}
+	if got := stats["block_input_bytes"]; got != int64(4096) {
+		t.Fatalf("expected block input bytes, got %#v", got)
+	}
+	if got := stats["block_output_bytes"]; got != int64(8192) {
+		t.Fatalf("expected block output bytes, got %#v", got)
+	}
+	if got := stats["pids"]; got != int64(7) {
+		t.Fatalf("expected pids, got %#v", got)
+	}
+}
+
+func TestDockerContainerStatsReadsDockerProxyStatsEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/containers/site-worker-1/stats" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("stream"); got != "false" {
+			t.Fatalf("expected stream=false, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(dockerStatsFixture())
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_DOCKER_PROXY_URL", server.URL)
+
+	stats := dockerContainerStats("site-worker-1")
+	if got := stats["cpu_percent"]; got != float64(200) {
+		t.Fatalf("expected docker proxy stats, got %#v", stats)
+	}
+}

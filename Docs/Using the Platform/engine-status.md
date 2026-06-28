@@ -14,6 +14,7 @@ Open `Admin Settings > Engine Status`.
 The React Flow canvas uses left-to-right topology:
 
 - Engine service nodes show core container health.
+- Engine service and site-worker nodes show compact Docker CPU, memory, Net I/O, and Disk I/O stats when available.
 - Scheduler node represents long-lived job-scheduler manager.
 - Site-worker nodes represent active or recent `site-worker-*` containers.
 - Task group nodes represent recent work claimed by workers.
@@ -42,8 +43,8 @@ The React Flow canvas uses left-to-right topology:
 
     ### API endpoints
 
-    - `GET /api/server/workers?history_seconds=60` - worker and recent work payload.
-    - `GET /api/server/overview` - service state and runtime context.
+    - `GET /api/server/workers?history_seconds=60` - worker and recent work payload, including site-worker Docker stats when available.
+    - `GET /api/server/overview` - service state, service Docker stats, and runtime context.
     - `POST /api/server/services/<service_key>/action` - queue service action from status surface.
 
     ### Related documentation
@@ -63,6 +64,7 @@ The React Flow canvas uses left-to-right topology:
     ### Runtime behavior
 
     - UI builds React Flow nodes and edges from `/api/server/workers` plus `/api/server/overview`.
+    - Docker stats are normalized by the Engine API before reaching the UI: CPU percent, memory bytes/percent, Net I/O bytes, Disk I/O bytes, and PIDs.
     - Worker rows live in `job_scheduler_workers`.
     - Work rows live in `job_scheduler_work_items`.
     - Terminal worker records are short-lived lifecycle hints, not durable job history.

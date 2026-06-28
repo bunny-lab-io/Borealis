@@ -178,7 +178,7 @@ func collectOverviewServiceRows() []map[string]any {
 			health = strings.ToLower(cleanText(healthPayload["Status"]))
 		}
 		displayStatus := overviewDisplayStatus(state, health)
-		rows = append(rows, map[string]any{
+		row := map[string]any{
 			"key":                spec.key,
 			"label":              spec.label,
 			"instance":           nil,
@@ -201,8 +201,12 @@ func collectOverviewServiceRows() []map[string]any {
 			"pending_action":     nil,
 			"status":             overviewComposeStatus(state, health),
 			"container_image":    cleanText(configPayload["Image"]),
-		})
+		}
+		rows = append(rows, row)
 	}
+	attachDockerStatsToRows(rows, func(row map[string]any) string {
+		return cleanText(row["unit_name"])
+	})
 	return rows
 }
 

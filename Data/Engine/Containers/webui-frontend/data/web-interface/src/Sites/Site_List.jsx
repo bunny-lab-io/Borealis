@@ -36,6 +36,7 @@ import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
+import { formatDockerStats, hasDockerStats } from "../app/utils/dockerStats.js";
 import {
   createRouteRequestPlan,
   getRouteErrorMessage,
@@ -825,6 +826,7 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_id_full: String(worker?.container_id_full || "").trim(),
         site_worker_status_label: status.label,
         site_worker_status_tone: status.tone,
+        site_worker_docker_stats: worker?.docker_stats || null,
         connected_devices: deviceCounts.connected_devices,
         site_device_count: deviceCounts.site_device_count,
         site_online_device_count: deviceCounts.site_online_device_count,
@@ -879,6 +881,7 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_id_full: "",
         site_worker_status_label: "No Online Devices",
         site_worker_status_tone: "no_online",
+        site_worker_docker_stats: null,
         connected_devices: 0,
         site_device_count: total,
         site_online_device_count: online,
@@ -1183,6 +1186,84 @@ function SiteWorkerContainerCell(params) {
           {busy ? "Re-Deploy Queued" : "Re-Deploy Site Worker"}
         </Box>
       ) : null}
+    </Box>
+  );
+}
+
+function DockerStatsMetric({ label, value, title }) {
+  return (
+    <Tooltip title={title || ""} placement="top">
+      <Box
+        sx={{
+          minWidth: 0,
+          borderRadius: 1,
+          border: "1px solid rgba(148,163,184,0.22)",
+          background: "rgba(15,23,42,0.36)",
+          px: 0.7,
+          py: 0.35,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 0.55,
+        }}
+      >
+        <Typography
+          component="span"
+          sx={{
+            color: "rgba(148,163,184,0.86)",
+            fontSize: "0.56rem",
+            fontWeight: 800,
+            lineHeight: 1,
+            textTransform: "uppercase",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </Typography>
+        <Typography
+          component="span"
+          sx={{
+            color: MAGIC_UI.textBright,
+            fontSize: "0.67rem",
+            fontWeight: 800,
+            lineHeight: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+          }}
+        >
+          {value}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+}
+
+function SiteWorkerStatsCell(params) {
+  const stats = params?.data?.site_worker_docker_stats;
+  if (!hasDockerStats(stats)) {
+    return (
+      <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", fontWeight: 600 }}>
+        Stats unavailable
+      </Typography>
+    );
+  }
+  const formatted = formatDockerStats(stats);
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        minWidth: 0,
+        display: "grid",
+        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+        gap: 0.45,
+      }}
+    >
+      <DockerStatsMetric label="CPU" value={formatted.cpu} />
+      <DockerStatsMetric label="MEM" value={formatted.memoryPercent} title={formatted.memory} />
+      <DockerStatsMetric label="NET" value={formatted.network} title="Input / Output" />
+      <DockerStatsMetric label="DISK" value={formatted.block} title="Read / Write" />
     </Box>
   );
 }
@@ -2162,6 +2243,17 @@ export default function SiteList() {
         suppressMouseEventHandling: () => true,
       },
       cellRenderer: SiteWorkerContainerCell,
+    },
+    {
+      headerName: "Resource Usage",
+      field: "site_worker_docker_stats",
+      minWidth: 360,
+      flex: 1.05,
+      filter: false,
+      suppressHeaderMenuButton: true,
+      suppressHeaderContextMenu: true,
+      cellClass: "center-col",
+      cellRenderer: SiteWorkerStatsCell,
     },
     {
       headerName: "Connected Devices",
