@@ -103,6 +103,7 @@ function BackupRestoreTool({ mode }) {
         headerName: "Count",
         width: 120,
         type: "numericColumn",
+        resizable: false,
         headerClass: "analysis-count-header",
         cellClass: "auto-col-tight analysis-count-cell",
         cellRenderer: (params) => (
