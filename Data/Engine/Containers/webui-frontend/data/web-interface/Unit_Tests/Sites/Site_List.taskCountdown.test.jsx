@@ -51,4 +51,44 @@ describe("site assigned task countdown", () => {
     expect(groups[0].removal_remaining_seconds).toBeNull();
     expect(groups[0].counts.running).toBe(1);
   });
+
+  it("suppresses premature terminal rows for active one-device runs", () => {
+    const payload = {
+      active_work: [
+        {
+          id: "scheduled-run:1440",
+          kind: "scheduled_run",
+          site_id: 7,
+          job_id: 144,
+          run_id: 1440,
+          status: "running",
+          started_at: 1000,
+          updated_at: 1010,
+          target_count: 1,
+        },
+      ],
+      recent_work: [
+        {
+          id: 501,
+          kind: "scheduled_run",
+          site_id: 7,
+          job_id: 144,
+          run_id: 1440,
+          target_id: 3001,
+          status: "succeeded",
+          started_at: 1000,
+          finished_at: 1012,
+          target_count: 1,
+        },
+      ],
+    };
+
+    const groups = buildTaskGroupsByWorker(payload, 1015).get("site:7");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].has_active_work).toBe(true);
+    expect(groups[0].expires_at).toBeNull();
+    expect(groups[0].counts.running).toBe(1);
+    expect(groups[0].counts.success).toBe(0);
+    expect(groups[0].counts.total_tasks).toBe(1);
+  });
 });
