@@ -530,11 +530,93 @@ function workIdentity(work) {
   ].join(":");
 }
 
-function jobIdForWork(work) {
+function positiveWorkNumber(...values) {
+  for (const value of values) {
+    const parsed = Number(value || 0);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  return 0;
+}
+
+function workRunId(work) {
   const taskLink = work?.task_link || {};
-  const value = work?.job_id || taskLink?.job_id || "";
-  const numberValue = Number(value || 0);
-  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : null;
+  return positiveWorkNumber(work?.run_id, taskLink?.run_id);
+}
+
+function workJobId(work) {
+  const taskLink = work?.task_link || {};
+  return positiveWorkNumber(work?.job_id, taskLink?.job_id);
+}
+
+function workTargetCount(work) {
+  return positiveWorkNumber(work?.target_count, work?.task_link?.target_count);
+}
+
+function workTargetId(work) {
+  return positiveWorkNumber(work?.target_id, work?.task_link?.target_id);
+}
+
+function workDisplayIdentity(work, activeSingletonRunIds) {
+  const runId = workRunId(work);
+  if (runId > 0) {
+    if (activeSingletonRunIds?.has(runId)) return `run:${runId}:single-target`;
+    const targetId = workTargetId(work);
+    if (targetId > 0) return `run:${runId}:target:${targetId}`;
+    if (workTargetCount(work) <= 1) return `run:${runId}:single-target`;
+    return `run:${runId}:all-targets`;
+  }
+
+  const jobId = workJobId(work);
+  if (jobId > 0) {
+    const targetId = workTargetId(work);
+    if (targetId > 0) return `job:${jobId}:target:${targetId}`;
+    if (workTargetCount(work) <= 1) return `job:${jobId}:single-target`;
+    return `job:${jobId}:all-targets`;
+  }
+
+  return workIdentity(work);
+}
+
+function shouldReplaceDisplayedWork(existing, next) {
+  const existingBucket = workStatusBucket(existing?.status);
+  const nextBucket = workStatusBucket(next?.status);
+  const existingActive = !isTerminalTaskBucket(existingBucket);
+  const nextActive = !isTerminalTaskBucket(nextBucket);
+  if (existingActive !== nextActive) return nextActive;
+  const rankDelta = statusRank(next?.status) - statusRank(existing?.status);
+  if (rankDelta !== 0) return rankDelta < 0;
+  return taskActivitySeconds(next) >= taskActivitySeconds(existing);
+}
+
+function visibleWorkerTaskRecords(activeWork, recentWork) {
+  const activeSingletonRunIds = new Set();
+  activeWork.forEach((work) => {
+    const runId = workRunId(work);
+    if (runId <= 0 || isTerminalTaskBucket(workStatusBucket(work?.status))) return;
+    const targetCount = workTargetCount(work);
+    if (workTargetId(work) <= 0 && targetCount > 0 && targetCount <= 1) {
+      activeSingletonRunIds.add(runId);
+    }
+  });
+
+  const seen = new Set();
+  const byDisplayIdentity = new Map();
+  [...activeWork, ...recentWork].forEach((work) => {
+    const identity = workIdentity(work);
+    if (seen.has(identity)) return;
+    seen.add(identity);
+    const displayIdentity = workDisplayIdentity(work, activeSingletonRunIds);
+    const existing = byDisplayIdentity.get(displayIdentity);
+    if (!existing || shouldReplaceDisplayedWork(existing, work)) {
+      byDisplayIdentity.set(displayIdentity, work);
+    }
+  });
+  return Array.from(byDisplayIdentity.values());
+}
+
+function jobIdForWork(work) {
+  const numberValue = workJobId(work);
+  return numberValue > 0 ? numberValue : null;
 }
 
 function jobPathForWork(work, jobId) {
@@ -560,13 +642,9 @@ function taskCountdownSecondsLabel(seconds) {
 
 export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
   const byWorker = new Map();
-  const seen = new Set();
   const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
   const recentWork = Array.isArray(payload?.recent_work) ? payload.recent_work : [];
-  [...activeWork, ...recentWork].forEach((work) => {
-    const identity = workIdentity(work);
-    if (seen.has(identity)) return;
-    seen.add(identity);
+  visibleWorkerTaskRecords(activeWork, recentWork).forEach((work) => {
     const keys = new Set(
       [work?.worker_guid, work?.lease_owner, work?.container_name]
         .map((value) => String(value || "").trim())
