@@ -43,6 +43,19 @@ export function buildAppRoutes() {
       },
     },
     {
+      path: APP_PATHS.bootstrapBackupRestore,
+      handle: {
+        title: "Backup/Restore",
+        breadcrumb: "Backup/Restore",
+        navKey: "backup-restore",
+        pageKey: "backup-restore",
+      },
+      lazy: lazyNamed(
+        () => import("../route-modules/adminRoutes.jsx"),
+        "BootstrapBackupRestoreRoute"
+      ),
+    },
+    {
       path: "/",
       element: <RequireAuth />,
       children: [
@@ -541,6 +554,19 @@ export function buildAppRoutes() {
                   lazy: lazyNamed(
                     () => import("../route-modules/adminRoutes.jsx"),
                     "EngineStatusRoute"
+                  ),
+                },
+                {
+                  path: "backup-restore",
+                  handle: {
+                    title: "Backup/Restore",
+                    breadcrumb: "Backup/Restore",
+                    navKey: "backup-restore",
+                    pageKey: "backup-restore",
+                  },
+                  lazy: lazyNamed(
+                    () => import("../route-modules/adminRoutes.jsx"),
+                    "BackupRestoreRoute"
                   ),
                 },
                 {

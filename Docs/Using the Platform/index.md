@@ -40,6 +40,7 @@ Use this section for daily Borealis work: sites, inventory, approvals, filters, 
 - [Credential Management](credential-management.md) - store remote execution credentials and service tokens.
 - [Directory Services](directory-services.md) - configure LDAP, LDAPS, and Active Directory login providers.
 - [User Management](user-management.md) - manage local and cached directory operators.
+- [Backup and Restore](backup-restore.md) - export or import encrypted Engine configuration backups.
 - [Server Info](server-info.md) - inspect Engine runtime health and service controls.
 - [Engine Status](engine-status.md) - read the live worker and service topology canvas.
 - [Engine Log Management](engine-log-management.md) - browse logs, set retention, and open raw log files.

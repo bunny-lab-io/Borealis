@@ -27,6 +27,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
     - [Security and Trust](../../Reference/security-and-trust.md)
     - [API Reference](../Data%20and%20Schema/api-reference.md)
+    - [Backup and Restore](../../Using%20the%20Platform/backup-restore.md)
     - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
     - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
     - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)
@@ -47,6 +48,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The Compose project name is `borealis-engine`.
     - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`. Hashes use declared service inputs, not the repo-wide Git commit.
     - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` prepares that binary only after one of those images is known to need a Docker rebuild, then reuses it within the same deploy pass.
+    - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
     - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, Docker builder cache, and Engine Buildx cache exports. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
@@ -193,6 +195,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Directory provider bind passwords are Aegis-protected. Directory users are JIT cached in `users`, keep Borealis TOTP MFA, and cannot register passkeys.
     - Setup migrates any legacy plaintext credential, GitHub token, password hash, MFA secret, or passkey cryptographic row into Aegis envelopes and stores KDF metadata plus a verification token in `aegis_cipher_state`.
     - The derived key is cached only in Engine memory. Restarting the Engine relocks protected secrets until an admin re-enters the cipher.
+    - Backup/Restore exports Engine configuration as encrypted JSON using the same Aegis-derived key. Restore imports `aegis_cipher_state` unchanged, clears the in-memory key, and returns `restart_required: true`.
     - Borealis does not render the login screen until bootstrap reaches `login_required`. Fresh installs require Aegis setup plus first-admin bootstrap; every later restart requires Aegis unlock before normal login or passkey auth can start.
     - While locked, operator-facing auth/session checks reject stale cookies and tokens until bootstrap unlock completes. Agent and device trust flows stay online because they do not depend on operator auth secrets.
     - Access Management now uses the Credentials page for Aegis status, rotation, and destructive force reset; setup and unlock moved to the bootstrap gate.

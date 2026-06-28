@@ -9,6 +9,7 @@ function normalizedString(value) {
 
 export const APP_PATHS = {
   login: "/login",
+  bootstrapBackupRestore: "/restore-engine-config-backup",
   sites: "/sites",
   devices: "/devices",
   software: "/software",
@@ -47,6 +48,7 @@ export const APP_PATHS = {
   directoryServices: "/directory-services",
   users: "/users",
   siteAssignment: "/users/site-assignment",
+  backupRestore: "/backup-restore",
   server: "/server",
   engineStatus: "/engine-status",
   logs: "/logs",
