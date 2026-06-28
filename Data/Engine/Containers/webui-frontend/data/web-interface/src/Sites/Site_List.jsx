@@ -73,7 +73,8 @@ const WORKER_REMOVE_SECONDS = 30;
 const TASK_REMOVE_SECONDS = 60;
 const SITE_WORKER_REFRESH_MS = 5000;
 const BASE_ROW_HEIGHT = 56;
-const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
+const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
+const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, "connected_devices"];
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -882,6 +883,28 @@ function attachResourceHistoryToRows(rows, historyMap) {
   });
 }
 
+export function siteWorkerContainerRefreshValue(row) {
+  const stats = row?.site_worker_docker_stats || {};
+  const history = Array.isArray(row?.site_worker_resource_history) ? row.site_worker_resource_history : [];
+  const latest = history.length ? history[history.length - 1] : null;
+  return [
+    row?.site_worker_container_id,
+    row?.site_worker_resource_history_key,
+    latest?.sampledAtMs,
+    stats?.read_at,
+    stats?.cpu_percent,
+    stats?.memory_usage_bytes,
+    stats?.memory_limit_bytes,
+    stats?.net_input_bytes,
+    stats?.net_output_bytes,
+    row?.site_worker_container_size_rootfs_bytes,
+    row?.site_worker_container_size_rw_bytes,
+    row?.site_worker_container_storage_limit_bytes,
+  ]
+    .map((value) => String(value ?? ""))
+    .join("|");
+}
+
 async function fetchSiteWorkerPayloadRoute(progress) {
   try {
     const payload = await progress.fetchJson(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`);
@@ -898,14 +921,16 @@ async function fetchSiteWorkerPayloadBrowser() {
       credentials: "include",
       cache: "no-store",
       headers: {
-        "Cache-Control": "no-store",
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
       },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) return {};
+    if (!response.ok) return null;
     return payload && typeof payload === "object" ? payload : {};
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -1926,7 +1951,7 @@ export default function SiteList() {
       }
       const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
-      setSiteWorkerPayload(workerPayload);
+      setSiteWorkerPayload(workerPayload && typeof workerPayload === "object" ? workerPayload : {});
       setInstallServerUrl(nextInstallServerUrl);
       setLoadError("");
     } catch {
@@ -2029,7 +2054,7 @@ export default function SiteList() {
       siteWorkerRefreshInFlightRef.current = true;
       try {
         const workerPayload = await fetchSiteWorkerPayloadBrowser();
-        if (active && workerPayload && typeof workerPayload === "object" && Object.keys(workerPayload).length > 0) {
+        if (active && workerPayload && typeof workerPayload === "object") {
           setSiteWorkerPayload(workerPayload);
         }
       } finally {
@@ -2037,12 +2062,22 @@ export default function SiteList() {
       }
     };
     const intervalId = setInterval(refreshSiteWorkerPayload, SITE_WORKER_REFRESH_MS);
+    refreshSiteWorkerPayload();
     return () => {
       active = false;
       clearInterval(intervalId);
       siteWorkerRefreshInFlightRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api) return;
+    if (typeof api.isDestroyed === "function" && api.isDestroyed()) return;
+    try {
+      api.refreshCells({ columns: [SITE_WORKER_CONTAINER_COLUMN_ID], force: true });
+    } catch {}
+  }, [resourceHistoryVersion, siteWorkerPayload]);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
@@ -2287,7 +2322,8 @@ export default function SiteList() {
     },
     {
       headerName: "Site Worker Container",
-      field: "site_worker_container_id",
+      colId: SITE_WORKER_CONTAINER_COLUMN_ID,
+      valueGetter: (params) => siteWorkerContainerRefreshValue(params.data),
       minWidth: 540,
       flex: 1.45,
       filter: false,
