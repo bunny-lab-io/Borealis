@@ -229,7 +229,7 @@ const BASE_NAV_SECTIONS = Object.freeze([
       },
       {
         icon: BackupRestoreIcon,
-        label: "Backup/Restore",
+        label: "Backup / Restore",
         navKey: "backup-restore",
         to: APP_PATHS.backupRestore,
       },
