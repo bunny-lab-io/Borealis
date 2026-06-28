@@ -179,6 +179,7 @@ Build cache:
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
 - Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and clear Engine Buildx cache exports under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
+- `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, `tzdata`, and `wireguard-tools`.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags separately.
@@ -393,6 +394,11 @@ docker compose \
 API liveness:
 ```sh
 curl -fsS http://127.0.0.1:5000/health
+```
+
+Container API healthcheck:
+```sh
+docker exec borealis-engine-api-backend borealis-api-backend-go api-healthcheck
 ```
 
 WebUI liveness:

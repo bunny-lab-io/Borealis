@@ -1,7 +1,5 @@
-#!/usr/bin/env bash
-set -o errexit
-set -o nounset
-set -o pipefail
+#!/bin/sh
+set -eu
 
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
@@ -36,7 +34,6 @@ export BOREALIS_GUACD_PORT="${BOREALIS_GUACD_PORT:-4822}"
 export BOREALIS_GUACAMOLE_ENABLED="${BOREALIS_GUACAMOLE_ENABLED:-1}"
 export BOREALIS_GO_API_HOST="${BOREALIS_GO_API_HOST:-127.0.0.1}"
 export BOREALIS_GO_API_PORT="${BOREALIS_GO_API_PORT:-5000}"
-export PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent:${PYTHONPATH:-}"
 
 cd /opt/Borealis
 exec /usr/local/bin/borealis-api-backend-go
