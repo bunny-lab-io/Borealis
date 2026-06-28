@@ -3,8 +3,7 @@ FROM alpine:3.24
 RUN apk add --no-cache \
         ca-certificates \
         git \
-        tzdata \
-        wireguard-tools
+        tzdata
 
 WORKDIR /opt/Borealis
 

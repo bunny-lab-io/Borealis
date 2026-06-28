@@ -41,7 +41,6 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
 | api-backend | Git | [GPL-2.0-only](https://github.com/git/git/blob/master/COPYING) |
 | api-backend | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
-| api-backend | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
 | api-backend | golang.org/x/crypto v0.33.0 (Go scrypt KDF support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
