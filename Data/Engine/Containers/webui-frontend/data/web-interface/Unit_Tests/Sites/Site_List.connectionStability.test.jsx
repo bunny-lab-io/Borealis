@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applySiteConnectionStability,
+  connectedDevicesPlaceholderText,
   recordSiteConnectionSnapshots,
   shouldShowConnectedDevicesPlaceholder,
   siteListRowHeightForData,
@@ -11,6 +12,8 @@ describe("site connection stability", () => {
   it("shows connection analysis placeholder until worker metrics are visible", () => {
     expect(shouldShowConnectedDevicesPlaceholder({ site_worker_metrics_visible: false })).toBe(true);
     expect(shouldShowConnectedDevicesPlaceholder({ site_worker_metrics_visible: true })).toBe(false);
+    expect(connectedDevicesPlaceholderText(10)).toBe("Analyzing Agent Connections in 10s");
+    expect(connectedDevicesPlaceholderText(2.2)).toBe("Analyzing Agent Connections in 3s");
   });
 
   it("keeps the last connected breakdown during a short zero-connected poll", () => {

@@ -764,6 +764,11 @@ export function shouldShowConnectedDevicesPlaceholder(row) {
   return !Boolean(row?.site_worker_metrics_visible);
 }
 
+export function connectedDevicesPlaceholderText(remainingSeconds) {
+  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_WARMUP_SECONDS)));
+  return `Analyzing Agent Connections in ${seconds}s`;
+}
+
 export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
   const byWorker = new Map();
   const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
@@ -1494,7 +1499,7 @@ function ConnectedDevicesCell(params) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
         <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-          Analyzing Agent Connections
+          {connectedDevicesPlaceholderText(params?.data?.site_worker_metrics_polling_remaining_seconds)}
         </Typography>
       </Box>
     );
