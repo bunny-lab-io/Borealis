@@ -317,6 +317,58 @@ func TestWatchdogPreviewEvaluatesOfflineRule(t *testing.T) {
 	}
 }
 
+func TestWatchdogPreviewStorageUsageIgnoresCdRomDrives(t *testing.T) {
+	record := map[string]any{
+		"criteria": map[string]any{
+			"match_mode": "all",
+			"rules": []any{
+				map[string]any{"id": "storage", "type": "storage_usage_percent", "threshold": int64(90), "drive_mode": "all"},
+			},
+		},
+		"match_mode":         "all",
+		"boot_grace_seconds": int64(0),
+	}
+	device := map[string]any{
+		"hostname": "LAB-OPERATOR-01",
+		"storage": []any{
+			map[string]any{"drive": "E:", "disk_type": "CD-ROM", "total": float64(100), "used": float64(100)},
+			map[string]any{"drive": "C:", "disk_type": "Fixed Disk", "total": float64(100), "used": float64(50)},
+		},
+	}
+
+	evaluation := evaluateWatchdogPreviewDevice(record, device, nil)
+	if boolDefault(evaluation["matched"], false) || evaluation["state"] != "normal" {
+		t.Fatalf("expected CD-ROM drive to be ignored, got %#v", evaluation)
+	}
+	results := anySlice(evaluation["rule_results"])
+	if len(results) != 1 {
+		t.Fatalf("expected one rule result, got %#v", results)
+	}
+	sample := asStringAnyMap(asStringAnyMap(results[0])["sample"])
+	if sample["highest_drive"] != "C:" || coerceInt64(sample["highest_usage_percent"]) != 50 {
+		t.Fatalf("expected fixed disk to drive storage sample, got %#v", sample)
+	}
+}
+
+func TestWatchdogPreviewSpecificStorageUsageIgnoresCdRomDrive(t *testing.T) {
+	rule := map[string]any{"id": "storage", "type": "storage_usage_percent", "threshold": int64(90), "drive_mode": "specific", "drive": "E:"}
+	device := map[string]any{
+		"hostname": "LAB-OPERATOR-01",
+		"storage": []any{
+			map[string]any{"drive": "E:", "disk_type": "CD-ROM", "total": float64(100), "used": float64(100)},
+		},
+	}
+
+	result := watchdogPreviewEvaluateStorage(rule, device)
+	if boolDefault(result["matched"], false) {
+		t.Fatalf("expected CD-ROM-specific storage rule to stay clear, got %#v", result)
+	}
+	sample := asStringAnyMap(result["sample"])
+	if boolDefault(sample["present"], true) {
+		t.Fatalf("expected CD-ROM target to be treated as absent for usage checks, got %#v", sample)
+	}
+}
+
 func TestNormalizeWatchdogSaveRecordPreservesExistingScopeAndActions(t *testing.T) {
 	existing := map[string]any{
 		"id":       int64(7),

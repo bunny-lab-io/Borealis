@@ -616,6 +616,9 @@ func watchdogPreviewEvaluateStorage(rule map[string]any, device map[string]any) 
 	selectedKey := watchdogPreviewStorageDriveKey(selectedDrive)
 	evaluated := []map[string]any{}
 	for _, row := range rows {
+		if watchdogPreviewStorageUsageIgnored(row) {
+			continue
+		}
 		if _, ok := float64Value(row["usage_percent"]); !ok {
 			continue
 		}
@@ -660,6 +663,14 @@ func watchdogPreviewEvaluateStorage(rule map[string]any, device map[string]any) 
 		matchedDriveSamples = append(matchedDriveSamples, map[string]any{"drive": row["drive"], "usage_percent": roundFloat(value, 2)})
 	}
 	return watchdogPreviewRuleResult(rule, len(matchedRows) > 0, false, summary, map[string]any{"drive_scope": "all", "threshold": roundFloat(threshold, 2), "highest_drive": chosen["drive"], "highest_usage_percent": roundFloat(usage, 2), "matched_drives": matchedDriveSamples})
+}
+
+func watchdogPreviewStorageUsageIgnored(row map[string]any) bool {
+	diskType := strings.ToLower(cleanText(firstNonEmpty(row["disk_type"], row["type"])))
+	if diskType == "" {
+		return false
+	}
+	return strings.Contains(diskType, "cd-rom") || strings.Contains(diskType, "cdrom") || strings.Contains(diskType, "cd rom")
 }
 
 func watchdogPreviewEvaluateRoleHealth(rule map[string]any, device map[string]any, now int64, priorResult map[string]any) map[string]any {
