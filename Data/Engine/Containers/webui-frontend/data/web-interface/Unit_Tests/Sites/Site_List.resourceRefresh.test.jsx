@@ -3,7 +3,7 @@ import { siteWorkerContainerRefreshValue, siteWorkerMetricPollingText } from "@/
 
 describe("site worker resource refresh value", () => {
   it("formats the delayed polling countdown text", () => {
-    expect(siteWorkerMetricPollingText(5)).toBe("Polling Site Worker Metrics in 5s");
+    expect(siteWorkerMetricPollingText(10)).toBe("Polling Site Worker Metrics in 10s");
     expect(siteWorkerMetricPollingText(2.2)).toBe("Polling Site Worker Metrics in 3s");
   });
 

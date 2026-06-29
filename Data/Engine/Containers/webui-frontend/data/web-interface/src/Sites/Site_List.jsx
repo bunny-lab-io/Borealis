@@ -75,7 +75,8 @@ const SITE_WORKER_REFRESH_MS = 5000;
 const BASE_ROW_HEIGHT = 56;
 const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, "connected_devices"];
-const SITE_WORKER_METRIC_REFRESH_SECONDS = Math.ceil(SITE_WORKER_REFRESH_MS / 1000);
+const SITE_WORKER_METRIC_WARMUP_MS = SITE_WORKER_REFRESH_MS * 2;
+const SITE_WORKER_METRIC_WARMUP_SECONDS = Math.ceil(SITE_WORKER_METRIC_WARMUP_MS / 1000);
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -909,7 +910,7 @@ export function siteWorkerContainerRefreshValue(row) {
 }
 
 export function siteWorkerMetricPollingText(remainingSeconds) {
-  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_REFRESH_SECONDS)));
+  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_WARMUP_SECONDS)));
   return `Polling Site Worker Metrics in ${seconds}s`;
 }
 
@@ -1877,11 +1878,10 @@ export default function SiteList() {
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
   const siteWorkerRefreshInFlightRef = useRef(false);
-  const siteWorkerMetricPollCountRef = useRef(0);
   const siteWorkerMetricSampleCountRef = useRef(0);
   const resourceHistoryRef = useRef(new Map());
   const [siteWorkerMetricsVisible, setSiteWorkerMetricsVisible] = useState(false);
-  const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(0);
+  const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(() => Date.now());
   const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
@@ -1897,9 +1897,9 @@ export default function SiteList() {
   const siteWorkerMetricsCountdownRemainingSeconds = useMemo(() => {
     if (siteWorkerMetricsVisible) return 0;
     const countdownStartedAtMs = Number(siteWorkerMetricsCountdownStartedAtMs || 0);
-    if (countdownStartedAtMs <= 0) return SITE_WORKER_METRIC_REFRESH_SECONDS;
-    const remainingMs = countdownStartedAtMs + SITE_WORKER_REFRESH_MS - Date.now();
-    return Math.max(1, Math.min(SITE_WORKER_METRIC_REFRESH_SECONDS, Math.ceil(remainingMs / 1000)));
+    if (countdownStartedAtMs <= 0) return SITE_WORKER_METRIC_WARMUP_SECONDS;
+    const remainingMs = countdownStartedAtMs + SITE_WORKER_METRIC_WARMUP_MS - Date.now();
+    return Math.max(1, Math.min(SITE_WORKER_METRIC_WARMUP_SECONDS, Math.ceil(remainingMs / 1000)));
   }, [nowSeconds, siteWorkerMetricsCountdownStartedAtMs, siteWorkerMetricsVisible]);
 
   const displayRows = useMemo(
@@ -2053,10 +2053,9 @@ export default function SiteList() {
   useEffect(() => {
     setRows(initialRows);
     setSiteWorkerPayload({});
-    siteWorkerMetricPollCountRef.current = 0;
     siteWorkerMetricSampleCountRef.current = 0;
     setSiteWorkerMetricsVisible(false);
-    setSiteWorkerMetricsCountdownStartedAtMs(0);
+    setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
     resourceHistoryRef.current.clear();
     setResourceHistoryVersion((version) => version + 1);
     setInstallServerUrl(initialInstallServerUrl);
@@ -2080,12 +2079,6 @@ export default function SiteList() {
     const refreshSiteWorkerPayload = async () => {
       if (siteWorkerRefreshInFlightRef.current) return;
       siteWorkerRefreshInFlightRef.current = true;
-      const nextPollCount = siteWorkerMetricPollCountRef.current + 1;
-      siteWorkerMetricPollCountRef.current = nextPollCount;
-      if (nextPollCount === 1) {
-        setSiteWorkerMetricsVisible(false);
-        setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
-      }
       try {
         const workerPayload = await fetchSiteWorkerPayloadBrowser();
         if (active && workerPayload && typeof workerPayload === "object") {
@@ -2106,7 +2099,6 @@ export default function SiteList() {
       active = false;
       clearInterval(intervalId);
       siteWorkerRefreshInFlightRef.current = false;
-      siteWorkerMetricPollCountRef.current = 0;
       siteWorkerMetricSampleCountRef.current = 0;
     };
   }, []);
