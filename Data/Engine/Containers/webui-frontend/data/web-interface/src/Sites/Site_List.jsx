@@ -75,6 +75,7 @@ const SITE_WORKER_REFRESH_MS = 5000;
 const BASE_ROW_HEIGHT = 56;
 const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, "connected_devices"];
+const SITE_WORKER_METRIC_REFRESH_SECONDS = Math.ceil(SITE_WORKER_REFRESH_MS / 1000);
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -888,6 +889,8 @@ export function siteWorkerContainerRefreshValue(row) {
   const history = Array.isArray(row?.site_worker_resource_history) ? row.site_worker_resource_history : [];
   const latest = history.length ? history[history.length - 1] : null;
   return [
+    row?.site_worker_metrics_visible ? "visible" : "polling",
+    row?.site_worker_metrics_polling_remaining_seconds,
     row?.site_worker_container_id,
     row?.site_worker_resource_history_key,
     latest?.sampledAtMs,
@@ -905,14 +908,9 @@ export function siteWorkerContainerRefreshValue(row) {
     .join("|");
 }
 
-async function fetchSiteWorkerPayloadRoute(progress) {
-  try {
-    const payload = await progress.fetchJson(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`);
-    return payload && typeof payload === "object" ? payload : {};
-  } catch (error) {
-    rethrowIfRouteRedirect(error);
-    return {};
-  }
+export function siteWorkerMetricPollingText(remainingSeconds) {
+  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_REFRESH_SECONDS)));
+  return `Polling Site Worker Metrics in ${seconds}s`;
 }
 
 async function fetchSiteWorkerPayloadBrowser() {
@@ -971,7 +969,7 @@ function deriveInstallServerUrl(payload) {
 }
 
 export async function loadSiteListPageData(request) {
-  const progress = createRouteRequestPlan(request, 5);
+  const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAuthenticatedRequest(request, progress);
     const data = await progress.fetchJson("/api/sites");
@@ -991,11 +989,10 @@ export async function loadSiteListPageData(request) {
     } else {
       progress.skip(1);
     }
-    const siteWorkerPayload = await fetchSiteWorkerPayloadRoute(progress);
 
     return {
       rows: Array.isArray(data?.sites) ? data.sites : [],
-      siteWorkerPayload,
+      siteWorkerPayload: {},
       installServerUrl,
       initialError: "",
     };
@@ -1092,6 +1089,15 @@ function TaskExpiryCountdown({ group }) {
 
 function SiteWorkerContainerCell(params) {
   const row = params?.data || {};
+  if (!row.site_worker_metrics_visible) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          {siteWorkerMetricPollingText(row.site_worker_metrics_polling_remaining_seconds)}
+        </Typography>
+      </Box>
+    );
+  }
   if (!hasDockerStats(row.site_worker_docker_stats)) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
@@ -1841,13 +1847,9 @@ export default function SiteList() {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
   const initialRows = useMemo(() => (Array.isArray(loaderData?.rows) ? loaderData.rows : []), [loaderData]);
-  const initialSiteWorkerPayload = useMemo(
-    () => (loaderData?.siteWorkerPayload && typeof loaderData.siteWorkerPayload === "object" ? loaderData.siteWorkerPayload : {}),
-    [loaderData]
-  );
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
   const [rows, setRows] = useState(() => initialRows);
-  const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => initialSiteWorkerPayload);
+  const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => ({}));
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
@@ -1875,7 +1877,11 @@ export default function SiteList() {
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
   const siteWorkerRefreshInFlightRef = useRef(false);
+  const siteWorkerMetricPollCountRef = useRef(0);
+  const siteWorkerMetricSampleCountRef = useRef(0);
   const resourceHistoryRef = useRef(new Map());
+  const [siteWorkerMetricsVisible, setSiteWorkerMetricsVisible] = useState(false);
+  const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(0);
   const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
@@ -1888,9 +1894,29 @@ export default function SiteList() {
     },
     [notify]
   );
+  const siteWorkerMetricsCountdownRemainingSeconds = useMemo(() => {
+    if (siteWorkerMetricsVisible) return 0;
+    const countdownStartedAtMs = Number(siteWorkerMetricsCountdownStartedAtMs || 0);
+    if (countdownStartedAtMs <= 0) return SITE_WORKER_METRIC_REFRESH_SECONDS;
+    const remainingMs = countdownStartedAtMs + SITE_WORKER_REFRESH_MS - Date.now();
+    return Math.max(1, Math.min(SITE_WORKER_METRIC_REFRESH_SECONDS, Math.ceil(remainingMs / 1000)));
+  }, [nowSeconds, siteWorkerMetricsCountdownStartedAtMs, siteWorkerMetricsVisible]);
+
   const displayRows = useMemo(
-    () => attachResourceHistoryToRows(mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds), resourceHistoryRef.current),
-    [nowSeconds, resourceHistoryVersion, rows, siteWorkerPayload]
+    () =>
+      attachResourceHistoryToRows(mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds), resourceHistoryRef.current).map((row) => ({
+        ...row,
+        site_worker_metrics_visible: siteWorkerMetricsVisible,
+        site_worker_metrics_polling_remaining_seconds: siteWorkerMetricsCountdownRemainingSeconds,
+      })),
+    [
+      nowSeconds,
+      resourceHistoryVersion,
+      rows,
+      siteWorkerPayload,
+      siteWorkerMetricsCountdownRemainingSeconds,
+      siteWorkerMetricsVisible,
+    ]
   );
 
   const handleOpenDevicesForSite = useCallback(
@@ -1941,17 +1967,13 @@ export default function SiteList() {
 
   const fetchSites = useCallback(async () => {
     try {
-      const [res, workerPayload] = await Promise.all([
-        fetch("/api/sites", { credentials: "include", cache: "no-store" }),
-        fetchSiteWorkerPayloadBrowser(),
-      ]);
+      const res = await fetch("/api/sites", { credentials: "include", cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
       }
       const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
-      setSiteWorkerPayload(workerPayload && typeof workerPayload === "object" ? workerPayload : {});
       setInstallServerUrl(nextInstallServerUrl);
       setLoadError("");
     } catch {
@@ -2030,10 +2052,16 @@ export default function SiteList() {
 
   useEffect(() => {
     setRows(initialRows);
-    setSiteWorkerPayload(initialSiteWorkerPayload);
+    setSiteWorkerPayload({});
+    siteWorkerMetricPollCountRef.current = 0;
+    siteWorkerMetricSampleCountRef.current = 0;
+    setSiteWorkerMetricsVisible(false);
+    setSiteWorkerMetricsCountdownStartedAtMs(0);
+    resourceHistoryRef.current.clear();
+    setResourceHistoryVersion((version) => version + 1);
     setInstallServerUrl(initialInstallServerUrl);
     setLoadError(String(loaderData?.initialError || ""));
-  }, [initialInstallServerUrl, initialRows, initialSiteWorkerPayload, loaderData]);
+  }, [initialInstallServerUrl, initialRows, loaderData]);
 
   useEffect(() => {
     recordSiteWorkerResourceHistory(resourceHistoryRef.current, siteWorkerPayload, Date.now());
@@ -2052,21 +2080,34 @@ export default function SiteList() {
     const refreshSiteWorkerPayload = async () => {
       if (siteWorkerRefreshInFlightRef.current) return;
       siteWorkerRefreshInFlightRef.current = true;
+      const nextPollCount = siteWorkerMetricPollCountRef.current + 1;
+      siteWorkerMetricPollCountRef.current = nextPollCount;
+      if (nextPollCount === 1) {
+        setSiteWorkerMetricsVisible(false);
+        setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
+      }
       try {
         const workerPayload = await fetchSiteWorkerPayloadBrowser();
         if (active && workerPayload && typeof workerPayload === "object") {
           setSiteWorkerPayload(workerPayload);
+          const nextSampleCount = siteWorkerMetricSampleCountRef.current + 1;
+          siteWorkerMetricSampleCountRef.current = nextSampleCount;
+          if (nextSampleCount >= 2) {
+            setSiteWorkerMetricsVisible(true);
+            setSiteWorkerMetricsCountdownStartedAtMs(0);
+          }
         }
       } finally {
         siteWorkerRefreshInFlightRef.current = false;
       }
     };
     const intervalId = setInterval(refreshSiteWorkerPayload, SITE_WORKER_REFRESH_MS);
-    refreshSiteWorkerPayload();
     return () => {
       active = false;
       clearInterval(intervalId);
       siteWorkerRefreshInFlightRef.current = false;
+      siteWorkerMetricPollCountRef.current = 0;
+      siteWorkerMetricSampleCountRef.current = 0;
     };
   }, []);
 
@@ -2077,7 +2118,12 @@ export default function SiteList() {
     try {
       api.refreshCells({ columns: [SITE_WORKER_CONTAINER_COLUMN_ID], force: true });
     } catch {}
-  }, [resourceHistoryVersion, siteWorkerPayload]);
+  }, [
+    resourceHistoryVersion,
+    siteWorkerMetricsCountdownRemainingSeconds,
+    siteWorkerMetricsVisible,
+    siteWorkerPayload,
+  ]);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;

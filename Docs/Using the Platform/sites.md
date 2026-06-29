@@ -31,7 +31,7 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
 
 The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends inside the Site Worker Container column to spot workers under load.
 
-Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, waits for one 5-second worker cadence, shows `Polling Site Worker Metrics in Ns` for one more cadence, then displays the mini-trends. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
 
 !!! tip
 
@@ -69,5 +69,5 @@ Resource mini-trends refresh with the site-worker payload every 5 seconds and ke
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
-    - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API.
+    - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. Sites does not fetch worker metrics from the route loader; browser polling starts after the page renders.
     - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.
