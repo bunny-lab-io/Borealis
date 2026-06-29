@@ -72,9 +72,12 @@ const WORKER_HISTORY_SECONDS = 300;
 const WORKER_REMOVE_SECONDS = 30;
 const TASK_REMOVE_SECONDS = 60;
 const SITE_WORKER_REFRESH_MS = 5000;
+const SITE_CONNECTION_STABILITY_GRACE_SECONDS = 20;
 const BASE_ROW_HEIGHT = 56;
 const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
-const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, "connected_devices"];
+const CONNECTED_DEVICES_COLUMN_ID = "connected_devices";
+const RUNNING_TASKS_COLUMN_ID = "assigned_task_groups";
+const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, CONNECTED_DEVICES_COLUMN_ID];
 const SITE_WORKER_METRIC_WARMUP_MS = SITE_WORKER_REFRESH_MS * 2;
 const SITE_WORKER_METRIC_WARMUP_SECONDS = Math.ceil(SITE_WORKER_METRIC_WARMUP_MS / 1000);
 const DEFAULT_INSTALL_BRANCH = "main";
@@ -406,6 +409,124 @@ function deviceConnectionBreakdown(payload, worker, siteId, connectedDevices, si
   };
 }
 
+function siteIdForRow(row) {
+  const siteId = Number(row?.site_id || row?.id || 0);
+  return Number.isFinite(siteId) && siteId > 0 ? siteId : 0;
+}
+
+function normalizedConnectionCounts(row) {
+  const connected = Math.max(0, Number(row?.connected_devices || 0));
+  const disconnected = Math.max(0, Number(row?.disconnected_devices || 0));
+  const offline = Math.max(0, Number(row?.offline_devices || 0));
+  const total = Math.max(
+    0,
+    Number(row?.site_device_count || 0),
+    Number(row?.device_count || 0),
+    connected + disconnected + offline
+  );
+  const online = Math.max(
+    connected,
+    Math.min(total, Math.max(Number(row?.site_online_device_count || 0), connected + disconnected))
+  );
+  return {
+    connected,
+    disconnected: Math.max(0, online - connected),
+    offline: Math.max(0, total - online),
+    total,
+    online,
+  };
+}
+
+export function recordSiteConnectionSnapshots(snapshotMap, rows, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!(snapshotMap instanceof Map) || !Array.isArray(rows)) return 0;
+  const now = Number.isFinite(Number(nowSeconds)) ? Number(nowSeconds) : Math.floor(Date.now() / 1000);
+  const visibleSiteIds = new Set();
+  let changed = 0;
+
+  rows.forEach((row) => {
+    const siteId = siteIdForRow(row);
+    if (!siteId) return;
+    visibleSiteIds.add(siteId);
+    const counts = normalizedConnectionCounts(row);
+    if (counts.connected <= 0 || counts.total <= 0) return;
+    const nextSnapshot = {
+      connected_devices: counts.connected,
+      disconnected_devices: counts.disconnected,
+      offline_devices: counts.offline,
+      site_device_count: counts.total,
+      site_online_device_count: counts.online,
+      sampled_at: now,
+    };
+    const previous = snapshotMap.get(siteId);
+    if (
+      !previous ||
+      previous.connected_devices !== nextSnapshot.connected_devices ||
+      previous.disconnected_devices !== nextSnapshot.disconnected_devices ||
+      previous.offline_devices !== nextSnapshot.offline_devices ||
+      previous.site_device_count !== nextSnapshot.site_device_count ||
+      previous.site_online_device_count !== nextSnapshot.site_online_device_count ||
+      previous.sampled_at !== nextSnapshot.sampled_at
+    ) {
+      snapshotMap.set(siteId, nextSnapshot);
+      changed += 1;
+    }
+  });
+
+  snapshotMap.forEach((snapshot, siteId) => {
+    const age = now - Number(snapshot?.sampled_at || 0);
+    if (!visibleSiteIds.has(siteId) || age > SITE_CONNECTION_STABILITY_GRACE_SECONDS) {
+      snapshotMap.delete(siteId);
+      changed += 1;
+    }
+  });
+  return changed;
+}
+
+export function applySiteConnectionStability(rows, snapshotMap, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!Array.isArray(rows) || !(snapshotMap instanceof Map)) return rows;
+  const now = Number.isFinite(Number(nowSeconds)) ? Number(nowSeconds) : Math.floor(Date.now() / 1000);
+  return rows.map((row) => {
+    const siteId = siteIdForRow(row);
+    const snapshot = siteId ? snapshotMap.get(siteId) : null;
+    if (!snapshot) return row;
+    const current = normalizedConnectionCounts(row);
+    if (current.connected > 0) return row;
+    const age = Math.max(0, now - Number(snapshot.sampled_at || 0));
+    if (age > SITE_CONNECTION_STABILITY_GRACE_SECONDS) return row;
+
+    const snapshotConnected = Math.max(0, Number(snapshot.connected_devices || 0));
+    if (snapshotConnected <= 0) return row;
+    const total = Math.max(
+      current.total,
+      Number(snapshot.site_device_count || 0),
+      snapshotConnected + Number(snapshot.disconnected_devices || 0) + Number(snapshot.offline_devices || 0)
+    );
+    if (total <= 0) return row;
+    const connected = Math.min(total, snapshotConnected);
+    const online = Math.max(
+      connected,
+      Math.min(
+        total,
+        Math.max(Number(snapshot.site_online_device_count || 0), connected + Number(snapshot.disconnected_devices || 0))
+      )
+    );
+    return {
+      ...row,
+      connected_devices: connected,
+      site_device_count: total,
+      device_count: Math.max(Number(row?.device_count || 0), total),
+      site_online_device_count: online,
+      disconnected_devices: Math.max(0, online - connected),
+      offline_devices: Math.max(0, total - online),
+      site_connection_stabilized: true,
+      site_connection_stabilized_remaining_seconds: Math.max(
+        0,
+        Math.ceil(SITE_CONNECTION_STABILITY_GRACE_SECONDS - age)
+      ),
+    };
+  });
+}
+
 function siteRecordsById(payload) {
   const records = new Map();
   const sites = Array.isArray(payload?.sites) ? payload.sites : [];
@@ -622,6 +743,21 @@ function taskActivitySeconds(work) {
 
 function taskCountdownSecondsLabel(seconds) {
   return `${Math.max(0, Math.ceil(Number(seconds || 0)))}s`;
+}
+
+export function siteListAssignedTaskGroupCount(row) {
+  return Math.max(0, Array.isArray(row?.assigned_task_groups) ? row.assigned_task_groups.length : 0);
+}
+
+export function siteListRowHeightForData(row) {
+  return BASE_ROW_HEIGHT * Math.max(1, siteListAssignedTaskGroupCount(row));
+}
+
+export function siteListRowHeightSignature(rows) {
+  if (!Array.isArray(rows)) return "";
+  return rows
+    .map((row) => `${String(row?.id ?? row?.site_id ?? "")}:${siteListAssignedTaskGroupCount(row)}`)
+    .join("|");
 }
 
 export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -1880,9 +2016,11 @@ export default function SiteList() {
   const siteWorkerRefreshInFlightRef = useRef(false);
   const siteWorkerMetricSampleCountRef = useRef(0);
   const resourceHistoryRef = useRef(new Map());
+  const siteConnectionSnapshotRef = useRef(new Map());
   const [siteWorkerMetricsVisible, setSiteWorkerMetricsVisible] = useState(false);
   const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(() => Date.now());
   const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
+  const [siteConnectionSnapshotVersion, setSiteConnectionSnapshotVersion] = useState(0);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
     icon: "locationcity",
@@ -1902,9 +2040,28 @@ export default function SiteList() {
     return Math.max(1, Math.min(SITE_WORKER_METRIC_WARMUP_SECONDS, Math.ceil(remainingMs / 1000)));
   }, [nowSeconds, siteWorkerMetricsCountdownStartedAtMs, siteWorkerMetricsVisible]);
 
+  const mergedRows = useMemo(
+    () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
+    [nowSeconds, rows, siteWorkerPayload]
+  );
+
+  useEffect(() => {
+    const sampleNowSeconds = Math.floor(Date.now() / 1000);
+    const sampleRows = mergeSiteWorkerRows(rows, siteWorkerPayload, sampleNowSeconds);
+    const changed = recordSiteConnectionSnapshots(siteConnectionSnapshotRef.current, sampleRows, sampleNowSeconds);
+    if (changed) {
+      setSiteConnectionSnapshotVersion((version) => version + 1);
+    }
+  }, [rows, siteWorkerPayload]);
+
+  const stableRows = useMemo(
+    () => applySiteConnectionStability(mergedRows, siteConnectionSnapshotRef.current, nowSeconds),
+    [mergedRows, nowSeconds, siteConnectionSnapshotVersion]
+  );
+
   const displayRows = useMemo(
     () =>
-      attachResourceHistoryToRows(mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds), resourceHistoryRef.current).map((row) => ({
+      attachResourceHistoryToRows(stableRows, resourceHistoryRef.current).map((row) => ({
         ...row,
         site_worker_metrics_visible: siteWorkerMetricsVisible,
         site_worker_metrics_polling_remaining_seconds: siteWorkerMetricsCountdownRemainingSeconds,
@@ -1912,12 +2069,13 @@ export default function SiteList() {
     [
       nowSeconds,
       resourceHistoryVersion,
-      rows,
-      siteWorkerPayload,
+      stableRows,
       siteWorkerMetricsCountdownRemainingSeconds,
       siteWorkerMetricsVisible,
     ]
   );
+
+  const rowHeightSignature = useMemo(() => siteListRowHeightSignature(displayRows), [displayRows]);
 
   const handleOpenDevicesForSite = useCallback(
     (site) => {
@@ -2057,7 +2215,9 @@ export default function SiteList() {
     setSiteWorkerMetricsVisible(false);
     setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
     resourceHistoryRef.current.clear();
+    siteConnectionSnapshotRef.current.clear();
     setResourceHistoryVersion((version) => version + 1);
+    setSiteConnectionSnapshotVersion((version) => version + 1);
     setInstallServerUrl(initialInstallServerUrl);
     setLoadError(String(loaderData?.initialError || ""));
   }, [initialInstallServerUrl, initialRows, loaderData]);
@@ -2108,14 +2268,27 @@ export default function SiteList() {
     if (!api) return;
     if (typeof api.isDestroyed === "function" && api.isDestroyed()) return;
     try {
-      api.refreshCells({ columns: [SITE_WORKER_CONTAINER_COLUMN_ID], force: true });
+      api.refreshCells({ columns: [SITE_WORKER_CONTAINER_COLUMN_ID, CONNECTED_DEVICES_COLUMN_ID], force: true });
     } catch {}
   }, [
     resourceHistoryVersion,
+    siteConnectionSnapshotVersion,
     siteWorkerMetricsCountdownRemainingSeconds,
     siteWorkerMetricsVisible,
     siteWorkerPayload,
   ]);
+
+  useEffect(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api) return;
+    if (typeof api.isDestroyed === "function" && api.isDestroyed()) return;
+    try {
+      api.resetRowHeights();
+    } catch {}
+    try {
+      api.refreshCells({ columns: [RUNNING_TASKS_COLUMN_ID], force: true });
+    } catch {}
+  }, [rowHeightSignature]);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
@@ -2160,6 +2333,7 @@ export default function SiteList() {
       }
       gridApiRef.current = null;
       resourceHistoryRef.current.clear();
+      siteConnectionSnapshotRef.current.clear();
     };
   }, []);
 
@@ -2375,7 +2549,7 @@ export default function SiteList() {
     },
     {
       headerName: "Connected Devices",
-      field: "connected_devices",
+      field: CONNECTED_DEVICES_COLUMN_ID,
       resizable: false,
       minWidth: 250,
       flex: 0.9,
@@ -2386,8 +2560,8 @@ export default function SiteList() {
       cellRenderer: ConnectedDevicesCell,
     },
     {
-      headerName: "Assigned Tasks",
-      field: "assigned_task_groups",
+      headerName: "Running Tasks",
+      field: RUNNING_TASKS_COLUMN_ID,
       minWidth: 340,
       flex: 1.2,
       filter: false,
@@ -2906,9 +3080,7 @@ export default function SiteList() {
               suppressContextMenu
               preventDefaultOnContextMenu
               rowHeight={BASE_ROW_HEIGHT}
-              getRowHeight={(params) =>
-                BASE_ROW_HEIGHT * Math.max(1, Array.isArray(params?.data?.assigned_task_groups) ? params.data.assigned_task_groups.length : 0)
-              }
+              getRowHeight={(params) => siteListRowHeightForData(params?.data)}
               pagination
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}

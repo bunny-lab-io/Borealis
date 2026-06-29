@@ -33,6 +33,8 @@ The Sites grid shows live Docker resource usage for each active site-worker when
 
 Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, immediately counts down from `Polling Site Worker Metrics in 10s`, starts worker polling after the first 5-second cadence, then displays the mini-trends after the second successful worker sample. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
 
+The Connected Devices bar uses the last known connected breakdown for a short grace window before showing an all-disconnected state. This prevents one missed site-worker heartbeat or zero-connected poll from briefly turning healthy sites red.
+
 !!! tip
 
     Keep one site per customer, lab, or security boundary. Filters and scheduled jobs become easier to reason about when site scope matches real ownership.
@@ -71,3 +73,4 @@ Resource mini-trends refresh with the site-worker payload every 5 seconds and ke
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
     - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. Sites does not fetch worker metrics from the route loader; browser polling starts after the page renders.
     - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.
+    - The Connected Devices bar caches the last non-zero connected breakdown in browser state and reuses it for brief zero-connected worker polls. Sustained zero-connected payloads still render as disconnected after the grace window.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTaskGroupsByWorker } from "@/Sites/Site_List.jsx";
 
-describe("site assigned task countdown", () => {
+describe("site running task countdown", () => {
   it("keeps terminal task groups for 60 seconds after last activity", () => {
     const payload = {
       recent_work: [
@@ -31,7 +31,7 @@ describe("site assigned task countdown", () => {
     expect(expiredGroups).toEqual([]);
   });
 
-  it("does not expire active assigned task groups", () => {
+  it("does not expire active running task groups", () => {
     const payload = {
       active_work: [
         {
