@@ -78,8 +78,6 @@ const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const CONNECTED_DEVICES_COLUMN_ID = "connected_devices";
 const RUNNING_TASKS_COLUMN_ID = "assigned_task_groups";
 const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, CONNECTED_DEVICES_COLUMN_ID];
-const SITE_WORKER_METRIC_WARMUP_MS = SITE_WORKER_REFRESH_MS * 2;
-const SITE_WORKER_METRIC_WARMUP_SECONDS = Math.ceil(SITE_WORKER_METRIC_WARMUP_MS / 1000);
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -761,12 +759,7 @@ export function siteListRowHeightSignature(rows) {
 }
 
 export function shouldShowConnectedDevicesPlaceholder(row) {
-  return !Boolean(row?.site_worker_metrics_visible);
-}
-
-export function connectedDevicesPlaceholderText(remainingSeconds) {
-  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_WARMUP_SECONDS)));
-  return `Analyzing Agent Connections in ${seconds}s`;
+  return !Boolean(row?.site_worker_payload_ready);
 }
 
 export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
@@ -1035,8 +1028,7 @@ export function siteWorkerContainerRefreshValue(row) {
   const history = Array.isArray(row?.site_worker_resource_history) ? row.site_worker_resource_history : [];
   const latest = history.length ? history[history.length - 1] : null;
   return [
-    row?.site_worker_metrics_visible ? "visible" : "polling",
-    row?.site_worker_metrics_polling_remaining_seconds,
+    row?.site_worker_payload_ready ? "ready" : "pending",
     row?.site_worker_container_id,
     row?.site_worker_resource_history_key,
     latest?.sampledAtMs,
@@ -1052,11 +1044,6 @@ export function siteWorkerContainerRefreshValue(row) {
   ]
     .map((value) => String(value ?? ""))
     .join("|");
-}
-
-export function siteWorkerMetricPollingText(remainingSeconds) {
-  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_WARMUP_SECONDS)));
-  return `Polling Site Worker Metrics in ${seconds}s`;
 }
 
 async function fetchSiteWorkerPayloadBrowser() {
@@ -1235,11 +1222,11 @@ function TaskExpiryCountdown({ group }) {
 
 function SiteWorkerContainerCell(params) {
   const row = params?.data || {};
-  if (!row.site_worker_metrics_visible) {
+  if (!row.site_worker_payload_ready) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
         <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-          {siteWorkerMetricPollingText(row.site_worker_metrics_polling_remaining_seconds)}
+          Polling Site Worker Metrics
         </Typography>
       </Box>
     );
@@ -1499,7 +1486,7 @@ function ConnectedDevicesCell(params) {
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
         <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-          {connectedDevicesPlaceholderText(params?.data?.site_worker_metrics_polling_remaining_seconds)}
+          Analyzing Agent Connections
         </Typography>
       </Box>
     );
@@ -2032,11 +2019,9 @@ export default function SiteList() {
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
   const siteWorkerRefreshInFlightRef = useRef(false);
-  const siteWorkerMetricSampleCountRef = useRef(0);
   const resourceHistoryRef = useRef(new Map());
   const siteConnectionSnapshotRef = useRef(new Map());
-  const [siteWorkerMetricsVisible, setSiteWorkerMetricsVisible] = useState(false);
-  const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(() => Date.now());
+  const [siteWorkerPayloadReady, setSiteWorkerPayloadReady] = useState(false);
   const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
   const [siteConnectionSnapshotVersion, setSiteConnectionSnapshotVersion] = useState(0);
   const notify = useAppNotifications({
@@ -2050,14 +2035,6 @@ export default function SiteList() {
     },
     [notify]
   );
-  const siteWorkerMetricsCountdownRemainingSeconds = useMemo(() => {
-    if (siteWorkerMetricsVisible) return 0;
-    const countdownStartedAtMs = Number(siteWorkerMetricsCountdownStartedAtMs || 0);
-    if (countdownStartedAtMs <= 0) return SITE_WORKER_METRIC_WARMUP_SECONDS;
-    const remainingMs = countdownStartedAtMs + SITE_WORKER_METRIC_WARMUP_MS - Date.now();
-    return Math.max(1, Math.min(SITE_WORKER_METRIC_WARMUP_SECONDS, Math.ceil(remainingMs / 1000)));
-  }, [nowSeconds, siteWorkerMetricsCountdownStartedAtMs, siteWorkerMetricsVisible]);
-
   const mergedRows = useMemo(
     () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
     [nowSeconds, rows, siteWorkerPayload]
@@ -2081,15 +2058,13 @@ export default function SiteList() {
     () =>
       attachResourceHistoryToRows(stableRows, resourceHistoryRef.current).map((row) => ({
         ...row,
-        site_worker_metrics_visible: siteWorkerMetricsVisible,
-        site_worker_metrics_polling_remaining_seconds: siteWorkerMetricsCountdownRemainingSeconds,
+        site_worker_payload_ready: siteWorkerPayloadReady,
       })),
     [
       nowSeconds,
       resourceHistoryVersion,
       stableRows,
-      siteWorkerMetricsCountdownRemainingSeconds,
-      siteWorkerMetricsVisible,
+      siteWorkerPayloadReady,
     ]
   );
 
@@ -2229,9 +2204,7 @@ export default function SiteList() {
   useEffect(() => {
     setRows(initialRows);
     setSiteWorkerPayload({});
-    siteWorkerMetricSampleCountRef.current = 0;
-    setSiteWorkerMetricsVisible(false);
-    setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
+    setSiteWorkerPayloadReady(false);
     resourceHistoryRef.current.clear();
     siteConnectionSnapshotRef.current.clear();
     setResourceHistoryVersion((version) => version + 1);
@@ -2261,23 +2234,18 @@ export default function SiteList() {
         const workerPayload = await fetchSiteWorkerPayloadBrowser();
         if (active && workerPayload && typeof workerPayload === "object") {
           setSiteWorkerPayload(workerPayload);
-          const nextSampleCount = siteWorkerMetricSampleCountRef.current + 1;
-          siteWorkerMetricSampleCountRef.current = nextSampleCount;
-          if (nextSampleCount >= 2) {
-            setSiteWorkerMetricsVisible(true);
-            setSiteWorkerMetricsCountdownStartedAtMs(0);
-          }
+          setSiteWorkerPayloadReady(true);
         }
       } finally {
         siteWorkerRefreshInFlightRef.current = false;
       }
     };
+    void refreshSiteWorkerPayload();
     const intervalId = setInterval(refreshSiteWorkerPayload, SITE_WORKER_REFRESH_MS);
     return () => {
       active = false;
       clearInterval(intervalId);
       siteWorkerRefreshInFlightRef.current = false;
-      siteWorkerMetricSampleCountRef.current = 0;
     };
   }, []);
 
@@ -2291,8 +2259,7 @@ export default function SiteList() {
   }, [
     resourceHistoryVersion,
     siteConnectionSnapshotVersion,
-    siteWorkerMetricsCountdownRemainingSeconds,
-    siteWorkerMetricsVisible,
+    siteWorkerPayloadReady,
     siteWorkerPayload,
   ]);
 
