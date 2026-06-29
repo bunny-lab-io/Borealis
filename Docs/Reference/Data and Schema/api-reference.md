@@ -222,8 +222,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     ### Server Info and Logs
     - `GET /api/server/time` (Operator Session) - server clock.
     - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
-    - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state, all site names plus total/online device counts, recent assigned work, and short Docker container IDs when Docker metadata is available.
-    - `POST /api/server/workers/<worker_guid>/recreate` (Admin) - queue a scheduler-owned stop for one site-worker container so Job Scheduler can deploy a replacement when same-site Agent or task demand remains.
+    - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
     - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.

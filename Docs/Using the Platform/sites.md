@@ -27,6 +27,12 @@ Use `Onboard Devices` from the Sites page when the Engine should attempt local-n
 
 Onboarding jobs still send agents through Device Approvals. Successful remote install means the agent reached Borealis, not that it is trusted yet.
 
+## Read Worker Resource Usage
+
+The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends inside the Site Worker Container column to spot workers under load.
+
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, immediately counts down from `Polling Site Worker Metrics in 10s`, starts worker polling after the first 5-second cadence, then displays the mini-trends after the second successful worker sample. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
+
 !!! tip
 
     Keep one site per customer, lab, or security boundary. Filters and scheduled jobs become easier to reason about when site scope matches real ownership.
@@ -42,7 +48,7 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
     - `POST /api/sites/assign` - assign devices to site.
     - `POST /api/sites/rename` - rename site.
     - `POST /api/sites/<site_id>/auto-approval` - set or clear temporary site auto-approval.
-    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status.
+    - `GET /api/server/workers?history_seconds=60` - active/recent worker state used by Sites and Engine Status, including site-worker Docker stats and Docker inspect size metadata when `docker-proxy` responds.
 
     ### Related documentation
 
@@ -63,3 +69,5 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
+    - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. Sites does not fetch worker metrics from the route loader; browser polling starts after the page renders.
+    - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.

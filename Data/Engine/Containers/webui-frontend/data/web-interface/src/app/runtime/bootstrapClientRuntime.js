@@ -7,7 +7,10 @@ const GO_REALTIME_EVENTS = [
   "device_services_changed",
   "borealis_notification",
   "server_operator_presence_changed",
+  "watchdog_incidents_changed",
+  "device_watchdogs_changed",
 ];
+const GO_REALTIME_EVENT_SET = new Set(GO_REALTIME_EVENTS);
 
 function hasAuthCookie() {
   if (typeof document === "undefined") return false;
@@ -15,7 +18,11 @@ function hasAuthCookie() {
 }
 
 function createBorealisSocketBridge() {
-  const legacySocket = io(window.location.origin, { transports: ["websocket"] });
+  const legacySocket = io(window.location.origin, {
+    transports: ["websocket"],
+    autoConnect: false,
+    reconnection: false,
+  });
   const handlers = new Map();
   let eventSource = null;
   let reconnectTimer = null;
@@ -93,17 +100,27 @@ function createBorealisSocketBridge() {
 
   const bridge = {
     on(eventName, handler) {
-      legacySocket.on(eventName, handler);
+      if (!GO_REALTIME_EVENT_SET.has(eventName)) {
+        legacySocket.on(eventName, handler);
+      }
       rememberHandler(eventName, handler);
       return bridge;
     },
     off(eventName, handler) {
-      legacySocket.off(eventName, handler);
+      if (!GO_REALTIME_EVENT_SET.has(eventName)) {
+        legacySocket.off(eventName, handler);
+      }
       forgetHandler(eventName, handler);
       return bridge;
     },
-    emit(...args) {
-      return legacySocket.emit(...args);
+    emit(eventName, ...args) {
+      if (eventName === "operator_presence_sync" || eventName === "operator_presence_clear") {
+        return false;
+      }
+      if (!legacySocket.connected) {
+        legacySocket.connect?.();
+      }
+      return legacySocket.emit(eventName, ...args);
     },
     connect() {
       legacySocket.connect?.();

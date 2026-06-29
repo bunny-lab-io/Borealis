@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,10 +32,6 @@ const (
 
 type serverWorkerStore interface {
 	serverWorkerPayload(ctx context.Context, historySeconds int, includeContainerMetadata bool) (map[string]any, error)
-}
-
-type serverWorkerRecreateStore interface {
-	queueSiteWorkerRecreate(ctx context.Context, workerGUID string) (map[string]any, int, error)
 }
 
 type workerSnapshotRow struct {
@@ -90,7 +87,6 @@ type scheduledRunWorkRow struct {
 
 func registerServerWorkerRoutes(mux *http.ServeMux, auth *authService, _ http.Handler) {
 	mux.HandleFunc("/api/server/workers", serverWorkersHandler(auth))
-	mux.HandleFunc("/api/server/workers/", serverWorkerSubtreeHandler(auth))
 }
 
 func serverWorkersHandler(auth *authService) http.HandlerFunc {
@@ -122,37 +118,6 @@ func serverWorkersHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, payload)
-	}
-}
-
-func serverWorkerSubtreeHandler(auth *authService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/server/workers/"), "/"), "/")
-		if len(parts) == 2 && parts[1] == "recreate" && r.Method == http.MethodPost {
-			if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
-				failure.write(w)
-				return
-			}
-			store, ok := auth.store.(serverWorkerRecreateStore)
-			if !ok {
-				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "server_workers_unavailable"})
-				return
-			}
-			timeout := auth.timeout
-			if timeout <= 0 {
-				timeout = defaultAuthTimeout
-			}
-			ctx, cancel := context.WithTimeout(r.Context(), timeout)
-			defer cancel()
-			payload, status, err := store.queueSiteWorkerRecreate(ctx, parts[0])
-			if err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-				return
-			}
-			writeJSON(w, status, payload)
-			return
-		}
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 	}
 }
 
@@ -228,118 +193,6 @@ func (s *postgresOperatorStore) serverWorkerPayload(ctx context.Context, history
 		"sites":                     siteRows,
 		"worker_idle_ttl_seconds":   workerIdleTTLSeconds,
 	}, nil
-}
-
-func (s *postgresOperatorStore) queueSiteWorkerRecreate(ctx context.Context, workerGUID string) (map[string]any, int, error) {
-	workerGUID = cleanText(workerGUID)
-	if workerGUID == "" {
-		return map[string]any{
-			"error":   "site_worker_recreate_unavailable",
-			"message": "A site-worker id is required.",
-		}, http.StatusBadRequest, nil
-	}
-	conn, err := s.db.Conn(ctx)
-	if err != nil {
-		return nil, 0, errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	cutoff := time.Now().Unix() - 86400
-	var row workerSnapshotRow
-	var siteName sql.NullString
-	err = tx.QueryRowContext(ctx, `
-		SELECT
-			worker_guid, container_name, site_id, status, started_at, last_seen_at,
-			idle_since, stopped_at, current_lanes_json, claimed_count, task_links_json,
-			docker_state, exit_code, s.name
-		  FROM engine.job_scheduler_workers
-	 LEFT JOIN engine.sites AS s ON s.id = job_scheduler_workers.site_id
-		 WHERE worker_guid = $1
-		   AND COALESCE(job_scheduler_workers.site_id, 0) > 0
-		   AND (
-		         status NOT IN ($2, $3)
-		      OR COALESCE(stopped_at, last_seen_at, updated_at, started_at, 0) >= $4
-		   )
-	  ORDER BY COALESCE(stopped_at, last_seen_at, started_at) DESC
-		 LIMIT 1
-	`, workerGUID, workerStatusStopped, workerStatusLost, cutoff).Scan(
-		&row.WorkerGUID,
-		&row.ContainerName,
-		&row.SiteID,
-		&row.Status,
-		&row.StartedAt,
-		&row.LastSeenAt,
-		&row.IdleSince,
-		&row.StoppedAt,
-		&row.CurrentLanesJSON,
-		&row.ClaimedCount,
-		&row.TaskLinksJSON,
-		&row.DockerState,
-		&row.ExitCode,
-		&siteName,
-	)
-	if errors.Is(err, sql.ErrNoRows) {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, 0, commitErr
-		}
-		committed = true
-		return map[string]any{
-			"error":   "site_worker_recreate_unavailable",
-			"message": "Site worker not found.",
-		}, http.StatusNotFound, nil
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-
-	containerName := nullString(row.ContainerName)
-	if containerName == "" {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return nil, 0, commitErr
-		}
-		committed = true
-		return map[string]any{
-			"error":   "site_worker_recreate_unavailable",
-			"message": "Site worker has no tracked container.",
-		}, http.StatusConflict, nil
-	}
-
-	action := map[string]any{
-		"id":             "recreate",
-		"label":          "Re-Create Site Worker",
-		"action":         "recreate",
-		"worker_guid":    workerGUID,
-		"container_name": containerName,
-		"site_id":        nullInt(row.SiteID),
-	}
-	workItemID, err := enqueueGoServiceAction(ctx, tx, "site-worker", action)
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, 0, err
-	}
-	committed = true
-
-	return map[string]any{
-		"queued":         true,
-		"worker_guid":    nullString(row.WorkerGUID),
-		"site_id":        nullInt(row.SiteID),
-		"site_name":      nullString(siteName),
-		"container_name": containerName,
-		"work_item_id":   workItemID,
-	}, http.StatusAccepted, nil
 }
 
 func enqueueGoServiceAction(ctx context.Context, tx *sql.Tx, serviceKey string, action map[string]any) (int64, error) {
@@ -876,17 +729,144 @@ func attachWorkerContainerMetadata(rows []map[string]any) []map[string]any {
 				row["container_image"] = image
 			}
 		}
+		applyDockerInspectSizeMetadata(row, inspected)
 	}
+	attachDockerStatsToRows(rows, func(row map[string]any) string {
+		return cleanText(row["container_name"])
+	})
 	return rows
 }
 
 func dockerInspectContainer(containerName string) map[string]any {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("BOREALIS_DOCKER_PROXY_URL")), "/")
-	if base == "" || strings.TrimSpace(containerName) == "" {
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return map[string]any{}
+	}
+	return dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/json?size=1")
+}
+
+func applyDockerInspectSizeMetadata(row map[string]any, inspected map[string]any) {
+	if row == nil || inspected == nil {
+		return
+	}
+	if value, ok := dockerInspectInt64(inspected, "SizeRootFs"); ok {
+		row["container_size_rootfs_bytes"] = maxInt64(value, 0)
+	}
+	if value, ok := dockerInspectInt64(inspected, "SizeRw"); ok {
+		row["container_size_rw_bytes"] = maxInt64(value, 0)
+	}
+	if limit, source := dockerInspectStorageLimit(inspected); limit > 0 {
+		row["container_storage_limit_bytes"] = limit
+		row["container_storage_limit_source"] = source
+	}
+}
+
+func dockerInspectInt64(payload map[string]any, key string) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	value, ok := payload[key]
+	if !ok {
+		return 0, false
+	}
+	return coerceInt64(value), true
+}
+
+func dockerInspectStorageLimit(inspected map[string]any) (int64, string) {
+	hostConfig := mapStringAny(inspected["HostConfig"])
+	if value, ok := dockerInspectInt64(hostConfig, "DiskQuota"); ok && value > 0 {
+		return value, "HostConfig.DiskQuota"
+	}
+	storageOpt := mapStringAny(hostConfig["StorageOpt"])
+	for _, key := range []string{"size", "Size", "dm.basesize", "dm.size"} {
+		if value, ok := storageOpt[key]; ok {
+			if parsed := parseDockerSizeBytes(value); parsed > 0 {
+				return parsed, "HostConfig.StorageOpt." + key
+			}
+		}
+	}
+	return 0, ""
+}
+
+func parseDockerSizeBytes(value any) int64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return parsed
+		}
+		floatParsed, err := typed.Float64()
+		if err == nil {
+			return int64(floatParsed)
+		}
+	case string:
+		raw := strings.TrimSpace(typed)
+		if raw == "" {
+			return 0
+		}
+		upper := strings.ToUpper(strings.ReplaceAll(raw, " ", ""))
+		multipliers := []struct {
+			suffix string
+			value  float64
+		}{
+			{"KIB", 1024},
+			{"MIB", 1024 * 1024},
+			{"GIB", 1024 * 1024 * 1024},
+			{"TIB", 1024 * 1024 * 1024 * 1024},
+			{"KB", 1000},
+			{"MB", 1000 * 1000},
+			{"GB", 1000 * 1000 * 1000},
+			{"TB", 1000 * 1000 * 1000 * 1000},
+			{"K", 1024},
+			{"M", 1024 * 1024},
+			{"G", 1024 * 1024 * 1024},
+			{"T", 1024 * 1024 * 1024 * 1024},
+			{"B", 1},
+		}
+		multiplier := float64(1)
+		numeric := upper
+		for _, unit := range multipliers {
+			if strings.HasSuffix(upper, unit.suffix) {
+				multiplier = unit.value
+				numeric = strings.TrimSuffix(upper, unit.suffix)
+				break
+			}
+		}
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(numeric), 64)
+		if err == nil && parsed > 0 {
+			return int64(parsed * multiplier)
+		}
+	}
+	return 0
+}
+
+func dockerContainerStats(containerName string) map[string]any {
+	containerName = strings.TrimSpace(containerName)
+	if containerName == "" {
+		return map[string]any{}
+	}
+	raw := dockerProxyJSON("/containers/" + url.PathEscape(containerName) + "/stats?stream=false")
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	return normalizeDockerContainerStats(raw)
+}
+
+func dockerProxyJSON(path string) map[string]any {
+	base := dockerProxyBaseURL()
+	if base == "" || strings.TrimSpace(path) == "" {
 		return map[string]any{}
 	}
 	client := http.Client{Timeout: 2500 * time.Millisecond}
-	requestURL := base + "/containers/" + url.PathEscape(strings.TrimSpace(containerName)) + "/json"
+	requestURL := base + path
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return map[string]any{}
@@ -905,6 +885,156 @@ func dockerInspectContainer(containerName string) map[string]any {
 		return map[string]any{}
 	}
 	return payload
+}
+
+func dockerProxyBaseURL() string {
+	return strings.TrimRight(strings.TrimSpace(os.Getenv("BOREALIS_DOCKER_PROXY_URL")), "/")
+}
+
+func attachDockerStatsToRows(rows []map[string]any, containerName func(map[string]any) string) {
+	if len(rows) == 0 || dockerProxyBaseURL() == "" {
+		return
+	}
+	type statsResult struct {
+		index int
+		stats map[string]any
+	}
+	const maxConcurrentStatsReads = 6
+	sem := make(chan struct{}, maxConcurrentStatsReads)
+	results := make(chan statsResult, len(rows))
+	var wg sync.WaitGroup
+	for index, row := range rows {
+		name := strings.TrimSpace(containerName(row))
+		if name == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(rowIndex int, container string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			stats := dockerContainerStats(container)
+			if len(stats) > 0 {
+				results <- statsResult{index: rowIndex, stats: stats}
+			}
+		}(index, name)
+	}
+	wg.Wait()
+	close(results)
+	for result := range results {
+		rows[result.index]["docker_stats"] = result.stats
+	}
+}
+
+func normalizeDockerContainerStats(payload map[string]any) map[string]any {
+	cpuStats := mapStringAny(payload["cpu_stats"])
+	precpuStats := mapStringAny(payload["precpu_stats"])
+	cpuUsage := mapStringAny(cpuStats["cpu_usage"])
+	precpuUsage := mapStringAny(precpuStats["cpu_usage"])
+	cpuDelta := coerceFloat64(cpuUsage["total_usage"]) - coerceFloat64(precpuUsage["total_usage"])
+	systemDelta := coerceFloat64(cpuStats["system_cpu_usage"]) - coerceFloat64(precpuStats["system_cpu_usage"])
+	onlineCPUs := coerceFloat64(cpuStats["online_cpus"])
+	if onlineCPUs <= 0 {
+		if perCPU, ok := cpuUsage["percpu_usage"].([]any); ok {
+			onlineCPUs = float64(len(perCPU))
+		}
+	}
+	cpuPercent := float64(0)
+	if cpuDelta > 0 && systemDelta > 0 && onlineCPUs > 0 {
+		cpuPercent = round2((cpuDelta / systemDelta) * onlineCPUs * 100)
+	}
+
+	memoryStats := mapStringAny(payload["memory_stats"])
+	memoryUsage := coerceInt64(memoryStats["usage"])
+	memoryLimit := coerceInt64(memoryStats["limit"])
+	memoryStatValues := mapStringAny(memoryStats["stats"])
+	memoryCache := firstPositiveDockerStatInt64(
+		coerceInt64(memoryStatValues["total_inactive_file"]),
+		coerceInt64(memoryStatValues["inactive_file"]),
+		coerceInt64(memoryStatValues["cache"]),
+	)
+	if memoryCache > 0 && memoryUsage > memoryCache {
+		memoryUsage -= memoryCache
+	}
+	memoryPercent := float64(0)
+	if memoryLimit > 0 && memoryUsage >= 0 {
+		memoryPercent = round2((float64(memoryUsage) / float64(memoryLimit)) * 100)
+	}
+
+	var networkInput int64
+	var networkOutput int64
+	if networks, ok := payload["networks"].(map[string]any); ok {
+		for _, networkValue := range networks {
+			networkPayload := mapStringAny(networkValue)
+			networkInput += coerceInt64(networkPayload["rx_bytes"])
+			networkOutput += coerceInt64(networkPayload["tx_bytes"])
+		}
+	}
+
+	var blockInput int64
+	var blockOutput int64
+	blkioStats := mapStringAny(payload["blkio_stats"])
+	if entries, ok := blkioStats["io_service_bytes_recursive"].([]any); ok {
+		for _, entryValue := range entries {
+			entry := mapStringAny(entryValue)
+			switch strings.ToLower(cleanText(entry["op"])) {
+			case "read":
+				blockInput += coerceInt64(entry["value"])
+			case "write":
+				blockOutput += coerceInt64(entry["value"])
+			}
+		}
+	}
+
+	pidsStats := mapStringAny(payload["pids_stats"])
+	result := map[string]any{
+		"cpu_percent":        cpuPercent,
+		"memory_usage_bytes": maxInt64(memoryUsage, 0),
+		"memory_limit_bytes": maxInt64(memoryLimit, 0),
+		"memory_percent":     memoryPercent,
+		"net_input_bytes":    maxInt64(networkInput, 0),
+		"net_output_bytes":   maxInt64(networkOutput, 0),
+		"block_input_bytes":  maxInt64(blockInput, 0),
+		"block_output_bytes": maxInt64(blockOutput, 0),
+		"pids":               maxInt64(coerceInt64(pidsStats["current"]), 0),
+	}
+	if readAt := cleanText(payload["read"]); readAt != "" {
+		result["read_at"] = readAt
+	}
+	return result
+}
+
+func firstPositiveDockerStatInt64(values ...int64) int64 {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func coerceFloat64(value any) float64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case float64:
+		return typed
+	case json.Number:
+		parsed, err := typed.Float64()
+		if err == nil {
+			return parsed
+		}
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		if err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func payloadTargetCount(payload map[string]any) any {

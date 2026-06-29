@@ -37,6 +37,15 @@ import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import {
+  appendDockerStatsHistory,
+  dockerStatsHistoryKey,
+  formatDockerStatBytes,
+  formatDockerStatPercent,
+  formatDockerStatRate,
+  hasDockerStats,
+  pruneDockerStatsHistory,
+} from "../app/utils/dockerStats.js";
+import {
   createRouteRequestPlan,
   getRouteErrorMessage,
   requireAuthenticatedRequest,
@@ -62,9 +71,12 @@ const iconFontFamily = '"Quartz Regular"';
 const WORKER_HISTORY_SECONDS = 300;
 const WORKER_REMOVE_SECONDS = 30;
 const TASK_REMOVE_SECONDS = 60;
-const SITE_WORKER_REFRESH_MS = 15000;
+const SITE_WORKER_REFRESH_MS = 5000;
 const BASE_ROW_HEIGHT = 56;
-const AUTO_SIZE_COLUMNS = ["site_worker_container_id", "connected_devices"];
+const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
+const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, "connected_devices"];
+const SITE_WORKER_METRIC_WARMUP_MS = SITE_WORKER_REFRESH_MS * 2;
+const SITE_WORKER_METRIC_WARMUP_SECONDS = Math.ceil(SITE_WORKER_METRIC_WARMUP_MS / 1000);
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -75,16 +87,6 @@ const INSTALL_OS_OPTIONS = [
   { id: "windows", label: "Windows" },
   { id: "linux", label: "Linux" },
 ];
-
-const TONE_STYLES = {
-  running: { border: "rgba(125,211,252,0.5)", bg: "rgba(14,116,144,0.2)", text: "#bae6fd" },
-  idle: { border: "rgba(52,211,153,0.34)", bg: "rgba(6,78,59,0.16)", text: "#bbf7d0" },
-  pending: { border: "rgba(251,191,36,0.5)", bg: "rgba(120,53,15,0.2)", text: "#fde68a" },
-  failed: { border: "rgba(251,113,133,0.52)", bg: "rgba(127,29,29,0.22)", text: "#fecdd3" },
-  stopped: { border: "rgba(148,163,184,0.3)", bg: "rgba(30,41,59,0.22)", text: "#cbd5e1" },
-  no_online: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.18)", text: "#94a3b8" },
-  unknown: { border: "rgba(148,163,184,0.28)", bg: "rgba(30,41,59,0.2)", text: "#cbd5e1" },
-};
 
 const TASK_SECTIONS = [
   { key: "success", label: "Success", color: "#00d18c" },
@@ -343,24 +345,6 @@ const SITE_CONTEXT_MENU_GROUP_LABELS = {
 };
 
 const SITE_CONTEXT_MENU_GROUP_ORDER = ["primary", "organize", "danger", "view"];
-
-function titleCase(value) {
-  return String(value || "")
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-function durationLabel(seconds) {
-  const value = Math.max(0, Math.ceil(Number(seconds || 0)));
-  if (value >= 60) {
-    const minutes = Math.floor(value / 60);
-    const remainder = value % 60;
-    return `${minutes}m${String(remainder).padStart(2, "0")}s`;
-  }
-  return `${value}s`;
-}
 
 function connectedDeviceCount(worker) {
   const direct = [
@@ -732,34 +716,9 @@ export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.no
   return normalized;
 }
 
-function workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds = null) {
-  const normalized = String(worker?.status || "").trim().toLowerCase();
-  const connected = connectedDeviceCount(worker);
-  if (removalRemainingSeconds != null) {
-    return { label: `Removing in ${durationLabel(removalRemainingSeconds)}`, tone: "stopped" };
-  }
-  if (connected > 0 && !["lost", "stopped", "failed"].includes(normalized)) {
-    return { label: "Running", tone: "running" };
-  }
-  if (normalized === "idle") {
-    const idleSince = Number(worker?.idle_since || nowSeconds);
-    const remaining = Math.max(0, Math.ceil(Number(idleTtlSeconds || 300) - Math.max(0, nowSeconds - idleSince)));
-    if (remaining > 0) {
-      return { label: `Tearing Down in ${durationLabel(remaining)}`, tone: "idle" };
-    }
-    return { label: "Idle", tone: "idle" };
-  }
-  if (normalized === "running") return { label: "Running", tone: "running" };
-  if (normalized === "starting") return { label: "Starting", tone: "pending" };
-  if (normalized === "lost") return { label: "Lost", tone: "failed" };
-  if (normalized === "stopped") return { label: "Stopped", tone: "stopped" };
-  return { label: titleCase(normalized || "unknown"), tone: "unknown" };
-}
-
 function buildWorkerRowsBySite(payload, nowSeconds) {
   const workers = Array.isArray(payload?.workers) ? payload.workers : [];
   const taskGroupsByWorker = buildTaskGroupsByWorker(payload, nowSeconds);
-  const idleTtlSeconds = Math.max(300, Number(payload?.worker_idle_ttl_seconds || 300));
   const newestActiveBySite = new Map();
   workers.forEach((worker) => {
     const siteId = Number(worker?.site_id || 0);
@@ -801,10 +760,6 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
       const siteId = Number(worker?.site_id || 0);
       const workerGuid = String(worker?.worker_guid || "").trim();
       const containerName = String(worker?.container_name || "").trim();
-      const removalRemainingSeconds = isTerminalWorker(worker)
-        ? WORKER_REMOVE_SECONDS - terminalWorkerAgeSeconds(worker, nowSeconds)
-        : null;
-      const status = workerStatusMeta(worker, nowSeconds, idleTtlSeconds, removalRemainingSeconds);
       const taskGroups =
         (workerGuid && taskGroupsByWorker.get(workerGuid)) ||
         (containerName && taskGroupsByWorker.get(containerName)) ||
@@ -823,8 +778,11 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_name: containerName,
         site_worker_container_id: String(worker?.container_id || "").trim() || "Unknown",
         site_worker_container_id_full: String(worker?.container_id_full || "").trim(),
-        site_worker_status_label: status.label,
-        site_worker_status_tone: status.tone,
+        site_worker_container_size_rootfs_bytes: Number(worker?.container_size_rootfs_bytes || 0),
+        site_worker_container_size_rw_bytes: Number(worker?.container_size_rw_bytes || 0),
+        site_worker_container_storage_limit_bytes: Number(worker?.container_storage_limit_bytes || 0),
+        site_worker_container_storage_limit_source: String(worker?.container_storage_limit_source || "").trim(),
+        site_worker_docker_stats: worker?.docker_stats || null,
         connected_devices: deviceCounts.connected_devices,
         site_device_count: deviceCounts.site_device_count,
         site_online_device_count: deviceCounts.site_online_device_count,
@@ -877,8 +835,11 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_name: "",
         site_worker_container_id: "N/A",
         site_worker_container_id_full: "",
-        site_worker_status_label: "No Online Devices",
-        site_worker_status_tone: "no_online",
+        site_worker_container_size_rootfs_bytes: 0,
+        site_worker_container_size_rw_bytes: 0,
+        site_worker_container_storage_limit_bytes: 0,
+        site_worker_container_storage_limit_source: "",
+        site_worker_docker_stats: null,
         connected_devices: 0,
         site_device_count: total,
         site_online_device_count: online,
@@ -897,14 +858,60 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
     );
 }
 
-async function fetchSiteWorkerPayloadRoute(progress) {
-  try {
-    const payload = await progress.fetchJson(`/api/server/workers?history_seconds=${WORKER_HISTORY_SECONDS}`);
-    return payload && typeof payload === "object" ? payload : {};
-  } catch (error) {
-    rethrowIfRouteRedirect(error);
-    return {};
-  }
+function recordSiteWorkerResourceHistory(historyMap, payload, sampledAtMs = Date.now()) {
+  if (!(historyMap instanceof Map)) return 0;
+  const workerRowsBySite = buildWorkerRowsBySite(payload, Math.floor(sampledAtMs / 1000));
+  const activeKeys = new Set();
+  workerRowsBySite.forEach((row) => {
+    const key = dockerStatsHistoryKey(row);
+    if (!key) return;
+    activeKeys.add(key);
+    appendDockerStatsHistory(historyMap, row, sampledAtMs);
+  });
+  pruneDockerStatsHistory(historyMap, activeKeys);
+  return activeKeys.size;
+}
+
+function attachResourceHistoryToRows(rows, historyMap) {
+  if (!Array.isArray(rows) || !(historyMap instanceof Map)) return rows;
+  return rows.map((row) => {
+    const key = dockerStatsHistoryKey(row);
+    const history = key ? historyMap.get(key) : null;
+    return {
+      ...row,
+      site_worker_resource_history_key: key,
+      site_worker_resource_history: Array.isArray(history) ? history : [],
+    };
+  });
+}
+
+export function siteWorkerContainerRefreshValue(row) {
+  const stats = row?.site_worker_docker_stats || {};
+  const history = Array.isArray(row?.site_worker_resource_history) ? row.site_worker_resource_history : [];
+  const latest = history.length ? history[history.length - 1] : null;
+  return [
+    row?.site_worker_metrics_visible ? "visible" : "polling",
+    row?.site_worker_metrics_polling_remaining_seconds,
+    row?.site_worker_container_id,
+    row?.site_worker_resource_history_key,
+    latest?.sampledAtMs,
+    stats?.read_at,
+    stats?.cpu_percent,
+    stats?.memory_usage_bytes,
+    stats?.memory_limit_bytes,
+    stats?.net_input_bytes,
+    stats?.net_output_bytes,
+    row?.site_worker_container_size_rootfs_bytes,
+    row?.site_worker_container_size_rw_bytes,
+    row?.site_worker_container_storage_limit_bytes,
+  ]
+    .map((value) => String(value ?? ""))
+    .join("|");
+}
+
+export function siteWorkerMetricPollingText(remainingSeconds) {
+  const seconds = Math.max(1, Math.ceil(Number(remainingSeconds || SITE_WORKER_METRIC_WARMUP_SECONDS)));
+  return `Polling Site Worker Metrics in ${seconds}s`;
 }
 
 async function fetchSiteWorkerPayloadBrowser() {
@@ -913,14 +920,16 @@ async function fetchSiteWorkerPayloadBrowser() {
       credentials: "include",
       cache: "no-store",
       headers: {
-        "Cache-Control": "no-store",
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
       },
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) return {};
+    if (!response.ok) return null;
     return payload && typeof payload === "object" ? payload : {};
   } catch {
-    return {};
+    return null;
   }
 }
 
@@ -961,7 +970,7 @@ function deriveInstallServerUrl(payload) {
 }
 
 export async function loadSiteListPageData(request) {
-  const progress = createRouteRequestPlan(request, 5);
+  const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAuthenticatedRequest(request, progress);
     const data = await progress.fetchJson("/api/sites");
@@ -981,11 +990,10 @@ export async function loadSiteListPageData(request) {
     } else {
       progress.skip(1);
     }
-    const siteWorkerPayload = await fetchSiteWorkerPayloadRoute(progress);
 
     return {
       rows: Array.isArray(data?.sites) ? data.sites : [],
-      siteWorkerPayload,
+      siteWorkerPayload: {},
       installServerUrl,
       initialError: "",
     };
@@ -1007,50 +1015,6 @@ function stopGridRowSelectionEvent(event) {
   if (typeof event.stopPropagation === "function") {
     event.stopPropagation();
   }
-}
-
-function StatusPill({ label, tone }) {
-  const style = TONE_STYLES[tone] || TONE_STYLES.unknown;
-  return (
-    <Box
-      component="span"
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 0,
-        maxWidth: "100%",
-        px: 0.85,
-        py: 0.25,
-        minHeight: 20,
-        borderRadius: 999,
-        border: `1px solid ${style.border}`,
-        background: style.bg,
-        color: style.text,
-        fontSize: "11px",
-        fontWeight: 700,
-        lineHeight: 1,
-        gap: 0.5,
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        verticalAlign: "middle",
-      }}
-    >
-      <Box
-        component="span"
-        sx={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          backgroundColor: style.text,
-          boxShadow: "0 0 0 2px rgba(0, 0, 0, 0.22)",
-          flexShrink: 0,
-        }}
-      />
-      {label}
-    </Box>
-  );
 }
 
 function TaskResultsBar({ counts }) {
@@ -1126,63 +1090,261 @@ function TaskExpiryCountdown({ group }) {
 
 function SiteWorkerContainerCell(params) {
   const row = params?.data || {};
-  const onRecreate = params?.context?.onRecreate;
-  const busy = params?.context?.recreateBusyId === row.site_worker_guid;
-  const canRecreate = Boolean(row.site_worker_guid);
+  if (!row.site_worker_metrics_visible) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          {siteWorkerMetricPollingText(row.site_worker_metrics_polling_remaining_seconds)}
+        </Typography>
+      </Box>
+    );
+  }
+  if (!hasDockerStats(row.site_worker_docker_stats)) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          Site Worker Not Running
+        </Typography>
+      </Box>
+    );
+  }
   return (
     <Box
       sx={{
         display: "flex",
         alignItems: "center",
-        justifyContent: "flex-start",
-        gap: 0.9,
+        justifyContent: "center",
         width: "100%",
         height: "100%",
         minWidth: 0,
       }}
     >
-      <StatusPill label={row.site_worker_status_label || "Unknown"} tone={row.site_worker_status_tone || "unknown"} />
-      {canRecreate ? (
+      <SiteWorkerStatsCell data={row} />
+    </Box>
+  );
+}
+
+function latestResourceSample(samples, fallback) {
+  return Array.isArray(samples) && samples.length ? samples[samples.length - 1] : fallback;
+}
+
+function resourceHistoryMax(samples, key) {
+  return (Array.isArray(samples) ? samples : []).reduce((max, sample) => {
+    const value = Number(sample?.[key] || 0);
+    return Number.isFinite(value) && value > max ? value : max;
+  }, 0);
+}
+
+function resourceSparklinePoints(samples, key, maxValue) {
+  const values = Array.isArray(samples) && samples.length ? samples : [];
+  if (!values.length) return "";
+  const width = 72;
+  const height = 18;
+  const topPad = 2;
+  const bottomPad = 2;
+  const safeMax = Math.max(1, Number(maxValue || 0));
+  const pointFor = (sample, index, count) => {
+    const rawValue = Math.max(0, Number(sample?.[key] || 0));
+    const x = count <= 1 ? width : (index / (count - 1)) * width;
+    const y = height - bottomPad - Math.min(1, rawValue / safeMax) * (height - topPad - bottomPad);
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  };
+  if (values.length === 1) {
+    const point = pointFor(values[0], 0, 1).split(",");
+    return `0,${point[1]} ${width},${point[1]}`;
+  }
+  return values.map((sample, index) => pointFor(sample, index, values.length)).join(" ");
+}
+
+function ResourceTrendPanel({ label, value, scaleLabel, tooltip, color, samples, valueKey, maxValue }) {
+  const points = resourceSparklinePoints(samples, valueKey, maxValue);
+  return (
+    <Tooltip title={tooltip || ""} placement="top">
+      <Box
+        sx={{
+          height: 46,
+          minWidth: 0,
+          borderRadius: 1,
+          border: "1px solid rgba(148,163,184,0.22)",
+          background: "rgba(15,23,42,0.36)",
+          px: 0.45,
+          py: 0.3,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          overflow: "hidden",
+        }}
+      >
         <Box
-          component="button"
-          type="button"
-          disabled={busy}
-          onMouseDown={stopGridRowSelectionEvent}
-          onClick={(event) => {
-            stopGridRowSelectionEvent(event);
-            if (busy) return;
-            onRecreate?.(row);
-          }}
           sx={{
-            display: "inline-flex",
+            display: "flex",
             alignItems: "center",
-            p: 0,
-            m: 0,
-            border: 0,
-            background: "transparent",
-            color: BOREALIS_LINK_COLOR,
-            cursor: busy ? "default" : "pointer",
-            font: "inherit",
-            fontSize: "0.82rem",
-            fontWeight: 700,
-            lineHeight: 1.45,
-            textDecoration: "none",
-            whiteSpace: "nowrap",
-            transition: "color 160ms ease, opacity 160ms ease",
-            "&:hover": busy
-              ? undefined
-              : {
-                  color: BOREALIS_LINK_HOVER_COLOR,
-                  textDecoration: "underline",
-                },
-            "&:disabled": {
-              opacity: 0.6,
-            },
+            justifyContent: "space-between",
+            gap: 0.35,
+            minWidth: 0,
           }}
         >
-          {busy ? "Re-Deploy Queued" : "Re-Deploy Site Worker"}
+          <Typography
+            component="span"
+            sx={{
+              color: "rgba(148,163,184,0.88)",
+              fontSize: "0.49rem",
+              fontWeight: 900,
+              lineHeight: 1,
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {label}
+          </Typography>
+          <Typography
+            component="span"
+            sx={{
+              color: MAGIC_UI.textBright,
+              fontSize: "0.56rem",
+              fontWeight: 900,
+              lineHeight: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            {value}
+          </Typography>
         </Box>
-      ) : null}
+        <Box
+          component="svg"
+          viewBox="0 0 72 18"
+          preserveAspectRatio="none"
+          sx={{
+            width: "100%",
+            height: 18,
+            display: "block",
+            overflow: "visible",
+          }}
+        >
+          <line x1="0" y1="17" x2="72" y2="17" stroke="rgba(148,163,184,0.18)" strokeWidth="1" />
+          {points ? (
+            <polyline
+              points={points}
+              fill="none"
+              stroke={color}
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : null}
+        </Box>
+        <Typography
+          component="span"
+          sx={{
+            color: "rgba(148,163,184,0.72)",
+            fontSize: "0.47rem",
+            fontWeight: 800,
+            lineHeight: 1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            minWidth: 0,
+            textAlign: "right",
+          }}
+        >
+          {scaleLabel}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+}
+
+function SiteWorkerStatsCell(params) {
+  const stats = params?.data?.site_worker_docker_stats;
+  if (!hasDockerStats(stats)) {
+    return (
+      <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.78rem", fontWeight: 600 }}>
+        Stats unavailable
+      </Typography>
+    );
+  }
+  const history = Array.isArray(params?.data?.site_worker_resource_history) ? params.data.site_worker_resource_history : [];
+  const fallbackSample = {
+    cpuPercent: Math.max(0, Number(stats.cpu_percent || 0)),
+    memoryUsageBytes: Math.max(0, Number(stats.memory_usage_bytes || 0)),
+    memoryLimitBytes: Math.max(0, Number(stats.memory_limit_bytes || 0)),
+    netInputBps: 0,
+    netOutputBps: 0,
+    netTotalBps: 0,
+    diskUsageBytes: Math.max(0, Number(params?.data?.site_worker_container_size_rootfs_bytes || 0)),
+    diskWritableBytes: Math.max(0, Number(params?.data?.site_worker_container_size_rw_bytes || 0)),
+    diskLimitBytes: Math.max(0, Number(params?.data?.site_worker_container_storage_limit_bytes || 0)),
+    diskLimitSource: String(params?.data?.site_worker_container_storage_limit_source || "").trim(),
+  };
+  const samples = history.length ? history : [fallbackSample];
+  const latest = latestResourceSample(samples, fallbackSample);
+  const cpuMax = Math.max(resourceHistoryMax(samples, "cpuPercent"), latest.cpuPercent);
+  const ramMax = latest.memoryLimitBytes > 0
+    ? latest.memoryLimitBytes
+    : Math.max(resourceHistoryMax(samples, "memoryUsageBytes"), latest.memoryUsageBytes);
+  const netMax = Math.max(resourceHistoryMax(samples, "netTotalBps"), latest.netTotalBps);
+  const diskMax = latest.diskLimitBytes > 0
+    ? latest.diskLimitBytes
+    : Math.max(resourceHistoryMax(samples, "diskUsageBytes"), latest.diskUsageBytes);
+  const metrics = [
+    {
+      label: "CPU",
+      value: formatDockerStatPercent(latest.cpuPercent),
+      scaleLabel: formatDockerStatPercent(cpuMax),
+      tooltip: `Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
+      color: "#7dd3fc",
+      valueKey: "cpuPercent",
+      maxValue: cpuMax,
+    },
+    {
+      label: "RAM",
+      value: formatDockerStatBytes(latest.memoryUsageBytes),
+      scaleLabel: latest.memoryLimitBytes > 0 ? formatDockerStatBytes(latest.memoryLimitBytes) : formatDockerStatBytes(ramMax),
+      tooltip: latest.memoryLimitBytes > 0
+        ? `${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
+        : `${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
+      color: "#c084fc",
+      valueKey: "memoryUsageBytes",
+      maxValue: ramMax,
+    },
+    {
+      label: "NET",
+      value: formatDockerStatRate(latest.netTotalBps),
+      scaleLabel: formatDockerStatRate(netMax),
+      tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
+      color: "#34d399",
+      valueKey: "netTotalBps",
+      maxValue: netMax,
+    },
+    {
+      label: "DISK",
+      value: formatDockerStatBytes(latest.diskUsageBytes),
+      scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
+      tooltip: latest.diskLimitBytes > 0
+        ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
+        : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
+      color: "#fbbf24",
+      valueKey: "diskUsageBytes",
+      maxValue: diskMax,
+    },
+  ];
+  return (
+    <Box
+      sx={{
+        width: "100%",
+        minWidth: 0,
+        display: "grid",
+        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gap: 0.4,
+      }}
+    >
+      {metrics.map((metric) => (
+        <ResourceTrendPanel key={metric.label} samples={samples} {...metric} />
+      ))}
     </Box>
   );
 }
@@ -1686,13 +1848,9 @@ export default function SiteList() {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
   const initialRows = useMemo(() => (Array.isArray(loaderData?.rows) ? loaderData.rows : []), [loaderData]);
-  const initialSiteWorkerPayload = useMemo(
-    () => (loaderData?.siteWorkerPayload && typeof loaderData.siteWorkerPayload === "object" ? loaderData.siteWorkerPayload : {}),
-    [loaderData]
-  );
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
   const [rows, setRows] = useState(() => initialRows);
-  const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => initialSiteWorkerPayload);
+  const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => ({}));
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
@@ -1716,13 +1874,15 @@ export default function SiteList() {
   const [branchRows, setBranchRows] = useState([]);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [branchLoadError, setBranchLoadError] = useState("");
-  const [recreateConfirmRow, setRecreateConfirmRow] = useState(null);
-  const [recreateBusyId, setRecreateBusyId] = useState("");
-  const [recreateError, setRecreateError] = useState("");
   const gridRef = useRef(null);
   const gridApiRef = useRef(null);
   const autoSizeHandleRef = useRef(null);
   const siteWorkerRefreshInFlightRef = useRef(false);
+  const siteWorkerMetricSampleCountRef = useRef(0);
+  const resourceHistoryRef = useRef(new Map());
+  const [siteWorkerMetricsVisible, setSiteWorkerMetricsVisible] = useState(false);
+  const [siteWorkerMetricsCountdownStartedAtMs, setSiteWorkerMetricsCountdownStartedAtMs] = useState(() => Date.now());
+  const [resourceHistoryVersion, setResourceHistoryVersion] = useState(0);
   const notify = useAppNotifications({
     title: PAGE_TITLE,
     icon: "locationcity",
@@ -1734,9 +1894,29 @@ export default function SiteList() {
     },
     [notify]
   );
+  const siteWorkerMetricsCountdownRemainingSeconds = useMemo(() => {
+    if (siteWorkerMetricsVisible) return 0;
+    const countdownStartedAtMs = Number(siteWorkerMetricsCountdownStartedAtMs || 0);
+    if (countdownStartedAtMs <= 0) return SITE_WORKER_METRIC_WARMUP_SECONDS;
+    const remainingMs = countdownStartedAtMs + SITE_WORKER_METRIC_WARMUP_MS - Date.now();
+    return Math.max(1, Math.min(SITE_WORKER_METRIC_WARMUP_SECONDS, Math.ceil(remainingMs / 1000)));
+  }, [nowSeconds, siteWorkerMetricsCountdownStartedAtMs, siteWorkerMetricsVisible]);
+
   const displayRows = useMemo(
-    () => mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds),
-    [nowSeconds, rows, siteWorkerPayload]
+    () =>
+      attachResourceHistoryToRows(mergeSiteWorkerRows(rows, siteWorkerPayload, nowSeconds), resourceHistoryRef.current).map((row) => ({
+        ...row,
+        site_worker_metrics_visible: siteWorkerMetricsVisible,
+        site_worker_metrics_polling_remaining_seconds: siteWorkerMetricsCountdownRemainingSeconds,
+      })),
+    [
+      nowSeconds,
+      resourceHistoryVersion,
+      rows,
+      siteWorkerPayload,
+      siteWorkerMetricsCountdownRemainingSeconds,
+      siteWorkerMetricsVisible,
+    ]
   );
 
   const handleOpenDevicesForSite = useCallback(
@@ -1787,17 +1967,13 @@ export default function SiteList() {
 
   const fetchSites = useCallback(async () => {
     try {
-      const [res, workerPayload] = await Promise.all([
-        fetch("/api/sites", { credentials: "include", cache: "no-store" }),
-        fetchSiteWorkerPayloadBrowser(),
-      ]);
+      const res = await fetch("/api/sites", { credentials: "include", cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
       }
       const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
       setRows(Array.isArray(data?.sites) ? data.sites : []);
-      setSiteWorkerPayload(workerPayload);
       setInstallServerUrl(nextInstallServerUrl);
       setLoadError("");
     } catch {
@@ -1876,10 +2052,20 @@ export default function SiteList() {
 
   useEffect(() => {
     setRows(initialRows);
-    setSiteWorkerPayload(initialSiteWorkerPayload);
+    setSiteWorkerPayload({});
+    siteWorkerMetricSampleCountRef.current = 0;
+    setSiteWorkerMetricsVisible(false);
+    setSiteWorkerMetricsCountdownStartedAtMs(Date.now());
+    resourceHistoryRef.current.clear();
+    setResourceHistoryVersion((version) => version + 1);
     setInstallServerUrl(initialInstallServerUrl);
     setLoadError(String(loaderData?.initialError || ""));
-  }, [initialInstallServerUrl, initialRows, initialSiteWorkerPayload, loaderData]);
+  }, [initialInstallServerUrl, initialRows, loaderData]);
+
+  useEffect(() => {
+    recordSiteWorkerResourceHistory(resourceHistoryRef.current, siteWorkerPayload, Date.now());
+    setResourceHistoryVersion((version) => version + 1);
+  }, [siteWorkerPayload]);
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -1895,8 +2081,14 @@ export default function SiteList() {
       siteWorkerRefreshInFlightRef.current = true;
       try {
         const workerPayload = await fetchSiteWorkerPayloadBrowser();
-        if (active && workerPayload && typeof workerPayload === "object" && Object.keys(workerPayload).length > 0) {
+        if (active && workerPayload && typeof workerPayload === "object") {
           setSiteWorkerPayload(workerPayload);
+          const nextSampleCount = siteWorkerMetricSampleCountRef.current + 1;
+          siteWorkerMetricSampleCountRef.current = nextSampleCount;
+          if (nextSampleCount >= 2) {
+            setSiteWorkerMetricsVisible(true);
+            setSiteWorkerMetricsCountdownStartedAtMs(0);
+          }
         }
       } finally {
         siteWorkerRefreshInFlightRef.current = false;
@@ -1907,8 +2099,23 @@ export default function SiteList() {
       active = false;
       clearInterval(intervalId);
       siteWorkerRefreshInFlightRef.current = false;
+      siteWorkerMetricSampleCountRef.current = 0;
     };
   }, []);
+
+  useEffect(() => {
+    const api = gridApiRef.current || gridRef.current?.api;
+    if (!api) return;
+    if (typeof api.isDestroyed === "function" && api.isDestroyed()) return;
+    try {
+      api.refreshCells({ columns: [SITE_WORKER_CONTAINER_COLUMN_ID], force: true });
+    } catch {}
+  }, [
+    resourceHistoryVersion,
+    siteWorkerMetricsCountdownRemainingSeconds,
+    siteWorkerMetricsVisible,
+    siteWorkerPayload,
+  ]);
 
   const autoSizeColumns = useCallback(() => {
     const api = gridApiRef.current || gridRef.current?.api;
@@ -1952,6 +2159,7 @@ export default function SiteList() {
         autoSizeHandleRef.current = null;
       }
       gridApiRef.current = null;
+      resourceHistoryRef.current.clear();
     };
   }, []);
 
@@ -2152,12 +2360,14 @@ export default function SiteList() {
     },
     {
       headerName: "Site Worker Container",
-      field: "site_worker_container_id",
-      minWidth: 300,
-      flex: 0.95,
+      colId: SITE_WORKER_CONTAINER_COLUMN_ID,
+      valueGetter: (params) => siteWorkerContainerRefreshValue(params.data),
+      minWidth: 540,
+      flex: 1.45,
       filter: false,
       suppressHeaderMenuButton: true,
       suppressHeaderContextMenu: true,
+      cellClass: "center-col",
       cellRendererParams: {
         suppressMouseEventHandling: () => true,
       },
@@ -2299,50 +2509,6 @@ export default function SiteList() {
     if (!hasSelectedSites) return;
     setDeleteOpen(true);
   }, [handleCloseSiteContextMenu, hasSelectedSites, selectedIds]);
-
-  const openRecreateDialog = useCallback((row) => {
-    setRecreateError("");
-    setRecreateConfirmRow(row || null);
-  }, []);
-
-  const closeRecreateDialog = useCallback(() => {
-    if (recreateBusyId) return;
-    setRecreateConfirmRow(null);
-    setRecreateError("");
-  }, [recreateBusyId]);
-
-  const confirmRecreate = useCallback(async () => {
-    const workerGuid = String(recreateConfirmRow?.site_worker_guid || "").trim();
-    if (!workerGuid) return;
-    setRecreateBusyId(workerGuid);
-    setRecreateError("");
-    try {
-      const response = await fetch(`/api/server/workers/${encodeURIComponent(workerGuid)}/recreate`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.message || data?.error || `HTTP ${response.status}`);
-      }
-      await sendNotification(`Re-deploy queued for ${recreateConfirmRow?.name || "site worker"}.`);
-      setRecreateConfirmRow(null);
-      await fetchSites();
-    } catch (error) {
-      const message = error?.message || "Unable to queue site-worker re-deploy.";
-      setRecreateError(message);
-      await sendNotification({
-        title: "Site Worker Re-Deploy Failed",
-        message,
-        icon: "warning",
-        variant: "error",
-      });
-    } finally {
-      setRecreateBusyId("");
-    }
-  }, [fetchSites, recreateConfirmRow, sendNotification]);
 
   useEffect(() => {
     if (!hasSelectedSites) {
@@ -2526,10 +2692,8 @@ export default function SiteList() {
   const gridContext = useMemo(
     () => ({
       navigate,
-      onRecreate: openRecreateDialog,
-      recreateBusyId,
     }),
-    [navigate, openRecreateDialog, recreateBusyId]
+    [navigate]
   );
 
   return (
@@ -2779,37 +2943,6 @@ export default function SiteList() {
           </Box>
         </Box>
       </PageBodyFrame>
-
-      <Dialog open={Boolean(recreateConfirmRow)} onClose={closeRecreateDialog} PaperProps={{ sx: SITE_DIALOG_PAPER_SX }}>
-        <DialogTitle sx={SITE_DIALOG_TITLE_SX}>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography sx={{ fontWeight: 700, fontSize: "1rem", lineHeight: 1.2, color: MAGIC_UI.textBright }}>
-              Re-Deploy Site Worker
-            </Typography>
-            <Typography sx={{ mt: 0.55, fontSize: "0.84rem", lineHeight: 1.45, color: MAGIC_UI.textMuted }}>
-              {recreateConfirmRow?.name ? `Site: ${recreateConfirmRow.name}` : "Site worker container"}
-            </Typography>
-          </Box>
-        </DialogTitle>
-        <DialogContent sx={SITE_DIALOG_CONTENT_SX}>
-          <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.88rem", lineHeight: 1.55 }}>
-            Borealis will stop this site-worker container. Job Scheduler will deploy a replacement when same-site Agent or task demand remains.
-          </Typography>
-          {recreateError ? (
-            <Alert severity="error" variant="outlined" sx={{ mt: 2, color: "#fecdd3", borderColor: "rgba(251,113,133,0.42)" }}>
-              {recreateError}
-            </Alert>
-          ) : null}
-        </DialogContent>
-        <DialogActions sx={SITE_DIALOG_ACTIONS_SX}>
-          <Button onClick={closeRecreateDialog} sx={SITE_DIALOG_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
-            Cancel
-          </Button>
-          <Button onClick={confirmRecreate} sx={SITE_DIALOG_DANGER_BUTTON_SX} disabled={Boolean(recreateBusyId)}>
-            {recreateBusyId ? "Queuing..." : "Re-Deploy"}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       <CreateSiteDialog
         open={createOpen}
