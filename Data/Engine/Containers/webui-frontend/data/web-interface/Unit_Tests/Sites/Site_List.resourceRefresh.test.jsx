@@ -1,21 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { siteWorkerContainerRefreshValue, siteWorkerMetricPollingText } from "@/Sites/Site_List.jsx";
+import { siteWorkerContainerRefreshValue } from "@/Sites/Site_List.jsx";
 
 describe("site worker resource refresh value", () => {
-  it("formats the delayed polling countdown text", () => {
-    expect(siteWorkerMetricPollingText(10)).toBe("Polling Site Worker Metrics in 10s");
-    expect(siteWorkerMetricPollingText(2.2)).toBe("Polling Site Worker Metrics in 3s");
-  });
-
-  it("changes while metrics are still in the polling countdown", () => {
+  it("changes when the worker payload becomes ready", () => {
     const baseRow = {
-      site_worker_metrics_visible: false,
-      site_worker_metrics_polling_remaining_seconds: 5,
+      site_worker_payload_ready: false,
       site_worker_container_id: "abcdef123456",
     };
     const nextRow = {
       ...baseRow,
-      site_worker_metrics_polling_remaining_seconds: 4,
+      site_worker_payload_ready: true,
     };
 
     expect(siteWorkerContainerRefreshValue(nextRow)).not.toBe(siteWorkerContainerRefreshValue(baseRow));
@@ -23,7 +17,7 @@ describe("site worker resource refresh value", () => {
 
   it("changes when nested docker stats change even if container id is stable", () => {
     const baseRow = {
-      site_worker_metrics_visible: true,
+      site_worker_payload_ready: true,
       site_worker_container_id: "abcdef123456",
       site_worker_resource_history_key: "7:worker-1:site-worker-1",
       site_worker_resource_history: [
