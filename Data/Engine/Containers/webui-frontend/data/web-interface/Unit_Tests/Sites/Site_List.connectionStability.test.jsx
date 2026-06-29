@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   applySiteConnectionStability,
   recordSiteConnectionSnapshots,
+  shouldShowConnectedDevicesPlaceholder,
   siteListRowHeightForData,
   siteListRowHeightSignature,
 } from "@/Sites/Site_List.jsx";
 
 describe("site connection stability", () => {
+  it("shows connection analysis placeholder until worker metrics are visible", () => {
+    expect(shouldShowConnectedDevicesPlaceholder({ site_worker_metrics_visible: false })).toBe(true);
+    expect(shouldShowConnectedDevicesPlaceholder({ site_worker_metrics_visible: true })).toBe(false);
+  });
+
   it("keeps the last connected breakdown during a short zero-connected poll", () => {
     const snapshots = new Map();
     const stableRows = [

@@ -760,6 +760,10 @@ export function siteListRowHeightSignature(rows) {
     .join("|");
 }
 
+export function shouldShowConnectedDevicesPlaceholder(row) {
+  return !Boolean(row?.site_worker_metrics_visible);
+}
+
 export function buildTaskGroupsByWorker(payload, nowSeconds = Math.floor(Date.now() / 1000)) {
   const byWorker = new Map();
   const activeWork = Array.isArray(payload?.active_work) ? payload.active_work : [];
@@ -1486,6 +1490,15 @@ function SiteWorkerStatsCell(params) {
 }
 
 function ConnectedDevicesCell(params) {
+  if (shouldShowConnectedDevicesPlaceholder(params?.data)) {
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
+        <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
+          Analyzing Agent Connections
+        </Typography>
+      </Box>
+    );
+  }
   const connected = Number(params?.data?.connected_devices || 0);
   const disconnected = Number(params?.data?.disconnected_devices || 0);
   const offline = Number(params?.data?.offline_devices || 0);

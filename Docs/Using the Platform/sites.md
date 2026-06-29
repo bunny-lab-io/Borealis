@@ -31,7 +31,7 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
 
 The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends inside the Site Worker Container column to spot workers under load.
 
-Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, immediately counts down from `Polling Site Worker Metrics in 10s`, starts worker polling after the first 5-second cadence, then displays the mini-trends after the second successful worker sample. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, immediately counts down from `Polling Site Worker Metrics in 10s`, starts worker polling after the first 5-second cadence, then displays the mini-trends after the second successful worker sample. Connected Devices shows `Analyzing Agent Connections` until that warmup finishes. Navigating away from Sites clears that short history. Sites with no active site-worker stats show `Site Worker Not Running`.
 
 The Connected Devices bar uses the last known connected breakdown for a short grace window before showing an all-disconnected state. This prevents one missed site-worker heartbeat or zero-connected poll from briefly turning healthy sites red.
 
