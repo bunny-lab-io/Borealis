@@ -1456,13 +1456,37 @@ restore_required_engine_images() {
   done
 }
 
-prune_engine_build_cache_exports() {
+trim_engine_build_cache_exports() {
   local cache_root="${DEPLOY_DIR}/cache/buildkit"
   [[ -d "${cache_root}" ]] || return 0
-  log_status "Docker cleanup" "Clearing Engine build cache" "${C_YELLOW}"
-  if ! find "${cache_root}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + >> "${BUILD_LOG}" 2>&1; then
-    log_status "Docker cleanup" "Engine build cache cleanup failed" "${C_RED}"
-    printf '[%s] Failed to clear Engine Buildx cache export directory %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
+  log_status "Docker cleanup" "Trimming Engine build cache" "${C_YELLOW}"
+  local cleanup_failed=0
+  local cache_dir=""
+  for cache_dir in "${cache_root}"/*; do
+    [[ -d "${cache_dir}" ]] || continue
+    local cache_name
+    cache_name="$(basename "${cache_dir}")"
+    local known_service=0
+    local service=""
+    for service in "${BUILD_ROLES[@]}"; do
+      if [[ "${cache_name}" == "${service}" ]]; then
+        known_service=1
+        break
+      fi
+    done
+    if [[ "${known_service}" -ne 1 ]]; then
+      if ! rm -rf "${cache_dir}" >> "${BUILD_LOG}" 2>&1; then
+        cleanup_failed=1
+      fi
+      continue
+    fi
+    if ! find "${cache_dir}" -mindepth 1 -maxdepth 1 ! -name current -exec rm -rf -- {} + >> "${BUILD_LOG}" 2>&1; then
+      cleanup_failed=1
+    fi
+  done
+  if [[ "${cleanup_failed}" -ne 0 ]]; then
+    log_status "Docker cleanup" "Engine build cache trim failed" "${C_RED}"
+    printf '[%s] Failed to trim Engine Buildx cache export directory %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
   fi
 }
 
@@ -1490,7 +1514,7 @@ prune_engine_docker_storage() {
     log_status "Docker cleanup" "Builder prune failed" "${C_RED}"
   fi
 
-  prune_engine_build_cache_exports
+  trim_engine_build_cache_exports
 
   if [[ "${cleanup_failed}" -eq 0 ]]; then
     log_status "Docker cleanup" "Complete" "${C_GREEN}"

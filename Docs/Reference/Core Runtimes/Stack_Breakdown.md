@@ -175,9 +175,9 @@ borealis-engine/<service>:sha-<inputhash12>
 ```
 
 Build cache:
-- Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/` when available.
+- Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/current` when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and clear Engine Buildx cache exports under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
+- Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and trim Engine Buildx cache exports so only each known service's `current` cache remains under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
 - `job-scheduler` uses an Alpine runtime image with the Go scheduler mode, Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
@@ -190,7 +190,7 @@ Build cache:
 - `compose.env` carries image tags, stable env-file paths, deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
-- Traefik always routes the WebUI service to `127.0.0.1:8000`; production preview and Vite HMR both bind that same loopback port.
+- Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
 
 Deploy output:
 - Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
@@ -200,8 +200,8 @@ Deploy output:
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
 
 WebUI targets:
-- Production builds Docker target `prod`, which runs `npm run build`.
-- Dev builds Docker target `dev`, which keeps Vite HMR available and skips production static build work.
+- Production builds Docker target `prod`, which runs `npm run build` in a build stage, copies only the static `build/` output into the runtime stage, and serves it without `node_modules` or Vite preview.
+- Dev builds Docker target `dev`, which keeps Vite HMR available with the full Node dependency tree and skips production static build work.
 - Dev HMR source edits should happen under `Engine/Services/webui-frontend/data/web-interface/`; Compose bind-mounts that runtime copy into the WebUI container.
 
 ## Runtime Start Order
@@ -605,7 +605,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     Build cache, when Docker Buildx is available, lives under:
     ```text
-    Engine/Deploy/cache/buildkit/<service>/
+    Engine/Deploy/cache/buildkit/<service>/current
     ```
 
     Operators should treat `Engine/` as generated runtime state. Edit committed source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`. For live WebUI dev/HMR work, edit the seeded runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/`.

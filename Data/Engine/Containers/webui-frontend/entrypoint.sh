@@ -1,7 +1,5 @@
-#!/usr/bin/env bash
-set -o errexit
-set -o nounset
-set -o pipefail
+#!/bin/sh
+set -eu
 
 cd /opt/Borealis/Data/Engine/web-interface
 
@@ -11,11 +9,11 @@ case "${mode}" in
   dev|developer)
     export NODE_ENV=development
     export BOREALIS_DEV_UI_PROXY_ENABLED=1
-    exec npm run dev -- --host 127.0.0.1 --port "${port}" --strictPort --open false
+    exec npm run dev -- --host 127.0.0.1 --port "${port}" --strictPort --no-open
     ;;
   prod|production|"")
     export NODE_ENV=production
-    exec npm exec -- vite preview --host 127.0.0.1 --port "${port}" --strictPort
+    exec node /usr/local/bin/borealis-webui-static-server.js
     ;;
   *)
     echo "Unsupported BOREALIS_WEBUI_MODE '${mode}'. Use prod or dev." >&2

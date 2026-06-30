@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS base
+FROM node:22-alpine AS deps
 
 ENV NODE_ENV=development
 
@@ -7,20 +7,45 @@ WORKDIR /opt/Borealis/Data/Engine/web-interface
 COPY data/web-interface/package.json /opt/Borealis/Data/Engine/web-interface/package.json
 RUN npm install --include=dev --no-fund --audit=false
 
+FROM deps AS source
+
 COPY data/web-interface /opt/Borealis/Data/Engine/web-interface
+
+FROM source AS dev
+
 COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
+COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
 
-RUN chmod +x /usr/local/bin/borealis-webui-frontend /usr/local/bin/borealis-webui-healthcheck
+RUN chmod +x \
+    /usr/local/bin/borealis-webui-frontend \
+    /usr/local/bin/borealis-webui-healthcheck \
+    /usr/local/bin/borealis-webui-static-server.js
 
 EXPOSE 8000
 
-FROM base AS dev
-
 ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]
 
-FROM base AS prod
+FROM source AS build
 
 RUN NODE_ENV=production npm run build
+
+FROM node:22-alpine AS prod
+
+ENV NODE_ENV=production
+
+WORKDIR /opt/Borealis/Data/Engine/web-interface
+
+COPY --from=build /opt/Borealis/Data/Engine/web-interface/build /opt/Borealis/Data/Engine/web-interface/build
+COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
+COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
+COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
+
+RUN chmod +x \
+    /usr/local/bin/borealis-webui-frontend \
+    /usr/local/bin/borealis-webui-healthcheck \
+    /usr/local/bin/borealis-webui-static-server.js
+
+EXPOSE 8000
 
 ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]
