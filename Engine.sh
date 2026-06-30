@@ -1577,11 +1577,7 @@ prune_expired_engine_build_cache_exports() {
     printf '[%s] Failed to prune one or more Engine Buildx cache exports under %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
     return 1
   fi
-  if ((removed > 0)); then
-    log_status "Docker cleanup" "Pruned ${removed} Engine build cache export(s)" "${C_GREEN}"
-  else
-    log_status "Docker cleanup" "Retained ${retained} Engine build cache export(s)" "${C_DIM}"
-  fi
+  log_status "Docker cleanup" "Engine build cache removed=${removed} retained=${retained}" "${C_GREEN}"
   printf '[%s] Engine Buildx cache retention complete: removed=%d retained=%d\n' "$(date +%FT%T)" "${removed}" "${retained}" >> "${BUILD_LOG}"
   return 0
 }
