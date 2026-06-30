@@ -10,7 +10,9 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  Icon,
   IconButton,
+  InputBase,
   MenuItem,
   Stack,
   TextField,
@@ -49,37 +51,170 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 const VALUE_TYPES = ["REG_SZ", "REG_EXPAND_SZ", "REG_MULTI_SZ", "REG_DWORD", "REG_QWORD", "REG_BINARY"];
 
 const TOOLBAR_BUTTON_SX = {
-  minHeight: 38,
-  borderRadius: 2,
+  minHeight: 42,
+  borderRadius: 999,
+  px: 1.8,
+  py: 0.8,
   textTransform: "none",
-  fontWeight: 700,
-  borderColor: "rgba(125,211,252,0.28)",
+  fontSize: "0.86rem",
+  fontWeight: 600,
+  letterSpacing: 0,
+  borderColor: "rgba(125,211,252,0.35)",
   color: MAGIC_UI.textBright,
-  background: "rgba(5,10,24,0.72)",
+  background: "rgba(5,10,24,0.78)",
+  boxShadow: "0 10px 24px rgba(2,6,23,0.24)",
   "&:hover": {
-    borderColor: "rgba(125,211,252,0.52)",
-    background: "rgba(8,17,35,0.9)",
+    borderColor: "rgba(125,211,252,0.55)",
+    background: "rgba(9,16,34,0.94)",
   },
   "&.Mui-disabled": {
-    color: "rgba(148,163,184,0.58)",
-    borderColor: "rgba(148,163,184,0.18)",
+    color: "rgba(148,163,184,0.52)",
+    borderColor: "rgba(148,163,184,0.2)",
+    background: "rgba(15,23,42,0.42)",
+  },
+  "& .MuiButton-startIcon": {
+    mr: 0.7,
+    "& > *:nth-of-type(1)": {
+      fontSize: 18,
+    },
   },
 };
 
 const ICON_BUTTON_SX = {
-  width: 38,
-  height: 38,
+  width: 42,
+  height: 42,
   borderRadius: "50%",
-  border: "1px solid rgba(148,163,184,0.28)",
-  background: "rgba(5,10,24,0.72)",
+  flexShrink: 0,
+  border: "1px solid rgba(148,163,184,0.36)",
+  background: "rgba(5,10,24,0.82)",
   color: MAGIC_UI.textBright,
+  transition: "background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease",
   "&:hover": {
-    borderColor: "rgba(125,211,252,0.52)",
-    background: "rgba(8,17,35,0.9)",
+    borderColor: "rgba(125,211,252,0.46)",
+    background: "rgba(9,16,34,0.94)",
+  },
+  "&:active": {
+    transform: "scale(0.98)",
   },
   "&.Mui-disabled": {
-    color: "rgba(148,163,184,0.58)",
-    borderColor: "rgba(148,163,184,0.18)",
+    color: "rgba(148,163,184,0.76)",
+    borderColor: "rgba(148,163,184,0.22)",
+    background: "rgba(15,23,42,0.42)",
+  },
+};
+
+const ADDRESS_BAR_SHELL_SX = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  minHeight: 42,
+  borderRadius: 2.5,
+  px: 1.15,
+  gap: 0.45,
+  background: "rgba(5,10,24,0.82)",
+  border: "1px solid rgba(148,163,184,0.24)",
+  transition: "border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease",
+  "&:hover": {
+    borderColor: "rgba(125,211,252,0.4)",
+  },
+  "&:focus-within": {
+    borderColor: "rgba(125,211,252,0.62)",
+    boxShadow: "0 0 0 1px rgba(125,211,252,0.12)",
+  },
+};
+
+const ADDRESS_BAR_INPUT_SX = {
+  flex: 1,
+  minWidth: 0,
+  color: MAGIC_UI.textBright,
+  "& input": {
+    py: 1.05,
+    fontSize: "0.92rem",
+  },
+  "& input::placeholder": {
+    color: "rgba(148,163,184,0.84)",
+    opacity: 1,
+  },
+};
+
+const ADDRESS_BAR_SEGMENT_BUTTON_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  minWidth: 0,
+  border: 0,
+  background: "transparent",
+  color: MAGIC_UI.textBright,
+  cursor: "pointer",
+  px: 0.7,
+  py: 0.35,
+  m: 0,
+  font: "inherit",
+  borderRadius: 1.1,
+  transition: "background-color 0.16s ease, color 0.16s ease",
+  "&:hover": {
+    background: "rgba(88,166,255,0.16)",
+    color: "#9bd7ff",
+  },
+};
+
+const ADDRESS_BAR_ROOT_BUTTON_SX = {
+  ...ADDRESS_BAR_SEGMENT_BUTTON_SX,
+  gap: 0.3,
+  flexShrink: 0,
+};
+
+const ADDRESS_BAR_COPY_BUTTON_SX = {
+  color: "rgba(148,163,184,0.92)",
+  ml: 0.25,
+  "&:hover": {
+    color: "#d9ecff",
+    background: "rgba(125,211,252,0.12)",
+  },
+  "&.Mui-disabled": {
+    color: "rgba(148,163,184,0.38)",
+  },
+};
+
+const GRID_CELL_TEXT_SX = {
+  display: "block",
+  width: "100%",
+  color: "#cbd5e1",
+  fontSize: "0.86rem",
+  fontWeight: 400,
+  lineHeight: 1.25,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const GRID_NUMERIC_CELL_SX = {
+  ...GRID_CELL_TEXT_SX,
+  width: "100%",
+  textAlign: "right",
+  fontVariantNumeric: "tabular-nums",
+};
+
+const GRID_MUTED_CELL_SX = {
+  ...GRID_CELL_TEXT_SX,
+  color: "rgba(148,163,184,0.86)",
+};
+
+const REGISTRY_GRID_SX = {
+  flexGrow: 1,
+  minHeight: 420,
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+  "& .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    textAlign: "left",
+  },
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(73,156,196,0.2) !important",
+  },
+  "& .ag-row-selected": {
+    backgroundColor: "rgba(125,211,252,0.2) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
   },
 };
 
@@ -292,12 +427,6 @@ export default function RemoteRegistryEditor({ device }) {
     void loadRegistryPath(currentPath);
   }, [currentPath, loadRegistryPath]);
 
-  const handleOpenSelected = useCallback(() => {
-    if (selectedKey?.path) {
-      navigateToPath(selectedKey.path);
-    }
-  }, [navigateToPath, selectedKey]);
-
   const handleCopyPath = useCallback(async () => {
     const pathValue = normalizeRegistryPath(selectedRow?.path || currentPath);
     if (!pathValue) return;
@@ -440,26 +569,45 @@ export default function RemoteRegistryEditor({ device }) {
         headerName: "Name",
         minWidth: 260,
         flex: 1.4,
+        cellStyle: {
+          display: "flex",
+          alignItems: "center",
+        },
         cellRenderer: (params) => {
           const row = params?.data || {};
           const isKey = row.row_type === "key";
           return (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.9, minWidth: 0 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, height: "100%", minWidth: 0, width: "100%" }}>
               {isKey ? (
-                <AccountTreeRoundedIcon sx={{ fontSize: 19, color: row.kind === "hive" ? "#7dd3fc" : "#34d399" }} />
+                row.kind === "hive" ? (
+                  <Icon
+                    baseClassName="material-symbols-outlined"
+                    sx={{
+                      fontSize: 29,
+                      color: "#8fd3ff",
+                      flexShrink: 0,
+                      lineHeight: 1,
+                      fontVariationSettings: '"FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24',
+                    }}
+                  >
+                    account_tree
+                  </Icon>
+                ) : (
+                  <AccountTreeRoundedIcon sx={{ fontSize: 29, color: "#8fd3ff", flexShrink: 0 }} />
+                )
               ) : (
-                <ArticleRoundedIcon sx={{ fontSize: 19, color: row.editable ? "#c084fc" : "rgba(148,163,184,0.82)" }} />
+                <ArticleRoundedIcon sx={{ fontSize: 29, color: row.editable ? "#cbd5e1" : "rgba(148,163,184,0.78)", flexShrink: 0 }} />
               )}
               <Typography
                 component="span"
                 sx={{
+                  color: "#58a6ff",
+                  fontWeight: 400,
+                  lineHeight: 1.25,
                   minWidth: 0,
+                  whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  color: MAGIC_UI.textBright,
-                  fontSize: "0.9rem",
-                  fontWeight: isKey ? 700 : 600,
                 }}
               >
                 {row.display_name}
@@ -468,11 +616,41 @@ export default function RemoteRegistryEditor({ device }) {
           );
         },
       },
-      { field: "type_label", headerName: "Type", minWidth: 130, flex: 0.55 },
-      { field: "data_label", headerName: "Data", minWidth: 240, flex: 1.2 },
-      { field: "subkey_count", headerName: "Subkeys", width: 110, flex: 0 },
-      { field: "value_count", headerName: "Values", width: 100, flex: 0 },
-      { field: "modified_label", headerName: "Modified", minWidth: 190, flex: 0.75 },
+      {
+        field: "type_label",
+        headerName: "Type",
+        minWidth: 130,
+        flex: 0.55,
+        cellRenderer: (params) => <Typography component="span" sx={GRID_MUTED_CELL_SX}>{params?.value || ""}</Typography>,
+      },
+      {
+        field: "data_label",
+        headerName: "Data",
+        minWidth: 260,
+        flex: 1.2,
+        cellRenderer: (params) => <Typography component="span" sx={GRID_CELL_TEXT_SX}>{params?.value || ""}</Typography>,
+      },
+      {
+        field: "subkey_count",
+        headerName: "Subkeys",
+        width: 110,
+        flex: 0,
+        cellRenderer: (params) => <Typography component="span" sx={GRID_NUMERIC_CELL_SX}>{params?.value ?? ""}</Typography>,
+      },
+      {
+        field: "value_count",
+        headerName: "Values",
+        width: 100,
+        flex: 0,
+        cellRenderer: (params) => <Typography component="span" sx={GRID_NUMERIC_CELL_SX}>{params?.value ?? ""}</Typography>,
+      },
+      {
+        field: "modified_label",
+        headerName: "Modified",
+        minWidth: 190,
+        flex: 0.75,
+        cellRenderer: (params) => <Typography component="span" sx={GRID_MUTED_CELL_SX}>{params?.value || ""}</Typography>,
+      },
     ],
     []
   );
@@ -480,38 +658,44 @@ export default function RemoteRegistryEditor({ device }) {
   const rowSelection = useMemo(() => ({ mode: "singleRow", enableClickSelection: true }), []);
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.35, flexGrow: 1, minHeight: 0 }}>
-      <Stack direction={{ xs: "column", lg: "row" }} spacing={1} alignItems={{ xs: "stretch", lg: "center" }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+      <Stack direction={{ xs: "column", lg: "row" }} spacing={1.05} alignItems={{ xs: "stretch", lg: "flex-start" }}>
+        <Stack direction="row" spacing={0.9} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
           <Tooltip title="Registry roots" arrow>
             <IconButton onClick={() => navigateToPath("")} sx={ICON_BUTTON_SX}>
               <AccountTreeRoundedIcon sx={{ fontSize: 19 }} />
             </IconButton>
           </Tooltip>
-          <TextField
-            value={addressInput}
-            onChange={(event) => setAddressInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                navigateToPath(addressInput);
-              }
-            }}
-            placeholder="HKLM\\SOFTWARE"
-            size="small"
-            fullWidth
-            sx={DIALOG_INPUT_SX}
-          />
+          <Box sx={ADDRESS_BAR_SHELL_SX}>
+            <InputBase
+              value={addressInput}
+              onChange={(event) => setAddressInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  navigateToPath(addressInput);
+                }
+              }}
+              placeholder="HKLM\\SOFTWARE"
+              sx={ADDRESS_BAR_INPUT_SX}
+              inputProps={{ "aria-label": "Registry path" }}
+            />
+            <Tooltip title={normalizeRegistryPath(selectedRow?.path || currentPath) ? "Copy path" : "Nothing to copy"} arrow>
+              <span>
+                <IconButton
+                  size="small"
+                  onClick={() => void handleCopyPath()}
+                  disabled={!normalizeRegistryPath(selectedRow?.path || currentPath)}
+                  sx={ADDRESS_BAR_COPY_BUTTON_SX}
+                >
+                  <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
           <Tooltip title="Open path" arrow>
             <span>
               <IconButton onClick={() => navigateToPath(addressInput)} disabled={!normalizeRegistryPath(addressInput)} sx={ICON_BUTTON_SX}>
                 <ChevronRightRoundedIcon sx={{ fontSize: 21 }} />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Copy path" arrow>
-            <span>
-              <IconButton onClick={() => void handleCopyPath()} disabled={!normalizeRegistryPath(selectedRow?.path || currentPath)} sx={ICON_BUTTON_SX}>
-                <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </span>
           </Tooltip>
@@ -541,25 +725,28 @@ export default function RemoteRegistryEditor({ device }) {
       </Stack>
 
       {currentPath ? (
-        <Stack direction="row" spacing={0.4} alignItems="center" sx={{ minHeight: 24, overflow: "hidden" }}>
+        <Stack direction="row" spacing={0.25} alignItems="center" sx={{ minHeight: 30, overflow: "hidden" }}>
           {pathSegments.map((segment, index) => (
             <React.Fragment key={segment}>
-              <Button
-                variant="text"
+              <Box
+                component="button"
+                type="button"
                 onClick={() => navigateToPath(segment)}
-                sx={{
-                  minWidth: 0,
-                  px: 0.7,
-                  py: 0.2,
-                  color: "#9bd7ff",
-                  textTransform: "none",
-                  fontWeight: 700,
-                  fontSize: "0.82rem",
-                }}
+                sx={index === 0 ? ADDRESS_BAR_ROOT_BUTTON_SX : ADDRESS_BAR_SEGMENT_BUTTON_SX}
               >
-                {segment.split("\\").pop()}
-              </Button>
-              {index < pathSegments.length - 1 ? <ChevronRightRoundedIcon sx={{ fontSize: 16, color: MAGIC_UI.textMuted }} /> : null}
+                <Typography
+                  component="span"
+                  sx={{
+                    fontSize: "0.92rem",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {segment.split("\\").pop()}
+                </Typography>
+              </Box>
+              {index < pathSegments.length - 1 ? (
+                <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "rgba(148,163,184,0.86)", flexShrink: 0 }} />
+              ) : null}
             </React.Fragment>
           ))}
         </Stack>
@@ -571,21 +758,7 @@ export default function RemoteRegistryEditor({ device }) {
         </Alert>
       ) : null}
 
-      <GridShell
-        sx={{
-          flexGrow: 1,
-          minHeight: 460,
-          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-          "& .ag-row-hover": {
-            backgroundColor: "rgba(73,156,196,0.2) !important",
-          },
-          "& .ag-row-selected": {
-            backgroundColor: "rgba(125,211,252,0.2) !important",
-            boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-          },
-        }}
-      >
+      <GridShell sx={REGISTRY_GRID_SX}>
         <AgGridReact
           ref={gridRef}
           rowData={rows}
