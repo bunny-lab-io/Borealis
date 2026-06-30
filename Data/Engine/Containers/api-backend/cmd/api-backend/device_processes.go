@@ -243,6 +243,8 @@ func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, pr
 	return snapshot, http.StatusOK, nil
 }
 
+const workerHostServiceCallResponseMaxBytes = 16 << 20
+
 func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, int, map[string]any) {
 	if auth == nil || route == nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
@@ -275,7 +277,7 @@ func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 	defer resp.Body.Close()
 
 	var payloadMap map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payloadMap); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, workerHostServiceCallResponseMaxBytes)).Decode(&payloadMap); err != nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "invalid_worker_response", "message": "The site-worker returned an invalid response."}
 	}
 	if resp.StatusCode >= 400 {
