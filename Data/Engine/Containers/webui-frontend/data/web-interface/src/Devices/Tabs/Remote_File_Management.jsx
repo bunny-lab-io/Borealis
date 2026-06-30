@@ -1678,6 +1678,7 @@ export default function RemoteFileManagement({ device }) {
       return;
     }
     const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("registry_path");
     if (shouldClear) {
       nextParams.delete("working_directory");
     } else {

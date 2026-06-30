@@ -77,6 +77,14 @@ import {
   STORAGE_USAGE_ALERT_THRESHOLD_PCT,
   isStorageUsageAlert,
 } from "./storageAlerts.js";
+import {
+  LEGACY_TAB_TO_WORKSPACE,
+  WORKSPACE_KEYS,
+  createDeviceWorkspaceSearch,
+  normalizeWorkspaceKey,
+  normalizeWorkspaceView,
+  pruneDeviceWorkspaceContextParams,
+} from "./deviceWorkspaceUrlState.js";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
@@ -286,70 +294,6 @@ const WORKSPACES = [
   { key: "history", label: "History", icon: ListAltRoundedIcon },
   { key: "config", label: "Metadata", icon: LabelRoundedIcon },
 ];
-const WORKSPACE_KEYS = new Set(WORKSPACES.map((workspace) => workspace.key));
-const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
-  remote_ops: "shell",
-  inventory: "summary",
-  config: "metadata",
-});
-const WORKSPACE_VIEW_OPTIONS = Object.freeze({
-  remote_ops: ["shell", "files", "registry", "processes", "services"],
-  inventory: ["summary", "software"],
-  config: ["metadata"],
-});
-const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
-  command: { workspace: "inventory", view: "summary" },
-  device_summary: { workspace: "inventory", view: "summary" },
-  summary: { workspace: "inventory", view: "summary" },
-  file_management: { workspace: "remote_ops", view: "files" },
-  registry: { workspace: "remote_ops", view: "registry" },
-  registry_editor: { workspace: "remote_ops", view: "registry" },
-  installed_software: { workspace: "inventory", view: "software" },
-  software: { workspace: "inventory", view: "software" },
-  metadata_fields: { workspace: "config", view: "metadata" },
-  metadata: { workspace: "config", view: "metadata" },
-  services: { workspace: "remote_ops", view: "services" },
-  process_management: { workspace: "remote_ops", view: "processes" },
-  processes: { workspace: "remote_ops", view: "processes" },
-  watchdogs: { workspace: "protection" },
-  activity_history: { workspace: "history" },
-  activity: { workspace: "history" },
-  remote_shell: { workspace: "remote_ops", view: "shell" },
-  shell: { workspace: "remote_ops", view: "shell" },
-  agent_health: { workspace: "inventory", view: "summary" },
-  health: { workspace: "inventory", view: "summary" },
-});
-
-const normalizeWorkspaceKey = (value, fallback = "inventory") => {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (WORKSPACE_KEYS.has(normalized)) return normalized;
-  const legacyTarget = LEGACY_TAB_TO_WORKSPACE[normalized];
-  if (legacyTarget?.workspace && WORKSPACE_KEYS.has(legacyTarget.workspace)) {
-    return legacyTarget.workspace;
-  }
-  return fallback;
-};
-
-const normalizeWorkspaceView = (workspaceKey, value) => {
-  const allowedViews = WORKSPACE_VIEW_OPTIONS[workspaceKey] || [];
-  const fallback = WORKSPACE_VIEW_DEFAULTS[workspaceKey] || "";
-  const normalized = String(value || "").trim().toLowerCase();
-  if (allowedViews.includes(normalized)) return normalized;
-  return fallback;
-};
-
-const createDeviceWorkspaceSearch = (currentSearch, workspaceKey, viewKey = "") => {
-  const params = new URLSearchParams(currentSearch || "");
-  const normalizedWorkspace = normalizeWorkspaceKey(workspaceKey);
-  const normalizedView = normalizeWorkspaceView(normalizedWorkspace, viewKey);
-  params.set("tab", normalizedWorkspace);
-  if (normalizedView) {
-    params.set("view", normalizedView);
-  } else {
-    params.delete("view");
-  }
-  return params.toString() ? `?${params.toString()}` : "";
-};
 
 const resolveDeviceId = (device) =>
   device?.agent_guid ||
@@ -1472,12 +1416,14 @@ export default function DeviceSummary() {
   );
   useEffect(() => {
     const params = new URLSearchParams(location.search);
+    const originalSearch = params.toString();
     const legacyTab = String(params.get("tab") || "").trim().toLowerCase();
     if (!deviceId) {
       return;
     }
     if (legacyTab === "remote_desktop" || legacyTab === "vnc") {
       params.delete("tab");
+      pruneDeviceWorkspaceContextParams(params, "", "");
       navigate(
         {
           pathname: APP_PATHS.deviceRemoteDesktop(deviceId),
@@ -1488,16 +1434,39 @@ export default function DeviceSummary() {
       return;
     }
     if (!legacyTab || WORKSPACE_KEYS.has(legacyTab)) {
+      const workspace = normalizeWorkspaceKey(legacyTab, "inventory");
+      const view = normalizeWorkspaceView(workspace, String(params.get("view") || "").trim().toLowerCase());
+      pruneDeviceWorkspaceContextParams(params, workspace, view);
+      if (params.toString() !== originalSearch) {
+        navigate(
+          {
+            pathname: location.pathname,
+            search: params.toString() ? `?${params.toString()}` : "",
+          },
+          { replace: true, state: location.state }
+        );
+      }
       return;
     }
     const target = LEGACY_TAB_TO_WORKSPACE[legacyTab];
     if (!target?.workspace) {
+      pruneDeviceWorkspaceContextParams(params, "", "");
+      if (params.toString() !== originalSearch) {
+        navigate(
+          {
+            pathname: location.pathname,
+            search: params.toString() ? `?${params.toString()}` : "",
+          },
+          { replace: true, state: location.state }
+        );
+      }
       return;
     }
     params.set("tab", target.workspace);
     if (target.view && !String(params.get("view") || "").trim()) {
       params.set("view", target.view);
     }
+    pruneDeviceWorkspaceContextParams(params, target.workspace, params.get("view"));
     navigate(
       {
         pathname: location.pathname,
