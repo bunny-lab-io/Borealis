@@ -15,6 +15,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - `internal/roles/device_audit` - core CPU, memory, storage media type, removable media, network link speed, OS/build, hardware model/serial with motherboard serial fallback, last reboot, internal IP, device type, uptime, and last-user inventory published through heartbeat payloads.
 - `internal/roles/file_management` - SYSTEM/root file-management browse, upload-conflict preflight, lightweight text editing, copy/cut/paste mutations, delete, mkdir, rename, move, upload pull, and download artifact transfer.
 - `internal/roles/process_management` - SYSTEM/root live process snapshots, parent/child metadata, cache reuse, and operator-triggered process termination for the Device Summary `Processes` tab.
+- `internal/roles/registry_management` - SYSTEM Windows registry browse, key create/rename/delete, value create/update/delete, and unsupported status on non-Windows agents.
 - `internal/roles/service_management` - SYSTEM/root service inventory publishing plus operator-triggered start, stop, and restart through `service_control_action`.
 - `internal/roles/software_management` - SYSTEM/root Windows installed-app inventory with cached icon payloads, Linux dpkg/rpm inventory, refresh requests, and post-uninstall inventory refresh through the SYSTEM quick-job lane.
 - `internal/roles/wireguard_tunnel` - SYSTEM/root persistent WireGuard reverse tunnel lifecycle, Engine `/api/agent/vpn/ensure` polling, `vpn_tunnel_start` handling, Windows tunnel-service apply, Linux `wg-quick` apply, and `/api/agent/vpn/ready` reporting.
@@ -90,6 +91,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
       - `quick_job_run` dispatch (system jobs plus broker-backed current-user jobs).
       - `file_management_request` browse, upload-conflict preflight, lightweight text-edit, copy/cut/paste mutate, and transfer orchestration for the Device Summary `File Management` tab.
       - `process_management_request` live process snapshots and process termination for the Device Summary `Processes` tab.
+      - `registry_management_request` Windows registry browse and mutation for the Device Summary `Registry` tab.
       - `service_control_action` start, stop, and restart requests for services discovered by the Service Management role.
       - `software_inventory_refresh_request` operator-triggered software inventory refresh after icon/override or software action changes.
       - `vpn_tunnel_start` (WireGuard lifecycle; tunnels are persistent and ignore stop events).

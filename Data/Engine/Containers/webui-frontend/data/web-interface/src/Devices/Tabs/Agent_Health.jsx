@@ -23,6 +23,7 @@ const AGENT_HEALTH_PRESENTATION_BY_KEY = Object.freeze({
   scriptexecsystem: { label: "Script Execution - SYSTEM", kind: AGENT_HEALTH_KIND.role },
   processmanagement: { label: "Process Management", kind: AGENT_HEALTH_KIND.role },
   filemanagement: { label: "File Management", kind: AGENT_HEALTH_KIND.role },
+  registrymanagement: { label: "Registry Management", kind: AGENT_HEALTH_KIND.role },
   vnc: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },
   ultravnc: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },
   ultravncservice: { label: "Borealis Agent - UltraVNC", kind: AGENT_HEALTH_KIND.service },

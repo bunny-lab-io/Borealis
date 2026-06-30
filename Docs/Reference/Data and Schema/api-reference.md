@@ -109,6 +109,14 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/device/files/<hostname>/transfer/<transfer_id>/status` (Token Authenticated) - poll a File Management transfer snapshot.
     - `POST /api/device/files/<hostname>/transfer/<transfer_id>/cancel` (Token Authenticated) - request cancellation for an in-progress File Management transfer.
     - `GET /api/device/files/<hostname>/transfer/<transfer_id>/content` (Token Authenticated) - download a completed File Management transfer artifact through the Engine API from site-worker transfer storage.
+    - `GET /api/device/registry/<hostname>/roots` (Token Authenticated) - load the Device Summary `Registry` roots view for an in-scope Windows device.
+    - `GET /api/device/registry/<hostname>/children?path=<registry-path>` (Token Authenticated) - list subkeys and values for one registry key on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/key/create` (Token Authenticated) - create a registry subkey on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/key/rename` (Token Authenticated) - rename a registry key on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/key/delete` (Token Authenticated) - delete a registry key on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/value/create` (Token Authenticated) - create a registry value on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/value/update` (Token Authenticated) - update a registry value on an in-scope Windows device.
+    - `POST /api/device/registry/<hostname>/value/delete` (Token Authenticated) - delete a registry value on an in-scope Windows device.
     - `POST /api/device/description/<hostname>` (Token Authenticated) - update description for an in-scope device.
     - `GET /api/device_list_views` (Token Authenticated) - list saved device views.
     - `GET /api/device_list_views/<int:view_id>` (Token Authenticated) - get saved view.
