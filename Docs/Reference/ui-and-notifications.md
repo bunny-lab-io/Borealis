@@ -85,6 +85,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
   - lightweight inline text editing should open in a large glass dialog that mirrors the StdOut / StdErr viewer shell: path subtitle on the left, `Save` and `Close` actions on the top-right, and a monospace syntax-highlighted editor surface sized for quick inline edits rather than full IDE workflows
   - duplicate upload conflicts should use an explorer-style `Replace or Skip Files` decision dialog rather than a generic confirmation modal
 - Registry browser surfaces should follow the same dense backend-tool shape as File Management: URL-sync the current registry path with `registry_path`, keep hive navigation explicit, and require typed path confirmation before key deletion.
+- Workspace-specific path query keys are scoped to the active browser. Leaving File Management clears `working_directory`, leaving Registry clears `registry_path`, and switching to any other Device Summary area clears both path keys.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ??? example "Detailed Codex Breakdown"

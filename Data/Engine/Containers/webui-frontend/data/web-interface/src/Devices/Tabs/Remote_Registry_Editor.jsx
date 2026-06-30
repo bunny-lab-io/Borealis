@@ -702,6 +702,7 @@ export default function RemoteRegistryEditor({ device }) {
       return;
     }
     const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("working_directory");
     if (serializedPath) {
       nextParams.set("registry_path", serializedPath);
     } else {
