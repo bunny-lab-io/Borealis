@@ -412,6 +412,18 @@ function siteIdForRow(row) {
   return Number.isFinite(siteId) && siteId > 0 ? siteId : 0;
 }
 
+export function buildDeviceListSiteStatusPath(site, statusKey = "") {
+  const siteId = siteIdForRow(site);
+  if (!siteId) return "";
+  const params = new URLSearchParams();
+  params.set("site", String(siteId));
+  const normalizedStatus = String(statusKey || "").trim().toLowerCase();
+  if (CONNECTION_SECTIONS.some((section) => section.key === normalizedStatus)) {
+    params.set("status", normalizedStatus);
+  }
+  return `${APP_PATHS.devices}?${params.toString()}`;
+}
+
 function normalizedConnectionCounts(row) {
   const connected = Math.max(0, Number(row?.connected_devices || 0));
   const disconnected = Math.max(0, Number(row?.disconnected_devices || 0));
@@ -1496,6 +1508,12 @@ function ConnectedDevicesCell(params) {
   const offline = Number(params?.data?.offline_devices || 0);
   const total = Math.max(0, Number(params?.data?.site_device_count || 0), connected + disconnected + offline);
   const counts = { connected, disconnected, offline };
+  const openDevicesForSiteStatus = params?.context?.openDevicesForSiteStatus;
+  const handleOpenStatus = (event, section) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    openDevicesForSiteStatus?.(params?.data, section.key);
+  };
   return (
     <Box
       sx={{
@@ -1508,6 +1526,10 @@ function ConnectedDevicesCell(params) {
         height: "100%",
         minWidth: 0,
         lineHeight: 1.25,
+        "@keyframes siteConnectivityPulse": {
+          "0%": { transform: "scaleY(1)" },
+          "100%": { transform: "scaleY(1.55)" },
+        },
       }}
     >
       <Box
@@ -1527,12 +1549,30 @@ function ConnectedDevicesCell(params) {
           return (
             <Box
               key={section.key}
-              component="span"
+              component="button"
+              type="button"
+              aria-label={`Show ${section.label} devices for this site`}
+              onMouseDown={stopGridRowSelectionEvent}
+              onClick={(event) => handleOpenStatus(event, section)}
               sx={{
                 display: "block",
                 height: "100%",
                 width: `${Math.max(4, Math.round((value / total) * 100))}%`,
                 backgroundColor: section.color,
+                border: 0,
+                p: 0,
+                m: 0,
+                minWidth: 4,
+                cursor: "pointer",
+                transformOrigin: "center",
+                transition: "filter 160ms ease, transform 160ms ease, box-shadow 160ms ease",
+                "&:hover, &:focus-visible": {
+                  animation: "siteConnectivityPulse 720ms ease-in-out infinite alternate",
+                  filter: "brightness(1.18)",
+                  outline: "none",
+                  boxShadow: "0 0 10px rgba(125,211,252,0.45)",
+                  zIndex: 1,
+                },
               }}
             />
           );
@@ -1551,7 +1591,33 @@ function ConnectedDevicesCell(params) {
         }}
       >
         {CONNECTION_SECTIONS.map((section) => (
-          <Box key={section.key} component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.35 }}>
+          <Box
+            key={section.key}
+            component="button"
+            type="button"
+            aria-label={`Show ${section.label} devices for this site`}
+            onMouseDown={stopGridRowSelectionEvent}
+            onClick={(event) => handleOpenStatus(event, section)}
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.35,
+              border: 0,
+              p: 0,
+              m: 0,
+              color: "inherit",
+              background: "transparent",
+              font: "inherit",
+              cursor: "pointer",
+              borderRadius: 0.75,
+              transition: "color 160ms ease, transform 160ms ease",
+              "&:hover, &:focus-visible": {
+                color: MAGIC_UI.textBright,
+                outline: "none",
+                transform: "translateY(-0.5px)",
+              },
+            }}
+          >
             <Box component="span" sx={{ width: 5, height: 5, borderRadius: 1, backgroundColor: section.color }} />
             {counts[section.key]} {section.label}
           </Box>
@@ -2072,9 +2138,18 @@ export default function SiteList() {
 
   const handleOpenDevicesForSite = useCallback(
     (site) => {
-      const siteId = site?.id;
-      if (siteId == null || siteId === "") return;
-      navigate(`${APP_PATHS.devices}?site=${encodeURIComponent(String(siteId))}`);
+      const path = buildDeviceListSiteStatusPath(site);
+      if (!path) return;
+      navigate(path);
+    },
+    [navigate]
+  );
+
+  const handleOpenDevicesForSiteStatus = useCallback(
+    (site, statusKey) => {
+      const path = buildDeviceListSiteStatusPath(site, statusKey);
+      if (!path) return;
+      navigate(path);
     },
     [navigate]
   );
@@ -2851,8 +2926,9 @@ export default function SiteList() {
   const gridContext = useMemo(
     () => ({
       navigate,
+      openDevicesForSiteStatus: handleOpenDevicesForSiteStatus,
     }),
-    [navigate]
+    [handleOpenDevicesForSiteStatus, navigate]
   );
 
   return (

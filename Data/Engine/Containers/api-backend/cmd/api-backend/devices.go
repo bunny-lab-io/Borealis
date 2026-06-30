@@ -22,6 +22,12 @@ type deviceListStore interface {
 	listDevices(ctx context.Context, profile operatorProfile, filter deviceListFilter) ([]map[string]any, error)
 }
 
+type agentSocketSnapshot struct {
+	Hostnames map[string]struct{}
+	AgentIDs  map[string]struct{}
+	GUIDs     map[string]struct{}
+}
+
 type deviceDetailStore interface {
 	getDeviceByGUID(ctx context.Context, profile operatorProfile, guid string) (map[string]any, int, error)
 	getDeviceDetails(ctx context.Context, profile operatorProfile, hostname string) (map[string]any, int, error)
@@ -175,8 +181,139 @@ func deviceListHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
+		enrichDeviceAgentSocketState(ctx, auth, devices)
 		writeJSON(w, http.StatusOK, map[string]any{"devices": devices})
 	}
+}
+
+func enrichDeviceAgentSocketState(ctx context.Context, auth *authService, devices []map[string]any) {
+	if auth == nil || len(devices) == 0 {
+		return
+	}
+	store, ok := auth.store.(*postgresOperatorStore)
+	if !ok || store == nil || store.db == nil {
+		return
+	}
+	siteIDs := make(map[int64]struct{})
+	for _, device := range devices {
+		siteID := coerceInt64(device["site_id"])
+		if siteID > 0 {
+			siteIDs[siteID] = struct{}{}
+		}
+	}
+	if len(siteIDs) == 0 {
+		return
+	}
+	conn, err := store.db.Conn(ctx)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	snapshots := make(map[int64]agentSocketSnapshot, len(siteIDs))
+	for siteID := range siteIDs {
+		route, err := fetchAgentWorkerRoute(ctx, conn, siteID)
+		if err != nil || route == nil {
+			continue
+		}
+		snapshots[siteID] = fetchWorkerAgentSocketSnapshot(ctx, auth, route)
+	}
+
+	for _, device := range devices {
+		siteID := coerceInt64(device["site_id"])
+		snapshot, ok := snapshots[siteID]
+		registered := ok && snapshot.deviceRegistered(device)
+		device["agent_socket"] = registered
+		if summary, ok := device["summary"].(map[string]any); ok {
+			summary["agent_socket"] = registered
+		}
+		if details, ok := device["details"].(map[string]any); ok {
+			if detailSummary, ok := details["summary"].(map[string]any); ok {
+				detailSummary["agent_socket"] = registered
+			}
+		}
+	}
+}
+
+func fetchWorkerAgentSocketSnapshot(ctx context.Context, auth *authService, route *agentWorkerRoute) agentSocketSnapshot {
+	snapshot := agentSocketSnapshot{
+		Hostnames: map[string]struct{}{},
+		AgentIDs:  map[string]struct{}{},
+		GUIDs:     map[string]struct{}{},
+	}
+	if auth == nil || route == nil {
+		return snapshot
+	}
+	target := workerInternalURL(route, "/agents")
+	if target == "" {
+		return snapshot
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return snapshot
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return snapshot
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return snapshot
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return snapshot
+	}
+	agents, _ := payload["agents"].(map[string]any)
+	for _, raw := range agents {
+		agent, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mode := strings.ToLower(cleanText(agent["service_mode"])); mode != "" && mode != "system" {
+			continue
+		}
+		if hostname := strings.ToLower(cleanText(agent["hostname"])); hostname != "" {
+			snapshot.Hostnames[hostname] = struct{}{}
+		}
+		if agentID := strings.ToLower(cleanText(agent["agent_id"])); agentID != "" {
+			snapshot.AgentIDs[agentID] = struct{}{}
+		}
+		if guid := normalizeGUID(cleanText(agent["guid"])); guid != "" {
+			snapshot.GUIDs[guid] = struct{}{}
+		}
+	}
+	return snapshot
+}
+
+func (s agentSocketSnapshot) deviceRegistered(device map[string]any) bool {
+	if len(s.Hostnames) == 0 && len(s.AgentIDs) == 0 && len(s.GUIDs) == 0 {
+		return false
+	}
+	if hostname := strings.ToLower(cleanText(device["hostname"])); hostname != "" {
+		if _, ok := s.Hostnames[hostname]; ok {
+			return true
+		}
+	}
+	if agentID := strings.ToLower(cleanText(device["agent_id"])); agentID != "" {
+		if _, ok := s.AgentIDs[agentID]; ok {
+			return true
+		}
+	}
+	guidCandidates := []any{device["agent_guid"], device["guid"]}
+	if summary, ok := device["summary"].(map[string]any); ok {
+		guidCandidates = append(guidCandidates, summary["agent_guid"], summary["guid"])
+	}
+	for _, candidate := range guidCandidates {
+		if guid := normalizeGUID(cleanText(candidate)); guid != "" {
+			if _, ok := s.GUIDs[guid]; ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func deviceByGUIDHandler(auth *authService) http.HandlerFunc {

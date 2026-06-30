@@ -10,7 +10,7 @@ Device Auditing is the normal starting point for understanding a managed endpoin
 ## Open Device Inventory
 
 1. Open `Inventory > Devices`.
-2. Search or filter by hostname, site, status, user, type, or operating system.
+2. Search or filter by hostname, site, connection status, user, type, or operating system.
 3. Select a device hostname to open Device Summary.
 4. Use saved table views when you need repeatable columns and filters for routine audits.
 
@@ -28,9 +28,10 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
 ## Understand Status
 
-- `Online` means the Engine saw a recent heartbeat.
+- `Connected` means the Engine saw a recent heartbeat and the site worker reports the Agent management socket is connected.
+- `Disconnected` means the Engine saw a recent heartbeat, but the site-worker management connection is not healthy.
 - `Offline` means heartbeat age exceeded the online window.
-- Agent Health explains startup and role state; it does not replace online/offline status.
+- Agent Health explains startup and role state; it does not replace connection status.
 - Stale inventory means the device may be online but a specific role has not published fresh data yet.
 
 !!! tip
@@ -72,7 +73,8 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
     ### Source map
 
-    - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/`
+    - Device APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go` and related `device_*` Go files.
+    - Device List UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Device Summary UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
     - Registry Editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Registry_Editor.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
@@ -80,7 +82,10 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
     ### Runtime behavior
 
-    - Online/offline status is derived from `devices.last_seen`.
+    - Device List status is derived from `devices.last_seen` plus the site-worker Agent socket registry exposed through `/api/devices` as `agent_socket`.
+    - `GET /api/devices` enriches device rows by fetching each visible site worker's `/agents` snapshot once, then matching system sockets by hostname, Agent ID, or GUID.
+    - Site List drilldowns use `/devices?site=<site_id>&status=<connected|disconnected|offline>`; Device List normalizes those status tokens to `Connected`, `Disconnected`, or `Offline`.
+    - Heartbeat-only online state without a confirmed Agent socket renders as `Disconnected`, not `Connected`.
     - Heavy inventory lands through `/api/agent/details`; heartbeat carries lightweight metrics and metadata deltas.
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.

@@ -334,6 +334,47 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   return now - tsSec <= offlineAfter ? "Online" : "Offline";
 }
 
+export function normalizeDeviceConnectivityStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "connected" || normalized === "online") return "Connected";
+  if (normalized === "disconnected" || normalized === "degraded") return "Disconnected";
+  if (normalized === "offline" || normalized === "down" || normalized === "unavailable") return "Offline";
+  return "";
+}
+
+function heartbeatOnlineFromStatus(status, lastSeen, offlineAfter = 300) {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  if (["connected", "disconnected", "degraded", "online"].includes(normalizedStatus)) return true;
+  if (["offline", "down", "unavailable"].includes(normalizedStatus)) return false;
+  return statusFromHeartbeat(lastSeen, offlineAfter) === "Online";
+}
+
+export function deviceConnectivityStatusFromState({ status, lastSeen, agentSocket } = {}) {
+  const rawStatus = String(status || "").trim().toLowerCase();
+  if (!heartbeatOnlineFromStatus(status, lastSeen)) return "Offline";
+  if (agentSocket === true) return "Connected";
+  if (agentSocket === false) return "Disconnected";
+  if (rawStatus === "connected") return "Connected";
+  return "Disconnected";
+}
+
+export function buildDeviceConnectivityStatusFilter(status) {
+  const normalized = normalizeDeviceConnectivityStatus(status);
+  if (!normalized) return null;
+  return { filterType: "text", type: "equals", filter: normalized };
+}
+
+function statusFilterMatches(statusFilter, status) {
+  const expected = normalizeDeviceConnectivityStatus(status);
+  return Boolean(
+    expected &&
+      statusFilter &&
+      statusFilter.filterType === "text" &&
+      statusFilter.type === "equals" &&
+      normalizeDeviceConnectivityStatus(statusFilter.filter) === expected
+  );
+}
+
 function extractGuidFromAgentId(value) {
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
   if (!text) return "";
@@ -392,7 +433,6 @@ function normalizeDeviceCollection(
     const guidRaw = (device.agent_guid || summary.agent_guid || "").trim();
     const rowKey = guidRaw || agentId || hostname || `device-${index + 1}`;
     const lastSeen = Number(device.last_seen || summary.last_seen || 0) || 0;
-    const status = device.status || statusFromHeartbeat(lastSeen);
 
     if (guidRaw && !summary.agent_guid) {
       summary.agent_guid = guidRaw;
@@ -427,6 +467,15 @@ function normalizeDeviceCollection(
     const wireguardVpnStatus = agentLookupKey
       ? tunnelStatusLookup.get(agentLookupKey) || "Offline"
       : "Offline";
+    const agentSocket =
+      device.agent_socket === true ||
+      summary.agent_socket === true ||
+      (agentLookupKey && tunnelStatusLookup.get(`${agentLookupKey}:agent_socket`) === "Connected");
+    const status = deviceConnectivityStatusFromState({
+      status: device.status || summary.status || statusFromHeartbeat(lastSeen),
+      lastSeen,
+      agentSocket,
+    });
     const wireguardPeerIp = (
       device.wireguard_peer_ip ||
       device.peer_ip ||
@@ -495,6 +544,7 @@ function normalizeDeviceCollection(
       internalIp,
       externalIp,
       wireguardVpnStatus,
+      agentSocket,
       wireguardPeerIp,
       lastReboot,
       uptime: uptimeSeconds,
@@ -587,6 +637,10 @@ export default function DeviceList({
   );
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
+    [searchParams]
+  );
+  const selectedConnectivityStatus = useMemo(
+    () => normalizeDeviceConnectivityStatus(searchParams.get("status") || searchParams.get("connectivity")),
     [searchParams]
   );
   const initialError = String(loaderData?.initialError || "");
@@ -721,6 +775,7 @@ export default function DeviceList({
   const initialSortAppliedRef = useRef(false);
   const tunnelPeerCacheRef = useRef(new Map());
   const tunnelStatusCacheRef = useRef(new Map());
+  const routeStatusFilterRef = useRef("");
 
   // Per-column filters
   const [filtersState, setFiltersState] = useState({});
@@ -835,7 +890,8 @@ export default function DeviceList({
   const heroStats = useMemo(() => {
     const now = Date.now() / 1000;
     const siteSet = new Set();
-    let online = 0;
+    let connected = 0;
+    let disconnected = 0;
     let offline = 0;
     let stale = 0;
     rows.forEach((row) => {
@@ -851,16 +907,15 @@ export default function DeviceList({
       if (siteName && siteName.toLowerCase() !== "not configured") {
         siteSet.add(siteName);
       }
-      const statusRaw =
-        row.status ||
-        row.summary?.status ||
-        statusFromHeartbeat(lastSeen);
-      if ((statusRaw || "").toLowerCase() === "online") online += 1;
+      const statusRaw = normalizeDeviceConnectivityStatus(row.status);
+      if (statusRaw === "Connected") connected += 1;
+      else if (statusRaw === "Disconnected") disconnected += 1;
       else offline += 1;
     });
     return {
       total: rows.length,
-      online,
+      connected,
+      disconnected,
       offline,
       sites: siteSet.size,
       stale,
@@ -902,9 +957,13 @@ export default function DeviceList({
           if (ip) peerByAgent.set(agentKey, ip);
           const vpnStatus = wireguardStatusFromTunnel(tunnel);
           statusByAgent.set(agentKey, vpnStatus);
+          statusByAgent.set(`${agentKey}:agent_socket`, tunnel.agent_socket === true ? "Connected" : "Disconnected");
           if (guidKey) {
             if (ip && !peerByAgent.has(guidKey)) peerByAgent.set(guidKey, ip);
             if (!statusByAgent.has(guidKey)) statusByAgent.set(guidKey, vpnStatus);
+            if (!statusByAgent.has(`${guidKey}:agent_socket`)) {
+              statusByAgent.set(`${guidKey}:agent_socket`, tunnel.agent_socket === true ? "Connected" : "Disconnected");
+            }
           }
         });
         tunnelPeerCacheRef.current = peerByAgent;
@@ -929,14 +988,25 @@ export default function DeviceList({
         if (!agentKey) return row;
         const peerIp = peerByAgent.get(agentKey) || "";
         const vpnStatus = statusByAgent.get(agentKey) || "Offline";
+        const socketStatus = statusByAgent.get(`${agentKey}:agent_socket`) || "";
+        const agentSocket = socketStatus ? socketStatus === "Connected" : row.agentSocket === true;
+        const nextStatus = deviceConnectivityStatusFromState({
+          status: row.status,
+          lastSeen: row.lastSeen,
+          agentSocket,
+        });
         const shouldUpdatePeerIp = Boolean(peerIp) && peerIp !== row.wireguardPeerIp;
         const shouldUpdateStatus = vpnStatus !== row.wireguardVpnStatus;
-        if (!shouldUpdatePeerIp && !shouldUpdateStatus) return row;
+        const shouldUpdateSocket = agentSocket !== row.agentSocket;
+        const shouldUpdateConnectivityStatus = nextStatus !== row.status;
+        if (!shouldUpdatePeerIp && !shouldUpdateStatus && !shouldUpdateSocket && !shouldUpdateConnectivityStatus) return row;
         changed = true;
         return {
           ...row,
           wireguardPeerIp: shouldUpdatePeerIp ? peerIp : row.wireguardPeerIp,
           wireguardVpnStatus: vpnStatus,
+          agentSocket,
+          status: nextStatus,
         };
       });
       return changed ? next : prev;
@@ -1113,6 +1183,27 @@ export default function DeviceList({
   }, [COL_LABELS.site, mergeFilters, selectedSiteId]);
 
   useEffect(() => {
+    setFiltersState((prev) => {
+      const base = prev || {};
+      const previousRouteStatus = routeStatusFilterRef.current;
+      if (selectedConnectivityStatus) {
+        const statusFilter = buildDeviceConnectivityStatusFilter(selectedConnectivityStatus);
+        routeStatusFilterRef.current = selectedConnectivityStatus;
+        if (!statusFilter || statusFilterMatches(base.status, selectedConnectivityStatus)) return base;
+        return { ...base, status: statusFilter };
+      }
+      if (previousRouteStatus && statusFilterMatches(base.status, previousRouteStatus)) {
+        const next = { ...base };
+        delete next.status;
+        routeStatusFilterRef.current = "";
+        return next;
+      }
+      routeStatusFilterRef.current = "";
+      return base;
+    });
+  }, [selectedConnectivityStatus]);
+
+  useEffect(() => {
     let active = true;
     const loadSavedFilterPreview = async () => {
       try {
@@ -1167,8 +1258,11 @@ export default function DeviceList({
     const siteScopedRows = selectedSiteId
       ? filteredRows.filter((row) => String(row?.siteId ?? "") === selectedSiteId)
       : filteredRows;
-    return [...siteScopedRows].sort(compareDeviceRowsBySiteThenHostname);
-  }, [rows, savedFilterHostnames, selectedSiteId]);
+    const statusScopedRows = selectedConnectivityStatus
+      ? siteScopedRows.filter((row) => normalizeDeviceConnectivityStatus(row?.status) === selectedConnectivityStatus)
+      : siteScopedRows;
+    return [...statusScopedRows].sort(compareDeviceRowsBySiteThenHostname);
+  }, [rows, savedFilterHostnames, selectedConnectivityStatus, selectedSiteId]);
 
   const applyView = useCallback((view) => {
     if (!view || view.id === "default") {
@@ -1200,6 +1294,18 @@ export default function DeviceList({
         background: "rgba(0, 209, 140, 0.16)",
         border: "1px solid rgba(0, 209, 140, 0.45)",
         dot: "#00d18c",
+      },
+      Connected: {
+        text: "#00d18c",
+        background: "rgba(0, 209, 140, 0.16)",
+        border: "1px solid rgba(0, 209, 140, 0.45)",
+        dot: "#00d18c",
+      },
+      Disconnected: {
+        text: "#ff8a8a",
+        background: "rgba(255, 79, 79, 0.15)",
+        border: "1px solid rgba(255, 79, 79, 0.42)",
+        dot: "#ff4f4f",
       },
       Recovering: {
         text: "#ffb347",
