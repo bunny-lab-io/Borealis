@@ -1817,8 +1817,8 @@ export default function DeviceList({
             headerName: col.label,
             cellRenderer: statusCellRenderer,
             cellClass: "status-pill-cell",
-            width: 112,
-            minWidth: 112,
+            width: 140,
+            minWidth: 140,
             flex: 0,
           };
         case "site":
