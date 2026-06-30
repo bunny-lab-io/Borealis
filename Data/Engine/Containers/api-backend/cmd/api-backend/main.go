@@ -107,6 +107,7 @@ func main() {
 	registerAgentMaintenanceRoutes(mux, auth)
 	registerProcessRoutes(mux, auth, fallback)
 	registerRemoteFileRoutes(mux, auth, fallback)
+	registerRemoteRegistryRoutes(mux, auth, fallback)
 	registerVNCRoutes(mux, auth, vpnRuntime, vncRuntime)
 	registerDeviceViewRoutes(mux, auth)
 	registerDeviceFilterRoutes(mux, auth)

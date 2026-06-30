@@ -21,6 +21,7 @@ Use this section for daily Borealis work: sites, inventory, approvals, filters, 
 - [Remote Desktop](remote-desktop.md) - launch shared browser VNC sessions.
 - [Remote Shell](remote-shell.md) - open WireGuard-backed PowerShell or shell sessions.
 - [File Management](file-management.md) - browse, transfer, edit, rename, move, and delete files.
+- [Registry Editor](registry-editor.md) - browse and edit Windows registry keys and values.
 - [Process Management](process-management.md) - inspect live processes and end tasks.
 - [Service Management](service-management.md) - inspect services and send start, stop, or restart actions.
 - [Software Management](software-management.md) - audit installed software, refresh inventory, and run supported uninstall actions.

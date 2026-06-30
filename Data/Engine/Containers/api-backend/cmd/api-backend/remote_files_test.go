@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -297,6 +298,59 @@ func TestRemoteFileTransferContentProxiesWorkerStream(t *testing.T) {
 	}
 	if recorder.Header().Get("Content-Disposition") != `attachment; filename="one.txt"` {
 		t.Fatalf("unexpected content disposition %q", recorder.Header().Get("Content-Disposition"))
+	}
+}
+
+func TestRemoteFileTransferStatusAcceptsLargeWorkerPayload(t *testing.T) {
+	largeDetail := strings.Repeat("x", (2<<20)+1024)
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		switch r.URL.Path {
+		case "/remote-files/transfers/transfer-large/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"transfer_id": "transfer-large",
+				"direction":   "download",
+				"status":      "completed",
+				"hostname":    "LAB-OPERATOR-01",
+				"detail":      largeDetail,
+			})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			GUID:     "00000000-0000-4000-8000-000000000123",
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerRemoteFileRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device/files/LAB-OPERATOR-01/transfer/transfer-large/status", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if recorder.Body.Len() <= 2<<20 {
+		t.Fatalf("expected response over old 2 MiB cap, got %d bytes", recorder.Body.Len())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["transfer_id"] != "transfer-large" || payload["detail"] != largeDetail {
+		t.Fatalf("unexpected transfer payload %#v", payload)
 	}
 }
 

@@ -25,6 +25,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | Remote Shell Host | Expose interactive shell over managed WireGuard tunnel. | Full | Full | - |
     | Remote Desktop | Run endpoint-side remote desktop service used by Apache Guacamole browser sessions. | Full | - | - |
     | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
+    | Registry Operations | Browse and edit Windows registry keys and values from Device Summary. | Full | - | - |
     | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Full | - |
     | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Full | - |
     | Software Operations | Report installed software, refresh inventory, and support software-management actions. | Full | Full | - |
@@ -48,7 +49,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | Aegis Cipher | Protect reusable machine credentials, operator password hashes, TOTP secrets, passkey data, and GitHub token storage with `scrypt` plus `AES-256-GCM`. |
     | MFA, Passkeys, and Sessions | Require Aegis unlock, enforce MFA by default, support WebAuthn passkeys, and invalidate sessions strictly. |
     | Code Signing | Sign script delivery and enforce trusted execution payloads. |
-    | REST/API Surface | Expose authenticated APIs for devices, jobs, files, processes, services, software, filters, sites, logs, and runtime operations. |
+    | REST/API Surface | Expose authenticated APIs for devices, jobs, files, registry, processes, services, software, filters, sites, logs, and runtime operations. |
     | Reporting | Track device activity history, scheduled job run history, alerts, and ansible recap data. |
 
 ## Getting Started

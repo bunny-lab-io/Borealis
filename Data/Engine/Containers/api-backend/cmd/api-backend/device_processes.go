@@ -243,6 +243,8 @@ func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, pr
 	return snapshot, http.StatusOK, nil
 }
 
+const workerHostServiceCallResponseMaxBytes = 64 << 20
+
 func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, int, map[string]any) {
 	if auth == nil || route == nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "agent_unavailable", "message": "The agent SYSTEM socket is not available."}
@@ -275,7 +277,7 @@ func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 	defer resp.Body.Close()
 
 	var payloadMap map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payloadMap); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, workerHostServiceCallResponseMaxBytes)).Decode(&payloadMap); err != nil {
 		return nil, http.StatusBadGateway, map[string]any{"error": "invalid_worker_response", "message": "The site-worker returned an invalid response."}
 	}
 	if resp.StatusCode >= 400 {
@@ -312,15 +314,17 @@ func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 
 func processErrorStatus(errorCode string) int {
 	switch strings.ToLower(strings.TrimSpace(errorCode)) {
-	case "invalid_action", "invalid_request", "pid_required":
+	case "invalid_action", "invalid_request", "pid_required", "path_required", "invalid_path", "invalid_hive", "invalid_name", "type_required", "confirmation_required", "invalid_value":
 		return http.StatusBadRequest
-	case "process_not_found", "not_found":
+	case "process_not_found", "not_found", "path_not_found":
 		return http.StatusNotFound
 	case "access_denied", "permission_denied":
 		return http.StatusForbidden
-	case "protected_process", "termination_failed":
+	case "protected_process", "termination_failed", "conflict", "key_has_children":
 		return http.StatusConflict
-	case "unsupported", "unsupported_platform":
+	case "value_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "unsupported", "unsupported_platform", "unsupported_type":
 		return http.StatusNotImplemented
 	case "timeout":
 		return http.StatusGatewayTimeout

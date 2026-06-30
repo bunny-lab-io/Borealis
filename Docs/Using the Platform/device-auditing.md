@@ -21,7 +21,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Device Summary` shows high-level identity, OS, hardware, network, current user, uptime, and description.
 - Storage usage warnings ignore `CD-ROM` drives so optical media does not count as disk pressure.
 - `Installed Software` shows software inventory and software actions.
-- `Services`, `Processes`, `File Management`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
+- `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
 - `Activity History` shows quick job and automation output tied to the device.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
 - `Agent Health` shows startup flow and role health separately from online/offline status.
@@ -57,6 +57,8 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `POST /api/agent/details` - full inventory payload.
     - `GET /api/device/activity/<hostname>` - activity history.
     - `DELETE /api/device/activity/<hostname>` - clear activity history.
+    - `GET /api/device/registry/<hostname>/roots` - Registry Editor roots view.
+    - `GET /api/device/registry/<hostname>/children?path=<registry-path>` - Registry Editor key view.
 
     ### Related documentation
 
@@ -69,6 +71,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
     - Device APIs: `Data/Engine/Containers/api-backend/data/services/API/devices/`
     - Device Summary UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
+    - Registry Editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Registry_Editor.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
     - Agent audit role: `Data/Agent/internal/roles/device_audit/`
 

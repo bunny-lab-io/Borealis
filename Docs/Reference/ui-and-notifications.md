@@ -84,6 +84,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
   - keep a copy affordance on the far-right edge of that address bar so operators can copy the current path without switching modes
   - lightweight inline text editing should open in a large glass dialog that mirrors the StdOut / StdErr viewer shell: path subtitle on the left, `Save` and `Close` actions on the top-right, and a monospace syntax-highlighted editor surface sized for quick inline edits rather than full IDE workflows
   - duplicate upload conflicts should use an explorer-style `Replace or Skip Files` decision dialog rather than a generic confirmation modal
+- Registry browser surfaces should follow the same dense backend-tool shape as File Management: URL-sync the current registry path with `registry_path`, keep hive navigation explicit, and require typed path confirmation before key deletion.
 - Real-time refresh uses `watchdog_incidents_changed` and `device_watchdogs_changed` on the shared `window.BorealisSocket`.
 
 ??? example "Detailed Codex Breakdown"
@@ -112,6 +113,14 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - lazy-load one File Management directory.
     - `POST /api/device/files/<hostname>/upload` (Token Authenticated) - start a File Management upload transfer.
     - `POST /api/device/files/<hostname>/download` (Token Authenticated) - start a File Management download transfer.
+    - `GET /api/device/registry/<hostname>/roots` (Token Authenticated) - hydrate the Device Summary `Registry` roots view.
+    - `GET /api/device/registry/<hostname>/children?path=<registry-path>` (Token Authenticated) - lazy-load one registry key.
+    - `POST /api/device/registry/<hostname>/key/create` (Token Authenticated) - create a registry key.
+    - `POST /api/device/registry/<hostname>/key/rename` (Token Authenticated) - rename a registry key.
+    - `POST /api/device/registry/<hostname>/key/delete` (Token Authenticated) - delete a registry key.
+    - `POST /api/device/registry/<hostname>/value/create` (Token Authenticated) - create a registry value.
+    - `POST /api/device/registry/<hostname>/value/update` (Token Authenticated) - update a registry value.
+    - `POST /api/device/registry/<hostname>/value/delete` (Token Authenticated) - delete a registry value.
     - `GET /api/device/processes/<hostname>?max_age_seconds=<seconds>` (Token Authenticated) - hydrate the Device Summary `Processes` tab with a live process snapshot.
     - `POST /api/device/processes/<hostname>/terminate` (Token Authenticated) - end one process from the Device Summary `Processes` context menu.
     - `POST /api/agent/status` (Device Authenticated) - agent startup status source for the Device Summary Agent Health timeline.

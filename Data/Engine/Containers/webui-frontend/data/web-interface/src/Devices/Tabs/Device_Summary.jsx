@@ -46,6 +46,7 @@ import InstalledSoftwareTab from "./Installed_Software.jsx";
 import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
+import RemoteRegistryEditorTab from "./Remote_Registry_Editor.jsx";
 import ProcessManagementTab from "./Process_Management.jsx";
 import { buildAgentHealthRows } from "./Agent_Health.jsx";
 import { RuntimeRoleHealthBreakdown } from "./Agent_Startup_Flow.jsx";
@@ -292,7 +293,7 @@ const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
   config: "metadata",
 });
 const WORKSPACE_VIEW_OPTIONS = Object.freeze({
-  remote_ops: ["shell", "files", "processes", "services"],
+  remote_ops: ["shell", "files", "registry", "processes", "services"],
   inventory: ["summary", "software"],
   config: ["metadata"],
 });
@@ -301,6 +302,8 @@ const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
   device_summary: { workspace: "inventory", view: "summary" },
   summary: { workspace: "inventory", view: "summary" },
   file_management: { workspace: "remote_ops", view: "files" },
+  registry: { workspace: "remote_ops", view: "registry" },
+  registry_editor: { workspace: "remote_ops", view: "registry" },
   installed_software: { workspace: "inventory", view: "software" },
   software: { workspace: "inventory", view: "software" },
   metadata_fields: { workspace: "config", view: "metadata" },
@@ -4235,6 +4238,12 @@ export default function DeviceSummary() {
             />
             <SidebarNavRow
               icon={<AccountTreeRoundedIcon fontSize="small" />}
+              label="Registry"
+              active={activeView("remote_ops", "registry")}
+              onClick={() => setActiveWorkspace("remote_ops", "registry")}
+            />
+            <SidebarNavRow
+              icon={<AccountTreeRoundedIcon fontSize="small" />}
               label="Processes"
               active={activeView("remote_ops", "processes")}
               onClick={() => setActiveWorkspace("remote_ops", "processes")}
@@ -4328,11 +4337,15 @@ export default function DeviceSummary() {
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {view === "files"
             ? renderFileManagementTab()
-            : view === "processes"
-              ? renderProcessManagementTab()
-              : view === "services"
-                ? renderServicesTab()
-                : renderRemoteShellTab()}
+            : view === "registry"
+              ? (
+                <RemoteRegistryEditorTab device={tunnelDevice || device} />
+              )
+              : view === "processes"
+                ? renderProcessManagementTab()
+                : view === "services"
+                  ? renderServicesTab()
+                  : renderRemoteShellTab()}
         </Box>
       </Box>
     );

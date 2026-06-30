@@ -16,6 +16,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
+	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/registry_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/remote_shell"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/service_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/software_management"
@@ -49,6 +50,7 @@ type Agent struct {
 	auditor       *deviceaudit.Auditor
 	files         *filemanagement.Manager
 	processes     *processmanagement.Manager
+	registry      *registrymanagement.Manager
 	remoteShell   *remoteshell.Manager
 	services      *servicemanagement.Manager
 	software      *softwaremanagement.Manager
@@ -113,6 +115,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
 	processManager := processmanagement.New(hostname)
+	registryManager := registrymanagement.New(hostname, options.ServiceMode)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
 	serviceManager := servicemanagement.New(authClient, hostname, options.ServiceMode)
 	softwareManager := softwaremanagement.New(authClient, hostname, options.ServiceMode)
@@ -130,6 +133,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		auditor:     auditor,
 		files:       fileManager,
 		processes:   processManager,
+		registry:    registryManager,
 		remoteShell: remoteShellManager,
 		services:    serviceManager,
 		software:    softwareManager,
@@ -326,6 +330,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.processes != nil {
 		socket.On("process_management_request", a.processes.HandleRequest)
 	}
+	if a.registry != nil {
+		socket.On("registry_management_request", a.registry.HandleRequest)
+	}
 	if a.services != nil {
 		socket.On("service_control_action", a.services.HandleControlAction)
 	}
@@ -359,6 +366,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"system_scripts":      true,
 				"file_management":     true,
 				"process_management":  true,
+				"registry_management": true,
 				"remote_shell":        true,
 				"service_management":  true,
 				"software_management": true,
@@ -464,6 +472,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.processes != nil {
 		processHealth = a.processes.Health()
 	}
+	registryHealth := registrymanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Registry Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.registry != nil {
+		registryHealth = a.registry.Health()
+	}
 	remoteShellHealth := remoteshell.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -558,6 +578,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		roleSnapshotFromHealth("system:device_auditor", "device_auditor", "Device Auditor", "system", auditSnapshot.Health.Status, auditSnapshot.Health.StatusCode, auditSnapshot.Health.Detail, auditSnapshot.Health.Details, now),
 		roleSnapshotFromHealth("system:file_management", "file_management", "File Management", "system", fileHealth.Status, fileHealth.StatusCode, fileHealth.Detail, fileHealth.Details, now),
 		roleSnapshotFromHealth("system:process_management", "process_management", "Process Management", "system", processHealth.Status, processHealth.StatusCode, processHealth.Detail, processHealth.Details, now),
+		roleSnapshotFromHealth("system:registry_management", "registry_management", "Registry Management", "system", registryHealth.Status, registryHealth.StatusCode, registryHealth.Detail, registryHealth.Details, now),
 		roleSnapshotFromHealth("system:remote_shell", "remote_shell", "Remote Shell", "system", remoteShellHealth.Status, remoteShellHealth.StatusCode, remoteShellHealth.Detail, remoteShellHealth.Details, now),
 		roleSnapshotFromHealth("system:service_management", "service_management", "Service Management", "system", serviceHealth.Status, serviceHealth.StatusCode, serviceHealth.Detail, serviceHealth.Details, now),
 		roleSnapshotFromHealth("system:software_management", "software_management", "Software Management", "system", softwareHealth.Status, softwareHealth.StatusCode, softwareHealth.Detail, softwareHealth.Details, now),
