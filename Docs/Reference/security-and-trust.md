@@ -1,201 +1,188 @@
-# Security and Trust
+# Security Whitepaper
 
-Explain the Borealis trust model, enrollment security, token handling, and code signing behavior.
+Borealis is built around layered trust. Agents do not become trusted because they can reach the Engine, operators do not become trusted because they know a password, and remote operations do not become trusted because a tunnel exists. Each layer has its own identity check, authorization gate, containment path, and audit trail.
 
-## Security Model Summary
-- Mutual trust: each agent has a unique Ed25519 identity key; the Engine issues Ed25519-signed access tokens bound to that fingerprint.
-- Public CA trust: Borealis exposes the Engine through a Borealis-managed Traefik edge that uses Let's Encrypt certificates for browser and agent HTTPS traffic.
-- Short-lived access tokens: JWTs signed with Ed25519, default lifetime about 15 minutes.
-- Long-lived refresh tokens: 90-day sliding window, hashed in the Engine database.
-- Operator session signing secret: generated once and persisted at `Engine/Services/api-backend/secrets/engine_secret.txt`.
-- Front-door operator bootstrap: Borealis now requires the Aegis Cipher before it will render any login UI after first setup or restart.
-- Operator sign-in methods: Borealis supports password plus TOTP MFA, and WebAuthn passkeys for direct browser sign-in once the Engine reaches the `login_required` bootstrap phase.
-- Operator auth secrets at rest: Aegis now protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and the GitHub API token.
-- Engine configuration backups: encrypted JSON exports use the Aegis-derived key and require the same Aegis Cipher for import.
-- Code signing: scripts are signed by the Engine; agents reject payloads with invalid signatures.
-- On supported Windows deployments, only the SYSTEM Borealis runtime authenticates to the Engine; per-session helpers are local-only and inherit no Borealis token or socket identity.
+This page starts with a plain-language security posture summary for evaluators, operators, and business stakeholders. Deeper implementation notes appear later on the page, and Codex-only source maps, endpoint lists, validation paths, and long workflows live in the final collapsed breakdown.
 
-## Security Breakdown (Full)
-### Overall
-- Borealis enforces mutual trust: each agent presents a unique Ed25519 identity to the server, and the server issues EdDSA-signed (Ed25519) access tokens bound to that fingerprint.
-- Public HTTPS terminates at the Borealis-managed Traefik edge on the engine host. Let's Encrypt owns the browser/agent trust chain, while the Python Engine stays on loopback HTTP behind Traefik.
-- Operators no longer need to download or install a Borealis private root CA for normal browser access.
-- Device enrollment is gated by enrollment and installer codes (configurable expiration and usage limits) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
-- Supported Windows agent traffic is owned by the SYSTEM runtime; per-session helpers never call device APIs or open their own Engine socket. Missing, expired, mismatched, quarantined, or revoked credentials are rejected before remote-operation business logic runs.
-- Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
-- Centralized logging under `Engine/Services/api-backend/logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review. Recent wrong-code enrollment attempts are also surfaced in the Device Approval Queue.
-- Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
-- Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory-compatible LDAP/LDAPS simple bind. LDAPS providers can use system trust, uploaded CA PEM, or an operator-reviewed pinned peer certificate downloaded from the LDAP server. Provider-scoped host overrides let Borealis connect to a configured IP while keeping FQDN SNI and certificate validation intact. Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
+## Executive Summary
+
+- Borealis is self-hosted: operators own the Engine host, network exposure, DNS, certificates, backups, and account lifecycle.
+- Agents connect outbound to the Engine over public CA validated HTTPS and Borealis-managed WireGuard. Endpoint inbound exposure is not required for normal remote operations.
+- Device trust starts with operator-approved enrollment, device-generated Ed25519 identity, short-lived access tokens, hashed refresh tokens, and device status checks.
+- Operator trust is protected by Aegis Cipher, MFA by default, WebAuthn passkeys, RBAC, site scoping, and strict session invalidation.
+- Script and automation delivery is signed by the Engine. Agents verify signatures before execution.
+- WireGuard is treated as encrypted transport, not blanket authorization. Borealis adds peer isolation, route validation, firewall rules, containment gates, and remote-operation checks above it.
+- Quarantine and revocation give operators a containment path when a device becomes suspicious or should no longer receive work.
+
+## Security Domains
+
+### Token Trust and Device Identity
+
+- Each enrolled agent has a unique Ed25519 identity key and proves key possession during enrollment.
+- Access tokens are short-lived, refresh tokens are hashed server-side, and token-version bumps invalidate stale trust.
+- Device containment states prevent quarantined, revoked, or decommissioned endpoints from receiving remote operations.
+
+### WireGuard Security
+
+- Agents keep outbound-only tunnels; Engine rejects broad or duplicate peer routes and locks each peer to one private `/32`.
+- Engine always installs default-deny WireGuard firewall chains for invalid traffic, lateral agent traffic, internal-network forwarding, and new agent-initiated host access.
+- Tunnel control runs without full privileged mode, and its socket accepts only expected WireGuard, route, and firewall operations.
+
+### Operator Access and Sessions
+
+- Aegis Cipher must be set up or unlocked before normal login, passkey, or operator API flows are available.
+- MFA is enabled by default, WebAuthn passkeys are supported, and operator sessions are revalidated against user state.
+- RBAC and site scoping limit which devices, jobs, credentials, and administrative actions an operator can reach.
+
+### Script and Automation Safety
+
+- Engine signs script payloads, and Agent enforces trusted delivery before execution.
+- Jobs, quick runs, workflows, watchdog remediation, and Ansible target materialization respect site scope and device containment.
+- Reusable machine credentials stay protected by Aegis Cipher and are never intended to appear in plaintext logs.
+
+### Runtime and Container Boundaries
+
+- The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
+- Docker socket access is isolated to job scheduler; API reads container state through a read-only Docker proxy.
+- WireGuard runtime uses explicit network capabilities, `/dev/net/tun`, and `no-new-privileges` instead of full privileged container mode.
+
+### Monitoring, Audit, and Recovery
+
+- Enrollment approvals, rate-limit hits, authentication anomalies, script-signature failures, and agent activity are logged.
+- Backup/Restore exports are encrypted with the Aegis-derived key and require the same Aegis Cipher for import.
+- Force reset is available as a disaster-recovery path, but it destroys protected operator auth secrets and reusable credential secrets.
+
+## Trust Boundaries
+
+### Engine Host
+
+The Engine host is the security root for Borealis. Operators should protect host SSH access, Docker permissions, DNS, firewall exposure, disk backups, and filesystem permissions. Borealis reduces application-level risk, but it cannot protect secrets if the Engine host itself is fully compromised.
+
+### Public Edge
+
+Traefik owns public HTTP/HTTPS, ACME state, UI/API routing, Socket.IO routing, and VNC WebSocket routing. Browser and agent trust use normal public CA and hostname validation. Internal Engine APIs stay behind the edge on loopback.
+
+### Device Enrollment
+
+An agent must present an enrollment or installer code, generate its own identity key, prove possession of that key, and wait for operator approval. Automatic local-network onboarding installs the agent, but it does not bypass approval.
+
+### Remote Operations
+
+Remote shell, remote desktop, file actions, process actions, service actions, scheduled jobs, quick jobs, workflows, and site-worker operations must pass device status, token trust, site scope, and operator authorization checks. WireGuard reachability alone is not enough.
+
+### Automation Content
+
+Scripts and assemblies are signed before delivery. Agents treat payloads as untrusted until signature verification succeeds. This protects against tampered payloads between Engine storage and endpoint execution.
+
+## Current Security Notes
+
+- Remote shell and remediation can run with high endpoint privilege. Use RBAC, site scoping, MFA, and containment workflows carefully.
+- Engine host compromise remains high impact because Engine owns API state, Aegis-protected secrets, WireGuard keys, and signing keys.
+- Directory authentication depends on secure LDAP/LDAPS configuration. Use LDAPS with trusted CA or reviewed pinned certificate where possible.
+- Packet-level WireGuard validation still requires a deployed test Engine with at least two enrolled agents to prove runtime firewall behavior.
+- macOS is not a productized agent target in current Borealis support matrix.
+
+## Technical Security Model
+
+### Engine Edge and Bootstrap
+
+- Borealis renders Traefik and Let's Encrypt runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
+- Internal engine-only material such as WireGuard keys, code-signing keys, Aegis state, and auth secrets stays under Engine service runtime paths.
+- First deployment follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
+- Later Engine restarts follow `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
+- Normal authenticated endpoints are unavailable until Aegis setup or unlock is complete and the Engine reaches the `login_required` bootstrap phase.
+
+### Operator Authentication
+
+- Operator accounts support password plus TOTP MFA.
+- WebAuthn passkeys are supported for direct browser sign-in once bootstrap is complete.
+- Aegis protects stored password hashes, TOTP secrets, passkey cryptographic material, directory bind passwords, reusable credentials, and GitHub API token storage.
 - Active sessions are revalidated against the operator row on authenticated requests. Deleted users, disabled directory cache entries, and deprovisioned directory users stop passing authorization checks without waiting for token expiry.
-- Borealis operator accounts still support username/password plus TOTP and direct passkey sign-in, but those flows are now unreachable until Aegis setup or unlock is complete.
+- Only an administrator can explicitly disable MFA for an operator account.
 
-### Operator Bootstrap and At-Rest Auth Protection
-- First deployment now follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
-- Every later Engine restart follows `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
-- Aegis setup and unlock moved to public bootstrap endpoints under `/api/bootstrap/*`; the normal authenticated Aegis page actions are now rotation and force reset only.
-- Backup/Restore uses the same Aegis-derived key for AES-256-GCM backup encryption. Restores import the source `aegis_cipher_state` unchanged, so the backup does not rotate the Aegis Cipher.
-- Force reset is the disaster-recovery path when the old cipher is gone: Borealis destroys stored operator auth secrets, reusable credential secrets, and the GitHub token, then requires a fresh Aegis setup plus administrator account recovery before operators can use the Engine again.
-- Usernames, display names, roles, site assignments, passkey labels, and other non-secret operator metadata stay plaintext so Borealis can still identify recovery targets and render admin-facing status once the Engine is recovered.
+### Enrollment and Device Identity
 
-### Server Security
-- Manages the public HTTPS edge: Borealis renders Traefik and Let's Encrypt runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`, while internal engine-only material such as WireGuard and code-signing keys stays under `Engine/Services/api-backend/secrets/Certificates/`.
-- Script delivery is code-signed with an Ed25519 key stored under `Engine/Services/api-backend/secrets/Certificates/Code-Signing`; agents refuse any payload whose signature does not match the pinned public key.
-- Device authentication checks GUID normalization, SSL fingerprint matches, token version counters, and quarantine flags before admitting requests; missing rows with valid tokens auto-recover into placeholder records to avoid accidental lockouts.
-- Refresh tokens are never stored in cleartext; only SHA-256 hashes plus DPoP bindings are stored in PostgreSQL, and reuse after revocation/expiry returns explicit error codes.
-- Enrollment workflow queues approvals, detects hostname and fingerprint conflicts, offers merge/overwrite options, and records auditor identities so trust decisions are traceable.
-- Automatic local-network onboarding never bypasses enrollment approval. It only performs a remote agent install using stored machine or domain credentials; the installed agent must still request approval with the selected site's enrollment code.
-- Background pruning of expired enrollment codes and refresh tokens is not wired yet; a maintenance task is still needed.
+- Device enrollment is gated by enrollment and installer codes with configurable expiration and usage limits.
+- Enrollment requests are rate-limited by IP and identity fingerprint.
+- Agents generate Ed25519 key pairs locally and prove possession with signed nonces.
+- Engine records GUID, key fingerprint, approval state, token version, and audit metadata.
+- Hostname and fingerprint conflicts are surfaced for operator decision instead of silently replacing trust.
 
-### Agent
-- Generates device-wide Ed25519 key pairs on first launch, storing PKCS8/SPKI base64 material in protected `agent.json` beside `Agent.exe`.
-- Stores refresh/access tokens in protected `agent.json` and re-enrolls on authentication failures.
-- Uses the system trust store and hostname validation for the public Engine FQDN instead of rotating a pinned public Engine certificate.
-- Treats every script payload as hostile until verified: only Ed25519 signatures from the server are accepted, missing or invalid signatures are logged and dropped, and the trusted signing key is updated only after successful verification between the agent and the server.
-- Operates outbound-only; there are no listener ports, and every API/WebSocket call flows through the Go auth client, forcing token refresh logic before retrying.
-- Logs bootstrap, enrollment, token refresh, and signature events to daily-rotated files under `Agent/Logs`, giving operators visibility without leaking secrets outside the project root.
-- The SYSTEM broker can launch per-session helpers for current-user execution, but those helpers do not enroll, do not store tokens, and talk only to the local SYSTEM broker over local IPC.
-- Borealis treats direct Session 0 interaction as unsupported; helper launch into `winsta0\\default` is the supported path for user-visible interaction.
+### Token and DPoP Handling
+
+- Access tokens are EdDSA JWTs with a short lifetime, defaulting to about 15 minutes.
+- Refresh tokens use a longer sliding window, are used only for refresh, and are stored as hashes in PostgreSQL.
+- The agent stores token material in protected `agent.json` with device identity and signing trust.
+- DPoP proof validation can bind refresh-token use to a key thumbprint and reject replay attempts.
+- Device status, fingerprint match, token version, refresh-token expiry, and revocation state are checked before new access tokens are issued.
+
+### Agent Runtime
+
+- Supported Windows agent traffic is owned by the SYSTEM runtime.
+- Per-session helpers do not enroll, do not store Engine tokens, and communicate with the local SYSTEM broker over local IPC.
+- Agent API and Socket.IO calls flow through the Go auth client, which refreshes tokens before retrying authenticated calls.
+- Script payloads are rejected when signature verification fails.
+- Agent logs bootstrap, enrollment, token refresh, role health, and signature events under `Agent/Logs`.
 
 ### WireGuard Agent to Engine Tunnels
-- Borealis started with a bespoke reverse tunnel stack (WebSocket framing + domain lanes); its handshake and security model did not scale, so the project moved to WireGuard as the Engine <-> Agent data pipeline for secure remote protocols and future remote desktop control.
-- Persistent, outbound-only: agents ensure the tunnel at boot (no inbound listeners), and it remains online while the agent runs.
-- Shared sessions: one live VPN tunnel per agent, reused across operators to avoid redundant connections.
-- Fast and robust transport: WireGuard provides encrypted UDP transport with lightweight handshakes that keep latency low and reconnects resilient.
-- Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
-- Public CA trust: tunnel orchestration uses the same Let's Encrypt-backed HTTPS control plane as REST and Socket.IO.
-- Isolation by default: each agent gets one host-only `/32`; Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys before it updates the WireGuard control plane. Agents also reject broad tunnel routes in received session material.
-- Firewall posture: WireGuard is transport identity, not application authorization. Engine listener reconcile always installs `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` iptables chains. Those chains drop invalid traffic, allow established/related return traffic, drop new agent-originated traffic to Engine host services over the WireGuard interface, drop agent-to-agent forwarding, and drop agent-originated forwarding toward internal networks.
-- Control-plane safety: the WireGuard control socket accepts only expected `wg`, `wg-quick`, `ip`, and `iptables` operations for Borealis tunnel setup. The tunnel container uses explicit network capabilities and `/dev/net/tun` instead of full privileged mode.
-- Port-level controls: agent-local firewall rules allow only Engine `/32` access to explicitly issued tunnel ports. Defaults are `47002`, `5900`, and `22`, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`; additional ports are added only when a session or scheduled transport requires them.
-- Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\\SYSTEM`) access for deep diagnostics and remediation.
-- Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP; role-level disconnects (shell/VNC) leave the tunnel intact.
-- Quarantine and revocation: admin containment routes bump the device token version, mark the device status, revoke active VNC collaboration state, and remove active WireGuard peers. `quarantined` devices can keep basic device-authenticated heartbeat/token refresh paths, but script polling returns a quarantined idle response and VPN, VNC, remote shell, remote desktop, site-worker remote-op tokens, and scheduled transport preparation are blocked. `revoked` devices also have refresh tokens revoked and cannot refresh trust.
-- Future protocols: reuse the same segmented tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows while keeping application authorization, site membership, worker assignment, and active session state checks above the WireGuard layer.
 
-## Enrollment and Identity
-- Enrollment uses install codes and operator approval.
-- The agent generates its Ed25519 key pair locally and proves possession via signed nonces.
-- Engine returns GUID, access token, refresh token, and script signing key.
+- Borealis moved remote transport from a bespoke reverse tunnel stack to WireGuard for encrypted UDP transport and resilient reconnect behavior.
+- Agents ensure the tunnel at boot, keep it outbound-only, and reuse one live VPN tunnel per agent across operators.
+- Engine issues short-lived, Ed25519-signed tunnel material that the agent verifies before bringing the tunnel up.
+- Each agent gets one host-only `/32`. Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys.
+- Agent runtime also rejects broad tunnel routes in received session material.
+- Engine listener reconcile always installs `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` iptables chains. No environment flag disables those chains.
+- Firewall chains drop invalid packets, allow established/related return traffic, drop new agent-originated host ingress over the tunnel, drop agent-to-agent forwarding, and drop agent-originated forwarding toward other networks.
+- Agent-local firewall rules allow only Engine `/32` access to explicitly issued tunnel ports. Defaults are `47002`, `5900`, and `22`; additional ports are added only when a session or scheduled transport requires them.
+- The WireGuard control socket accepts only expected `wg`, `wg-quick`, `ip`, and `iptables` operations for Borealis tunnel setup.
 
-## Token and DPoP Handling
-- Access tokens are required on device APIs (Bearer token).
-- Refresh tokens are stored encrypted on the agent and hashed on the Engine.
-- DPoP proof headers bind refresh tokens to a key thumbprint and prevent replay.
+### Containment and Revocation
 
-## Code Signing
-- Engine signs script payloads using `Engine/Services/api-backend/secrets/Certificates/Code-Signing` keys.
-- Agent verifies signatures before execution; failures are logged and rejected.
+- Quarantine and revocation routes bump the device token version, mark device status, revoke active VNC collaboration state, and remove active WireGuard peers.
+- `quarantined` devices can keep basic heartbeat and token-refresh paths, but script polling returns a quarantined idle response.
+- VPN, VNC, remote shell, remote desktop, site-worker remote-op tokens, worker sockets, and scheduled transport preparation are blocked for quarantined devices.
+- `revoked` devices also have refresh tokens revoked and cannot refresh trust.
+- `decommissioned` devices are treated as non-active for remote-operation admission.
 
-## Automated Agent Enrollment
-If you deploy the agent via Group Policy or another automation platform, you can pre-inject an enrollment code during install. The enrollment code below is an example only.
+### Code Signing and Automation Delivery
 
-**Windows**:
-```powershell
-.\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
-```
-**Linux**:
-```bash
-/opt/Borealis/Agent/Agent --server-url "https://borealis.example.com" --site-enrollment-code "E925-448B-626D-D595-5A0F-FB24-B4D6-6983"
-```
-Passing an enrollment code writes it into protected `agent.json` before the service starts so the supplied code wins over cached installer codes.
+- Script delivery is code-signed with an Ed25519 key stored under `Engine/Services/api-backend/secrets/Certificates/Code-Signing`.
+- Agents verify signatures with the pinned server signing key before execution.
+- Signature failure stops execution and creates agent-side logs.
+- Quick jobs, scheduled jobs, workflows, watchdog remediation, and Engine-side Ansible target materialization must pass target scope and device status checks before dispatch.
 
 ### Automatic Local-Network Enrollment
+
 - Sites > Onboard Devices creates scheduler-backed enrollment jobs for local-network Linux and Windows targets.
-- Operators provide a site, device OS, discovery scope, stored machine or domain credential, install branch, and schedule. The selected credential remains in Aegis-protected credential storage.
-- Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then a remote scheduled task, then WMI/DCOM process creation, then WinRM before requiring manual install. Windows onboarding uses the standard `C:\Borealis` install root plus a host-wide mutex and a non-secret state marker so repeated Engine redeploys do not create parallel installers or duplicate pending approvals.
-- Borealis writes only non-secret onboarding correlation (`job_id`, `run_id`, target) to the agent settings during remote install so pending approvals can show their source.
-- Manual approval remains the trust boundary. A successful remote install means the agent reached the approval queue, not that the device is trusted.
+- Operators provide site, device OS, discovery scope, stored credential, install branch, and schedule.
+- Linux enrollment uses SSH. Windows enrollment tries SMB `ADMIN$` plus Remote Service Control Manager, then scheduled task, then WMI/DCOM process creation, then WinRM.
+- Borealis writes non-secret onboarding correlation to agent settings so pending approvals can show source context.
+- Manual approval remains the trust boundary. Successful remote install means the agent reached the approval queue, not that the device is trusted.
 
-## Agent/Server Enrollment (Sequence Diagram)
-```mermaid
-sequenceDiagram
-    participant Operator
-    participant Server
-    participant SYS as "SYSTEM Agent"
-    participant HELPER as "Session Helper"
+### Directory Authentication
 
-    Operator->>Server: Request installer code
-    Server-->>Operator: Deliver hashed installer code
-    Note over Operator,Server: Human-controlled code binds enrollment to known device
+- Directory authentication supports LDAP/LDAPS user-bind providers and Active Directory-compatible LDAP/LDAPS simple bind.
+- LDAPS providers can use system trust, uploaded CA PEM, or an operator-reviewed pinned peer certificate downloaded from the LDAP server.
+- Provider-scoped host overrides let Borealis connect to a configured IP while keeping FQDN SNI and certificate validation intact.
+- Directory users are cached just-in-time in `users`, keep Borealis TOTP MFA, and cannot register Borealis passkeys.
 
-    SYS->>Server: Initiate TLS session
-    Server-->>SYS: Present TLS certificate
-    Note over SYS,Server: Public CA validation plus hostname checks stop MITM
+### Logging and Audit
 
-    SYS->>SYS: Generate Ed25519 identity key pair
-    Note right of SYS: Private key stored in protected agent.json
+- Engine logs live under `Engine/Services/api-backend/logs`.
+- Agent logs live under `Agent/Logs`.
+- Enrollment approvals, rate-limit hits, signature failures, refresh-token outcomes, and auth anomalies are logged for incident review.
+- Recent wrong-code enrollment attempts are surfaced in the Device Approval Queue.
 
-    SYS->>Server: Enrollment request (installer code, public key, fingerprint)
+## Operational Security Checklist
 
-    Server->>Operator: Prompt for enrollment approval
-    Operator-->>Server: Approve device enrollment
-    Note over Operator,Server: Manual approval blocks rogue agents
-
-    Server-->>SYS: Send enrollment nonce
-    SYS->>Server: Return signed nonce to prove key possession
-    Note over Server,Operator: Server verifies signature and records GUID plus key fingerprint
-
-    Server->>SYS: Issue GUID, short-lived token, refresh token, script-signing key
-    Note over SYS,Server: Agent stores GUID and tokens in protected agent.json
-    Note over Server,Operator: Database keeps refresh token hash, key fingerprint, audit trail
-
-    loop Secure Sessions
-        SYS->>Server: REST heartbeat and job polling with Bearer token
-        Server-->>SYS: Provide new access token before expiry
-        SYS->>Server: Refresh request over public CA validated HTTPS
-    end
-
-    Server-->>SYS: Deliver script payload plus Ed25519 signature
-    SYS->>SYS: Verify signature before execution
-    SYS->>HELPER: Launch helper into active user session when needed
-    Note over SYS,HELPER: Helper receives work only from the local SYSTEM broker and holds no Engine token
-    Note over SYS,HELPER: Signature failure triggers detailed logging; helper-backed payloads are broker-verified
-    Note over Server,Operator: Persistent records and approvals sustain long term trust
-```
-
-## Code-Signed Remote Script Execution (Sequence Diagram)
-```mermaid
-sequenceDiagram
-    participant Operator
-    participant Server
-    participant SYS as "SYSTEM Agent"
-    participant HELPER as "Session Helper"
-
-    Operator->>Server: Upload or author script
-    Server->>Server: Store script and metadata on-disk
-
-    Operator->>Server: Request script execution on a specific device + execution context (NT Authority\\SYSTEM or Current-User)
-    Server->>Server: Load Ed25519 code signing key from secure store
-    Server->>Server: Sign script hash and execution manifest (The Assembly)
-
-    Server->>Server: Enqueue job with signed payload for the host's SYSTEM socket
-    Note over Server: Dispatch limited to enrolled agents with valid GUID + tokens
-
-    loop Agent job polling (public CA validated HTTPS + Bearer token)
-        SYS->>Server: REST heartbeat and job poll
-        Server-->>SYS: Pending job payloads
-    end
-
-    alt SYSTEM context
-        Server-->>SYS: Script, signature, hash, execution parameters
-        SYS->>SYS: Verify HTTPS trust and token freshness
-        SYS->>SYS: Verify Ed25519 signature using pinned server key
-        SYS->>SYS: Recalculate script hash and compare
-        Note right of SYS: Verification failure stops execution and logs incident
-        SYS->>SYS: Execute in the SYSTEM runtime
-        SYS-->>Server: Return execution status, output, telemetry
-    else CURRENTUSER context
-        Server-->>SYS: Script, signature, hash, execution parameters, session target
-        SYS->>SYS: Verify HTTPS trust, token freshness, and Ed25519 signature
-        SYS->>HELPER: Forward broker-verified payload over local IPC
-        HELPER->>HELPER: Execute within the interactive user session
-        HELPER-->>SYS: Return execution status, output, telemetry
-        SYS-->>Server: Return session-scoped execution result
-    end
-
-    Server->>Server: Record results and logs alongside job metadata
-    Note over SYS,HELPER: Public CA validated HTTPS, signed payloads, protected agent.json secrets, and helper-local IPC defend against tampering and replay
-```
+- Keep Engine host patched, backed up, and firewalled.
+- Expose only required public ports: HTTP/HTTPS for Traefik and UDP WireGuard for remote operations.
+- Use a real public FQDN with valid public CA certificates for agents and browsers.
+- Keep Aegis Cipher recoverable by trusted administrators.
+- Require MFA for operators and prefer passkeys where possible.
+- Use RBAC and site scoping so operators see only devices they own.
+- Quarantine devices at first sign of suspicious behavior.
+- Validate WireGuard behavior in a disposable test Engine before relying on a new security-sensitive network change.
 
 ??? example "Detailed Codex Breakdown"
 
@@ -235,42 +222,54 @@ sequenceDiagram
     - `POST /api/directory/providers/<int:provider_id>/test` (Admin) - test provider connectivity.
     - `POST /api/directory/providers/<int:provider_id>/sync` (Admin) - sync cached directory users.
     - `POST /api/users/<username>/directory-cache` (Admin) - disable or re-enable a cached directory user.
-    - MFA policy note: Borealis requires MFA by default. Only an administrator can explicitly disable MFA for an operator account.
     - `GET /api/admin/enrollment-codes` (Admin) - list static site enrollment codes.
     - `POST /api/admin/enrollment-codes` (Admin) - deprecated (returns 410; use site APIs).
     - `DELETE /api/admin/enrollment-codes/<code_id>` (Admin) - deprecated (returns 410; use site APIs).
+    - `POST /api/agent/vpn/ensure` (Device Authenticated) - create or refresh WireGuard tunnel material when device is active.
+    - `POST /api/agent/vpn/ready` (Device Authenticated) - report tunnel readiness when device is active.
+    - `POST /api/agent/vnc/ensure` (Device Authenticated) - prepare VNC tunnel material when device is active.
+    - `POST /api/tunnel/connect` (Operator Authenticated) - request remote tunnel connectivity for an active device.
+    - `GET /api/tunnel/status` (Operator Authenticated) - inspect tunnel status for an active device.
+    - `GET /api/tunnel/active` (Operator Authenticated) - list active tunnel state.
+    - `POST /api/remote-ops/session` (Operator Authenticated) - request remote operation session token after device status and scope checks.
 
     ### Related documentation
 
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
+    - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
     - [Device Approvals](../Using%20the%20Platform/device-approvals.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-    - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
+    - [Engine Deployment](../Engine/deploying-the-engine.md)
 
-    ### Key material locations (Engine)
-    - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
-    - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.
-    - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
-    - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
+    ### Source map
 
-    ### Key material locations (Agent)
-    - Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
-
-    ### WireGuard hardening source map
-
+    - Engine auth bootstrap: `Data/Engine/Containers/api-backend/cmd/api-backend/bootstrap_*.go`.
+    - Operator auth and passkeys: `Data/Engine/Containers/api-backend/cmd/api-backend/auth_*.go`.
+    - Directory providers: `Data/Engine/Containers/api-backend/cmd/api-backend/directory_*.go`.
+    - Device enrollment and approvals: `Data/Engine/Containers/api-backend/cmd/api-backend/device_enrollment.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/device_approvals.go`.
+    - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
     - Engine tunnel runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go`.
     - Agent VPN routes: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go`.
     - Remote-operation session authorization: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_ops_sessions.go`.
     - Worker-backed command execution gate: `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`.
     - Scheduled target filtering: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_rerun.go`.
     - Site-worker socket assignment gate: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`.
-    - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
     - Agent WireGuard route validation: `Data/Agent/internal/roles/wireguard_tunnel/wireguard_tunnel.go`.
+    - Agent auth client and token lifecycle: `Data/Agent/internal/auth`.
+    - Agent token and key storage: `Data/Agent/internal/config`.
     - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
     - WireGuard tunnel container boundary: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
 
-    ### Runtime behavior
+    ### Key material locations
+
+    - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
+    - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.
+    - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
+    - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
+    - Agent identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
+
+    ### WireGuard runtime behavior
 
     - `wireGuardRuntime.validatePeerPolicyLocked` enforces one IPv4 `/32` per agent peer, requires peer IPs inside `BOREALIS_WIREGUARD_PEER_NETWORK`, rejects Engine `/32` reuse, rejects duplicate peer public keys, and validates desired reconcile state before mutating the listener.
     - `parseWireGuardRuntimePrefixes` rejects unsafe overlay configuration before runtime starts: Engine address must be private IPv4 `/32`, peer network must be private IPv4 `/16` through `/30`, and the Engine address must sit inside that peer network.
@@ -282,96 +281,116 @@ sequenceDiagram
     - Site-worker socket authentication rejects quarantined, revoked, and decommissioned devices before registering host-service sockets or file-transfer agent sessions.
     - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They do not mount `/var/run/docker.sock`; only `job-scheduler` owns the host Docker socket.
 
+    ### Enrollment workflow
+
+    ```mermaid
+    sequenceDiagram
+        participant Operator
+        participant Engine
+        participant SYS as "SYSTEM Agent"
+        participant HELPER as "Session Helper"
+
+        Operator->>Engine: Request installer or enrollment code
+        Engine-->>Operator: Deliver hashed code record
+        Note over Operator,Engine: Human-controlled code binds enrollment to expected device
+
+        SYS->>Engine: Initiate TLS session
+        Engine-->>SYS: Present public CA trusted certificate
+        Note over SYS,Engine: Public CA validation plus hostname checks stop common MITM paths
+
+        SYS->>SYS: Generate Ed25519 identity key pair
+        Note right of SYS: Private key stored in protected agent.json
+
+        SYS->>Engine: Enrollment request with code, public key, fingerprint
+        Engine->>Operator: Show pending approval
+        Operator-->>Engine: Approve device enrollment
+        Engine-->>SYS: Send enrollment nonce
+        SYS->>Engine: Return signed nonce to prove key possession
+        Engine->>Engine: Verify signature and record GUID plus key fingerprint
+        Engine->>SYS: Issue GUID, access token, refresh token, signing key
+        SYS->>SYS: Store GUID and tokens in protected agent.json
+
+        loop Secure sessions
+            SYS->>Engine: Heartbeat and job polling with Bearer token
+            Engine-->>SYS: Return work or refreshed state
+            SYS->>Engine: Refresh request before access token expiry
+        end
+
+        Engine-->>SYS: Deliver signed script payload
+        SYS->>SYS: Verify signature before execution
+        SYS->>HELPER: Launch local helper only when current-user context needed
+        Note over SYS,HELPER: Helper holds no Engine token and receives broker-verified work over local IPC
+    ```
+
+    ### Code-signed remote script workflow
+
+    ```mermaid
+    sequenceDiagram
+        participant Operator
+        participant Engine
+        participant SYS as "SYSTEM Agent"
+        participant HELPER as "Session Helper"
+
+        Operator->>Engine: Upload or author script
+        Engine->>Engine: Store script and metadata
+        Operator->>Engine: Request execution on device and context
+        Engine->>Engine: Load Ed25519 code-signing key
+        Engine->>Engine: Sign script hash and execution manifest
+        Engine->>Engine: Enqueue job for target host
+
+        loop Agent job polling
+            SYS->>Engine: REST heartbeat and job poll with Bearer token
+            Engine-->>SYS: Pending job payload
+        end
+
+        alt SYSTEM context
+            SYS->>SYS: Verify HTTPS trust, token freshness, signature, and script hash
+            SYS->>SYS: Execute in SYSTEM runtime
+            SYS-->>Engine: Return status, output, telemetry
+        else Current-user context
+            SYS->>SYS: Verify HTTPS trust, token freshness, signature, and script hash
+            SYS->>HELPER: Forward broker-verified payload over local IPC
+            HELPER->>HELPER: Execute within interactive user session
+            HELPER-->>SYS: Return status, output, telemetry
+            SYS-->>Engine: Return result
+        end
+    ```
+
+    ### Refresh-token workflow details
+
+    - Enrollment returns `guid`, access token, refresh token, and Engine signing key.
+    - Agent persists GUID, access token, refresh token, expiry metadata, identity keys, and signing trust through `Data/Agent/internal/config`.
+    - Base refresh-token TTL is 90 days.
+    - Successful refresh resets `expires_at` to now plus 90 days.
+    - Expiry is enforced by Engine clock.
+    - Access tokens are EdDSA JWTs with default `expires_in = 900`.
+    - Refresh tokens are used only to obtain new access tokens.
+    - If refresh token is missing or invalid, the agent re-enrolls when an installer or enrollment code path is available.
+
+    ### Common failure modes
+
+    - `fingerprint_mismatch`: agent identity changed or identity data was wiped.
+    - `token_version_mismatch`: device token version was bumped by containment or trust reset.
+    - `refresh_token_expired`: agent stayed offline longer than refresh-token sliding window.
+    - `refresh_token_revoked`: refresh trust was explicitly revoked.
+    - `dpop_invalid`: DPoP proof missing or malformed.
+    - `dpop_replayed`: DPoP proof was reused.
+    - `wireguard_peer_allowed_ip_must_be_ipv4_32`: peer route was not host-only.
+    - `wireguard_peer_allowed_ip_outside_peer_network`: peer route escaped configured overlay network.
+    - `wireguard_public_key_already_assigned`: peer public key collided with another agent.
+
     ### Validation
 
     - Engine focused Go tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./cmd/api-backend`.
     - Agent focused Go tests: `cd Data/Agent && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./internal/roles/wireguard_tunnel`.
+    - Control socket tests: `/opt/Borealis/.cache/codex-engine-tests/bin/python3 -m pytest Data/Engine/Unit_Tests/test_wireguard_control_server.py`.
+    - Engine remote-access domain wrapper: `BOREALIS_ENGINE_TEST_PYTHON=/opt/Borealis/.cache/codex-engine-tests/bin/python3 ./Engine_Unit_Tests.sh --domain remote-access`.
     - Runtime network validation still requires a disposable deployed Engine with at least two enrolled agents to prove packet-level agent-to-agent, agent-to-internal, and quarantine/revocation denial.
 
-    ### Enrollment sequence (step-by-step)
-    1) Agent generates Ed25519 key pair and a fingerprint.
-    2) Agent submits `/api/agent/enroll/request` with install code and public key.
-    3) Engine rate-limits and queues for operator approval.
-    4) Operator approves via `/api/admin/device-approvals/<id>/approve`.
-    5) Agent polls `/api/agent/enroll/poll`, returns signed nonce.
-    6) Engine issues GUID, access token, refresh token, and signing key.
-    7) Agent stores tokens securely and trusts the Engine FQDN via the public CA chain.
-
-    ### Access vs refresh tokens
-    - Access token (JWT, EdDSA): used on every device API call; default expiry about 900 seconds.
-    - Refresh token: used only on `/api/agent/token/refresh` to mint new access tokens.
-    - Refresh token is SHA-256 hashed in DB and never stored in plaintext by the Engine.
-
-    ### DPoP binding
-    - Refresh token requests can include a `DPoP` header.
-    - Engine validates DPoP proof and stores `dpop_jkt` in `refresh_tokens` table.
-    - Replay attempts return `dpop_replayed` and force re-enrollment behavior.
-
-    ### Rate limiting and abuse controls
-    - Enrollment uses IP and fingerprint rate limiters (see `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`).
-    - README documents IP and fingerprint rate limits (40 req/min/IP, 12 req/min/fingerprint).
-
-    ### Code signing behavior
-    - Engine signs script payload bytes (Ed25519) before dispatch.
-    - Agent verifies signatures with `signature_utils` and stores the signing key on first success.
-    - If verification fails, the script is rejected and the agent logs an incident.
-
-    ### Common failure modes
-    - `fingerprint_mismatch`: agent identity changed or cert data was wiped.
-    - `token_version_mismatch`: device token version bumped or revoked.
-    - `refresh_token_expired`: agent offline too long (greater than 90 days without refresh).
-    - `dpop_invalid`: DPoP proof missing or malformed.
-
-    ### Agent Refresh Tokens (Full)
-    #### What a refresh token is
-    - A long-lived credential the agent gets during enrollment; it represents device trust and is bound to the agent's identity fingerprint.
-    - Stored locally in protected `agent.json` alongside token metadata and the agent GUID.
-    - Not presented to normal APIs; it is only sent to the Engine to mint new short-lived access tokens.
-
-    #### How the agent obtains it
-    1) Enrollment (`/api/agent/enroll/request` -> `/api/agent/enroll/poll`):
-       - The agent proves possession of its Ed25519 identity and an operator-approved enrollment code.
-       - The Engine issues:
-         - `guid` (device identity)
-         - `access_token` (EdDSA JWT, about 15 minutes)
-         - `refresh_token` (random urlsafe string)
-         - Engine signing key
-       - The agent persists the GUID, access token, refresh token, and expiry metadata through `Data/Agent/internal/config`.
-
-    #### How long it lasts (sliding expiry)
-    - Base TTL: 90 days (Engine stores `expires_at = now + 90 days`).
-    - Sliding refresh: every successful call to `/api/agent/token/refresh` resets `expires_at` to `now + 90 days`.
-    - Expiry is enforced by the Engine clock, not the agent.
-
-    #### Access tokens vs refresh tokens
-    - Access tokens: EdDSA JWTs with a about 15 minute lifetime (default `expires_in = 900`). Used for all device API calls and Socket.IO auth.
-    - Refresh tokens: used only to obtain new access tokens. If missing or invalid, the agent re-enrolls.
-
-    #### How the agent uses it
-    - All authenticated calls pass through the Go auth client (`Data/Agent/internal/auth`).
-    - If no GUID/refresh token, the agent triggers enrollment.
-    - If the access token is missing or near expiry, the agent posts `{guid, refresh_token}` to `/api/agent/token/refresh`.
-    - On success, it stores the new access token and updated expiry metadata.
-
-    #### When it stops working
-    - Engine-side expiry: `refresh_token_expired` (401) forces re-enrollment.
-    - Revocation: device status `revoked` or `decommissioned` blocks refresh.
-    - Fingerprint mismatch: identity key changes cause the Engine to reject refresh.
-    - Token version mismatch: token version bump in DB forces re-enrollment.
-
-    #### Operational notes
-    - Short outages are tolerated: the 90-day sliding window resets on the first successful refresh after the Engine is back.
-    - Long inactivity (more than 90 days without refresh) requires re-enrollment; the agent will reuse the last installer code if available, otherwise operator action is needed.
-    - Logs for token activity live under `Agent/Logs/Agent/` (`agent.log`, `agent.error.log`). Engine-side changes are recorded in the Engine DB `refresh_tokens` table with `last_used_at` and `expires_at`.
-
-    #### Relevant files
-    - Agent token lifecycle: `Data/Agent/internal/auth`.
-    - Token storage: `Data/Agent/internal/config`.
-    - Refresh API: `Data/Engine/Containers/api-backend/data/services/API/tokens/routes.py`.
-    - Enrollment API: `Data/Engine/Containers/api-backend/data/services/API/enrollment/routes.py`.
-    - JWT issuance: `Data/Engine/Containers/api-backend/data/auth/jwt_service.py`.
-    - Database schema: `Data/Engine/Containers/api-backend/data/database_migrations.py` (`refresh_tokens` table).
-
     ### Where to update docs when security changes
-    - Update this page and any impacted runtime docs (engine or agent).
-    - Update `api-reference.md` if you add or change security-related endpoints.
+
+    - Update this page for security posture, trust model, containment, token, WireGuard, bootstrap, auth, and code-signing changes.
+    - Update [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md) when container, service, runtime path, or deployment boundary changes.
+    - Update [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md) when Compose services, capabilities, mounts, sockets, or host networking assumptions change.
+    - Update [API Reference](../Reference/Data%20and%20Schema/api-reference.md) if security-related endpoints are added or changed.
+    - Update [SBOM](SBOM.md) if security work adds, removes, vendors, or downloads third-party software.
