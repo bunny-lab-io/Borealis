@@ -243,7 +243,7 @@ func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, pr
 	return snapshot, http.StatusOK, nil
 }
 
-const workerHostServiceCallResponseMaxBytes = 16 << 20
+const workerHostServiceCallResponseMaxBytes = 64 << 20
 
 func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, int, map[string]any) {
 	if auth == nil || route == nil {

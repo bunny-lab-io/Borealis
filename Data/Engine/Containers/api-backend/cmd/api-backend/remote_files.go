@@ -13,7 +13,7 @@ import (
 )
 
 const remoteFileDefaultTimeoutSeconds = 30.0
-const remoteFileWorkerJSONResponseMaxBytes = 16 << 20
+const remoteFileWorkerJSONResponseMaxBytes = 64 << 20
 
 func registerRemoteFileRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/device/files/", remoteFileSubtreeHandler(auth, fallback))
