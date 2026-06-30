@@ -27,6 +27,7 @@ WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
+BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
@@ -1281,6 +1282,34 @@ except Exception:
 PY
 }
 
+is_build_role() {
+  local candidate="$1"
+  local service=""
+  for service in "${BUILD_ROLES[@]}"; do
+    if [[ "${candidate}" == "${service}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+build_cache_export_epoch() {
+  local export_name="$1"
+  local stamp="${export_name%%-*}"
+  [[ "${stamp}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || return 1
+  date -u -d "${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:9:2}:${stamp:11:2}:${stamp:13:2} UTC" +%s 2>/dev/null
+}
+
+collect_build_cache_exports() {
+  local service="$1"
+  local cache_root="${DEPLOY_DIR}/cache/buildkit/${service}"
+  [[ -d "${cache_root}" ]] || return 0
+  find "${cache_root}" -mindepth 1 -maxdepth 1 -type d -name '????????T??????Z-*' -print | sort
+  if [[ -d "${cache_root}/current" ]]; then
+    printf '%s\n' "${cache_root}/current"
+  fi
+}
+
 prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
@@ -1364,19 +1393,35 @@ build_service_image() {
     fi
     if docker buildx version >/dev/null 2>&1; then
       local cache_root="${DEPLOY_DIR}/cache/buildkit/${service}"
-      local cache_current="${cache_root}/current"
-      local cache_next="${cache_root}/next"
       mkdir -p "${cache_root}"
+      local cache_stamp
+      cache_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      local cache_export_name="${cache_stamp}-${image_hash:0:12}"
+      local cache_next="${cache_root}/next-${cache_export_name}-$$"
+      local cache_final="${cache_root}/${cache_export_name}"
+      if [[ -e "${cache_final}" ]]; then
+        cache_final="${cache_root}/${cache_export_name}-$$"
+      fi
       rm -rf "${cache_next}"
       local buildx_args=(buildx build --load --progress=plain)
-      if [[ -d "${cache_current}" ]]; then
-        buildx_args+=(--cache-from "type=local,src=${cache_current}")
+      local cache_sources=()
+      mapfile -t cache_sources < <(collect_build_cache_exports "${service}")
+      if ((${#cache_sources[@]} > 0)); then
+        printf '[%s] %s using %d retained Buildx cache export(s)\n' "$(date +%FT%T)" "${service}" "${#cache_sources[@]}"
+        local cache_source=""
+        for cache_source in "${cache_sources[@]}"; do
+          printf '[%s] %s cache-from %s\n' "$(date +%FT%T)" "${service}" "${cache_source}"
+          buildx_args+=(--cache-from "type=local,src=${cache_source}")
+        done
+      else
+        printf '[%s] %s has no retained Buildx cache exports\n' "$(date +%FT%T)" "${service}"
       fi
       buildx_args+=(--cache-to "type=local,dest=${cache_next},mode=max")
       if DOCKER_BUILDKIT=1 docker "${buildx_args[@]}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"; then
         if [[ -d "${cache_next}" ]]; then
-          rm -rf "${cache_current}"
-          mv "${cache_next}" "${cache_current}"
+          rm -rf "${cache_final}"
+          mv "${cache_next}" "${cache_final}"
+          printf '[%s] %s stored full Buildx cache export %s\n' "$(date +%FT%T)" "${service}" "${cache_final}"
         fi
       else
         rm -rf "${cache_next}"
@@ -1456,14 +1501,85 @@ restore_required_engine_images() {
   done
 }
 
-prune_engine_build_cache_exports() {
+prune_expired_engine_build_cache_exports() {
   local cache_root="${DEPLOY_DIR}/cache/buildkit"
   [[ -d "${cache_root}" ]] || return 0
-  log_status "Docker cleanup" "Clearing Engine build cache" "${C_YELLOW}"
-  if ! find "${cache_root}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + >> "${BUILD_LOG}" 2>&1; then
-    log_status "Docker cleanup" "Engine build cache cleanup failed" "${C_RED}"
-    printf '[%s] Failed to clear Engine Buildx cache export directory %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
+  log_status "Docker cleanup" "Pruning Engine build cache >${BUILD_CACHE_RETENTION_DAYS}d" "${C_YELLOW}"
+  printf '[%s] Pruning Engine Buildx cache exports older than %d days from %s\n' "$(date +%FT%T)" "${BUILD_CACHE_RETENTION_DAYS}" "${cache_root}" >> "${BUILD_LOG}"
+  local cutoff_epoch
+  if ! cutoff_epoch="$(date -u -d "${BUILD_CACHE_RETENTION_DAYS} days ago" +%s 2>/dev/null)"; then
+    log_status "Docker cleanup" "Engine build cache retention failed" "${C_RED}"
+    printf '[%s] Failed to compute Engine Buildx cache retention cutoff\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    return 1
   fi
+  local cleanup_failed=0
+  local removed=0
+  local retained=0
+  local service_dir=""
+  for service_dir in "${cache_root}"/*; do
+    [[ -d "${service_dir}" ]] || continue
+    local service_name
+    service_name="$(basename "${service_dir}")"
+    if ! is_build_role "${service_name}"; then
+      printf '[%s] Removing unknown Engine Buildx cache service directory %s\n' "$(date +%FT%T)" "${service_dir}" >> "${BUILD_LOG}"
+      if rm -rf "${service_dir}" >> "${BUILD_LOG}" 2>&1; then
+        ((removed += 1))
+      else
+        cleanup_failed=1
+      fi
+      continue
+    fi
+
+    local cache_dir=""
+    for cache_dir in "${service_dir}"/*; do
+      [[ -d "${cache_dir}" ]] || continue
+      local export_name
+      export_name="$(basename "${cache_dir}")"
+      local should_remove=0
+      local reason=""
+      if [[ "${export_name}" == next-* ]]; then
+        should_remove=1
+        reason="incomplete temporary export"
+      elif [[ "${export_name}" == "current" ]]; then
+        local legacy_epoch
+        legacy_epoch="$(stat -c %Y "${cache_dir}" 2>/dev/null || printf '0')"
+        if ((legacy_epoch < cutoff_epoch)); then
+          should_remove=1
+          reason="legacy current export older than ${BUILD_CACHE_RETENTION_DAYS} days"
+        fi
+      else
+        local export_epoch=""
+        if export_epoch="$(build_cache_export_epoch "${export_name}")"; then
+          if ((export_epoch < cutoff_epoch)); then
+            should_remove=1
+            reason="timestamp older than ${BUILD_CACHE_RETENTION_DAYS} days"
+          fi
+        else
+          should_remove=1
+          reason="unrecognized export name"
+        fi
+      fi
+
+      if [[ "${should_remove}" -eq 1 ]]; then
+        printf '[%s] Removing Engine Buildx cache export %s (%s)\n' "$(date +%FT%T)" "${cache_dir}" "${reason}" >> "${BUILD_LOG}"
+        if rm -rf "${cache_dir}" >> "${BUILD_LOG}" 2>&1; then
+          ((removed += 1))
+        else
+          cleanup_failed=1
+        fi
+      else
+        ((retained += 1))
+      fi
+    done
+  done
+  if [[ "${cleanup_failed}" -ne 0 ]]; then
+    log_status "Docker cleanup" "Engine build cache prune failed" "${C_RED}"
+    printf '[%s] Failed to prune one or more Engine Buildx cache exports under %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
+    return 1
+  fi
+  log_status "Docker cleanup" "Engine build cache removed=${removed} retained=${retained}" "${C_GREEN}"
+  printf '[%s] Engine Buildx cache retention complete: removed=%d retained=%d\n' "$(date +%FT%T)" "${removed}" "${retained}" >> "${BUILD_LOG}"
+  return 0
 }
 
 prune_engine_docker_storage() {
@@ -1490,7 +1606,9 @@ prune_engine_docker_storage() {
     log_status "Docker cleanup" "Builder prune failed" "${C_RED}"
   fi
 
-  prune_engine_build_cache_exports
+  if ! prune_expired_engine_build_cache_exports; then
+    cleanup_failed=1
+  fi
 
   if [[ "${cleanup_failed}" -eq 0 ]]; then
     log_status "Docker cleanup" "Complete" "${C_GREEN}"

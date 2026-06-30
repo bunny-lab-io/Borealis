@@ -52,8 +52,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `job-scheduler` uses `alpine:3.24` with Bash, Python 3, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`; Docker Buildx is not installed in this container.
     - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
-    - Docker Buildx cache is stored under `Engine/Deploy/cache/buildkit/<service>/` when usable; plain Docker build remains the fallback.
-    - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, Docker builder cache, and Engine Buildx cache exports. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
+    - Docker Buildx cache is stored as timestamped full `mode=max` exports under `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` when usable; plain Docker build remains the fallback.
+    - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, clears Docker builder cache, and deletes whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
     - The current `site-worker` image is preserved even when no site-worker container is running. Stale site-worker tags are removed separately so scheduler-launched workers can still start after cleanup.
     - Deploy output uses compact colored service status lines in interactive terminals; set `NO_COLOR=1` to force plain text.
     - No-op redeploys reuse existing image tags and skip Compose when deploy manifest, runtime env, image hashes, and container state already match.
@@ -113,6 +113,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### WebUI hosting and dev mode
     - Production UI is served by the `webui-frontend` container from its built static output.
     - Dev UI runs Vite HMR behind `traefik-edge`.
+    - The WebUI image uses Node Alpine stages. The production target copies only built static output plus the dependency-free static server into the final image, while the development target keeps Vite and `node_modules` for HMR.
     - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 

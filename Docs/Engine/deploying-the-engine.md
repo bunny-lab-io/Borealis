@@ -84,7 +84,7 @@ During deployment, Borealis will install missing dependencies, prepare runtime c
     ```
 
 ### Docker Storage Cleanup
-Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images, clears Docker builder cache, and removes Engine Buildx cache exports so old image tags and build snapshots do not fill root storage over time.
+Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
 
 `site-worker` images are handled carefully because the scheduler may need the current image even when no site-worker container is running. Borealis keeps the current site-worker image available and removes stale site-worker tags separately.
 
