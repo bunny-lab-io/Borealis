@@ -13,6 +13,7 @@ import (
 )
 
 const remoteFileDefaultTimeoutSeconds = 30.0
+const remoteFileWorkerJSONResponseMaxBytes = 16 << 20
 
 func registerRemoteFileRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("/api/device/files/", remoteFileSubtreeHandler(auth, fallback))
@@ -949,7 +950,7 @@ func remoteFileWorkerContentResponse(ctx context.Context, auth *authService, rou
 
 func decodeRemoteFileWorkerJSONResponse(resp *http.Response) (map[string]any, int, map[string]any) {
 	var payload map[string]any
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&payload); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, remoteFileWorkerJSONResponseMaxBytes)).Decode(&payload); err != nil {
 		if resp.StatusCode >= 400 {
 			return nil, resp.StatusCode, map[string]any{"error": "site_worker_error"}
 		}
