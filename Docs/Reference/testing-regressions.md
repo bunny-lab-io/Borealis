@@ -29,7 +29,7 @@ Baseline sampled on April 30, 2026 from branch `feature/unit-test-formalization`
     - [Unit Testing](Unit_Testing.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](security-and-trust.md)
+    - [Security Whitepaper](security-whitepaper.md)
 
     - Add a row when introducing a regression test for a bug found in production, operator validation, or a PR review.
     - If a formalization run exposes a failure that predates the cleanup, record it here before changing or quarantining the test.

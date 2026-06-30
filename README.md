@@ -22,7 +22,7 @@ It combines RMM-style endpoint operations, Ansible/AWX-style automation, schedul
 
 ## Security Whitepaper
 
-Borealis security posture, hardening domains, and trust model are documented in the [Security Whitepaper](Docs/Reference/security-and-trust.md). It covers token trust, WireGuard security, Aegis Cipher, MFA/passkeys, code signing, device containment, runtime boundaries, and operational security expectations.
+Borealis security posture, hardening domains, and trust model are documented in the [Security Whitepaper](Docs/Reference/security-whitepaper.md). It covers token trust, WireGuard security, Aegis Cipher, MFA/passkeys, code signing, device containment, runtime boundaries, and operational security expectations.
 
 ## Feature Snapshot
 

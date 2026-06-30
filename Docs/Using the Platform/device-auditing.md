@@ -68,7 +68,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
 
     ### Source map
 

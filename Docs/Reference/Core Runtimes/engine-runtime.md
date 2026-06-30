@@ -25,7 +25,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Architecture Overview](../../Reference/architecture-overview.md)
     - [Docker Stack Breakdown](Stack_Breakdown.md)
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
     - [API Reference](../Data%20and%20Schema/api-reference.md)
     - [Backup and Restore](../../Using%20the%20Platform/backup-restore.md)
     - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)

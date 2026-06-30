@@ -49,7 +49,7 @@ Credentials page also shows Aegis status and runtime actions after bootstrap. Us
     - [Scheduled Jobs](scheduled-jobs.md)
     - [Ansible Playbooks](Assemblies/ansible-playbooks.md)
     - [Directory Services](directory-services.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
 
     ### Source map

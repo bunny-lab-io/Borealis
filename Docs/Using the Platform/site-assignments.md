@@ -47,7 +47,7 @@ Directory Services can map directory groups to site sets. Those mappings replace
     - [User Management](user-management.md)
     - [Directory Services](directory-services.md)
     - [Sites](sites.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
 
     ### Source map
 
