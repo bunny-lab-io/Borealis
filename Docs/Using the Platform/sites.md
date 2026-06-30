@@ -35,6 +35,8 @@ Resource mini-trends refresh with the site-worker payload every 5 seconds and ke
 
 The Connected Devices bar uses the last known connected breakdown for a short grace window before showing an all-disconnected state. This prevents one missed site-worker heartbeat or zero-connected poll from briefly turning healthy sites red.
 
+Select any colored section of the Connected Devices bar, or its `Connected`, `Disconnected`, or `Offline` label, to open Device Inventory filtered to that site and connection status. Use this drilldown when the bar shows disconnected or offline devices and you need the exact endpoints to inspect.
+
 !!! tip
 
     Keep one site per customer, lab, or security boundary. Filters and scheduled jobs become easier to reason about when site scope matches real ownership.
@@ -63,6 +65,7 @@ The Connected Devices bar uses the last known connected breakdown for a short gr
 
     - Site API: `Data/Engine/Containers/api-backend/data/services/API/sites/management.py`
     - Sites UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Sites/Site_List.jsx`
+    - Device List UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Site assignment UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Sites/Site_Assignment.jsx`
 
     ### Runtime behavior
@@ -74,3 +77,4 @@ The Connected Devices bar uses the last known connected breakdown for a short gr
     - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. Sites does not fetch worker metrics from the route loader; browser polling starts immediately after the page renders and continues every 5 seconds.
     - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.
     - The Connected Devices bar caches the last non-zero connected breakdown in browser state and reuses it for brief zero-connected worker polls. Sustained zero-connected payloads still render as disconnected after the grace window.
+    - Connected Devices bar segments and labels deep-link to `/devices?site=<site_id>&status=<connected|disconnected|offline>`.

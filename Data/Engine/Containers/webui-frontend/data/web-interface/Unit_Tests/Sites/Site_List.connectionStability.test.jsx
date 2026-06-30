@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applySiteConnectionStability,
+  buildDeviceListSiteStatusPath,
   recordSiteConnectionSnapshots,
   shouldShowConnectedDevicesPlaceholder,
   siteListRowHeightForData,
@@ -97,5 +98,15 @@ describe("site running task row heights", () => {
     const after = siteListRowHeightSignature([{ id: 7, assigned_task_groups: [] }]);
 
     expect(before).not.toBe(after);
+  });
+});
+
+describe("site connectivity drilldown paths", () => {
+  it("builds device list path with site and status query filters", () => {
+    expect(buildDeviceListSiteStatusPath({ id: 7 }, "disconnected")).toBe("/devices?site=7&status=disconnected");
+  });
+
+  it("omits unknown status filters", () => {
+    expect(buildDeviceListSiteStatusPath({ site_id: 9 }, "unknown")).toBe("/devices?site=9");
   });
 });
