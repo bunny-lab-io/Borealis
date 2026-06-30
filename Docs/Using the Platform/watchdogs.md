@@ -30,7 +30,7 @@ Scope controls which sites the watchdog can apply to. Targets choose devices ins
 
 ## Build Rules
 
-Watchdog rules can evaluate device offline state, storage usage, service state, agent role health, CPU, memory, uptime, reboot/change detection, sessions, processes, software presence/version, and agent version status.
+Watchdog rules can evaluate device offline state, storage usage, service state, agent role health, CPU, memory, uptime, reboot/change detection, sessions, processes, software presence/version, and agent version status. Storage usage checks ignore `CD-ROM` drives so mounted optical media does not create disk space incidents.
 
 Use `all` when every condition must match. Use `any` when one condition should open the incident.
 

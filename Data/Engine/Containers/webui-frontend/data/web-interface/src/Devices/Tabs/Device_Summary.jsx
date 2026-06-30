@@ -70,6 +70,12 @@ import AgentBranchChannelDialog, {
   normalizeAgentBranch,
   normalizeAgentReleaseChannel,
 } from "../../AgentBranchChannelDialog.jsx";
+import {
+  STORAGE_USAGE_ALERT_COLOR,
+  STORAGE_USAGE_ALERT_LABEL,
+  STORAGE_USAGE_ALERT_THRESHOLD_PCT,
+  isStorageUsageAlert,
+} from "./storageAlerts.js";
 
 const TUNNEL_STATUS_POLL_INTERVAL_MS = 15000;
 const DEVICE_DETAILS_POLL_INTERVAL_MS = 60000;
@@ -410,9 +416,6 @@ const SUMMARY_GRID_STYLE = {
 const SUMMARY_FIELD_TEXT_COLOR = "#58a6ff"; // matches hostname blue in Device_List.jsx
 const SUMMARY_DEFAULT_TEXT_COLOR = NAV_TAB_COLORS.textActive;
 const UNABLE_TO_RETRIEVE_SN = "<Unable to Retrieve S/N>";
-const STORAGE_USAGE_ALERT_THRESHOLD_PCT = 90;
-const STORAGE_USAGE_ALERT_LABEL = `Usage Exceeding ${STORAGE_USAGE_ALERT_THRESHOLD_PCT}%`;
-const STORAGE_USAGE_ALERT_COLOR = "#facc15";
 
 function statusFromHeartbeat(tsSec, offlineAfter = 300) {
   if (!tsSec) return "Offline";
@@ -797,11 +800,6 @@ export async function loadDeviceSummaryPageData(request, routeDeviceId) {
     progress.finalize();
   }
 }
-
-const isStorageUsageAlert = (usageValue) =>
-  typeof usageValue === "number" &&
-  !Number.isNaN(usageValue) &&
-  usageValue > STORAGE_USAGE_ALERT_THRESHOLD_PCT;
 
 const formatHostnameForDisplay = (value) => {
   const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
@@ -3134,7 +3132,7 @@ export default function DeviceSummary() {
       return {
         id: `${d.drive || idx}`,
         driveLabel: String(d.drive || "").replace("\\\\", ""),
-        disk_type: d.disk_type || "Fixed Disk",
+        disk_type: d.disk_type || d.type || "Fixed Disk",
         total,
         used: usedBytes,
         freeBytes,
@@ -3194,7 +3192,7 @@ export default function DeviceSummary() {
         sortable: false,
         filter: false,
         cellRenderer: (params) => {
-          if (!isStorageUsageAlert(params?.data?.usage)) return "";
+          if (!isStorageUsageAlert(params?.data)) return "";
           return (
             <Box
               component="span"
@@ -3245,7 +3243,7 @@ export default function DeviceSummary() {
 
   const hardwareOverview = useMemo(() => {
     const storageCritical = storageRows.filter(
-      (row) => isStorageUsageAlert(row.usage)
+      (row) => isStorageUsageAlert(row)
     ).length;
     const installedMemory = memoryRows.filter((row) => {
       if (typeof row.capacity === "number") return row.capacity > 0;

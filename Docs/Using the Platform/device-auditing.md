@@ -19,6 +19,7 @@ Device Auditing is the normal starting point for understanding a managed endpoin
 Device Summary collects the last-known inventory and action tabs for one endpoint.
 
 - `Device Summary` shows high-level identity, OS, hardware, network, current user, uptime, and description.
+- Storage usage warnings ignore `CD-ROM` drives so optical media does not count as disk pressure.
 - `Installed Software` shows software inventory and software actions.
 - `Services`, `Processes`, `File Management`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
 - `Activity History` shows quick job and automation output tied to the device.
