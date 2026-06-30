@@ -30,6 +30,10 @@ func agentVPNTunnelEnsureHandler(auth *authService, signer *agentJWTSigner, dpop
 			failure.write(w)
 			return
 		}
+		if !deviceAllowsRemoteAccess(deviceCtx.Status) {
+			writeJSON(w, http.StatusForbidden, deviceRemoteAccessBlockedPayload(deviceCtx.Status))
+			return
+		}
 		body := readOptionalJSONMap(w, r)
 		if body == nil {
 			return
@@ -76,6 +80,10 @@ func agentVPNTunnelReadyHandler(auth *authService, signer *agentJWTSigner, dpop 
 			failure.write(w)
 			return
 		}
+		if !deviceAllowsRemoteAccess(deviceCtx.Status) {
+			writeJSON(w, http.StatusForbidden, deviceRemoteAccessBlockedPayload(deviceCtx.Status))
+			return
+		}
 		body := readOptionalJSONMap(w, r)
 		if body == nil {
 			return
@@ -115,6 +123,10 @@ func agentVNCEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 		deviceCtx, failure := authenticateDeviceBearer(r.Context(), r, auth, signer, dpop)
 		if failure != nil {
 			failure.write(w)
+			return
+		}
+		if !deviceAllowsRemoteAccess(deviceCtx.Status) {
+			writeJSON(w, http.StatusForbidden, deviceRemoteAccessBlockedPayload(deviceCtx.Status))
 			return
 		}
 		body := readOptionalJSONMap(w, r)
@@ -195,6 +207,14 @@ func agentVNCEnsureHandler(auth *authService, signer *agentJWTSigner, dpop *dpop
 			"display_virtual_bounds": displayBounds,
 			"session":                firstNonEmpty(activeSession["session"], nil),
 		})
+	}
+}
+
+func deviceRemoteAccessBlockedPayload(status string) map[string]any {
+	return map[string]any{
+		"error":   "device_quarantined",
+		"message": "Device is not active for remote operations.",
+		"status":  firstText(strings.ToLower(strings.TrimSpace(status)), "unknown"),
 	}
 }
 

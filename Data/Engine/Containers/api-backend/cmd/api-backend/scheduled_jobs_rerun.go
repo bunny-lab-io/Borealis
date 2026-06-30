@@ -171,12 +171,27 @@ func (s *postgresOperatorStore) resolveScheduledRerunTargets(ctx context.Context
 	if err != nil {
 		return scheduledTargetResolution{}, err
 	}
+	allDevices := devices
+	devices = scheduledExecutableDevices(devices)
 	filterIDs := scheduledFilterIDsFromTargets(rawTargets)
 	filters, err := s.loadDeviceFilters(ctx, filterIDs, false)
 	if err != nil {
 		return scheduledTargetResolution{}, err
 	}
 
+	inactiveGUIDs := map[string]bool{}
+	inactiveHosts := map[string]bool{}
+	for _, device := range allDevices {
+		if scheduledDeviceExecutable(device) {
+			continue
+		}
+		if guid := strings.ToLower(normalizeCanonicalGUID(firstPresentAny(device["device_guid"], device["guid"]))); guid != "" {
+			inactiveGUIDs[guid] = true
+		}
+		if hostname := strings.ToLower(cleanText(device["hostname"])); hostname != "" {
+			inactiveHosts[hostname] = true
+		}
+	}
 	byGUID := map[string]map[string]any{}
 	byHost := map[string][]map[string]any{}
 	bySiteHost := map[string][]map[string]any{}
@@ -242,6 +257,12 @@ func (s *postgresOperatorStore) resolveScheduledRerunTargets(ctx context.Context
 				matches = append(matches, byHost[strings.ToLower(hostname)]...)
 			}
 			if len(matches) == 0 {
+				if guid != "" && inactiveGUIDs[guid] {
+					continue
+				}
+				if guid == "" && hostname != "" && inactiveHosts[strings.ToLower(hostname)] {
+					continue
+				}
 				appendTarget(scheduledResolvedTarget{Hostname: hostname, SiteID: siteID, SiteName: siteName})
 				continue
 			}
@@ -287,6 +308,21 @@ func (s *postgresOperatorStore) resolveScheduledRerunTargets(ctx context.Context
 		}
 	}
 	return result, nil
+}
+
+func scheduledExecutableDevices(devices []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(devices))
+	for _, device := range devices {
+		if scheduledDeviceExecutable(device) {
+			out = append(out, device)
+		}
+	}
+	return out
+}
+
+func scheduledDeviceExecutable(device map[string]any) bool {
+	status := firstText(cleanText(firstPresentAny(device["security_status"], device["device_status"])), "active")
+	return deviceAllowsRemoteAccess(status)
 }
 
 func scheduledFilterIDsFromTargets(rawTargets []any) []int64 {

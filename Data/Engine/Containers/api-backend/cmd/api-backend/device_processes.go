@@ -198,16 +198,17 @@ func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, pr
 		GUID     sql.NullString
 		Hostname sql.NullString
 		AgentID  sql.NullString
+		Status   sql.NullString
 		SiteID   sql.NullInt64
 	}
 	err = conn.QueryRowContext(ctx, `
-		SELECT d.guid, d.hostname, d.agent_id, ds.site_id
+		SELECT d.guid, d.hostname, d.agent_id, COALESCE(d.status, 'active'), ds.site_id
 		  FROM engine.devices AS d
 	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname = d.hostname
 		 WHERE LOWER(d.hostname) = LOWER($1)
 	  ORDER BY COALESCE(d.last_seen, 0) DESC
 		 LIMIT 1
-	`, hostname).Scan(&row.GUID, &row.Hostname, &row.AgentID, &row.SiteID)
+	`, hostname).Scan(&row.GUID, &row.Hostname, &row.AgentID, &row.Status, &row.SiteID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return deviceProcessContext{}, http.StatusNotFound, errors.New("not found")
 	}
@@ -224,6 +225,9 @@ func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, pr
 		}
 	} else if !strings.EqualFold(strings.TrimSpace(profile.Role), "admin") {
 		return deviceProcessContext{}, http.StatusNotFound, errors.New("not found")
+	}
+	if !deviceAllowsRemoteAccess(row.Status.String) {
+		return deviceProcessContext{}, http.StatusForbidden, errors.New("device_quarantined")
 	}
 
 	snapshot := deviceProcessContext{

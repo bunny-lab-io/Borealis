@@ -94,6 +94,7 @@ type filterDeviceRow struct {
 	OperatingSystem    sql.NullString
 	Uptime             sql.NullInt64
 	AgentID            sql.NullString
+	SecurityStatus     sql.NullString
 	ConnectionType     sql.NullString
 	ConnectionEndpoint sql.NullString
 	SiteID             sql.NullInt64
@@ -1322,7 +1323,7 @@ func (s *postgresOperatorStore) fetchFilterDevices(ctx context.Context, profile 
 		SELECT d.guid, d.hostname, d.description, d.created_at, d.agent_hash, d.memory, d.network, d.software,
 		       d.storage, d.cpu, d.device_type, d.domain, d.external_ip, d.internal_ip, d.last_reboot,
 		       d.last_seen, d.last_user, d.operating_system, d.uptime, d.agent_id, d.connection_type,
-		       d.connection_endpoint, s.id AS site_id, s.name AS site_name, s.description AS site_description
+		       d.connection_endpoint, COALESCE(d.status, 'active'), s.id AS site_id, s.name AS site_name, s.description AS site_description
 		  FROM engine.devices AS d
 	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname=d.hostname
 	 LEFT JOIN engine.sites AS s ON s.id=ds.site_id
@@ -1348,7 +1349,7 @@ func (s *postgresOperatorStore) fetchFilterDevices(ctx context.Context, profile 
 			&row.GUID, &row.Hostname, &row.Description, &row.CreatedAt, &row.AgentHash, &row.MemoryJSON, &row.NetworkJSON, &row.SoftwareJSON,
 			&row.StorageJSON, &row.CPUJSON, &row.DeviceType, &row.Domain, &row.ExternalIP, &row.InternalIP, &row.LastReboot,
 			&row.LastSeen, &row.LastUser, &row.OperatingSystem, &row.Uptime, &row.AgentID, &row.ConnectionType,
-			&row.ConnectionEndpoint, &row.SiteID, &row.SiteName, &row.SiteDescription,
+			&row.ConnectionEndpoint, &row.SecurityStatus, &row.SiteID, &row.SiteName, &row.SiteDescription,
 		); err != nil {
 			_ = rows.Close()
 			return nil, err
@@ -1540,6 +1541,7 @@ func filterDevicePayload(row filterDeviceRow, softwareMap map[string][]map[strin
 		"site_id":               nullableInt(row.SiteID),
 		"site_name":             nullString(row.SiteName),
 		"site_description":      nullString(row.SiteDescription),
+		"security_status":       firstText(strings.ToLower(strings.TrimSpace(nullString(row.SecurityStatus))), "active"),
 		"status":                statusFromLastSeen(lastSeen, time.Now().Unix()),
 		"total_ram_gb":          totalRAMGB(memory),
 		"storage_free_percent":  storageFreePercent(storage),

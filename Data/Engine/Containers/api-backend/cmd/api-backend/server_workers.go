@@ -626,7 +626,7 @@ func collectWorkerReferenceData(ctx context.Context, conn *sql.Conn, collections
 			 WHERE ds.site_id IN (`+placeholders+`)
 			   AND d.last_seen IS NOT NULL
 			   AND d.last_seen >= $`+strconv.Itoa(len(siteIDs)+1)+`
-			   AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+			   AND LOWER(COALESCE(NULLIF(d.status, ''), 'active')) IN ('active', 'online')
 		  GROUP BY ds.site_id
 		`, onlineParams...)
 		if err != nil {

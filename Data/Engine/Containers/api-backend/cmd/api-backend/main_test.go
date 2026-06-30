@@ -46,6 +46,12 @@ type fakeOperatorStore struct {
 	devicePurgeResult    devicePurgeResult
 	devicePurgeStatus    int
 	devicePurgeErr       error
+	deviceSecurityGUID   string
+	deviceSecurityStatus string
+	deviceSecurityReason string
+	deviceSecurityResult deviceSecurityResult
+	deviceSecurityCode   int
+	deviceSecurityErr    error
 	releaseGUID          string
 	releaseChannel       any
 	releaseBranch        any
@@ -299,6 +305,24 @@ func (s *fakeOperatorStore) purgeDevice(_ context.Context, profile operatorProfi
 		}
 	}
 	return devicePurgeResult{Payload: copyMap(result.Payload), AgentID: result.AgentID}, status, nil
+}
+
+func (s *fakeOperatorStore) setDeviceSecurityStatus(_ context.Context, _ operatorProfile, guid string, status string, reason string) (deviceSecurityResult, int, error) {
+	s.deviceSecurityGUID = guid
+	s.deviceSecurityStatus = status
+	s.deviceSecurityReason = reason
+	if s.deviceSecurityErr != nil {
+		code := s.deviceSecurityCode
+		if code == 0 {
+			code = http.StatusInternalServerError
+		}
+		return deviceSecurityResult{}, code, s.deviceSecurityErr
+	}
+	code := s.deviceSecurityCode
+	if code == 0 {
+		code = http.StatusOK
+	}
+	return deviceSecurityResult{Payload: copyMap(s.deviceSecurityResult.Payload), AgentID: s.deviceSecurityResult.AgentID}, code, nil
 }
 
 func (s *fakeOperatorStore) listSites(_ context.Context, profile operatorProfile) ([]map[string]any, error) {
@@ -1441,6 +1465,28 @@ func TestRemoteOpsSessionHandlerReportsMissingWorker(t *testing.T) {
 
 	if recorder.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRemoteOpsSessionHandlerRejectsQuarantinedDevice(t *testing.T) {
+	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	store.remoteOpsStatus = http.StatusForbidden
+	store.remoteOpsErr = errors.New("device_remote_access_blocked")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/remote-ops/session", strings.NewReader(`{"hostname":"LAB","capability":"shell"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	remoteOpsSessionHandler(auth, testAgentJWTSigner(t)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["error"] != "device_quarantined" {
+		t.Fatalf("unexpected payload %#v", payload)
 	}
 }
 

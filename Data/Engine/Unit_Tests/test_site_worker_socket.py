@@ -75,7 +75,7 @@ def _db_factory(db_path: Path):
     return _factory
 
 
-def _seed_device(conn, *, guid: str, hostname: str, site_id: int, fingerprint: str = "fingerprint-1") -> None:
+def _seed_device(conn, *, guid: str, hostname: str, site_id: int, fingerprint: str = "fingerprint-1", status: str = "active") -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS devices (
@@ -100,9 +100,9 @@ def _seed_device(conn, *, guid: str, hostname: str, site_id: int, fingerprint: s
     conn.execute(
         """
         INSERT INTO devices(guid, hostname, ssl_key_fingerprint, token_version, status)
-        VALUES(?, ?, ?, 1, 'active')
+        VALUES(?, ?, ?, 1, ?)
         """,
-        (guid, hostname, fingerprint),
+        (guid, hostname, fingerprint, status),
     )
     conn.execute(
         """
@@ -114,12 +114,12 @@ def _seed_device(conn, *, guid: str, hostname: str, site_id: int, fingerprint: s
     conn.commit()
 
 
-def _runtime(tmp_path: Path, *, site_id: int = 7) -> tuple[SiteWorkerSocketRuntime, str]:
+def _runtime(tmp_path: Path, *, site_id: int = 7, device_status: str = "active") -> tuple[SiteWorkerSocketRuntime, str]:
     db_path = tmp_path / "worker-socket.sqlite3"
     fingerprint = "fingerprint-1"
     conn = sqlite3.connect(str(db_path))
     try:
-        _seed_device(conn, guid=AGENT_GUID, hostname=AGENT_HOSTNAME, site_id=site_id, fingerprint=fingerprint)
+        _seed_device(conn, guid=AGENT_GUID, hostname=AGENT_HOSTNAME, site_id=site_id, fingerprint=fingerprint, status=device_status)
     finally:
         conn.close()
     service = jwt_service.load_service()
@@ -595,6 +595,31 @@ def test_site_worker_socket_rejects_cross_site_agent(tmp_path: Path, monkeypatch
     )
 
     assert ack["error"] == "device_site_mismatch"
+    assert not runtime.has_host_service_socket("lab-one", "system")
+    client.disconnect()
+
+
+def test_site_worker_socket_rejects_quarantined_agent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    runtime, token = _runtime(tmp_path, device_status="quarantined")
+
+    client = runtime.socketio.test_client(
+        runtime.app,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    ack = client.emit(
+        "connect_agent",
+        {
+            "agent_id": AGENT_ID,
+            "hostname": AGENT_HOSTNAME,
+            "service_mode": "system",
+        },
+        callback=True,
+    )
+
+    assert ack["error"] == "device_quarantined"
     assert not runtime.has_host_service_socket("lab-one", "system")
     client.disconnect()
 

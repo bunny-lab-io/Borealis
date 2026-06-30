@@ -1409,7 +1409,7 @@ func (s *postgresOperatorStore) loadSchedulerOnlineSites(ctx context.Context, wi
 		   AND ds.site_id > 0
 		   AND d.last_seen IS NOT NULL
 		   AND d.last_seen >= $1
-		   AND COALESCE(NULLIF(d.status, ''), 'active') <> 'purged'
+		   AND LOWER(COALESCE(NULLIF(d.status, ''), 'active')) IN ('active', 'online')
 	`
 	args := []any{threshold}
 	if len(siteIDs) > 0 {

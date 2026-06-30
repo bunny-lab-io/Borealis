@@ -72,6 +72,10 @@ func devicePurgeHandler(auth *authService, runtime devicePurgeRuntime) http.Hand
 }
 
 func (r devicePurgeRuntime) cleanup(ctx context.Context, agentID string) map[string]any {
+	return r.cleanupWithReason(ctx, agentID, "device_purged")
+}
+
+func (r devicePurgeRuntime) cleanupWithReason(ctx context.Context, agentID string, reason string) map[string]any {
 	agentID = cleanText(agentID)
 	summary := map[string]any{
 		"vpn_disconnected":       false,
@@ -85,7 +89,7 @@ func (r devicePurgeRuntime) cleanup(ctx context.Context, agentID string) map[str
 		summary["vnc_sessions_revoked"] = int64(r.vnc.revokeAgent(agentID))
 	}
 	if r.vpn != nil {
-		summary["vpn_disconnected"] = r.vpn.disconnect(ctx, agentID, "device_purged", true)
+		summary["vpn_disconnected"] = r.vpn.disconnect(ctx, agentID, firstText(cleanText(reason), "device_contained"), true)
 	}
 	return summary
 }

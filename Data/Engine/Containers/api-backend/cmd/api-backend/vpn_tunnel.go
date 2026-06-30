@@ -33,6 +33,8 @@ const (
 	defaultWireGuardPeerCIDR   = "10.255.0.0/16"
 	defaultWireGuardInterface  = "borealis-wg"
 	defaultWireGuardConfigName = "borealis-wg"
+	wireGuardInputChain        = "BOREALIS-WG-INPUT"
+	wireGuardForwardChain      = "BOREALIS-WG-FWD"
 	defaultVPNTokenTTL         = 300 * time.Second
 	defaultVPNIdleSeconds      = 900
 	defaultVNCBackendPort      = 5900
@@ -1207,6 +1209,7 @@ type wireGuardRuntime struct {
 	serverPublic   string
 	mu             sync.Mutex
 	managedPeers   map[string]map[string]any
+	commandRunner  func([]string) (int, string, string)
 }
 
 func newWireGuardRuntime(port int, enginePrefix netip.Prefix, peerPrefix netip.Prefix, allowPorts []int) *wireGuardRuntime {
@@ -1306,6 +1309,12 @@ func (w *wireGuardRuntime) upsertPeer(peer map[string]any) error {
 	if agentID == "" || publicKey == "" || len(allowedIPs) == 0 {
 		return errors.New("invalid_wireguard_peer")
 	}
+	normalizedIPs, err := w.validatePeerPolicyLocked(agentID, publicKey, allowedIPs, w.occupiedPeerPolicyLocked(agentID))
+	if err != nil {
+		return err
+	}
+	peer = copyMap(peer)
+	peer["allowed_ips"] = normalizedIPs
 	if err := w.ensureListenerLocked(); err != nil {
 		return err
 	}
@@ -1315,7 +1324,7 @@ func (w *wireGuardRuntime) upsertPeer(peer map[string]any) error {
 			_ = w.removePeerLocked(agentID, previousKey)
 		}
 	}
-	args := []string{w.bin("wg"), "set", w.interfaceName, "peer", publicKey, "allowed-ips", strings.Join(allowedIPs, ",")}
+	args := []string{w.bin("wg"), "set", w.interfaceName, "peer", publicKey, "allowed-ips", strings.Join(normalizedIPs, ",")}
 	code, out, errOut := w.runCommand(args)
 	if code != 0 {
 		return fmt.Errorf("wireguard_peer_upsert_failed: %s", firstText(errOut, out, "unknown"))
@@ -1351,19 +1360,26 @@ func (w *wireGuardRuntime) removePeerLocked(agentID string, publicKey string) er
 func (w *wireGuardRuntime) reconcilePeers(peers []map[string]any) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.ensureListenerLocked(); err != nil {
-		return err
-	}
 	desired := map[string]map[string]any{}
 	desiredKeys := map[string]struct{}{}
+	occupied := peerPolicyOwners{AllowedIPs: map[string]string{}, PublicKeys: map[string]string{}}
 	for _, peer := range peers {
 		agentID := cleanText(peer["agent_id"])
 		publicKey := cleanText(peer["public_key"])
 		if agentID == "" || publicKey == "" {
 			continue
 		}
-		desired[agentID] = peer
+		allowedIPs, err := w.validatePeerPolicyLocked(agentID, publicKey, normalizeStringSlice(peer["allowed_ips"]), occupied)
+		if err != nil {
+			return err
+		}
+		normalized := copyMap(peer)
+		normalized["allowed_ips"] = allowedIPs
+		desired[agentID] = normalized
 		desiredKeys[publicKey] = struct{}{}
+	}
+	if err := w.ensureListenerLocked(); err != nil {
+		return err
 	}
 	for _, current := range w.currentPeersLocked() {
 		if _, ok := desiredKeys[current]; !ok {
@@ -1463,6 +1479,135 @@ func (w *wireGuardRuntime) ensureLinuxRuntimeLocked() error {
 	if code != 0 {
 		return fmt.Errorf("wireguard_link_up_failed: %s", firstText(errOut, out, "unknown"))
 	}
+	return w.ensureLinuxFirewallLocked()
+}
+
+type peerPolicyOwners struct {
+	AllowedIPs map[string]string
+	PublicKeys map[string]string
+}
+
+func (w *wireGuardRuntime) occupiedPeerPolicyLocked(exceptAgentID string) peerPolicyOwners {
+	owners := peerPolicyOwners{AllowedIPs: map[string]string{}, PublicKeys: map[string]string{}}
+	exceptAgentID = cleanText(exceptAgentID)
+	for agentID, peer := range w.managedPeers {
+		agentID = cleanText(agentID)
+		if agentID == "" || agentID == exceptAgentID {
+			continue
+		}
+		for _, allowedIP := range normalizeStringSlice(peer["allowed_ips"]) {
+			if normalized := normalizeWireGuardHostRoute(allowedIP); normalized != "" {
+				owners.AllowedIPs[normalized] = agentID
+			}
+		}
+		if publicKey := cleanText(peer["public_key"]); publicKey != "" {
+			owners.PublicKeys[publicKey] = agentID
+		}
+	}
+	return owners
+}
+
+func (w *wireGuardRuntime) validatePeerPolicyLocked(agentID string, publicKey string, allowedIPs []string, owners peerPolicyOwners) ([]string, error) {
+	agentID = cleanText(agentID)
+	publicKey = cleanText(publicKey)
+	if owners.AllowedIPs == nil {
+		owners.AllowedIPs = map[string]string{}
+	}
+	if owners.PublicKeys == nil {
+		owners.PublicKeys = map[string]string{}
+	}
+	if agentID == "" || publicKey == "" {
+		return nil, errors.New("invalid_wireguard_peer")
+	}
+	if owner := owners.PublicKeys[publicKey]; owner != "" && owner != agentID {
+		return nil, fmt.Errorf("wireguard_public_key_already_assigned: %s", owner)
+	}
+	if len(allowedIPs) != 1 {
+		return nil, errors.New("wireguard_peer_allowed_ips_must_be_single_host")
+	}
+	prefix, err := netip.ParsePrefix(cleanText(allowedIPs[0]))
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 32 {
+		return nil, errors.New("wireguard_peer_allowed_ip_must_be_ipv4_32")
+	}
+	prefix = prefix.Masked()
+	if !w.peerPrefix.Contains(prefix.Addr()) {
+		return nil, errors.New("wireguard_peer_allowed_ip_outside_peer_network")
+	}
+	if prefix.Addr() == w.enginePrefix.Addr() {
+		return nil, errors.New("wireguard_peer_allowed_ip_reserved_for_engine")
+	}
+	normalized := prefix.String()
+	if owner := owners.AllowedIPs[normalized]; owner != "" && owner != agentID {
+		return nil, fmt.Errorf("wireguard_allowed_ip_already_assigned: %s", normalized)
+	}
+	owners.AllowedIPs[normalized] = agentID
+	owners.PublicKeys[publicKey] = agentID
+	return []string{normalized}, nil
+}
+
+func normalizeWireGuardHostRoute(value string) string {
+	prefix, err := netip.ParsePrefix(cleanText(value))
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 32 {
+		return ""
+	}
+	return prefix.Masked().String()
+}
+
+func (w *wireGuardRuntime) ensureLinuxFirewallLocked() error {
+	if !parseBoolEnvDefault("BOREALIS_WIREGUARD_ENFORCE_FIREWALL", true) {
+		return nil
+	}
+	if !w.peerPrefix.Addr().Is4() || !w.enginePrefix.Addr().Is4() {
+		return errors.New("wireguard_firewall_ipv4_required")
+	}
+	peerCIDR := w.peerPrefix.String()
+	engineHost := netip.PrefixFrom(w.enginePrefix.Addr(), 32).String()
+	required := [][]string{
+		{w.bin("iptables"), "-F", wireGuardInputChain},
+		{w.bin("iptables"), "-A", wireGuardInputChain, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-m", "comment", "--comment", "borealis wg established return", "-j", "ACCEPT"},
+		{w.bin("iptables"), "-A", wireGuardInputChain, "-s", peerCIDR, "-d", engineHost, "-m", "comment", "--comment", "borealis deny unsolicited agent ingress", "-j", "DROP"},
+		{w.bin("iptables"), "-F", wireGuardForwardChain},
+		{w.bin("iptables"), "-A", wireGuardForwardChain, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-m", "comment", "--comment", "borealis wg established forward", "-j", "ACCEPT"},
+		{w.bin("iptables"), "-A", wireGuardForwardChain, "-i", w.interfaceName, "-o", w.interfaceName, "-m", "comment", "--comment", "borealis deny agent lateral wg", "-j", "DROP"},
+		{w.bin("iptables"), "-A", wireGuardForwardChain, "-s", peerCIDR, "-m", "comment", "--comment", "borealis deny agent forwarding", "-j", "DROP"},
+	}
+	for _, chain := range []string{wireGuardInputChain, wireGuardForwardChain} {
+		code, _, _ := w.runCommand([]string{w.bin("iptables"), "-N", chain})
+		if code != 0 {
+			// Existing chains are expected after restart/reconcile.
+		}
+	}
+	for _, args := range required {
+		if err := w.runRequiredCommand(args, "wireguard_firewall_rule_failed"); err != nil {
+			return err
+		}
+	}
+	hooks := []struct {
+		chain string
+		args  []string
+	}{
+		{chain: "INPUT", args: []string{"-i", w.interfaceName, "-j", wireGuardInputChain}},
+		{chain: "FORWARD", args: []string{"-i", w.interfaceName, "-j", wireGuardForwardChain}},
+	}
+	for _, hook := range hooks {
+		check := append([]string{w.bin("iptables"), "-C", hook.chain}, hook.args...)
+		code, _, _ := w.runCommand(check)
+		if code == 0 {
+			continue
+		}
+		insert := append([]string{w.bin("iptables"), "-I", hook.chain, "1"}, hook.args...)
+		if err := w.runRequiredCommand(insert, "wireguard_firewall_hook_failed"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *wireGuardRuntime) runRequiredCommand(args []string, reason string) error {
+	code, out, errOut := w.runCommand(args)
+	if code != 0 {
+		return fmt.Errorf("%s: %s", reason, firstText(errOut, out, "unknown"))
+	}
 	return nil
 }
 
@@ -1527,6 +1672,9 @@ func (w *wireGuardRuntime) bin(name string) string {
 }
 
 func (w *wireGuardRuntime) runCommand(args []string) (int, string, string) {
+	if w != nil && w.commandRunner != nil {
+		return w.commandRunner(args)
+	}
 	socketPath := cleanText(os.Getenv("BOREALIS_WIREGUARD_CONTROL_SOCKET"))
 	if socketPath != "" && len(args) > 0 {
 		code, out, errOut, err := runWireGuardControlCommand(socketPath, args)

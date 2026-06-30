@@ -51,6 +51,9 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `GET /api/devices` - device list scoped to operator site access.
     - `GET /api/devices/search?hostname=<query>` - shared hostname search.
     - `GET /api/devices/<guid>` - device summary by GUID.
+    - `POST /api/devices/<guid>/quarantine` - admin containment action that blocks jobs and remote access without deleting inventory.
+    - `POST /api/devices/<guid>/unquarantine` - admin restore action for quarantined devices.
+    - `POST /api/devices/<guid>/revoke` - admin trust revocation that blocks token refresh and remote access.
     - `GET /api/device/details/<hostname>` - detailed device payload.
     - `POST /api/agent/heartbeat` - heartbeat, metrics, and metadata sync.
     - `POST /api/agent/status` - startup timeline and role health update.

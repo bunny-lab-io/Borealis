@@ -21,7 +21,7 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Public HTTPS terminates at the Borealis-managed Traefik edge on the engine host. Let's Encrypt owns the browser/agent trust chain, while the Python Engine stays on loopback HTTP behind Traefik.
 - Operators no longer need to download or install a Borealis private root CA for normal browser access.
 - Device enrollment is gated by enrollment and installer codes (configurable expiration and usage limits) and an operator approval queue; replay-resistant nonces plus rate limits (40 req/min/IP, 12 req/min/fingerprint) prevent brute force or code reuse.
-- Supported Windows agent traffic is owned by the SYSTEM runtime; per-session helpers never call device APIs or open their own Engine socket. Missing, expired, mismatched, or revoked credentials are rejected before any business logic runs. Operator-driven revoking and device quarantining are not yet implemented.
+- Supported Windows agent traffic is owned by the SYSTEM runtime; per-session helpers never call device APIs or open their own Engine socket. Missing, expired, mismatched, quarantined, or revoked credentials are rejected before remote-operation business logic runs.
 - Replay and credential theft defenses layer in DPoP proof validation (thumbprint binding) on the server side and short-lived access tokens (about 15 minutes) with 90-day refresh tokens hashed via SHA-256.
 - Centralized logging under `Engine/Services/api-backend/logs` and `Agent/Logs` captures enrollment approvals, rate-limit hits, signature failures, and auth anomalies for post-incident review. Recent wrong-code enrollment attempts are also surfaced in the Device Approval Queue.
 - Operator-facing API endpoints (device inventory, assemblies, job history, credentials, user management, etc.) require the Engine to be Aegis-unlocked and in the `login_required` bootstrap phase before an authenticated operator session or bearer token is honored.
@@ -63,11 +63,13 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Fast and robust transport: WireGuard provides encrypted UDP transport with lightweight handshakes that keep latency low and reconnects resilient.
 - Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
 - Public CA trust: tunnel orchestration uses the same Let's Encrypt-backed HTTPS control plane as REST and Socket.IO.
-- Isolation by default: each agent gets a host-only /32; AllowedIPs are restricted to the agent /32 and the Engine /32; no LAN routes and no client-to-client traffic.
-- Port-level controls: the tunnel is trusted end-to-end, and the Engine/Agent firewall rules allow a global port allowlist between the Engine /32 and Agent /32 (defaults to 47002, 5900, and 22, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`).
+- Isolation by default: each agent gets one host-only `/32`; Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys before it updates the WireGuard control plane. Agents also reject broad tunnel routes in received session material.
+- Firewall posture: WireGuard is transport identity, not application authorization. Engine listener reconcile installs `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` iptables chains by default. Those chains allow established/related return traffic, drop unsolicited agent-originated traffic to the Engine WireGuard address, drop agent-to-agent forwarding, and drop agent-originated forwarding toward internal networks.
+- Port-level controls: agent-local firewall rules allow only Engine `/32` access to explicitly issued tunnel ports. Defaults are `47002`, `5900`, and `22`, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`; additional ports are added only when a session or scheduled transport requires them.
 - Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\\SYSTEM`) access for deep diagnostics and remediation.
 - Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP; role-level disconnects (shell/VNC) leave the tunnel intact.
-- Future protocols: reuse the same trusted tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows without per-device port toggles.
+- Quarantine and revocation: admin containment routes bump the device token version, mark the device status, revoke active VNC collaboration state, and remove active WireGuard peers. `quarantined` devices can keep basic device-authenticated heartbeat/token refresh paths, but script polling returns a quarantined idle response and VPN, VNC, remote shell, remote desktop, site-worker remote-op tokens, and scheduled transport preparation are blocked. `revoked` devices also have refresh tokens revoked and cannot refresh trust.
+- Future protocols: reuse the same segmented tunnel for SSH, WinRM, VNC, WebRTC streaming, and other remote management workflows while keeping application authorization, site membership, worker assignment, and active session state checks above the WireGuard layer.
 
 ## Enrollment and Identity
 - Enrollment uses install codes and operator approval.
@@ -201,6 +203,9 @@ sequenceDiagram
     - `POST /api/agent/enroll/request` (No Authentication) - start enrollment.
     - `POST /api/agent/enroll/poll` (No Authentication) - finalize enrollment after approval.
     - `POST /api/agent/token/refresh` (Refresh Token) - mint a new access token.
+    - `POST /api/devices/<guid>/quarantine` (Admin) - mark a device quarantined, bump token version, and disconnect active VPN/VNC runtime state.
+    - `POST /api/devices/<guid>/unquarantine` (Admin) - return a quarantined device to active state and bump token version so stale access tokens are not reused.
+    - `POST /api/devices/<guid>/revoke` (Admin) - mark a device revoked, bump token version, revoke refresh tokens, and disconnect active VPN/VNC runtime state.
     - `GET /api/bootstrap/state` (No Authentication) - return the public bootstrap phase (`aegis_setup_required`, `aegis_unlock_required`, `admin_setup_required`, `admin_recovery_required`, `login_required`).
     - `POST /api/bootstrap/aegis/setup` (No Authentication) - configure Aegis before any login UI is available.
     - `POST /api/bootstrap/aegis/unlock` (No Authentication) - unlock Aegis after restart before any login UI is available.
@@ -250,6 +255,32 @@ sequenceDiagram
 
     ### Key material locations (Agent)
     - Identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
+
+    ### WireGuard hardening source map
+
+    - Engine tunnel runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go`.
+    - Agent VPN routes: `Data/Engine/Containers/api-backend/cmd/api-backend/agent_vpn_runtime.go`.
+    - Remote-operation session authorization: `Data/Engine/Containers/api-backend/cmd/api-backend/remote_ops_sessions.go`.
+    - Worker-backed command execution gate: `Data/Engine/Containers/api-backend/cmd/api-backend/device_processes.go`.
+    - Scheduled target filtering: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs_rerun.go`.
+    - Site-worker socket assignment gate: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`.
+    - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
+    - Agent WireGuard route validation: `Data/Agent/internal/roles/wireguard_tunnel/wireguard_tunnel.go`.
+    - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
+
+    ### Runtime behavior
+
+    - `wireGuardRuntime.validatePeerPolicyLocked` enforces one IPv4 `/32` per agent peer, requires peer IPs inside `BOREALIS_WIREGUARD_PEER_NETWORK`, rejects Engine `/32` reuse, rejects duplicate peer public keys, and validates desired reconcile state before mutating the listener.
+    - `wireGuardRuntime.ensureLinuxFirewallLocked` creates deterministic `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` chains unless `BOREALIS_WIREGUARD_ENFORCE_FIREWALL=0`.
+    - `deviceAllowsRemoteAccess` blocks non-active device status for `/api/agent/vpn/ensure`, `/api/agent/vpn/ready`, `/api/agent/vnc/ensure`, `/api/tunnel/connect`, `/api/tunnel/status`, `/api/tunnel/active`, `/api/remote-ops/session`, worker-backed process/quick-run/maintenance dispatch, and scheduled target materialization.
+    - Site-worker socket authentication rejects quarantined, revoked, and decommissioned devices before registering host-service sockets or file-transfer agent sessions.
+    - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They do not mount `/var/run/docker.sock`; only `job-scheduler` owns the host Docker socket.
+
+    ### Validation
+
+    - Engine focused Go tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./cmd/api-backend`.
+    - Agent focused Go tests: `cd Data/Agent && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./internal/roles/wireguard_tunnel`.
+    - Runtime network validation still requires a disposable deployed Engine with at least two enrolled agents to prove packet-level agent-to-agent, agent-to-internal, and quarantine/revocation denial.
 
     ### Enrollment sequence (step-by-step)
     1) Agent generates Ed25519 key pair and a fingerprint.

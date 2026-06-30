@@ -79,6 +79,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `PUT /api/metadata_fields/<field_number>` (Admin) - update one global Agent Metadata Field description.
     - `GET /api/devices/<device_id>/metadata_fields` (Token Authenticated) - list all 500 metadata field rows for an in-scope device, including decoded sparse values and modification metadata.
     - `PUT /api/devices/<device_id>/metadata_fields/<field_number>` (Token Authenticated) - update or clear one in-scope device metadata field. Blank value clears the field.
+    - `POST /api/devices/<guid>/quarantine` (Admin) - mark a device quarantined, bump its token version, disconnect active WireGuard/VNC runtime state, and block new jobs, VPN, VNC, shell, remote-op, and scheduled transport paths.
+    - `POST /api/devices/<guid>/unquarantine` (Admin) - return a quarantined device to active state and bump its token version so stale access tokens cannot continue.
+    - `POST /api/devices/<guid>/revoke` (Admin) - mark a device revoked, bump its token version, revoke refresh tokens, and disconnect active WireGuard/VNC runtime state.
     - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
     - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO.
     - `POST /api/devices/agent-maintenance` (Token Authenticated) - queue on-demand Agent updates or Agent branch/channel switches for selected devices. Requests create `agent_maintenance` scheduled-job history and site-worker `agent_maintenance_run` work items; site workers fan out to agents through the internal socket bridge.
