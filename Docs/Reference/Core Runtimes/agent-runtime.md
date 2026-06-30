@@ -60,7 +60,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     ### Related documentation
 
     - [Agent CLI Flags](agent-cli-flags.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
     - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
     - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
 

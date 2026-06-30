@@ -120,6 +120,22 @@ func TestBuildSessionNormalizesAllowedPortsAndHostRoute(t *testing.T) {
 	}
 }
 
+func TestBuildSessionRejectsBroadRoutes(t *testing.T) {
+	manager := testManager(t)
+	payload := testPayload(time.Now().Add(time.Hour).Unix())
+	payload["allowed_ips"] = "10.255.0.0/16"
+
+	if _, err := manager.buildSession(payload); err == nil || !strings.Contains(err.Error(), "allowed_ips must be single /32") {
+		t.Fatalf("expected broad allowed_ips rejection, got %v", err)
+	}
+
+	payload = testPayload(time.Now().Add(time.Hour).Unix())
+	payload["virtual_ip"] = "10.255.0.15/24"
+	if _, err := manager.buildSession(payload); err == nil || !strings.Contains(err.Error(), "virtual_ip must be /32") {
+		t.Fatalf("expected broad virtual_ip rejection, got %v", err)
+	}
+}
+
 func TestNewUsesWireGuardLogCategoryPath(t *testing.T) {
 	dir := t.TempDir()
 	manager := New(nil, "LAB-01", "system", filepath.Join(dir, "agent.json"))

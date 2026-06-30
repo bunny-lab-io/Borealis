@@ -51,7 +51,7 @@ Directory users cannot use local Borealis passwords or passkeys.
 
     - [User Management](user-management.md)
     - [Site Assignments](site-assignments.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
 
     ### Source map

@@ -137,6 +137,18 @@ class SocketAgentAuthError(Exception):
         self.status_code = status_code
 
 
+def _normalize_device_security_status(status: Any) -> str:
+    return str(status or "active").strip().lower() or "active"
+
+
+def _assert_device_worker_allowed(status: Any) -> None:
+    status_norm = _normalize_device_security_status(status)
+    if status_norm in {"revoked", "decommissioned"}:
+        raise SocketAgentAuthError("device_revoked", status_code=403)
+    if status_norm not in {"active", "online"}:
+        raise SocketAgentAuthError("device_quarantined", status_code=403)
+
+
 def _bearer_token() -> str:
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):
@@ -205,8 +217,7 @@ def _authenticate_socket_agent(
         raise SocketAgentAuthError("fingerprint_mismatch", status_code=403)
     if int(stored_version or 0) != token_version:
         raise SocketAgentAuthError("token_version_mismatch", status_code=403)
-    if str(status or "active").strip().lower() in {"revoked", "decommissioned"}:
-        raise SocketAgentAuthError("device_revoked", status_code=403)
+    _assert_device_worker_allowed(status)
     try:
         device_site_id = int(site_id) if site_id is not None else 0
     except Exception:
@@ -502,8 +513,7 @@ class SiteWorkerSocketRuntime:
             raise SocketAgentAuthError("fingerprint_mismatch", status_code=403)
         if int(stored_version or 0) != token_version:
             raise SocketAgentAuthError("token_version_mismatch", status_code=403)
-        if str(status or "active").strip().lower() in {"revoked", "decommissioned"}:
-            raise SocketAgentAuthError("device_revoked", status_code=403)
+        _assert_device_worker_allowed(status)
         try:
             device_site_id = int(site_id) if site_id is not None else 0
         except Exception:

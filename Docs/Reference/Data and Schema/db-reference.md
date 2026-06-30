@@ -289,11 +289,11 @@ finally:
     ### Related documentation
 
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
     - [Device Auditing](../../Using%20the%20Platform/device-auditing.md)
     - [Scheduled Jobs](../../Using%20the%20Platform/scheduled-jobs.md)
     - [Assemblies](../../Using%20the%20Platform/Assemblies/assemblies.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
 
     ### Source map
 
@@ -376,7 +376,7 @@ finally:
 
     ### Change-management checklist for schema edits
     - Update creation/migration code first (`database.py`, `database_migrations.py`, scheduler table init, or assembly DB manager).
-    - Update this document and any affected domain docs (`device-auditing.md`, `scheduled-jobs.md`, `security-and-trust.md`).
+    - Update this document and any affected domain docs (`device-auditing.md`, `scheduled-jobs.md`, `security-whitepaper.md`).
     - Update unit tests that rely on local schema fixtures (`Data/Engine/Unit_Tests/conftest.py`).
     - Verify runtime startup applies schema without errors by checking `Engine/Services/api-backend/logs/engine.log`.
 

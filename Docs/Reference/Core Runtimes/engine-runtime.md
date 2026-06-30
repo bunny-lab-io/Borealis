@@ -25,7 +25,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Architecture Overview](../../Reference/architecture-overview.md)
     - [Docker Stack Breakdown](Stack_Breakdown.md)
     - [Database Reference](../Data%20and%20Schema/db-reference.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
     - [API Reference](../Data%20and%20Schema/api-reference.md)
     - [Backup and Restore](../../Using%20the%20Platform/backup-restore.md)
     - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
@@ -69,7 +69,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
     - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
     - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
-    - `wireguard-tunnel` owns privileged WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
+    - `wireguard-tunnel` owns constrained WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
 
     ### Launcher commands
     - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.

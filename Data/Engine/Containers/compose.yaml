@@ -210,7 +210,8 @@ services:
     container_name: borealis-engine-wireguard-tunnel
     network_mode: host
     restart: unless-stopped
-    privileged: true
+    security_opt:
+      - no-new-privileges:true
     cap_add:
       - NET_ADMIN
       - NET_RAW

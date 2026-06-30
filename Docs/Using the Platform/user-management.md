@@ -48,7 +48,7 @@ After Aegis force reset, affected users can show recovery required. Recovering o
     - [Site Assignments](site-assignments.md)
     - [Directory Services](directory-services.md)
     - [Credential Management](credential-management.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
 
     ### Source map
 

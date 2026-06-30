@@ -136,17 +136,17 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 ### Security Controls vs Vendor-Assurance/Compliance
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| MFA | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
-| Passkeys / modern auth | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
+| MFA | Shipped | `Docs/Reference/security-whitepaper.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis requires MFA by default. |
+| Passkeys / modern auth | Shipped | `Docs/Reference/security-whitepaper.md`, `Docs/Reference/Data and Schema/api-reference.md` | Strong modern operator auth story. |
 | LDAP/LDAPS directory authentication | Shipped | `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_ldap.go`, `Data/Engine/Containers/webui-frontend/data/web-interface/src/Access_Management/Directory_Services.jsx`, `Data/Engine/Containers/api-backend/data/database.py` | Borealis now supports directory credential providers with LDAPS certificate trust, provider testing, AD group role mapping, and site-scoped operator assignment by directory group. |
-| Script/code signing | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/Assemblies/scripts.md` | Strong differentiator versus much of the field. |
-| Aegis secret protection | Shipped | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
+| Script/code signing | Shipped | `Docs/Reference/security-whitepaper.md`, `Docs/Using the Platform/Assemblies/scripts.md` | Strong differentiator versus much of the field. |
+| Aegis secret protection | Shipped | `Docs/Reference/security-whitepaper.md`, `Docs/Reference/Core Runtimes/engine-runtime.md`, `README.md` | Strong differentiator. |
 | Site-scoped RBAC | Shipped | `Docs/Using the Platform/site-assignments.md`, `README.md`, `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go` | Strong multi-operator control model now extends to directory-backed user groups. |
-| Customer lockbox | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/engine-log-management.md` | No tenancy-support lockbox pattern is documented. |
-| SAML / SSO | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
-| Management IP allowlisting | Absent | `Docs/Reference/security-and-trust.md`, `Docs/Using the Platform/remote-shell.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
+| Customer lockbox | Absent | `Docs/Reference/security-whitepaper.md`, `Docs/Using the Platform/engine-log-management.md` | No tenancy-support lockbox pattern is documented. |
+| SAML / SSO | Absent | `Docs/Reference/security-whitepaper.md`, `Docs/Reference/Data and Schema/api-reference.md` | LDAPS closes directory-backed authentication, but no SAML/OIDC web SSO flow or endpoints are documented. |
+| Management IP allowlisting | Absent | `Docs/Reference/security-whitepaper.md`, `Docs/Using the Platform/remote-shell.md` | Borealis documents WireGuard transport port allowlists, not browser/API management IP allowlists. |
 | Log export / SIEM integration | Partial but still a gap | `Docs/Using the Platform/engine-log-management.md`, `Docs/Reference/Data and Schema/api-reference.md` | Borealis exposes log APIs and retention management, but no SIEM export/integration is documented. |
-| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/Reference/security-and-trust.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
+| Vendor assurance programs: VDP, bug bounty, SOC2/ISO, FedRAMP | Absent | `Docs/Reference/security-whitepaper.md`, `README.md` | Product security is strong, but repo/docs do not show formal assurance-program artifacts. |
 
 ## Top Roadmap Gaps
 
@@ -259,7 +259,7 @@ Borealis is not starting from zero. Several areas already compare well, and thes
   - `Data/Agent/Roles/role_system_process_management.py`
   - `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Process_Management.jsx`
 - Aegis, MFA, passkeys, short-lived tokens, and code signing:
-  - `Docs/Reference/security-and-trust.md`
+  - `Docs/Reference/security-whitepaper.md`
   - `Docs/Reference/Core Runtimes/engine-runtime.md`
 - LDAP/LDAPS directory authentication with AD group role and site assignment:
   - `Data/Engine/Containers/api-backend/cmd/api-backend/directory_management.go`

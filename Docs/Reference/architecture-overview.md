@@ -44,7 +44,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](security-and-trust.md)
+    - [Security Whitepaper](security-whitepaper.md)
     - [Device Auditing](../Using%20the%20Platform/device-auditing.md)
     - [Assemblies](../Using%20the%20Platform/Assemblies/assemblies.md)
     - [Scheduled Jobs](../Using%20the%20Platform/scheduled-jobs.md)

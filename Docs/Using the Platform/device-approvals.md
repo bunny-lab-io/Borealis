@@ -50,7 +50,7 @@ Sites can carry a temporary `auto_approve_until` window. During that window, saf
 
     - [Sites](sites.md)
     - [Site Assignments](site-assignments.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [Database Reference](../Reference/Data%20and%20Schema/db-reference.md)
 
     ### Source map

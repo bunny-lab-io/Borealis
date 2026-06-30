@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -435,7 +436,7 @@ func (m *Manager) buildSession(payload map[string]any) (*SessionConfig, error) {
 		return nil, fmt.Errorf("missing tunnel_id")
 	}
 	virtualIP := cleanText(firstValue(payload, "virtual_ip", "client_virtual_ip"))
-	if !strings.Contains(virtualIP, "/32") {
+	if !validSingleHostRoute(virtualIP) {
 		return nil, fmt.Errorf("virtual_ip must be /32")
 	}
 	allowedIPs := parseAllowedIPs(firstValue(payload, "allowed_ips"), cleanText(firstValue(payload, "engine_virtual_ip", "engine_ip")))
@@ -1073,7 +1074,8 @@ func validSingleHostRoute(value string) bool {
 	if text == "" || strings.Contains(text, ",") {
 		return false
 	}
-	return strings.HasSuffix(text, "/32")
+	prefix, err := netip.ParsePrefix(text)
+	return err == nil && prefix.Addr().Is4() && prefix.Bits() == 32
 }
 
 func parseAllowedPorts(value any) []int {

@@ -56,7 +56,7 @@ If another operator already has the device open, Borealis joins the same shared 
     - [Server Info](server-info.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
 
     ### Source map
 

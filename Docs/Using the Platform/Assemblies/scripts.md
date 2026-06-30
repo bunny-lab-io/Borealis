@@ -50,7 +50,7 @@ Define variables in the assembly when values should change by run. Borealis inje
     - [Scheduled Jobs](../scheduled-jobs.md)
     - [Watchdogs](../watchdogs.md)
     - [Agent Runtime](../../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](../../Reference/security-and-trust.md)
+    - [Security Whitepaper](../../Reference/security-whitepaper.md)
 
     ### Source map
 

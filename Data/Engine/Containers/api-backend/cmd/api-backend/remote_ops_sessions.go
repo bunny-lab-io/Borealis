@@ -72,6 +72,7 @@ type remoteOpsSessionDevice struct {
 	GUID     string
 	Hostname string
 	AgentID  string
+	Status   string
 	SiteID   *int64
 	SiteName string
 }
@@ -259,6 +260,9 @@ func (s *postgresOperatorStore) createRemoteOpsSession(ctx context.Context, prof
 	if device.SiteID == nil {
 		return remoteOpsSessionResult{}, http.StatusConflict, errors.New("device_site_unassigned")
 	}
+	if !deviceAllowsRemoteAccess(device.Status) {
+		return remoteOpsSessionResult{}, http.StatusForbidden, errors.New("device_remote_access_blocked")
+	}
 	allowed, err := profileCanAccessSite(ctx, conn, profile, *device.SiteID)
 	if err != nil {
 		return remoteOpsSessionResult{}, http.StatusInternalServerError, err
@@ -292,16 +296,16 @@ func lookupRemoteOpsDevice(ctx context.Context, conn *sql.Conn, request remoteOp
 		return remoteOpsSessionDevice{}, nil
 	}
 	query := `
-		SELECT d.guid, d.hostname, d.agent_id, ds.site_id, s.name
+		SELECT d.guid, d.hostname, d.agent_id, COALESCE(d.status, 'active'), ds.site_id, s.name
 		  FROM engine.devices AS d
 	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname=d.hostname
 	 LEFT JOIN engine.sites AS s ON s.id=ds.site_id
 		 WHERE ` + strings.Join(clauses, " OR ") + `
 	  ORDER BY COALESCE(d.last_seen, 0) DESC, d.hostname ASC
 		 LIMIT 1`
-	var guid, hostname, agentID, siteName sql.NullString
+	var guid, hostname, agentID, status, siteName sql.NullString
 	var siteID sql.NullInt64
-	err := conn.QueryRowContext(ctx, query, params...).Scan(&guid, &hostname, &agentID, &siteID, &siteName)
+	err := conn.QueryRowContext(ctx, query, params...).Scan(&guid, &hostname, &agentID, &status, &siteID, &siteName)
 	if errors.Is(err, sql.ErrNoRows) {
 		return remoteOpsSessionDevice{}, nil
 	}
@@ -317,9 +321,19 @@ func lookupRemoteOpsDevice(ctx context.Context, conn *sql.Conn, request remoteOp
 		GUID:     normalizeCanonicalGUID(guid.String),
 		Hostname: cleanText(hostname.String),
 		AgentID:  cleanText(agentID.String),
+		Status:   firstText(cleanText(status.String), "active"),
 		SiteID:   siteIDPtr,
 		SiteName: cleanText(siteName.String),
 	}, nil
+}
+
+func deviceAllowsRemoteAccess(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "", "active", "online":
+		return true
+	default:
+		return false
+	}
 }
 
 func profileCanAccessSite(ctx context.Context, conn *sql.Conn, profile operatorProfile, siteID int64) (bool, error) {
@@ -416,6 +430,8 @@ func remoteOpsSessionErrorPayload(err error) map[string]any {
 		return map[string]any{"error": "not_found", "message": "Device was not found."}
 	case "device_site_unassigned":
 		return map[string]any{"error": "device_site_unassigned", "message": "Device is not assigned to a site."}
+	case "device_remote_access_blocked":
+		return map[string]any{"error": "device_quarantined", "message": "Device is not active for remote operations."}
 	default:
 		return map[string]any{"error": err.Error()}
 	}

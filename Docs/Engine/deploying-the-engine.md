@@ -128,7 +128,7 @@ After deployment finishes:
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
-    - [Security and Trust](../Reference/security-and-trust.md)
+    - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [Engine Log Management](../Using%20the%20Platform/engine-log-management.md)
 
     ### Bootstrap and runtime separation
@@ -166,7 +166,9 @@ After deployment finishes:
     - Bundled official assemblies: `Data/Engine/Containers/api-backend/data/Official_Assemblies/` (generated seed snapshot)
     - Aurora checkout: `Engine/Services/api-backend/cache/Aurora/`
     - Logs: `Engine/Services/api-backend/logs/engine.log`, `Engine/Services/api-backend/logs/error.log`, `Engine/Services/api-backend/logs/api.log`
-    - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, shell port 47002
+    - WireGuard: UDP 30000, engine virtual IP `10.255.0.1/32`, peer network `10.255.0.0/16`, shell port 47002
+
+    WireGuard overlay overrides must stay private IPv4. The Engine virtual IP must be a `/32`, and the peer network must be `/16` through `/30` with the Engine address inside it.
 
     ### Public edge and trust
 
