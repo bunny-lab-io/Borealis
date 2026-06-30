@@ -15,7 +15,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 | --- | --- | --- | --- |
 | `docker-proxy` | `borealis-engine-docker-proxy` | Read-only Docker API proxy for Engine container status reads and Sites site-worker stats | `127.0.0.1:2375` |
 | `postgres-db` | `borealis-engine-postgres-db` | PostgreSQL database and persisted DB state | `127.0.0.1:5432` |
-| `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | Privileged WireGuard interface, peer config, firewall/routing, control socket | UDP `30000`, interface `borealis-wg` |
+| `wireguard-tunnel` | `borealis-engine-wireguard-tunnel` | WireGuard interface, peer config, firewall/routing, constrained control socket | UDP `30000`, interface `borealis-wg` |
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
 | `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | `127.0.0.1:8000` |
 | `api-backend` | `borealis-engine-api-backend` | Go API backend, live operator sessions, VNC session broker, workflow/runtime APIs | `127.0.0.1:5000` |
@@ -516,7 +516,7 @@ bash Engine.sh deploy prod
 - `reload` is currently a Traefik restart.
 - `reconcile` is currently WireGuard-only.
 - PostgreSQL uses host networking and must not conflict with host PostgreSQL on `127.0.0.1:5432`.
-- WireGuard tunnel container is privileged and needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`.
+- WireGuard tunnel container uses host networking with `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`. It does not run with full Compose privileged mode.
 
 ## Troubleshooting Load Order
 If `api-backend` does not start:

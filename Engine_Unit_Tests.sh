@@ -247,6 +247,7 @@ engine_python_files_for_domain() {
         "${test_root}/test_vpn_shell.py" \
         "${test_root}/test_vpn_tunnel_service.py" \
         "${test_root}/test_websocket_registry.py" \
+        "${test_root}/test_wireguard_control_server.py" \
         "${test_root}/test_wireguard_server.py"
       ;;
     runtime-overrides)

@@ -46,6 +46,34 @@ func TestWireGuardRuntimeRejectsBroadAllowedIPsBeforeCommand(t *testing.T) {
 	}
 }
 
+func TestWireGuardRuntimePrefixesRejectUnsafeOverlayConfig(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP", "10.255.0.1/32")
+	t.Setenv("BOREALIS_WIREGUARD_PEER_NETWORK", "0.0.0.0/0")
+
+	enginePrefix, peerPrefix := parseWireGuardRuntimePrefixes()
+
+	if enginePrefix.String() != defaultWireGuardEngineIP {
+		t.Fatalf("unsafe peer network should keep default engine prefix, got %s", enginePrefix)
+	}
+	if peerPrefix.String() != defaultWireGuardPeerCIDR {
+		t.Fatalf("unsafe peer network should fall back to default peer prefix, got %s", peerPrefix)
+	}
+}
+
+func TestWireGuardRuntimePrefixesAcceptPrivateContainedOverlayConfig(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP", "192.168.200.1/32")
+	t.Setenv("BOREALIS_WIREGUARD_PEER_NETWORK", "192.168.200.0/24")
+
+	enginePrefix, peerPrefix := parseWireGuardRuntimePrefixes()
+
+	if enginePrefix.String() != "192.168.200.1/32" {
+		t.Fatalf("expected custom engine prefix, got %s", enginePrefix)
+	}
+	if peerPrefix.String() != "192.168.200.0/24" {
+		t.Fatalf("expected custom peer prefix, got %s", peerPrefix)
+	}
+}
+
 func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	runtime.managedPeers["agent-1"] = map[string]any{
@@ -93,7 +121,9 @@ func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {
 
 	for _, expected := range [][]string{
 		{"iptables", "-F", wireGuardInputChain},
-		{"iptables", "-A", wireGuardInputChain, "-s", "10.255.0.0/16", "-d", "10.255.0.1/32", "-m", "comment", "--comment", "borealis deny unsolicited agent ingress", "-j", "DROP"},
+		{"iptables", "-A", wireGuardInputChain, "-m", "conntrack", "--ctstate", "INVALID", "-m", "comment", "--comment", "borealis wg drop invalid ingress", "-j", "DROP"},
+		{"iptables", "-A", wireGuardInputChain, "-s", "10.255.0.0/16", "-m", "comment", "--comment", "borealis deny agent host ingress", "-j", "DROP"},
+		{"iptables", "-A", wireGuardForwardChain, "-m", "conntrack", "--ctstate", "INVALID", "-m", "comment", "--comment", "borealis wg drop invalid forward", "-j", "DROP"},
 		{"iptables", "-A", wireGuardForwardChain, "-i", defaultWireGuardInterface, "-o", defaultWireGuardInterface, "-m", "comment", "--comment", "borealis deny agent lateral wg", "-j", "DROP"},
 		{"iptables", "-A", wireGuardForwardChain, "-s", "10.255.0.0/16", "-m", "comment", "--comment", "borealis deny agent forwarding", "-j", "DROP"},
 		{"iptables", "-I", "INPUT", "1", "-i", defaultWireGuardInterface, "-j", wireGuardInputChain},

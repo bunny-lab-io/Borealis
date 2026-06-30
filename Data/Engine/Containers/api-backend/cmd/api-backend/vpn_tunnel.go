@@ -100,8 +100,7 @@ type vpnSession struct {
 }
 
 func newVPNTunnelService(auth *authService) *vpnTunnelService {
-	enginePrefix := parsePrefixEnv("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP", defaultWireGuardEngineIP)
-	peerPrefix := parsePrefixEnv("BOREALIS_WIREGUARD_PEER_NETWORK", defaultWireGuardPeerCIDR)
+	enginePrefix, peerPrefix := parseWireGuardRuntimePrefixes()
 	port := parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_PORT"), defaultWireGuardPort)
 	publicPort := parseIntDefault(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_PORT"), port)
 	if publicPort <= 0 {
@@ -143,7 +142,32 @@ func parsePrefixEnv(name string, fallback string) netip.Prefix {
 	if err != nil {
 		prefix, _ = netip.ParsePrefix(fallback)
 	}
-	return prefix
+	return prefix.Masked()
+}
+
+func parseWireGuardRuntimePrefixes() (netip.Prefix, netip.Prefix) {
+	engineFallback := netip.MustParsePrefix(defaultWireGuardEngineIP)
+	peerFallback := netip.MustParsePrefix(defaultWireGuardPeerCIDR)
+	enginePrefix := parsePrefixEnv("BOREALIS_WIREGUARD_ENGINE_VIRTUAL_IP", defaultWireGuardEngineIP)
+	peerPrefix := parsePrefixEnv("BOREALIS_WIREGUARD_PEER_NETWORK", defaultWireGuardPeerCIDR)
+	if !validWireGuardEnginePrefix(enginePrefix) || !validWireGuardPeerPrefix(peerPrefix, enginePrefix) {
+		return engineFallback, peerFallback
+	}
+	return enginePrefix, peerPrefix
+}
+
+func validWireGuardEnginePrefix(prefix netip.Prefix) bool {
+	return prefix.IsValid() && prefix.Addr().Is4() && prefix.Addr().IsPrivate() && prefix.Bits() == 32
+}
+
+func validWireGuardPeerPrefix(prefix netip.Prefix, enginePrefix netip.Prefix) bool {
+	return prefix.IsValid() &&
+		prefix.Addr().Is4() &&
+		prefix.Addr().IsPrivate() &&
+		prefix.Bits() >= 16 &&
+		prefix.Bits() <= 30 &&
+		validWireGuardEnginePrefix(enginePrefix) &&
+		prefix.Contains(enginePrefix.Addr())
 }
 
 func parsePortListEnv(name string, fallback []int) []int {
@@ -1554,19 +1578,17 @@ func normalizeWireGuardHostRoute(value string) string {
 }
 
 func (w *wireGuardRuntime) ensureLinuxFirewallLocked() error {
-	if !parseBoolEnvDefault("BOREALIS_WIREGUARD_ENFORCE_FIREWALL", true) {
-		return nil
-	}
 	if !w.peerPrefix.Addr().Is4() || !w.enginePrefix.Addr().Is4() {
 		return errors.New("wireguard_firewall_ipv4_required")
 	}
 	peerCIDR := w.peerPrefix.String()
-	engineHost := netip.PrefixFrom(w.enginePrefix.Addr(), 32).String()
 	required := [][]string{
 		{w.bin("iptables"), "-F", wireGuardInputChain},
+		{w.bin("iptables"), "-A", wireGuardInputChain, "-m", "conntrack", "--ctstate", "INVALID", "-m", "comment", "--comment", "borealis wg drop invalid ingress", "-j", "DROP"},
 		{w.bin("iptables"), "-A", wireGuardInputChain, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-m", "comment", "--comment", "borealis wg established return", "-j", "ACCEPT"},
-		{w.bin("iptables"), "-A", wireGuardInputChain, "-s", peerCIDR, "-d", engineHost, "-m", "comment", "--comment", "borealis deny unsolicited agent ingress", "-j", "DROP"},
+		{w.bin("iptables"), "-A", wireGuardInputChain, "-s", peerCIDR, "-m", "comment", "--comment", "borealis deny agent host ingress", "-j", "DROP"},
 		{w.bin("iptables"), "-F", wireGuardForwardChain},
+		{w.bin("iptables"), "-A", wireGuardForwardChain, "-m", "conntrack", "--ctstate", "INVALID", "-m", "comment", "--comment", "borealis wg drop invalid forward", "-j", "DROP"},
 		{w.bin("iptables"), "-A", wireGuardForwardChain, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-m", "comment", "--comment", "borealis wg established forward", "-j", "ACCEPT"},
 		{w.bin("iptables"), "-A", wireGuardForwardChain, "-i", w.interfaceName, "-o", w.interfaceName, "-m", "comment", "--comment", "borealis deny agent lateral wg", "-j", "DROP"},
 		{w.bin("iptables"), "-A", wireGuardForwardChain, "-s", peerCIDR, "-m", "comment", "--comment", "borealis deny agent forwarding", "-j", "DROP"},

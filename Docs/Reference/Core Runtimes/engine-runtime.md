@@ -69,7 +69,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
     - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
     - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
-    - `wireguard-tunnel` owns privileged WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
+    - `wireguard-tunnel` owns constrained WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
 
     ### Launcher commands
     - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.

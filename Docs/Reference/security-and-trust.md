@@ -64,7 +64,8 @@ Explain the Borealis trust model, enrollment security, token handling, and code 
 - Orchestration security: the Engine issues short-lived, Ed25519-signed tunnel tokens that the agent verifies before bringing the tunnel up.
 - Public CA trust: tunnel orchestration uses the same Let's Encrypt-backed HTTPS control plane as REST and Socket.IO.
 - Isolation by default: each agent gets one host-only `/32`; Engine peer mutation rejects duplicate `/32` assignments, broad prefixes, Engine-address reuse, and duplicate peer public keys before it updates the WireGuard control plane. Agents also reject broad tunnel routes in received session material.
-- Firewall posture: WireGuard is transport identity, not application authorization. Engine listener reconcile installs `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` iptables chains by default. Those chains allow established/related return traffic, drop unsolicited agent-originated traffic to the Engine WireGuard address, drop agent-to-agent forwarding, and drop agent-originated forwarding toward internal networks.
+- Firewall posture: WireGuard is transport identity, not application authorization. Engine listener reconcile always installs `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` iptables chains. Those chains drop invalid traffic, allow established/related return traffic, drop new agent-originated traffic to Engine host services over the WireGuard interface, drop agent-to-agent forwarding, and drop agent-originated forwarding toward internal networks.
+- Control-plane safety: the WireGuard control socket accepts only expected `wg`, `wg-quick`, `ip`, and `iptables` operations for Borealis tunnel setup. The tunnel container uses explicit network capabilities and `/dev/net/tun` instead of full privileged mode.
 - Port-level controls: agent-local firewall rules allow only Engine `/32` access to explicitly issued tunnel ports. Defaults are `47002`, `5900`, and `22`, configurable via `BOREALIS_WIREGUARD_PORT_ALLOWLIST`; additional ports are added only when a session or scheduled transport requires them.
 - Live PowerShell today: a VPN-only shell endpoint enables remote command execution with SYSTEM-level (`NT AUTHORITY\\SYSTEM`) access for deep diagnostics and remediation.
 - Session lifecycle: tunnels stay online with `PersistentKeepalive = 30`; session material includes a virtual IP; role-level disconnects (shell/VNC) leave the tunnel intact.
@@ -267,11 +268,16 @@ sequenceDiagram
     - Device containment routes: `Data/Engine/Containers/api-backend/cmd/api-backend/device_security.go`.
     - Agent WireGuard route validation: `Data/Agent/internal/roles/wireguard_tunnel/wireguard_tunnel.go`.
     - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
+    - WireGuard tunnel container boundary: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
 
     ### Runtime behavior
 
     - `wireGuardRuntime.validatePeerPolicyLocked` enforces one IPv4 `/32` per agent peer, requires peer IPs inside `BOREALIS_WIREGUARD_PEER_NETWORK`, rejects Engine `/32` reuse, rejects duplicate peer public keys, and validates desired reconcile state before mutating the listener.
-    - `wireGuardRuntime.ensureLinuxFirewallLocked` creates deterministic `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` chains unless `BOREALIS_WIREGUARD_ENFORCE_FIREWALL=0`.
+    - `parseWireGuardRuntimePrefixes` rejects unsafe overlay configuration before runtime starts: Engine address must be private IPv4 `/32`, peer network must be private IPv4 `/16` through `/30`, and the Engine address must sit inside that peer network.
+    - `wireGuardRuntime.ensureLinuxFirewallLocked` always creates deterministic `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` chains. No environment flag disables those firewall chains.
+    - Engine-side WireGuard firewall chains drop invalid packets, accept only established/related return traffic, drop new agent-originated host ingress over the tunnel, drop agent-to-agent forwarding, and drop agent-originated forwarding toward other networks.
+    - `wireguard-tunnel/control_server.py` rejects arbitrary privileged commands. It only accepts expected WireGuard listener, peer, interface, route, and Borealis firewall command shapes under service-local config and secret paths.
+    - `wireguard-tunnel` uses host networking, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`; it does not run with Compose `privileged: true`.
     - `deviceAllowsRemoteAccess` blocks non-active device status for `/api/agent/vpn/ensure`, `/api/agent/vpn/ready`, `/api/agent/vnc/ensure`, `/api/tunnel/connect`, `/api/tunnel/status`, `/api/tunnel/active`, `/api/remote-ops/session`, worker-backed process/quick-run/maintenance dispatch, and scheduled target materialization.
     - Site-worker socket authentication rejects quarantined, revoked, and decommissioned devices before registering host-service sockets or file-transfer agent sessions.
     - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They do not mount `/var/run/docker.sock`; only `job-scheduler` owns the host Docker socket.
