@@ -1,7 +1,6 @@
 ![Borealis Logo](Data/Engine/Containers/webui-frontend/data/web-interface/public/Borealis_Logo_Full.png)
 
 # Borealis
-
 Borealis is a self-hosted remote management, monitoring, and visual automation platform built around a Linux-hosted Engine and a cross-platform Agent runtime.
 
 It combines RMM-style endpoint operations, Ansible/AWX-style automation, scheduled jobs, watchdog remediation, remote desktop, remote shell, file/software/process/service management, and credential-backed infrastructure execution in one operator interface.
@@ -11,7 +10,6 @@ It combines RMM-style endpoint operations, Ansible/AWX-style automation, schedul
 **Deploy Borealis:** https://bunny-lab-io.github.io/Borealis/Engine/deploying-the-engine/
 
 ## Standout Capabilities
-
 - Linux-hosted Engine with Dockerized API, WebUI, PostgreSQL, Traefik, WireGuard, and Guacamole services.
 - Cross-platform Agent runtime with Windows and Linux support for inventory, telemetry, remote shell, file operations, process/service/software management, signed script execution, and watchdog inputs.
 - Managed WireGuard tunnel for remote operations without inbound endpoint exposure.
@@ -21,11 +19,9 @@ It combines RMM-style endpoint operations, Ansible/AWX-style automation, schedul
 - Operator documentation for deployment, runtime architecture, API behavior, testing, troubleshooting, and platform workflows.
 
 ## Security Whitepaper
-
-Borealis security posture, hardening domains, and trust model are documented in the [Security Whitepaper](Docs/Reference/security-whitepaper.md). It covers token trust, WireGuard security, Aegis Cipher, MFA/passkeys, code signing, device containment, runtime boundaries, and operational security expectations.
+Borealis's Engine and Agent security posture, hardened domains, and trust model are documented in the [Security Whitepaper](Docs/Reference/security-whitepaper.md). It covers token trust, WireGuard security, Aegis Cipher, MFA/passkeys, code signing, device containment, runtime boundaries, and operational security expectations.
 
 ## Feature Snapshot
-
 Status reflects productized support in current Borealis code and docs. See the [documentation feature matrix](https://bunny-lab-io.github.io/Borealis/) for detailed breakdowns and caveats.
 
 ### Agent Runtime
@@ -57,10 +53,7 @@ Status reflects productized support in current Borealis code and docs. See the [
 | Reporting for activity history, job history, alerts, and Ansible recap data | Full |
 
 ## Architecture At A Glance
-
 - **Engine:** Linux-hosted control plane for APIs, WebUI, scheduling, automation, remote access, credentials, security controls, and PostgreSQL-backed state.
 - **Agent:** Go endpoint runtime that enrolls, reports inventory and health, maintains remote-operation roles, and executes approved work.
 - **Transport:** Agents connect outbound to the Engine. Remote operations use Borealis-managed WireGuard sessions with Engine-controlled access.
 - **Automation:** Assemblies run through quick jobs, scheduled jobs, workflows, watchdog remediation, and Engine-side Ansible.
-
-Full deployment, operation, automation, architecture, API, testing, and contributor documentation lives in the [documentation site](https://bunny-lab-io.github.io/Borealis/).
