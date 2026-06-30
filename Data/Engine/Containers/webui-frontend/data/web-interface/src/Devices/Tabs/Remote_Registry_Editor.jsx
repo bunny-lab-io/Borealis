@@ -23,6 +23,8 @@ import { AgGridReact } from "ag-grid-react";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ArticleRoundedIcon from "@mui/icons-material/ArticleRounded";
+import AutorenewRoundedIcon from "@mui/icons-material/AutorenewRounded";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
 import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
@@ -49,6 +51,7 @@ import {
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
 const VALUE_TYPES = ["REG_SZ", "REG_EXPAND_SZ", "REG_MULTI_SZ", "REG_DWORD", "REG_QWORD", "REG_BINARY"];
+const ROOTS_SENTINEL = "__registry_roots__";
 
 const TOOLBAR_BUTTON_SX = {
   minHeight: 42,
@@ -163,6 +166,17 @@ const ADDRESS_BAR_ROOT_BUTTON_SX = {
   flexShrink: 0,
 };
 
+const ADDRESS_BAR_EMPTY_SPACE_BUTTON_SX = {
+  flex: 1,
+  minWidth: 28,
+  alignSelf: "stretch",
+  border: 0,
+  background: "transparent",
+  cursor: "text",
+  p: 0,
+  m: 0,
+};
+
 const ADDRESS_BAR_COPY_BUTTON_SX = {
   color: "rgba(148,163,184,0.92)",
   ml: 0.25,
@@ -187,16 +201,23 @@ const GRID_CELL_TEXT_SX = {
   textOverflow: "ellipsis",
 };
 
-const GRID_NUMERIC_CELL_SX = {
-  ...GRID_CELL_TEXT_SX,
-  width: "100%",
-  textAlign: "right",
-  fontVariantNumeric: "tabular-nums",
-};
-
 const GRID_MUTED_CELL_SX = {
   ...GRID_CELL_TEXT_SX,
   color: "rgba(148,163,184,0.86)",
+};
+
+const LOADING_STATUS_PILL_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 0.45,
+  flexShrink: 0,
+  px: 0.75,
+  py: 0.25,
+  ml: 0.25,
+  borderRadius: 999,
+  border: "1px solid rgba(125,211,252,0.26)",
+  background: "rgba(14,116,144,0.18)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
 };
 
 const REGISTRY_GRID_SX = {
@@ -292,6 +313,99 @@ export function normalizeValueEntry(row, currentPath) {
   };
 }
 
+function isRegistryKey(entry) {
+  return normalizeText(entry?.row_type).toLowerCase() === "key";
+}
+
+function isGridInteractiveClick(event) {
+  const target = event?.target;
+  if (!target?.closest) return false;
+  return Boolean(
+    target.closest(
+      "button, input, a, textarea, select, option, label, .ag-selection-checkbox, .ag-checkbox-input-wrapper, .ag-checkbox-input"
+    )
+  );
+}
+
+export function buildRegistryAddressSegments(pathValue) {
+  const normalized = normalizeRegistryPath(pathValue);
+  if (!normalized) return [];
+  const segments = [];
+  let currentPath = "";
+  normalized
+    .split("\\")
+    .filter(Boolean)
+    .forEach((segment) => {
+      currentPath = currentPath ? `${currentPath}\\${segment}` : segment;
+      segments.push({ label: segment, path: currentPath });
+    });
+  return segments;
+}
+
+export function buildRegistryPathChain(pathValue) {
+  return buildRegistryAddressSegments(pathValue).map((segment) => segment.path);
+}
+
+function compareRegistryRows(left, right, columnId) {
+  const leftIsKey = isRegistryKey(left);
+  const rightIsKey = isRegistryKey(right);
+  if (leftIsKey !== rightIsKey) {
+    return leftIsKey ? -1 : 1;
+  }
+  return normalizeText(left?.[columnId]).localeCompare(normalizeText(right?.[columnId]), undefined, {
+    sensitivity: "base",
+    numeric: true,
+  });
+}
+
+function sortRegistryRows(entries, sortModel = []) {
+  const activeSorts = Array.isArray(sortModel) && sortModel.length ? sortModel : [{ colId: "display_name", sort: "asc" }];
+  return [...entries].sort((left, right) => {
+    for (const descriptor of activeSorts) {
+      const columnId = normalizeText(descriptor?.colId) || "display_name";
+      const direction = normalizeText(descriptor?.sort).toLowerCase() === "desc" ? -1 : 1;
+      const comparison = compareRegistryRows(left, right, columnId);
+      if (comparison !== 0) return comparison * direction;
+    }
+    return compareRegistryRows(left, right, "display_name");
+  });
+}
+
+export function buildVisibleRows(entriesByParent, expandedPaths, sortModel) {
+  const rows = [];
+  let sortIndex = 0;
+
+  function visit(parentKey, depth) {
+    const children = sortRegistryRows(entriesByParent[parentKey] || [], sortModel);
+    children.forEach((entry) => {
+      rows.push({ ...entry, depth, sortIndex });
+      sortIndex += 1;
+      if (isRegistryKey(entry) && expandedPaths.has(entry.path)) {
+        visit(entry.path, depth + 1);
+      }
+    });
+  }
+
+  visit(ROOTS_SENTINEL, 0);
+  return rows;
+}
+
+export function collapseExpandedBranch(expandedSet, entriesByParent, branchPath) {
+  const next = new Set(expandedSet);
+  const stack = [normalizeRegistryPath(branchPath)];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) continue;
+    next.delete(current);
+    (entriesByParent[current] || []).forEach((entry) => {
+      if (isRegistryKey(entry) && normalizeRegistryPath(entry.path)) {
+        stack.push(entry.path);
+      }
+    });
+  }
+  return next;
+}
+
 export function valueDataToEditor(row) {
   const data = row?.data;
   if (Array.isArray(data)) return data.join("\n");
@@ -306,14 +420,23 @@ export default function RemoteRegistryEditor({ device }) {
   const notifyOperator = useAppNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const gridRef = useRef(null);
+  const pathInputRef = useRef(null);
+  const loadSuccessTimersRef = useRef({});
+  const hydratedRegistryPathRef = useRef("");
+  const pendingScrollPathRef = useRef("");
   const hostname = useMemo(() => getHostname(device), [device]);
   const requestedPath = useMemo(() => normalizeRegistryPath(searchParams.get("registry_path")), [searchParams]);
 
   const [currentPath, setCurrentPath] = useState("");
-  const [addressInput, setAddressInput] = useState("");
-  const [rows, setRows] = useState([]);
+  const [pathInput, setPathInput] = useState("");
+  const [isPathEditing, setIsPathEditing] = useState(false);
+  const [entriesByParent, setEntriesByParent] = useState({});
+  const [expandedPaths, setExpandedPaths] = useState(() => new Set());
   const [selectedRows, setSelectedRows] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [sortModel, setSortModel] = useState([]);
+  const [loadingPaths, setLoadingPaths] = useState(() => new Set());
+  const [initializing, setInitializing] = useState(true);
+  const [rowLoadStateByPath, setRowLoadStateByPath] = useState({});
   const [error, setError] = useState("");
   const [keyDialog, setKeyDialog] = useState({ open: false, mode: "create", row: null, name: "" });
   const [valueDialog, setValueDialog] = useState({
@@ -339,72 +462,300 @@ export default function RemoteRegistryEditor({ device }) {
   const canRenameKey = Boolean(selectedKey?.editable);
   const canDeleteKey = Boolean(selectedKey?.editable);
   const canEditValue = Boolean(selectedValue?.editable);
+  const loading = initializing || loadingPaths.size > 0;
+  const visibleRows = useMemo(
+    () => buildVisibleRows(entriesByParent, expandedPaths, sortModel).map((row) => ({ ...row, id: row.id || `${row.row_type}:${row.path}:${row.name}` })),
+    [entriesByParent, expandedPaths, sortModel]
+  );
+  const addressBarSegments = useMemo(() => buildRegistryAddressSegments(currentPath), [currentPath]);
 
-  const setUrlPath = useCallback(
-    (pathValue) => {
+  const fetchRootsView = useCallback(async () => {
+    const response = await fetch(`/api/device/registry/${encodeURIComponent(hostname)}/roots`, {
+      credentials: "include",
+    });
+    const data = await responseJson(response);
+    if (!response.ok) {
+      throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
+    }
+    return {
+      entries: Array.isArray(data?.entries) ? data.entries.map((row) => normalizeKeyEntry(row)) : [],
+    };
+  }, [hostname]);
+
+  const fetchChildrenView = useCallback(
+    async (pathValue) => {
       const normalizedPath = normalizeRegistryPath(pathValue);
-      const nextParams = new URLSearchParams(searchParams);
-      if (normalizedPath) {
-        nextParams.set("registry_path", normalizedPath);
-      } else {
-        nextParams.delete("registry_path");
+      const response = await fetch(
+        `/api/device/registry/${encodeURIComponent(hostname)}/children?path=${encodeURIComponent(normalizedPath)}`,
+        { credentials: "include" }
+      );
+      const data = await responseJson(response);
+      if (!response.ok) {
+        throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
       }
-      setSearchParams(nextParams, { replace: true });
+      const resolvedPath = normalizeRegistryPath(data?.current_path || normalizedPath);
+      const keyRows = Array.isArray(data?.entries) ? data.entries.map((row) => normalizeKeyEntry(row)) : [];
+      const valueRows = Array.isArray(data?.values) ? data.values.map((row) => normalizeValueEntry(row, resolvedPath)) : [];
+      return {
+        currentPath: resolvedPath,
+        entries: [...keyRows, ...valueRows],
+      };
     },
-    [searchParams, setSearchParams]
+    [hostname]
   );
 
-  const buildRows = useCallback((data, pathValue) => {
-    const keyRows = Array.isArray(data?.entries) ? data.entries.map((row) => normalizeKeyEntry(row)) : [];
-    const valueRows = Array.isArray(data?.values) ? data.values.map((row) => normalizeValueEntry(row, pathValue)) : [];
-    return [...keyRows, ...valueRows];
-  }, []);
-
-  const loadRegistryPath = useCallback(
-    async (pathValue = "") => {
+  const restoreRegistryView = useCallback(
+    async ({ targetPath = "", resetSelection = true, scrollToPath = false } = {}) => {
       if (!hostname) return;
-      const normalizedPath = normalizeRegistryPath(pathValue);
-      setLoading(true);
-      setError("");
-      try {
-        const url = normalizedPath
-          ? `/api/device/registry/${encodeURIComponent(hostname)}/children?path=${encodeURIComponent(normalizedPath)}`
-          : `/api/device/registry/${encodeURIComponent(hostname)}/roots`;
-        const response = await fetch(url, { credentials: "include" });
-        const data = await responseJson(response);
-        if (!response.ok) {
-          throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
-        }
-        const nextPath = normalizedPath ? normalizeRegistryPath(data?.current_path || normalizedPath) : "";
-        setCurrentPath(nextPath);
-        setAddressInput(nextPath);
-        setRows(buildRows(data, nextPath));
+      const normalizedTarget = normalizeRegistryPath(targetPath);
+      if (resetSelection) {
         setSelectedRows([]);
         gridRef.current?.api?.deselectAll?.();
+      }
+      setError("");
+      setLoadingPaths((previous) => {
+        const next = new Set(previous);
+        next.add(ROOTS_SENTINEL);
+        return next;
+      });
+      try {
+        const rootPayload = await fetchRootsView();
+        const nextEntriesByParent = {
+          [ROOTS_SENTINEL]: Array.isArray(rootPayload?.entries) ? rootPayload.entries : [],
+        };
+        const nextExpandedPaths = new Set();
+        let resolvedPath = "";
+
+        setEntriesByParent({ ...nextEntriesByParent });
+        setExpandedPaths(new Set());
+
+        for (const expandedPath of buildRegistryPathChain(normalizedTarget)) {
+          const childPayload = await fetchChildrenView(expandedPath);
+          const childPath = normalizeRegistryPath(childPayload?.currentPath || expandedPath);
+          nextEntriesByParent[childPath] = Array.isArray(childPayload?.entries) ? childPayload.entries : [];
+          nextExpandedPaths.add(childPath);
+          resolvedPath = childPath;
+        }
+
+        setEntriesByParent({ ...nextEntriesByParent });
+        setExpandedPaths(nextExpandedPaths);
+        setCurrentPath(resolvedPath);
+        setPathInput(resolvedPath);
+        setIsPathEditing(false);
+        if (scrollToPath && resolvedPath) {
+          pendingScrollPathRef.current = resolvedPath;
+        }
+        setError("");
       } catch (loadError) {
         setError(loadError?.message || "Registry request failed.");
-        setRows([]);
       } finally {
-        setLoading(false);
+        setLoadingPaths((previous) => {
+          const next = new Set(previous);
+          next.delete(ROOTS_SENTINEL);
+          return next;
+        });
       }
     },
-    [buildRows, hostname]
+    [fetchChildrenView, fetchRootsView, hostname]
   );
 
   useEffect(() => {
-    void loadRegistryPath(requestedPath);
-  }, [loadRegistryPath, requestedPath]);
+    if (!isPathEditing) return undefined;
+    const timerId = window.setTimeout(() => {
+      pathInputRef.current?.focus?.();
+      pathInputRef.current?.select?.();
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [isPathEditing]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(loadSuccessTimersRef.current || {}).forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    const targetPath = normalizeRegistryPath(pendingScrollPathRef.current);
+    if (!targetPath || !visibleRows.length) {
+      return undefined;
+    }
+    const rowIndex = visibleRows.findIndex((row) => isRegistryKey(row) && normalizeRegistryPath(row?.path) === targetPath);
+    if (rowIndex < 0) {
+      return undefined;
+    }
+    pendingScrollPathRef.current = "";
+    const animationFrameId = window.requestAnimationFrame(() => {
+      gridRef.current?.api?.ensureIndexVisible?.(rowIndex, "top");
+    });
+    return () => window.cancelAnimationFrame(animationFrameId);
+  }, [visibleRows]);
+
+  useEffect(() => {
+    if (initializing) return;
+    const serializedPath = normalizeRegistryPath(currentPath);
+    const currentValue = normalizeRegistryPath(searchParams.get("registry_path"));
+    if ((serializedPath && currentValue === serializedPath) || (!serializedPath && !currentValue)) {
+      return;
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    if (serializedPath) {
+      nextParams.set("registry_path", serializedPath);
+    } else {
+      nextParams.delete("registry_path");
+    }
+    hydratedRegistryPathRef.current = `${hostname}::${serializedPath}`;
+    setSearchParams(nextParams, { replace: true });
+  }, [currentPath, hostname, initializing, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    let canceled = false;
+
+    async function loadInitial() {
+      if (!hostname) {
+        setInitializing(false);
+        return;
+      }
+      setInitializing(true);
+      try {
+        const hydrateKey = `${hostname}::${requestedPath}`;
+        if (hydratedRegistryPathRef.current === hydrateKey) {
+          setInitializing(false);
+          return;
+        }
+        await restoreRegistryView({ targetPath: requestedPath, resetSelection: false, scrollToPath: true });
+        hydratedRegistryPathRef.current = hydrateKey;
+      } finally {
+        if (!canceled) {
+          setInitializing(false);
+        }
+      }
+    }
+
+    void loadInitial();
+    return () => {
+      canceled = true;
+    };
+  }, [hostname, requestedPath, restoreRegistryView]);
 
   const navigateToPath = useCallback(
-    (pathValue) => {
+    async (pathValue) => {
+      await restoreRegistryView({ targetPath: normalizeRegistryPath(pathValue), resetSelection: true, scrollToPath: true });
+    },
+    [restoreRegistryView]
+  );
+
+  const loadChildrenForPath = useCallback(
+    async (pathValue) => {
       const normalizedPath = normalizeRegistryPath(pathValue);
-      setUrlPath(normalizedPath);
-      if (normalizedPath === requestedPath) {
-        void loadRegistryPath(normalizedPath);
+      if (!hostname || !normalizedPath) return;
+      if (loadSuccessTimersRef.current[normalizedPath]) {
+        window.clearTimeout(loadSuccessTimersRef.current[normalizedPath]);
+        delete loadSuccessTimersRef.current[normalizedPath];
+      }
+      setRowLoadStateByPath((previous) => ({ ...previous, [normalizedPath]: "loading" }));
+      setLoadingPaths((previous) => {
+        const next = new Set(previous);
+        next.add(normalizedPath);
+        return next;
+      });
+      try {
+        const data = await fetchChildrenView(normalizedPath);
+        const resolvedPath = normalizeRegistryPath(data?.currentPath || normalizedPath);
+        setEntriesByParent((previous) => ({
+          ...previous,
+          [resolvedPath]: Array.isArray(data?.entries) ? data.entries : [],
+        }));
+        setRowLoadStateByPath((previous) => {
+          const next = { ...previous, [resolvedPath]: "loaded" };
+          if (resolvedPath !== normalizedPath) {
+            delete next[normalizedPath];
+          }
+          return next;
+        });
+        loadSuccessTimersRef.current[resolvedPath] = window.setTimeout(() => {
+          setRowLoadStateByPath((previous) => {
+            const next = { ...previous };
+            delete next[resolvedPath];
+            return next;
+          });
+          delete loadSuccessTimersRef.current[resolvedPath];
+        }, 1000);
+      } catch (loadError) {
+        setRowLoadStateByPath((previous) => {
+          const next = { ...previous };
+          delete next[normalizedPath];
+          return next;
+        });
+        throw loadError;
+      } finally {
+        setLoadingPaths((previous) => {
+          const next = new Set(previous);
+          next.delete(normalizedPath);
+          next.delete(normalizeRegistryPath(pathValue));
+          return next;
+        });
       }
     },
-    [loadRegistryPath, requestedPath, setUrlPath]
+    [fetchChildrenView, hostname]
   );
+
+  const toggleExpand = useCallback(
+    async (row) => {
+      if (!row || !isRegistryKey(row)) return;
+      const pathValue = normalizeRegistryPath(row.path);
+      if (!pathValue) return;
+      if (expandedPaths.has(pathValue)) {
+        setExpandedPaths((previous) => collapseExpandedBranch(previous, entriesByParent, pathValue));
+        const parentPath = normalizeRegistryPath(row.parent_path);
+        setCurrentPath(parentPath);
+        setPathInput(parentPath);
+        return;
+      }
+      if (!entriesByParent[pathValue]) {
+        try {
+          await loadChildrenForPath(pathValue);
+        } catch (expandError) {
+          setError(String(expandError?.message || expandError));
+          return;
+        }
+      }
+      setExpandedPaths((previous) => {
+        let next = new Set(previous);
+        const siblingParentKey = normalizeRegistryPath(row.parent_path) || ROOTS_SENTINEL;
+        (entriesByParent[siblingParentKey] || []).forEach((sibling) => {
+          const siblingPath = normalizeRegistryPath(sibling?.path);
+          if (!siblingPath || siblingPath === pathValue || !isRegistryKey(sibling) || !next.has(siblingPath)) return;
+          next = collapseExpandedBranch(next, entriesByParent, siblingPath);
+        });
+        next.add(pathValue);
+        return next;
+      });
+      setCurrentPath(pathValue);
+      setPathInput(pathValue);
+      setIsPathEditing(false);
+      setError("");
+    },
+    [entriesByParent, expandedPaths, loadChildrenForPath]
+  );
+
+  const handleEnablePathEditing = useCallback(() => {
+    setPathInput(currentPath);
+    setIsPathEditing(true);
+  }, [currentPath]);
+
+  const handleCancelPathEditing = useCallback(() => {
+    setPathInput(currentPath);
+    setIsPathEditing(false);
+  }, [currentPath]);
+
+  const handleAddressBarNavigate = useCallback(async () => {
+    const targetPath = normalizeRegistryPath(pathInput);
+    await navigateToPath(targetPath);
+    setPathInput(targetPath);
+    setIsPathEditing(false);
+  }, [navigateToPath, pathInput]);
 
   const requestRegistryMutation = useCallback(
     async (suffix, body) => {
@@ -424,11 +775,11 @@ export default function RemoteRegistryEditor({ device }) {
   );
 
   const refreshCurrent = useCallback(() => {
-    void loadRegistryPath(currentPath);
-  }, [currentPath, loadRegistryPath]);
+    void restoreRegistryView({ targetPath: currentPath, resetSelection: true, scrollToPath: true });
+  }, [currentPath, restoreRegistryView]);
 
   const handleCopyPath = useCallback(async () => {
-    const pathValue = normalizeRegistryPath(selectedRow?.path || currentPath);
+    const pathValue = normalizeRegistryPath(currentPath);
     if (!pathValue) return;
     try {
       await navigator.clipboard?.writeText(pathValue);
@@ -436,7 +787,7 @@ export default function RemoteRegistryEditor({ device }) {
     } catch {
       await notifyOperator({ title: "Registry", message: "Clipboard copy failed.", variant: "warning", icon: "content_copy" });
     }
-  }, [currentPath, notifyOperator, selectedRow]);
+  }, [currentPath, notifyOperator]);
 
   const openCreateKeyDialog = useCallback(() => {
     setKeyDialog({ open: true, mode: "create", row: null, name: "" });
@@ -495,20 +846,24 @@ export default function RemoteRegistryEditor({ device }) {
         variant: "success",
         icon: "account_tree",
       });
-      refreshCurrent();
+      await restoreRegistryView({
+        targetPath: isRename ? normalizeRegistryPath(keyDialog.row?.parent_path) : normalizeRegistryPath(currentPath),
+        resetSelection: true,
+        scrollToPath: true,
+      });
     } catch (saveError) {
       setError(saveError?.message || "Registry key action failed.");
     } finally {
       setActionBusy("");
     }
-  }, [currentPath, keyDialog, notifyOperator, refreshCurrent, requestRegistryMutation]);
+  }, [currentPath, keyDialog, notifyOperator, requestRegistryMutation, restoreRegistryView]);
 
   const handleSaveValue = useCallback(async () => {
     const isUpdate = valueDialog.mode === "update";
     setActionBusy(isUpdate ? "update-value" : "create-value");
     try {
       await requestRegistryMutation(isUpdate ? "value/update" : "value/create", {
-        path: normalizeRegistryPath(currentPath),
+        path: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : currentPath),
         name: valueDialog.name,
         type: valueDialog.type,
         data: valueDialog.data,
@@ -520,13 +875,17 @@ export default function RemoteRegistryEditor({ device }) {
         variant: "success",
         icon: "article",
       });
-      refreshCurrent();
+      await restoreRegistryView({
+        targetPath: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : currentPath),
+        resetSelection: true,
+        scrollToPath: true,
+      });
     } catch (saveError) {
       setError(saveError?.message || "Registry value action failed.");
     } finally {
       setActionBusy("");
     }
-  }, [currentPath, notifyOperator, refreshCurrent, requestRegistryMutation, valueDialog]);
+  }, [currentPath, notifyOperator, requestRegistryMutation, restoreRegistryView, valueDialog]);
 
   const handleDelete = useCallback(async () => {
     const row = deleteDialog.row;
@@ -548,19 +907,17 @@ export default function RemoteRegistryEditor({ device }) {
         await notifyOperator({ title: "Registry", message: "Registry value deleted.", variant: "success", icon: "delete" });
       }
       setDeleteDialog({ open: false, row: null, confirmPath: "", recursive: false });
-      refreshCurrent();
+      await restoreRegistryView({
+        targetPath: row.row_type === "key" ? normalizeRegistryPath(row.parent_path) : normalizeRegistryPath(row.path),
+        resetSelection: true,
+        scrollToPath: true,
+      });
     } catch (deleteError) {
       setError(deleteError?.message || "Registry delete failed.");
     } finally {
       setActionBusy("");
     }
-  }, [deleteDialog, notifyOperator, refreshCurrent, requestRegistryMutation]);
-
-  const pathSegments = useMemo(() => {
-    if (!currentPath) return [];
-    const parts = currentPath.split("\\").filter(Boolean);
-    return parts.map((_part, index) => parts.slice(0, index + 1).join("\\"));
-  }, [currentPath]);
+  }, [deleteDialog, notifyOperator, requestRegistryMutation, restoreRegistryView]);
 
   const columnDefs = useMemo(
     () => [
@@ -575,9 +932,20 @@ export default function RemoteRegistryEditor({ device }) {
         },
         cellRenderer: (params) => {
           const row = params?.data || {};
-          const isKey = row.row_type === "key";
+          const isKey = isRegistryKey(row);
+          const loadState = params?.context?.rowLoadStateByPath?.[row.path] || "";
           return (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.8, height: "100%", minWidth: 0, width: "100%" }}>
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.8,
+                height: "100%",
+                minWidth: 0,
+                width: "100%",
+                pl: `${Number(row?.depth || 0) * 18}px`,
+              }}
+            >
               {isKey ? (
                 row.kind === "hive" ? (
                   <Icon
@@ -598,20 +966,64 @@ export default function RemoteRegistryEditor({ device }) {
               ) : (
                 <ArticleRoundedIcon sx={{ fontSize: 29, color: row.editable ? "#cbd5e1" : "rgba(148,163,184,0.78)", flexShrink: 0 }} />
               )}
-              <Typography
-                component="span"
+              <Box
+                component={isKey ? "button" : "span"}
+                type={isKey ? "button" : undefined}
+                onClick={
+                  isKey
+                    ? (event) => {
+                        event.stopPropagation();
+                        params?.node?.setSelected?.(true, true);
+                        params?.context?.toggleExpand?.(row);
+                      }
+                    : undefined
+                }
                 sx={{
-                  color: "#58a6ff",
-                  fontWeight: 400,
-                  lineHeight: 1.25,
+                  border: 0,
+                  background: "transparent",
+                  color: "inherit",
+                  cursor: isKey ? "pointer" : "default",
+                  p: 0,
+                  m: 0,
                   minWidth: 0,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
+                  textAlign: "left",
+                  display: "inline-flex",
+                  alignItems: "center",
                 }}
               >
-                {row.display_name}
-              </Typography>
+                <Typography
+                  component="span"
+                  sx={{
+                    color: "#58a6ff",
+                    fontWeight: 400,
+                    lineHeight: 1.25,
+                    minWidth: 0,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {row.display_name}
+                </Typography>
+              </Box>
+              {loadState ? (
+                <Box sx={LOADING_STATUS_PILL_SX}>
+                  {loadState === "loading" ? (
+                    <AutorenewRoundedIcon
+                      sx={{
+                        fontSize: 15,
+                        color: "#9bd7ff",
+                        animation: "remoteRegistryManagementSpin 1.15s linear infinite",
+                      }}
+                    />
+                  ) : (
+                    <CheckCircleRoundedIcon sx={{ fontSize: 15, color: "#4ade80" }} />
+                  )}
+                  <Typography component="span" sx={{ color: loadState === "loading" ? "#d9ecff" : "#c7f9cc", fontSize: "0.72rem", fontWeight: 600 }}>
+                    {loadState === "loading" ? "Loading..." : "Loaded Successfully"}
+                  </Typography>
+                </Box>
+              ) : null}
             </Box>
           );
         },
@@ -625,30 +1037,17 @@ export default function RemoteRegistryEditor({ device }) {
       },
       {
         field: "data_label",
-        headerName: "Data",
+        headerName: "Value",
         minWidth: 260,
         flex: 1.2,
         cellRenderer: (params) => <Typography component="span" sx={GRID_CELL_TEXT_SX}>{params?.value || ""}</Typography>,
-      },
-      {
-        field: "subkey_count",
-        headerName: "Subkeys",
-        width: 110,
-        flex: 0,
-        cellRenderer: (params) => <Typography component="span" sx={GRID_NUMERIC_CELL_SX}>{params?.value ?? ""}</Typography>,
-      },
-      {
-        field: "value_count",
-        headerName: "Values",
-        width: 100,
-        flex: 0,
-        cellRenderer: (params) => <Typography component="span" sx={GRID_NUMERIC_CELL_SX}>{params?.value ?? ""}</Typography>,
       },
       {
         field: "modified_label",
         headerName: "Modified",
         minWidth: 190,
         flex: 0.75,
+        resizable: false,
         cellRenderer: (params) => <Typography component="span" sx={GRID_MUTED_CELL_SX}>{params?.value || ""}</Typography>,
       },
     ],
@@ -656,35 +1055,127 @@ export default function RemoteRegistryEditor({ device }) {
   );
 
   const rowSelection = useMemo(() => ({ mode: "singleRow", enableClickSelection: true }), []);
+  const gridContext = useMemo(
+    () => ({
+      toggleExpand,
+      expandedPaths,
+      loadingPaths,
+      rowLoadStateByPath,
+    }),
+    [expandedPaths, loadingPaths, rowLoadStateByPath, toggleExpand]
+  );
 
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5, flexGrow: 1, minHeight: 0 }}>
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 1.5,
+        flexGrow: 1,
+        minHeight: 0,
+        "@keyframes remoteRegistryManagementSpin": {
+          "0%": { transform: "rotate(0deg)" },
+          "100%": { transform: "rotate(360deg)" },
+        },
+      }}
+    >
       <Stack direction={{ xs: "column", lg: "row" }} spacing={1.05} alignItems={{ xs: "stretch", lg: "flex-start" }}>
         <Stack direction="row" spacing={0.9} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
-          <Tooltip title="Registry roots" arrow>
-            <IconButton onClick={() => navigateToPath("")} sx={ICON_BUTTON_SX}>
-              <AccountTreeRoundedIcon sx={{ fontSize: 19 }} />
-            </IconButton>
+          <Tooltip title="Refresh registry listing" arrow>
+            <span>
+              <IconButton onClick={refreshCurrent} disabled={loading} sx={ICON_BUTTON_SX}>
+                <RefreshRoundedIcon sx={{ fontSize: 18 }} />
+              </IconButton>
+            </span>
           </Tooltip>
           <Box sx={ADDRESS_BAR_SHELL_SX}>
-            <InputBase
-              value={addressInput}
-              onChange={(event) => setAddressInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  navigateToPath(addressInput);
-                }
+            <Box
+              component="button"
+              type="button"
+              aria-label="Go to registry roots"
+              onClick={() => {
+                void navigateToPath("");
               }}
-              placeholder="HKLM\\SOFTWARE"
-              sx={ADDRESS_BAR_INPUT_SX}
-              inputProps={{ "aria-label": "Registry path" }}
-            />
-            <Tooltip title={normalizeRegistryPath(selectedRow?.path || currentPath) ? "Copy path" : "Nothing to copy"} arrow>
+              sx={ADDRESS_BAR_ROOT_BUTTON_SX}
+            >
+              <AccountTreeRoundedIcon sx={{ color: "currentColor", fontSize: 19, flexShrink: 0 }} />
+              <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "currentColor", flexShrink: 0 }} />
+            </Box>
+            {isPathEditing ? (
+              <InputBase
+                inputRef={pathInputRef}
+                value={pathInput}
+                onChange={(event) => setPathInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void handleAddressBarNavigate();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    handleCancelPathEditing();
+                  }
+                }}
+                placeholder="HKLM\\SOFTWARE"
+                autoComplete="off"
+                fullWidth
+                sx={ADDRESS_BAR_INPUT_SX}
+                inputProps={{ "aria-label": "Registry path" }}
+              />
+            ) : (
+              <>
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.35,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    flexShrink: 1,
+                  }}
+                >
+                  {addressBarSegments.length ? (
+                    addressBarSegments.map((segment, index) => (
+                      <React.Fragment key={`${segment.path || "root"}-${index}`}>
+                        <Box
+                          component="button"
+                          type="button"
+                          onClick={() => {
+                            void navigateToPath(segment.path);
+                          }}
+                          sx={ADDRESS_BAR_SEGMENT_BUTTON_SX}
+                        >
+                          <Typography
+                            component="span"
+                            sx={{
+                              fontSize: "0.92rem",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {segment.label}
+                          </Typography>
+                        </Box>
+                        {index < addressBarSegments.length - 1 ? (
+                          <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "rgba(148,163,184,0.86)", flexShrink: 0 }} />
+                        ) : null}
+                      </React.Fragment>
+                    ))
+                  ) : null}
+                </Box>
+                <Box
+                  component="button"
+                  type="button"
+                  aria-label="Edit registry path"
+                  onClick={handleEnablePathEditing}
+                  sx={ADDRESS_BAR_EMPTY_SPACE_BUTTON_SX}
+                />
+              </>
+            )}
+            <Tooltip title={normalizeRegistryPath(currentPath) ? "Copy path" : "Nothing to copy"} arrow>
               <span>
                 <IconButton
                   size="small"
                   onClick={() => void handleCopyPath()}
-                  disabled={!normalizeRegistryPath(selectedRow?.path || currentPath)}
+                  disabled={!normalizeRegistryPath(currentPath)}
                   sx={ADDRESS_BAR_COPY_BUTTON_SX}
                 >
                   <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
@@ -692,18 +1183,6 @@ export default function RemoteRegistryEditor({ device }) {
               </span>
             </Tooltip>
           </Box>
-          <Tooltip title="Open path" arrow>
-            <span>
-              <IconButton onClick={() => navigateToPath(addressInput)} disabled={!normalizeRegistryPath(addressInput)} sx={ICON_BUTTON_SX}>
-                <ChevronRightRoundedIcon sx={{ fontSize: 21 }} />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="Refresh" arrow>
-            <IconButton onClick={refreshCurrent} disabled={loading} sx={ICON_BUTTON_SX}>
-              <RefreshRoundedIcon sx={{ fontSize: 18 }} />
-            </IconButton>
-          </Tooltip>
         </Stack>
         <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
           <Button variant="outlined" startIcon={<AddRoundedIcon />} onClick={openCreateKeyDialog} disabled={!canMutateCurrentKey || loading} sx={TOOLBAR_BUTTON_SX}>
@@ -724,34 +1203,6 @@ export default function RemoteRegistryEditor({ device }) {
         </Stack>
       </Stack>
 
-      {currentPath ? (
-        <Stack direction="row" spacing={0.25} alignItems="center" sx={{ minHeight: 30, overflow: "hidden" }}>
-          {pathSegments.map((segment, index) => (
-            <React.Fragment key={segment}>
-              <Box
-                component="button"
-                type="button"
-                onClick={() => navigateToPath(segment)}
-                sx={index === 0 ? ADDRESS_BAR_ROOT_BUTTON_SX : ADDRESS_BAR_SEGMENT_BUTTON_SX}
-              >
-                <Typography
-                  component="span"
-                  sx={{
-                    fontSize: "0.92rem",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {segment.split("\\").pop()}
-                </Typography>
-              </Box>
-              {index < pathSegments.length - 1 ? (
-                <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "rgba(148,163,184,0.86)", flexShrink: 0 }} />
-              ) : null}
-            </React.Fragment>
-          ))}
-        </Stack>
-      ) : null}
-
       {error ? (
         <Alert severity="warning" sx={{ background: "rgba(120,53,15,0.32)", color: "#fed7aa", border: "1px solid rgba(251,146,60,0.28)" }}>
           {error}
@@ -761,20 +1212,41 @@ export default function RemoteRegistryEditor({ device }) {
       <GridShell sx={REGISTRY_GRID_SX}>
         <AgGridReact
           ref={gridRef}
-          rowData={rows}
+          rowData={visibleRows}
           columnDefs={columnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}
           rowSelection={rowSelection}
           animateRows
           suppressCellFocus
-          loading={loading}
+          loading={initializing || loadingPaths.has(ROOTS_SENTINEL)}
           theme={DEVICE_DETAILS_GRID_THEME}
           getRowId={(params) => params?.data?.id || ""}
+          context={gridContext}
           onSelectionChanged={(event) => setSelectedRows(event.api.getSelectedRows())}
+          onSortChanged={() => {
+            const nextSortModel = gridRef.current?.api?.getSortModel?.() || [];
+            setSortModel(nextSortModel);
+          }}
+          postSortRows={(params) => {
+            params.nodes.sort((leftNode, rightNode) => {
+              const leftSort = Number(leftNode?.data?.sortIndex || 0);
+              const rightSort = Number(rightNode?.data?.sortIndex || 0);
+              return leftSort - rightSort;
+            });
+          }}
+          onCellClicked={(event) => {
+            if (isGridInteractiveClick(event?.event)) return;
+            if (isRegistryKey(event?.data)) {
+              void toggleExpand(event.data);
+            } else if (event?.data?.row_type === "value") {
+              const parentPath = normalizeRegistryPath(event.data.path);
+              setCurrentPath(parentPath);
+              setPathInput(parentPath);
+              setIsPathEditing(false);
+            }
+          }}
           onRowDoubleClicked={(event) => {
-            if (event?.data?.row_type === "key") {
-              navigateToPath(event.data.path);
-            } else if (event?.data?.row_type === "value" && event.data.editable) {
+            if (event?.data?.row_type === "value" && event.data.editable) {
               setValueDialog({
                 open: true,
                 mode: "update",

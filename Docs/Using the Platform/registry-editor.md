@@ -7,7 +7,7 @@ Registry Editor lets operators browse and change Windows registry keys and value
 1. Open a Windows device.
 2. Open `Backend Tools > Registry`.
 3. Select a root hive such as `HKLM`.
-4. Double-click keys or enter a registry path such as `HKLM\SOFTWARE`.
+4. Single-click keys to expand them in place, or enter a registry path such as `HKLM\SOFTWARE`.
 5. Select a value to review its type and data.
 
 Registry paths use short hive names: `HKCR`, `HKCU`, `HKLM`, `HKU`, and `HKCC`.

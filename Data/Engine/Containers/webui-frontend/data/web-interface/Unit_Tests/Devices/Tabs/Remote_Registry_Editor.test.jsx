@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRegistryAddressSegments,
+  buildRegistryPathChain,
+  buildVisibleRows,
+  collapseExpandedBranch,
   normalizeKeyEntry,
   normalizeRegistryPath,
   normalizeValueEntry,
@@ -37,5 +41,62 @@ describe("Remote Registry Editor helpers", () => {
     expect(row.display_name).toBe("(Default)");
     expect(row.data_label).toBe("one; two");
     expect(valueDataToEditor(row)).toBe("one\ntwo");
+  });
+
+  it("builds clickable registry breadcrumb segments", () => {
+    expect(buildRegistryAddressSegments("HKLM\\SOFTWARE\\Borealis")).toEqual([
+      { label: "HKLM", path: "HKLM" },
+      { label: "SOFTWARE", path: "HKLM\\SOFTWARE" },
+      { label: "Borealis", path: "HKLM\\SOFTWARE\\Borealis" },
+    ]);
+    expect(buildRegistryPathChain("HKLM\\SOFTWARE\\Borealis")).toEqual([
+      "HKLM",
+      "HKLM\\SOFTWARE",
+      "HKLM\\SOFTWARE\\Borealis",
+    ]);
+  });
+
+  it("flattens opened registry keys while preserving parent context", () => {
+    const entriesByParent = {
+      __registry_roots__: [
+        normalizeKeyEntry({ path: "HKLM", name: "HKLM", kind: "hive", editable: false }),
+        normalizeKeyEntry({ path: "HKCU", name: "HKCU", kind: "hive", editable: false }),
+      ],
+      HKLM: [
+        normalizeKeyEntry({ path: "HKLM\\SOFTWARE", parent_path: "HKLM", name: "SOFTWARE", kind: "key" }),
+        normalizeValueEntry({ name: "InstallPath", type: "REG_SZ", data: "C:\\Borealis" }, "HKLM"),
+      ],
+      "HKLM\\SOFTWARE": [
+        normalizeKeyEntry({ path: "HKLM\\SOFTWARE\\Borealis", parent_path: "HKLM\\SOFTWARE", name: "Borealis", kind: "key" }),
+      ],
+    };
+
+    const rows = buildVisibleRows(entriesByParent, new Set(["HKLM", "HKLM\\SOFTWARE"]), []);
+    expect(rows.map((row) => `${row.depth}:${row.display_name}`)).toEqual([
+      "0:HKCU",
+      "0:HKLM",
+      "1:SOFTWARE",
+      "2:Borealis",
+      "1:InstallPath",
+    ]);
+  });
+
+  it("collapses expanded registry descendants under one branch", () => {
+    const entriesByParent = {
+      HKLM: [
+        normalizeKeyEntry({ path: "HKLM\\SOFTWARE", parent_path: "HKLM", name: "SOFTWARE", kind: "key" }),
+        normalizeKeyEntry({ path: "HKLM\\SYSTEM", parent_path: "HKLM", name: "SYSTEM", kind: "key" }),
+      ],
+      "HKLM\\SOFTWARE": [
+        normalizeKeyEntry({ path: "HKLM\\SOFTWARE\\Borealis", parent_path: "HKLM\\SOFTWARE", name: "Borealis", kind: "key" }),
+      ],
+    };
+
+    const collapsed = collapseExpandedBranch(
+      new Set(["HKLM", "HKLM\\SOFTWARE", "HKLM\\SOFTWARE\\Borealis", "HKLM\\SYSTEM"]),
+      entriesByParent,
+      "HKLM\\SOFTWARE"
+    );
+    expect([...collapsed].sort()).toEqual(["HKLM", "HKLM\\SYSTEM"]);
   });
 });
