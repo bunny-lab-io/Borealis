@@ -150,7 +150,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 16. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
 17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
 18. Write `Engine/Deploy/deploy-manifest.json`.
-19. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports after successful reconciliation.
+19. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports older than 7 days after successful reconciliation.
 
 Build order follows `Engine.sh` local build roles. `docker-proxy` is an external image and is not locally built.
 ```text
@@ -175,9 +175,9 @@ borealis-engine/<service>:sha-<inputhash12>
 ```
 
 Build cache:
-- Docker Buildx uses `Engine/Deploy/cache/buildkit/<service>/current` when available.
+- Docker Buildx uses retained `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` exports when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- Successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and trim Engine Buildx cache exports so only each known service's `current` cache remains under `Engine/Deploy/cache/buildkit/`. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
+- Successful Buildx builds write a full `mode=max` cache export for the service, and successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and delete whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
 - `job-scheduler` uses an Alpine runtime image with the Go scheduler mode, Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
@@ -605,7 +605,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     Build cache, when Docker Buildx is available, lives under:
     ```text
-    Engine/Deploy/cache/buildkit/<service>/current
+    Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>
     ```
 
     Operators should treat `Engine/` as generated runtime state. Edit committed source under `Data/Engine/Containers/`, then redeploy through `Engine.sh`. For live WebUI dev/HMR work, edit the seeded runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/`.
