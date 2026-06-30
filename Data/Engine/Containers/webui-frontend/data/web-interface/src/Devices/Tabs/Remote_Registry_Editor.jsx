@@ -5,6 +5,7 @@ import {
   Box,
   Button,
   Checkbox,
+  Divider,
   Dialog,
   DialogActions,
   DialogContent,
@@ -13,6 +14,7 @@ import {
   Icon,
   IconButton,
   InputBase,
+  Menu,
   MenuItem,
   Stack,
   TextField,
@@ -31,6 +33,7 @@ import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import UnfoldLessRoundedIcon from "@mui/icons-material/UnfoldLessRounded";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -52,36 +55,6 @@ import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 
 const VALUE_TYPES = ["REG_SZ", "REG_EXPAND_SZ", "REG_MULTI_SZ", "REG_DWORD", "REG_QWORD", "REG_BINARY"];
 const ROOTS_SENTINEL = "__registry_roots__";
-
-const TOOLBAR_BUTTON_SX = {
-  minHeight: 42,
-  borderRadius: 999,
-  px: 1.8,
-  py: 0.8,
-  textTransform: "none",
-  fontSize: "0.86rem",
-  fontWeight: 600,
-  letterSpacing: 0,
-  borderColor: "rgba(125,211,252,0.35)",
-  color: MAGIC_UI.textBright,
-  background: "rgba(5,10,24,0.78)",
-  boxShadow: "0 10px 24px rgba(2,6,23,0.24)",
-  "&:hover": {
-    borderColor: "rgba(125,211,252,0.55)",
-    background: "rgba(9,16,34,0.94)",
-  },
-  "&.Mui-disabled": {
-    color: "rgba(148,163,184,0.52)",
-    borderColor: "rgba(148,163,184,0.2)",
-    background: "rgba(15,23,42,0.42)",
-  },
-  "& .MuiButton-startIcon": {
-    mr: 0.7,
-    "& > *:nth-of-type(1)": {
-      fontSize: 18,
-    },
-  },
-};
 
 const ICON_BUTTON_SX = {
   width: 42,
@@ -220,6 +193,119 @@ const LOADING_STATUS_PILL_SX = {
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05)",
 };
 
+const ACTION_MENU_PAPER_SX = {
+  bgcolor: "rgba(8,12,24,0.96)",
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  backdropFilter: "blur(14px)",
+  borderRadius: 2,
+  minWidth: 288,
+  px: 0.8,
+  py: 0.8,
+};
+
+const ACTION_MENU_ITEM_SX = {
+  minHeight: 42,
+  borderRadius: 1.6,
+  color: MAGIC_UI.textBright,
+  alignItems: "center",
+  px: 1,
+  py: 0.85,
+  position: "relative",
+  overflow: "hidden",
+  "&:hover": {
+    backgroundColor: "rgba(88,166,255,0.12)",
+  },
+  "&::before": {
+    content: '""',
+    position: "absolute",
+    left: 0,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 999,
+    background: "transparent",
+    transition: "background-color 0.16s ease",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_DANGER_ITEM_SX = {
+  ...ACTION_MENU_ITEM_SX,
+  "&:hover": {
+    backgroundColor: "rgba(248,113,113,0.1)",
+  },
+  "&:hover::before": {
+    background: "#58a6ff",
+  },
+};
+
+const ACTION_MENU_SECTION_LABEL_SX = {
+  px: 1.2,
+  pt: 0.65,
+  pb: 0.45,
+  color: "rgba(148,163,184,0.72)",
+  fontSize: "0.68rem",
+  fontWeight: 700,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const ACTION_MENU_DIVIDER_SX = {
+  my: 0.55,
+  borderColor: "rgba(148,163,184,0.16)",
+};
+
+const ACTION_MENU_HEADER_SX = {
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  px: 1.1,
+  pt: 0.55,
+  pb: 0.85,
+};
+
+const ACTION_MENU_HEADER_ICON_SX = {
+  width: 32,
+  height: 32,
+  borderRadius: 1.35,
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  border: "1px solid rgba(148,163,184,0.14)",
+  background: "rgba(255,255,255,0.04)",
+  color: "#8fd3ff",
+};
+
+const ACTION_MENU_ROW_ICON_SX = {
+  mt: 0.18,
+  mr: 1,
+  fontSize: 18,
+  flexShrink: 0,
+};
+
+const ACTION_MENU_LABEL_SX = {
+  color: MAGIC_UI.textBright,
+  fontSize: "0.84rem",
+  fontWeight: 500,
+  lineHeight: 1.2,
+};
+
+const ACTION_MENU_DESCRIPTION_SX = {
+  color: "rgba(148,163,184,0.78)",
+  fontSize: "0.73rem",
+  lineHeight: 1.25,
+  mt: 0.25,
+};
+
+const ACTION_MENU_TITLE_TRUNCATE_SX = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
 const REGISTRY_GRID_SX = {
   flexGrow: 1,
   minHeight: 420,
@@ -346,6 +432,13 @@ export function buildRegistryPathChain(pathValue) {
   return buildRegistryAddressSegments(pathValue).map((segment) => segment.path);
 }
 
+function getRegistryPathLeafLabel(pathValue) {
+  const normalized = normalizeRegistryPath(pathValue);
+  if (!normalized) return "Registry Roots";
+  const parts = normalized.split("\\").filter(Boolean);
+  return parts[parts.length - 1] || normalized;
+}
+
 function compareRegistryRows(left, right, columnId) {
   const leftIsKey = isRegistryKey(left);
   const rightIsKey = isRegistryKey(right);
@@ -438,11 +531,13 @@ export default function RemoteRegistryEditor({ device }) {
   const [initializing, setInitializing] = useState(true);
   const [rowLoadStateByPath, setRowLoadStateByPath] = useState({});
   const [error, setError] = useState("");
-  const [keyDialog, setKeyDialog] = useState({ open: false, mode: "create", row: null, name: "" });
+  const [contextMenuState, setContextMenuState] = useState(null);
+  const [keyDialog, setKeyDialog] = useState({ open: false, mode: "create", row: null, parentPath: "", name: "" });
   const [valueDialog, setValueDialog] = useState({
     open: false,
     mode: "create",
     row: null,
+    path: "",
     name: "",
     type: "REG_SZ",
     data: "",
@@ -458,7 +553,14 @@ export default function RemoteRegistryEditor({ device }) {
   const selectedRow = selectedRows.length === 1 ? selectedRows[0] : null;
   const selectedKey = selectedRow?.row_type === "key" ? selectedRow : null;
   const selectedValue = selectedRow?.row_type === "value" ? selectedRow : null;
-  const canMutateCurrentKey = Boolean(currentPath);
+  const registryMutationTargetPath = useMemo(() => {
+    if (selectedRows.length === 1) {
+      if (isRegistryKey(selectedRows[0])) return normalizeRegistryPath(selectedRows[0].path);
+      if (selectedRows[0]?.row_type === "value") return normalizeRegistryPath(selectedRows[0].path);
+    }
+    return normalizeRegistryPath(currentPath);
+  }, [currentPath, selectedRows]);
+  const canMutateCurrentKey = Boolean(registryMutationTargetPath);
   const canRenameKey = Boolean(selectedKey?.editable);
   const canDeleteKey = Boolean(selectedKey?.editable);
   const canEditValue = Boolean(selectedValue?.editable);
@@ -757,6 +859,44 @@ export default function RemoteRegistryEditor({ device }) {
     setIsPathEditing(false);
   }, [navigateToPath, pathInput]);
 
+  const handleCloseContextMenu = useCallback(() => {
+    setContextMenuState(null);
+  }, []);
+
+  const handleOpenContextMenuAtPointer = useCallback((event) => {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    setContextMenuState({
+      top: Number(event.clientY || 0),
+      left: Number(event.clientX || 0),
+    });
+  }, []);
+
+  const handleGridCellContextMenu = useCallback(
+    (params) => {
+      const mouseEvent = params?.event;
+      if (!mouseEvent) return;
+      const node = params?.node;
+      if (node && !node.isSelected?.()) {
+        gridRef.current?.api?.deselectAll?.();
+        node.setSelected?.(true, true);
+      }
+      setSelectedRows(gridRef.current?.api?.getSelectedRows?.() || []);
+      handleOpenContextMenuAtPointer(mouseEvent);
+    },
+    [handleOpenContextMenuAtPointer]
+  );
+
+  const handleGridShellContextMenu = useCallback(
+    (event) => {
+      if (event?.target?.closest?.(".ag-cell")) return;
+      gridRef.current?.api?.deselectAll?.();
+      setSelectedRows([]);
+      handleOpenContextMenuAtPointer(event);
+    },
+    [handleOpenContextMenuAtPointer]
+  );
+
   const requestRegistryMutation = useCallback(
     async (suffix, body) => {
       const response = await fetch(`/api/device/registry/${encodeURIComponent(hostname)}/${suffix}`, {
@@ -790,17 +930,17 @@ export default function RemoteRegistryEditor({ device }) {
   }, [currentPath, notifyOperator]);
 
   const openCreateKeyDialog = useCallback(() => {
-    setKeyDialog({ open: true, mode: "create", row: null, name: "" });
-  }, []);
+    setKeyDialog({ open: true, mode: "create", row: null, parentPath: registryMutationTargetPath, name: "" });
+  }, [registryMutationTargetPath]);
 
   const openRenameKeyDialog = useCallback(() => {
     if (!selectedKey) return;
-    setKeyDialog({ open: true, mode: "rename", row: selectedKey, name: normalizeText(selectedKey.name) });
+    setKeyDialog({ open: true, mode: "rename", row: selectedKey, parentPath: normalizeRegistryPath(selectedKey.parent_path), name: normalizeText(selectedKey.name) });
   }, [selectedKey]);
 
   const openCreateValueDialog = useCallback(() => {
-    setValueDialog({ open: true, mode: "create", row: null, name: "", type: "REG_SZ", data: "" });
-  }, []);
+    setValueDialog({ open: true, mode: "create", row: null, path: registryMutationTargetPath, name: "", type: "REG_SZ", data: "" });
+  }, [registryMutationTargetPath]);
 
   const openEditValueDialog = useCallback(() => {
     if (!selectedValue) return;
@@ -808,6 +948,7 @@ export default function RemoteRegistryEditor({ device }) {
       open: true,
       mode: "update",
       row: selectedValue,
+      path: normalizeRegistryPath(selectedValue.path),
       name: normalizeText(selectedValue.name),
       type: normalizeText(selectedValue.type || "REG_SZ").toUpperCase(),
       data: valueDataToEditor(selectedValue),
@@ -835,11 +976,11 @@ export default function RemoteRegistryEditor({ device }) {
     try {
       await requestRegistryMutation(isRename ? "key/rename" : "key/create", {
         path: normalizeRegistryPath(keyDialog.row?.path),
-        parent_path: normalizeRegistryPath(currentPath),
+        parent_path: normalizeRegistryPath(keyDialog.parentPath || currentPath),
         new_name: name,
         name,
       });
-      setKeyDialog({ open: false, mode: "create", row: null, name: "" });
+      setKeyDialog({ open: false, mode: "create", row: null, parentPath: "", name: "" });
       await notifyOperator({
         title: "Registry",
         message: isRename ? "Registry key renamed." : "Registry key created.",
@@ -847,7 +988,7 @@ export default function RemoteRegistryEditor({ device }) {
         icon: "account_tree",
       });
       await restoreRegistryView({
-        targetPath: isRename ? normalizeRegistryPath(keyDialog.row?.parent_path) : normalizeRegistryPath(currentPath),
+        targetPath: isRename ? normalizeRegistryPath(keyDialog.row?.parent_path) : normalizeRegistryPath(keyDialog.parentPath || currentPath),
         resetSelection: true,
         scrollToPath: true,
       });
@@ -863,12 +1004,12 @@ export default function RemoteRegistryEditor({ device }) {
     setActionBusy(isUpdate ? "update-value" : "create-value");
     try {
       await requestRegistryMutation(isUpdate ? "value/update" : "value/create", {
-        path: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : currentPath),
+        path: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : valueDialog.path || currentPath),
         name: valueDialog.name,
         type: valueDialog.type,
         data: valueDialog.data,
       });
-      setValueDialog({ open: false, mode: "create", row: null, name: "", type: "REG_SZ", data: "" });
+      setValueDialog({ open: false, mode: "create", row: null, path: "", name: "", type: "REG_SZ", data: "" });
       await notifyOperator({
         title: "Registry",
         message: isUpdate ? "Registry value updated." : "Registry value created.",
@@ -876,7 +1017,7 @@ export default function RemoteRegistryEditor({ device }) {
         icon: "article",
       });
       await restoreRegistryView({
-        targetPath: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : currentPath),
+        targetPath: normalizeRegistryPath(isUpdate ? valueDialog.row?.path : valueDialog.path || currentPath),
         resetSelection: true,
         scrollToPath: true,
       });
@@ -1065,6 +1206,224 @@ export default function RemoteRegistryEditor({ device }) {
     [expandedPaths, loadingPaths, rowLoadStateByPath, toggleExpand]
   );
 
+  const contextMenuSubject = useMemo(() => {
+    if (selectedRow) {
+      return {
+        title: selectedRow.display_name || selectedRow.name || "Selected registry item",
+        subtitle: selectedRow.row_type === "value" ? normalizeRegistryPath(selectedRow.path) : normalizeRegistryPath(selectedRow.path),
+        kind: selectedRow.row_type,
+        entry: selectedRow,
+      };
+    }
+    return {
+      title: getRegistryPathLeafLabel(currentPath),
+      subtitle: normalizeRegistryPath(currentPath) || "Registry roots",
+      kind: "location",
+      entry: null,
+    };
+  }, [currentPath, selectedRow]);
+
+  const renderContextMenuSubjectIcon = useCallback((subject) => {
+    if (subject?.kind === "value") {
+      return <ArticleRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+    }
+    return <AccountTreeRoundedIcon sx={{ fontSize: 19, color: "currentColor" }} />;
+  }, []);
+
+  const contextMenuActions = useMemo(
+    () => [
+      {
+        id: "new-key",
+        group: "primary",
+        label: "New Key",
+        icon: AddRoundedIcon,
+        disabled: !canMutateCurrentKey || loading || Boolean(actionBusy),
+        disabledReason: !canMutateCurrentKey ? "Open or select a registry key first." : "",
+        description: registryMutationTargetPath ? `Create under ${registryMutationTargetPath}.` : "",
+        onClick: openCreateKeyDialog,
+      },
+      {
+        id: "new-value",
+        group: "primary",
+        label: "New Value",
+        icon: AddRoundedIcon,
+        disabled: !canMutateCurrentKey || loading || Boolean(actionBusy),
+        disabledReason: !canMutateCurrentKey ? "Open or select a registry key first." : "",
+        description: registryMutationTargetPath ? `Create under ${registryMutationTargetPath}.` : "",
+        onClick: openCreateValueDialog,
+      },
+      {
+        id: "edit-value",
+        group: "organize",
+        label: "Edit Value",
+        icon: EditRoundedIcon,
+        disabled: !canEditValue || loading || Boolean(actionBusy),
+        disabledReason:
+          selectedRow?.row_type !== "value"
+            ? "Select one registry value."
+            : !selectedValue?.editable
+              ? "This value type is read-only."
+              : "",
+        onClick: openEditValueDialog,
+      },
+      {
+        id: "rename-key",
+        group: "organize",
+        label: "Rename Key",
+        icon: DriveFileRenameOutlineRoundedIcon,
+        disabled: !canRenameKey || loading || Boolean(actionBusy),
+        disabledReason:
+          selectedRow?.row_type !== "key"
+            ? "Select one registry key."
+            : !selectedKey?.editable
+              ? "Hive roots cannot be renamed."
+              : "",
+        onClick: openRenameKeyDialog,
+      },
+      {
+        id: "delete",
+        group: "danger",
+        intent: "danger",
+        label: "Delete",
+        icon: DeleteOutlineRoundedIcon,
+        disabled: !(canDeleteKey || selectedValue) || loading || Boolean(actionBusy),
+        disabledReason: !selectedRow ? "Select one registry key or value." : "",
+        description: selectedRow ? "Requires confirmation before removal." : "",
+        onClick: openDeleteDialog,
+      },
+      {
+        id: "collapse-all",
+        group: "view",
+        label: "Collapse All",
+        icon: UnfoldLessRoundedIcon,
+        disabled: !expandedPaths.size || loading || Boolean(actionBusy),
+        disabledReason: !expandedPaths.size ? "No expanded registry keys in the current view." : "",
+        onClick: () => {
+          setExpandedPaths(new Set());
+        },
+      },
+    ],
+    [
+      actionBusy,
+      canDeleteKey,
+      canEditValue,
+      canMutateCurrentKey,
+      canRenameKey,
+      expandedPaths.size,
+      loading,
+      openCreateKeyDialog,
+      openCreateValueDialog,
+      openDeleteDialog,
+      openEditValueDialog,
+      openRenameKeyDialog,
+      registryMutationTargetPath,
+      selectedKey,
+      selectedRow,
+      selectedValue,
+    ]
+  );
+
+  const renderActionMenuItems = useCallback(
+    (closeMenu) => {
+      const groupLabels = {
+        primary: "Primary",
+        organize: "Organize",
+        danger: "Danger Zone",
+        view: "View",
+      };
+      const groupOrder = ["primary", "organize", "danger", "view"];
+      const groups = groupOrder
+        .map((groupId) => ({
+          id: groupId,
+          label: groupLabels[groupId],
+          actions: contextMenuActions.filter((action) => action.group === groupId),
+        }))
+        .filter((group) => group.actions.length);
+
+      const nodes = [
+        <Box key="context-header" component="li" role="presentation" sx={ACTION_MENU_HEADER_SX}>
+          <Box sx={ACTION_MENU_HEADER_ICON_SX}>{renderContextMenuSubjectIcon(contextMenuSubject)}</Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Tooltip title={contextMenuSubject.title || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: MAGIC_UI.textBright,
+                  fontSize: "0.88rem",
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.title}
+              </Typography>
+            </Tooltip>
+            <Tooltip title={contextMenuSubject.subtitle || ""} placement="top-start">
+              <Typography
+                sx={{
+                  ...ACTION_MENU_TITLE_TRUNCATE_SX,
+                  color: "rgba(148,163,184,0.82)",
+                  fontSize: "0.73rem",
+                  lineHeight: 1.25,
+                  mt: 0.22,
+                  maxWidth: 240,
+                }}
+              >
+                {contextMenuSubject.subtitle}
+              </Typography>
+            </Tooltip>
+          </Box>
+        </Box>,
+      ];
+
+      groups.forEach((group) => {
+        nodes.push(<Divider key={`divider-before-${group.id}`} component="li" sx={ACTION_MENU_DIVIDER_SX} />);
+        nodes.push(
+          <Box key={`label-${group.id}`} component="li" role="presentation" sx={ACTION_MENU_SECTION_LABEL_SX}>
+            {group.label}
+          </Box>
+        );
+        group.actions.forEach((action) => {
+          const IconComponent = action.icon;
+          const helperText = action.disabledReason || action.description || "";
+          nodes.push(
+            <MenuItem
+              key={action.id}
+              disabled={Boolean(action.disabled)}
+              onClick={() => {
+                closeMenu();
+                action.onClick?.();
+              }}
+              sx={action.intent === "danger" ? ACTION_MENU_DANGER_ITEM_SX : ACTION_MENU_ITEM_SX}
+            >
+              <IconComponent
+                sx={{
+                  ...ACTION_MENU_ROW_ICON_SX,
+                  color: action.intent === "danger" ? "rgba(248,113,113,0.92)" : "rgba(226,232,240,0.92)",
+                }}
+              />
+              <Box
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: helperText ? "flex-start" : "center",
+                }}
+              >
+                <Typography sx={ACTION_MENU_LABEL_SX}>{action.label}</Typography>
+                {helperText ? <Typography sx={ACTION_MENU_DESCRIPTION_SX}>{helperText}</Typography> : null}
+              </Box>
+            </MenuItem>
+          );
+        });
+      });
+
+      return nodes;
+    },
+    [contextMenuActions, contextMenuSubject, renderContextMenuSubjectIcon]
+  );
+
   return (
     <Box
       sx={{
@@ -1079,128 +1438,109 @@ export default function RemoteRegistryEditor({ device }) {
         },
       }}
     >
-      <Stack direction={{ xs: "column", lg: "row" }} spacing={1.05} alignItems={{ xs: "stretch", lg: "flex-start" }}>
-        <Stack direction="row" spacing={0.9} alignItems="center" sx={{ flex: 1, minWidth: 0 }}>
-          <Tooltip title="Refresh registry listing" arrow>
+      <Stack direction="row" spacing={0.9} alignItems="center" sx={{ minWidth: 0 }}>
+        <Tooltip title="Refresh registry listing" arrow>
+          <span>
+            <IconButton onClick={refreshCurrent} disabled={loading} sx={ICON_BUTTON_SX}>
+              <RefreshRoundedIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Box sx={ADDRESS_BAR_SHELL_SX}>
+          <Box
+            component="button"
+            type="button"
+            aria-label="Go to registry roots"
+            onClick={() => {
+              void navigateToPath("");
+            }}
+            sx={ADDRESS_BAR_ROOT_BUTTON_SX}
+          >
+            <AccountTreeRoundedIcon sx={{ color: "currentColor", fontSize: 19, flexShrink: 0 }} />
+            <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "currentColor", flexShrink: 0 }} />
+          </Box>
+          {isPathEditing ? (
+            <InputBase
+              inputRef={pathInputRef}
+              value={pathInput}
+              onChange={(event) => setPathInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void handleAddressBarNavigate();
+                } else if (event.key === "Escape") {
+                  event.preventDefault();
+                  handleCancelPathEditing();
+                }
+              }}
+              placeholder="HKLM\\SOFTWARE"
+              autoComplete="off"
+              fullWidth
+              sx={ADDRESS_BAR_INPUT_SX}
+              inputProps={{ "aria-label": "Registry path" }}
+            />
+          ) : (
+            <>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.35,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  flexShrink: 1,
+                }}
+              >
+                {addressBarSegments.length ? (
+                  addressBarSegments.map((segment, index) => (
+                    <React.Fragment key={`${segment.path || "root"}-${index}`}>
+                      <Box
+                        component="button"
+                        type="button"
+                        onClick={() => {
+                          void navigateToPath(segment.path);
+                        }}
+                        sx={ADDRESS_BAR_SEGMENT_BUTTON_SX}
+                      >
+                        <Typography
+                          component="span"
+                          sx={{
+                            fontSize: "0.92rem",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {segment.label}
+                        </Typography>
+                      </Box>
+                      {index < addressBarSegments.length - 1 ? (
+                        <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "rgba(148,163,184,0.86)", flexShrink: 0 }} />
+                      ) : null}
+                    </React.Fragment>
+                  ))
+                ) : null}
+              </Box>
+              <Box
+                component="button"
+                type="button"
+                aria-label="Edit registry path"
+                onClick={handleEnablePathEditing}
+                sx={ADDRESS_BAR_EMPTY_SPACE_BUTTON_SX}
+              />
+            </>
+          )}
+          <Tooltip title={normalizeRegistryPath(currentPath) ? "Copy path" : "Nothing to copy"} arrow>
             <span>
-              <IconButton onClick={refreshCurrent} disabled={loading} sx={ICON_BUTTON_SX}>
-                <RefreshRoundedIcon sx={{ fontSize: 18 }} />
+              <IconButton
+                size="small"
+                onClick={() => void handleCopyPath()}
+                disabled={!normalizeRegistryPath(currentPath)}
+                sx={ADDRESS_BAR_COPY_BUTTON_SX}
+              >
+                <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </span>
           </Tooltip>
-          <Box sx={ADDRESS_BAR_SHELL_SX}>
-            <Box
-              component="button"
-              type="button"
-              aria-label="Go to registry roots"
-              onClick={() => {
-                void navigateToPath("");
-              }}
-              sx={ADDRESS_BAR_ROOT_BUTTON_SX}
-            >
-              <AccountTreeRoundedIcon sx={{ color: "currentColor", fontSize: 19, flexShrink: 0 }} />
-              <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "currentColor", flexShrink: 0 }} />
-            </Box>
-            {isPathEditing ? (
-              <InputBase
-                inputRef={pathInputRef}
-                value={pathInput}
-                onChange={(event) => setPathInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    void handleAddressBarNavigate();
-                  } else if (event.key === "Escape") {
-                    event.preventDefault();
-                    handleCancelPathEditing();
-                  }
-                }}
-                placeholder="HKLM\\SOFTWARE"
-                autoComplete="off"
-                fullWidth
-                sx={ADDRESS_BAR_INPUT_SX}
-                inputProps={{ "aria-label": "Registry path" }}
-              />
-            ) : (
-              <>
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 0.35,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    flexShrink: 1,
-                  }}
-                >
-                  {addressBarSegments.length ? (
-                    addressBarSegments.map((segment, index) => (
-                      <React.Fragment key={`${segment.path || "root"}-${index}`}>
-                        <Box
-                          component="button"
-                          type="button"
-                          onClick={() => {
-                            void navigateToPath(segment.path);
-                          }}
-                          sx={ADDRESS_BAR_SEGMENT_BUTTON_SX}
-                        >
-                          <Typography
-                            component="span"
-                            sx={{
-                              fontSize: "0.92rem",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {segment.label}
-                          </Typography>
-                        </Box>
-                        {index < addressBarSegments.length - 1 ? (
-                          <ChevronRightRoundedIcon sx={{ fontSize: 17, color: "rgba(148,163,184,0.86)", flexShrink: 0 }} />
-                        ) : null}
-                      </React.Fragment>
-                    ))
-                  ) : null}
-                </Box>
-                <Box
-                  component="button"
-                  type="button"
-                  aria-label="Edit registry path"
-                  onClick={handleEnablePathEditing}
-                  sx={ADDRESS_BAR_EMPTY_SPACE_BUTTON_SX}
-                />
-              </>
-            )}
-            <Tooltip title={normalizeRegistryPath(currentPath) ? "Copy path" : "Nothing to copy"} arrow>
-              <span>
-                <IconButton
-                  size="small"
-                  onClick={() => void handleCopyPath()}
-                  disabled={!normalizeRegistryPath(currentPath)}
-                  sx={ADDRESS_BAR_COPY_BUTTON_SX}
-                >
-                  <ContentCopyRoundedIcon sx={{ fontSize: 18 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </Box>
-        </Stack>
-        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-          <Button variant="outlined" startIcon={<AddRoundedIcon />} onClick={openCreateKeyDialog} disabled={!canMutateCurrentKey || loading} sx={TOOLBAR_BUTTON_SX}>
-            Key
-          </Button>
-          <Button variant="outlined" startIcon={<AddRoundedIcon />} onClick={openCreateValueDialog} disabled={!canMutateCurrentKey || loading} sx={TOOLBAR_BUTTON_SX}>
-            Value
-          </Button>
-          <Button variant="outlined" startIcon={<EditRoundedIcon />} onClick={openEditValueDialog} disabled={!canEditValue || loading} sx={TOOLBAR_BUTTON_SX}>
-            Edit
-          </Button>
-          <Button variant="outlined" startIcon={<DriveFileRenameOutlineRoundedIcon />} onClick={openRenameKeyDialog} disabled={!canRenameKey || loading} sx={TOOLBAR_BUTTON_SX}>
-            Rename
-          </Button>
-          <Button variant="outlined" startIcon={<DeleteOutlineRoundedIcon />} onClick={openDeleteDialog} disabled={!(canDeleteKey || selectedValue) || loading} sx={TOOLBAR_BUTTON_SX}>
-            Delete
-          </Button>
-        </Stack>
+        </Box>
       </Stack>
 
       {error ? (
@@ -1209,7 +1549,7 @@ export default function RemoteRegistryEditor({ device }) {
         </Alert>
       ) : null}
 
-      <GridShell sx={REGISTRY_GRID_SX}>
+      <GridShell onContextMenu={handleGridShellContextMenu} sx={REGISTRY_GRID_SX}>
         <AgGridReact
           ref={gridRef}
           rowData={visibleRows}
@@ -1222,6 +1562,8 @@ export default function RemoteRegistryEditor({ device }) {
           theme={DEVICE_DETAILS_GRID_THEME}
           getRowId={(params) => params?.data?.id || ""}
           context={gridContext}
+          suppressContextMenu
+          preventDefaultOnContextMenu
           onSelectionChanged={(event) => setSelectedRows(event.api.getSelectedRows())}
           onSortChanged={() => {
             const nextSortModel = gridRef.current?.api?.getSortModel?.() || [];
@@ -1245,6 +1587,7 @@ export default function RemoteRegistryEditor({ device }) {
               setIsPathEditing(false);
             }
           }}
+          onCellContextMenu={handleGridCellContextMenu}
           onRowDoubleClicked={(event) => {
             if (event?.data?.row_type === "value" && event.data.editable) {
               setValueDialog({
@@ -1260,11 +1603,28 @@ export default function RemoteRegistryEditor({ device }) {
         />
       </GridShell>
 
-      <Dialog open={keyDialog.open} onClose={() => setKeyDialog({ open: false, mode: "create", row: null, name: "" })} PaperProps={{ sx: DIALOG_PAPER_SX }} fullWidth maxWidth="sm">
+      <Menu
+        open={Boolean(contextMenuState)}
+        onClose={handleCloseContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenuState
+            ? {
+                top: Number(contextMenuState?.top || 0),
+                left: Number(contextMenuState?.left || 0),
+              }
+            : undefined
+        }
+        PaperProps={{ sx: ACTION_MENU_PAPER_SX }}
+      >
+        {renderActionMenuItems(handleCloseContextMenu)}
+      </Menu>
+
+      <Dialog open={keyDialog.open} onClose={() => setKeyDialog({ open: false, mode: "create", row: null, parentPath: "", name: "" })} PaperProps={{ sx: DIALOG_PAPER_SX }} fullWidth maxWidth="sm">
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title={keyDialog.mode === "rename" ? "Rename Key" : "Create Key"}
-            subtitle={keyDialog.mode === "rename" ? normalizeRegistryPath(keyDialog.row?.path) : currentPath}
+            subtitle={keyDialog.mode === "rename" ? normalizeRegistryPath(keyDialog.row?.path) : normalizeRegistryPath(keyDialog.parentPath)}
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
@@ -1278,7 +1638,7 @@ export default function RemoteRegistryEditor({ device }) {
           />
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button sx={DIALOG_BUTTON_SX} onClick={() => setKeyDialog({ open: false, mode: "create", row: null, name: "" })}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setKeyDialog({ open: false, mode: "create", row: null, parentPath: "", name: "" })}>
             Cancel
           </Button>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={Boolean(actionBusy)} onClick={() => void handleSaveKey()}>
@@ -1287,11 +1647,11 @@ export default function RemoteRegistryEditor({ device }) {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={valueDialog.open} onClose={() => setValueDialog({ open: false, mode: "create", row: null, name: "", type: "REG_SZ", data: "" })} PaperProps={{ sx: DIALOG_PAPER_SX }} fullWidth maxWidth="md">
+      <Dialog open={valueDialog.open} onClose={() => setValueDialog({ open: false, mode: "create", row: null, path: "", name: "", type: "REG_SZ", data: "" })} PaperProps={{ sx: DIALOG_PAPER_SX }} fullWidth maxWidth="md">
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title={valueDialog.mode === "update" ? "Edit Value" : "Create Value"}
-            subtitle={currentPath}
+            subtitle={normalizeRegistryPath(valueDialog.path || currentPath)}
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
@@ -1331,7 +1691,7 @@ export default function RemoteRegistryEditor({ device }) {
           </Stack>
         </DialogContent>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
-          <Button sx={DIALOG_BUTTON_SX} onClick={() => setValueDialog({ open: false, mode: "create", row: null, name: "", type: "REG_SZ", data: "" })}>
+          <Button sx={DIALOG_BUTTON_SX} onClick={() => setValueDialog({ open: false, mode: "create", row: null, path: "", name: "", type: "REG_SZ", data: "" })}>
             Cancel
           </Button>
           <Button sx={DIALOG_PRIMARY_BUTTON_SX} disabled={Boolean(actionBusy)} onClick={() => void handleSaveValue()}>

@@ -18,10 +18,12 @@ Registry paths use short hive names: `HKCR`, `HKCU`, `HKLM`, `HKU`, and `HKCC`.
 
 ## Edit Keys And Values
 
-- `Key` creates a subkey under the current path.
-- `Value` creates a value under the current path.
-- `Edit` updates the selected value data and type.
-- `Rename` changes the selected key name.
+Right-click the current location, a key, or a value to open registry actions.
+
+- `New Key` creates a subkey under the selected key or current path.
+- `New Value` creates a value under the selected key or current path.
+- `Edit Value` updates the selected value data and type.
+- `Rename Key` changes the selected key name.
 - `Delete` removes the selected key or value.
 
 Supported editable value types are `REG_SZ`, `REG_EXPAND_SZ`, `REG_MULTI_SZ`, `REG_DWORD`, `REG_QWORD`, and `REG_BINARY`. Unsupported value types are visible but read-only.

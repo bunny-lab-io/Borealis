@@ -104,8 +104,8 @@ export const DEVICE_GRID_STYLE = {
   "--ag-icon-font-family": iconFontFamily,
 };
 
-export const GridShell = ({ children, sx }) => (
-  <Box className={gridThemeClass} sx={{ ...GRID_SHELL_BASE_SX, ...(sx || {}) }}>
+export const GridShell = ({ children, sx, ...rest }) => (
+  <Box className={gridThemeClass} sx={{ ...GRID_SHELL_BASE_SX, ...(sx || {}) }} {...rest}>
     {children}
   </Box>
 );
