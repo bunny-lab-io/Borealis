@@ -381,7 +381,7 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 
     ### Validation
 
-    - Engine focused Go tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./cmd/api-backend`.
+    - Engine focused Go tests: `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.23.12/bin/go test ./cmd/api-backend`.
     - Agent focused Go tests: `cd Data/Agent && /opt/Borealis/Dependencies/Go/go1.22.12/bin/go test ./internal/roles/wireguard_tunnel`.
     - Control socket tests: `/opt/Borealis/.cache/codex-engine-tests/bin/python3 -m pytest Data/Engine/Unit_Tests/test_wireguard_control_server.py`.
     - Engine remote-access domain wrapper: `BOREALIS_ENGINE_TEST_PYTHON=/opt/Borealis/.cache/codex-engine-tests/bin/python3 ./Engine_Unit_Tests.sh --domain remote-access`.

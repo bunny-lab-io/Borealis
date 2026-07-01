@@ -1,6 +1,6 @@
 module borealis/api-backend
 
-go 1.22
+go 1.23.0
 
 require (
 	github.com/go-webauthn/webauthn v0.10.2
@@ -9,7 +9,7 @@ require (
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.8
-	golang.org/x/crypto v0.33.0
+	golang.org/x/crypto v0.35.0
 )
 
 require (
