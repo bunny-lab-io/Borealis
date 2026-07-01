@@ -29,7 +29,7 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
 ## Edit And Organize
 
 - Right-click files or folders for contextual actions.
-- Text editing opens one remote file at a time and saves back in place.
+- Text editing opens one remote INI, log, script, config, or other basic text file at a time. Successful saves close the editor and refresh the current file view.
 - Copy and cut stay operator-local until paste asks the remote agent to perform the filesystem operation.
 
 !!! warning

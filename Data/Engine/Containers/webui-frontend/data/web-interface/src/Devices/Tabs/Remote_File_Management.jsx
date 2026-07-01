@@ -713,6 +713,25 @@ const CODEMIRROR_LANGUAGE_FACTORIES = {
   xml: () => [xmlLanguage()],
   yaml: () => [yamlLanguage()],
 };
+const BASIC_TEXT_EXTENSIONS = new Set([
+  ".csv",
+  ".err",
+  ".log",
+  ".lst",
+  ".list",
+  ".out",
+  ".text",
+  ".trace",
+  ".tsv",
+  ".txt",
+]);
+const BASIC_TEXT_FILE_NAMES = new Set([
+  "authors",
+  "changelog",
+  "license",
+  "notice",
+  "readme",
+]);
 
 function normalizeText(value) {
   if (value == null) return "";
@@ -1043,9 +1062,10 @@ function getEditorFileName(pathValue) {
   return normalizeText(pathValue).toLowerCase().split(/[\\/]/).filter(Boolean).pop() || "";
 }
 
-function detectEditorLanguage(pathValue) {
+export function detectEditorLanguage(pathValue) {
   const normalizedPath = normalizeText(pathValue).toLowerCase();
   const fileName = getEditorFileName(pathValue);
+  const extension = getFileExtension(pathValue);
   if (!normalizedPath) return "plaintext";
   if (fileName === "dockerfile" || fileName === "containerfile" || fileName.endsWith(".dockerfile")) {
     return "dockerfile";
@@ -1175,7 +1195,7 @@ function detectEditorLanguage(pathValue) {
   if (normalizedPath.endsWith(".java")) {
     return "java";
   }
-  if (normalizedPath.endsWith(".log") || normalizedPath.endsWith(".txt")) {
+  if (BASIC_TEXT_EXTENSIONS.has(extension) || BASIC_TEXT_FILE_NAMES.has(fileName)) {
     return "plaintext";
   }
   return "plaintext";
@@ -2387,7 +2407,8 @@ export default function RemoteFileManagement({ device }) {
         icon: "success",
         variant: "success",
       });
-      await refreshBaseView();
+      handleCloseEditor();
+      void refreshBaseView();
     } catch (saveError) {
       const message = String(saveError?.message || saveError);
       setEditorError(message);
@@ -2408,6 +2429,7 @@ export default function RemoteFileManagement({ device }) {
     editorPath,
     editorSaving,
     hostname,
+    handleCloseEditor,
     notifyOperator,
     refreshBaseView,
   ]);
