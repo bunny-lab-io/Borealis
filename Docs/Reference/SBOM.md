@@ -50,7 +50,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | github.com/go-webauthn/webauthn v0.10.2 (Go WebAuthn passkey ceremonies) | [BSD-3-Clause](https://github.com/go-webauthn/webauthn/blob/master/LICENSE) |
 | api-backend | github.com/fxamacker/cbor/v2 v2.6.0 (Go WebAuthn CBOR codec dependency) | [MIT](https://github.com/fxamacker/cbor/blob/master/LICENSE) |
 | api-backend | github.com/go-webauthn/x v0.1.9 (Go WebAuthn support dependency) | [BSD-3-Clause](https://github.com/go-webauthn/x/blob/master/LICENSE) |
-| api-backend | github.com/golang-jwt/jwt/v5 v5.2.1 (Go WebAuthn transitive JWT support dependency) | [MIT](https://github.com/golang-jwt/jwt/blob/main/LICENSE) |
+| api-backend | github.com/golang-jwt/jwt/v5 v5.2.2 (Go WebAuthn transitive JWT support dependency) | [MIT](https://github.com/golang-jwt/jwt/blob/main/LICENSE) |
 | api-backend | github.com/google/go-tpm v0.9.0 (Go WebAuthn TPM attestation support dependency) | [Apache-2.0](https://github.com/google/go-tpm/blob/main/LICENSE) |
 | api-backend | github.com/google/uuid v1.6.0 (Go WebAuthn UUID support dependency) | [BSD-3-Clause](https://github.com/google/uuid/blob/master/LICENSE) |
 | api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
