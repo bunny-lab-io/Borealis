@@ -117,6 +117,30 @@ const IMAGE_PREVIEW_MIME_TYPES = {
   ".webp": "image/webp",
 };
 const IMAGE_PREVIEW_EXTENSIONS = new Set(Object.keys(IMAGE_PREVIEW_MIME_TYPES));
+const WINDOWS_RESERVED_FILE_NAMES = new Set([
+  "con",
+  "prn",
+  "aux",
+  "nul",
+  "com1",
+  "com2",
+  "com3",
+  "com4",
+  "com5",
+  "com6",
+  "com7",
+  "com8",
+  "com9",
+  "lpt1",
+  "lpt2",
+  "lpt3",
+  "lpt4",
+  "lpt5",
+  "lpt6",
+  "lpt7",
+  "lpt8",
+  "lpt9",
+]);
 
 const REFRESH_ICON_BUTTON_SX = {
   width: 42,
@@ -731,6 +755,43 @@ function normalizeUploadRelativePath(value, fallbackName = "") {
     .map((segment) => normalizeText(segment))
     .filter(Boolean)
     .join("/");
+}
+
+export function validateNewTextFileName(value, platform = "") {
+  const name = normalizeText(value);
+  if (!name) return "File name required.";
+  if (name === "." || name === "..") return "Use a file name instead of a directory shortcut.";
+  if (/[\\/]/.test(name)) return "File name cannot include path separators.";
+  if (/[\x00-\x1f]/.test(name)) return "File name cannot include control characters.";
+  if (normalizeText(platform).toLowerCase() === "windows") {
+    if (/[<>:"|?*]/.test(name)) return "File name contains characters Windows does not allow.";
+    if (/[. ]$/.test(name)) return "Windows file names cannot end with a space or period.";
+    if (WINDOWS_RESERVED_FILE_NAMES.has(name.split(".")[0].toLowerCase())) {
+      return "File name uses a reserved Windows device name.";
+    }
+  }
+  return "";
+}
+
+export function buildRemoteChildPath(parentPath, childName, platform = "") {
+  const parent = normalizeText(parentPath);
+  const name = normalizeText(childName);
+  if (!parent || !name) return name;
+  if (normalizeText(platform).toLowerCase() === "windows") {
+    return `${parent.replace(/[\\/]+$/, "")}\\${name}`;
+  }
+  if (parent === "/") return `/${name}`;
+  return `${parent.replace(/\/+$/, "")}/${name}`;
+}
+
+function createEmptyTextUploadFile(fileName) {
+  if (typeof File === "function") {
+    return new File([""], fileName, { type: "text/plain", lastModified: Date.now() });
+  }
+  const blob = new Blob([""], { type: "text/plain" });
+  blob.name = fileName;
+  blob.lastModified = Date.now();
+  return blob;
 }
 
 function buildUploadManifest(files = [], { preserveRelativePath = false } = {}) {
@@ -1474,6 +1535,7 @@ export default function RemoteFileManagement({ device }) {
   const editorViewRef = useRef(null);
   const editorSearchInputRef = useRef(null);
   const handleSaveEditorRef = useRef(null);
+  const pendingCreatedFilesRef = useRef({});
   const imagePreviewTransfersRef = useRef({});
   const imagePreviewUrlRef = useRef("");
 
@@ -1491,6 +1553,8 @@ export default function RemoteFileManagement({ device }) {
   const [initializing, setInitializing] = useState(true);
   const [error, setError] = useState("");
   const [contextMenuState, setContextMenuState] = useState(null);
+  const [newFileOpen, setNewFileOpen] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
@@ -1533,6 +1597,7 @@ export default function RemoteFileManagement({ device }) {
   const [rowLoadStateByPath, setRowLoadStateByPath] = useState({});
   const [showHiddenItems, setShowHiddenItems] = useState(false);
   const [clipboardState, setClipboardState] = useState(null);
+  const [createdFileToOpen, setCreatedFileToOpen] = useState(null);
   const [imagePreview, setImagePreview] = useState({
     open: false,
     status: "idle",
@@ -1623,6 +1688,10 @@ export default function RemoteFileManagement({ device }) {
   const resolvedClipboardTarget = useMemo(
     () => normalizeText(resolvedUploadTarget || currentPath || (platform === "windows" ? "" : "/")),
     [currentPath, platform, resolvedUploadTarget]
+  );
+  const newFileValidation = useMemo(
+    () => validateNewTextFileName(newFileName, platform),
+    [newFileName, platform]
   );
 
   useEffect(() => {
@@ -2166,13 +2235,26 @@ export default function RemoteFileManagement({ device }) {
                 });
               }
             } else {
-              void notifyOperator({
-                title: "Upload Complete",
-                message: `Uploaded ${Number(transferData?.item_count || 0)} item${Number(transferData?.item_count || 0) === 1 ? "" : "s"} to ${normalizeText(transferData?.target_path) || "the selected directory"}.`,
-                icon: "upload",
-                variant: "success",
-              });
-              void refreshBaseView();
+              const createdFile = pendingCreatedFilesRef.current[transferId];
+              if (createdFile) {
+                delete pendingCreatedFilesRef.current[transferId];
+                setCreatedFileToOpen(createdFile);
+                void notifyOperator({
+                  title: "File Created",
+                  message: `Created ${createdFile.path}.`,
+                  icon: "success",
+                  variant: "success",
+                });
+                void refreshBaseView();
+              } else {
+                void notifyOperator({
+                  title: "Upload Complete",
+                  message: `Uploaded ${Number(transferData?.item_count || 0)} item${Number(transferData?.item_count || 0) === 1 ? "" : "s"} to ${normalizeText(transferData?.target_path) || "the selected directory"}.`,
+                  icon: "upload",
+                  variant: "success",
+                });
+                void refreshBaseView();
+              }
             }
             setActiveTransfers((previous) => {
               const next = { ...previous };
@@ -2183,6 +2265,7 @@ export default function RemoteFileManagement({ device }) {
           if (normalizeText(data?.status).toLowerCase() === "failed" && !handledTransfersRef.current[handledKey]) {
             handledTransfersRef.current[handledKey] = true;
             const previewRequest = imagePreviewTransfersRef.current[transferId];
+            const createdFile = pendingCreatedFilesRef.current[transferId];
             if (previewRequest) {
               delete imagePreviewTransfersRef.current[transferId];
               setImagePreview((previous) =>
@@ -2195,8 +2278,11 @@ export default function RemoteFileManagement({ device }) {
                   : previous
               );
             }
+            if (createdFile) {
+              delete pendingCreatedFilesRef.current[transferId];
+            }
             void notifyOperator({
-              title: "Transfer Failed",
+              title: createdFile ? "File Create Failed" : "Transfer Failed",
               message: normalizeText(transferData?.error) || "The file transfer failed.",
               icon: "error",
               variant: "error",
@@ -2210,6 +2296,7 @@ export default function RemoteFileManagement({ device }) {
           if (normalizeText(data?.status).toLowerCase() === "canceled" && !handledTransfersRef.current[handledKey]) {
             handledTransfersRef.current[handledKey] = true;
             const previewRequest = imagePreviewTransfersRef.current[transferId];
+            const createdFile = pendingCreatedFilesRef.current[transferId];
             if (previewRequest) {
               delete imagePreviewTransfersRef.current[transferId];
               setImagePreview((previous) =>
@@ -2222,8 +2309,11 @@ export default function RemoteFileManagement({ device }) {
                   : previous
               );
             }
+            if (createdFile) {
+              delete pendingCreatedFilesRef.current[transferId];
+            }
             void notifyOperator({
-              title: "Transfer Canceled",
+              title: createdFile ? "File Create Canceled" : "Transfer Canceled",
               message: normalizeText(transferData?.error) || "The file transfer was canceled.",
               icon: "notification",
               variant: "info",
@@ -2346,6 +2436,21 @@ export default function RemoteFileManagement({ device }) {
     },
     [hostname, notifyOperator, selectedEntry]
   );
+
+  useEffect(() => {
+    if (!createdFileToOpen) return;
+    setCreatedFileToOpen(null);
+    void handleOpenEditor(
+      normalizeEntry({
+        path: createdFileToOpen.path,
+        parent_path: createdFileToOpen.parentPath,
+        name: createdFileToOpen.name,
+        kind: "file",
+        size_bytes: 0,
+        modified_at: Math.floor(Date.now() / 1000),
+      })
+    );
+  }, [createdFileToOpen, handleOpenEditor]);
 
   const handleSaveEditor = useCallback(async () => {
     const targetPath = normalizeText(editorPath);
@@ -2522,11 +2627,11 @@ export default function RemoteFileManagement({ device }) {
   }, []);
 
   const startUploadRequest = useCallback(
-    async (files, manifest, targetPath, conflictSelections = {}) => {
+    async (files, manifest, targetPath, conflictSelections = {}, options = {}) => {
       const uploadFiles = Array.isArray(files) ? files : [];
       const uploadManifest = Array.isArray(manifest) ? manifest : [];
       const normalizedTarget = normalizeText(targetPath);
-      if (!uploadFiles.length || !hostname || !normalizedTarget || uploadManifest.length !== uploadFiles.length) return;
+      if (!uploadFiles.length || !hostname || !normalizedTarget || uploadManifest.length !== uploadFiles.length) return false;
       setActionBusy("upload");
       try {
         const formData = new FormData();
@@ -2546,7 +2651,7 @@ export default function RemoteFileManagement({ device }) {
         const data = await response.json().catch(() => ({}));
         if (response.status === 409 && normalizeText(data?.error).toLowerCase() === "upload_conflicts") {
           openUploadConflictDialog(uploadFiles, uploadManifest, normalizedTarget, data?.conflicts || [], conflictSelections);
-          return;
+          return false;
         }
         if (response.status === 409 && normalizeText(data?.error).toLowerCase() === "agent_update_required") {
           throw new Error("This device agent needs to be updated before duplicate upload resolution is available.");
@@ -2563,7 +2668,12 @@ export default function RemoteFileManagement({ device }) {
           });
           await refreshBaseView();
           clearUploadConflictState();
-          return;
+          return true;
+        }
+        const transferId = normalizeText(data?.transfer_id);
+        const createdFile = options?.createdFile || null;
+        if (transferId && createdFile?.path) {
+          pendingCreatedFilesRef.current[transferId] = createdFile;
         }
         setActiveTransfers((previous) => ({ ...previous, [data.transfer_id]: data }));
         await notifyOperator({
@@ -2573,6 +2683,7 @@ export default function RemoteFileManagement({ device }) {
           variant: "info",
         });
         clearUploadConflictState();
+        return true;
       } catch (uploadError) {
         await notifyOperator({
           title: "Upload Failed",
@@ -2580,6 +2691,7 @@ export default function RemoteFileManagement({ device }) {
           icon: "error",
           variant: "error",
         });
+        return false;
       } finally {
         setActionBusy("");
       }
@@ -2998,6 +3110,76 @@ export default function RemoteFileManagement({ device }) {
     }
   }, [currentPath, executeJsonAction, newFolderName, platform, resolvedUploadTarget]);
 
+  const handleCreateFile = useCallback(async () => {
+    const fileName = normalizeText(newFileName);
+    const validationMessage = validateNewTextFileName(fileName, platform);
+    const destination = normalizeText(resolvedUploadTarget || currentPath || (platform === "windows" ? "" : "/"));
+    if (!destination || validationMessage) {
+      if (validationMessage) {
+        await notifyOperator({
+          title: "Create File Failed",
+          message: validationMessage,
+          icon: "error",
+          variant: "error",
+        });
+      }
+      return;
+    }
+    const uploadFile = createEmptyTextUploadFile(fileName);
+    const manifest = buildUploadManifest([uploadFile]);
+    if (manifest.length !== 1) {
+      await notifyOperator({
+        title: "Create File Failed",
+        message: "The file name could not be staged for upload.",
+        icon: "error",
+        variant: "error",
+      });
+      return;
+    }
+    setActionBusy("new-file");
+    try {
+      const response = await fetch(`/api/device/files/${encodeURIComponent(hostname)}/upload/conflicts`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_path: destination,
+          items: manifest,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(normalizeText(data?.message) || normalizeText(data?.error) || `HTTP ${response.status}`);
+      }
+      const conflicts = Array.isArray(data?.conflicts) ? data.conflicts : [];
+      if (conflicts.length) {
+        throw new Error(`${fileName} already exists in ${destination}.`);
+      }
+      const createdPath = buildRemoteChildPath(destination, fileName, platform);
+      const accepted = await startUploadRequest([uploadFile], manifest, destination, {}, {
+        createdFile: {
+          path: createdPath,
+          parentPath: destination,
+          name: fileName,
+        },
+      });
+      if (accepted) {
+        setNewFileOpen(false);
+        setNewFileName("");
+        setContextMenuState(null);
+      }
+    } catch (createError) {
+      await notifyOperator({
+        title: "Create File Failed",
+        message: String(createError?.message || createError),
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setActionBusy("");
+    }
+  }, [currentPath, hostname, newFileName, notifyOperator, platform, resolvedUploadTarget, startUploadRequest]);
+
   const handleRename = useCallback(async () => {
     if (!selectedEntry || !renameValue.trim()) return;
     const didRename = await executeJsonAction(
@@ -3263,6 +3445,18 @@ export default function RemoteFileManagement({ device }) {
             : "",
         onClick: () => {
           void handleOpenEditor();
+        },
+      },
+      {
+        id: "new-file",
+        group: "organize",
+        label: "New File",
+        icon: InsertDriveFileRoundedIcon,
+        disabled: !resolvedUploadTarget || !!actionBusy,
+        disabledReason: !resolvedUploadTarget ? "Select a folder or drive first." : "",
+        onClick: () => {
+          setNewFileName("");
+          setNewFileOpen(true);
         },
       },
       {
@@ -4625,6 +4819,41 @@ export default function RemoteFileManagement({ device }) {
           </Button>
           <Button onClick={handleCloseEditor} sx={DIALOG_DANGER_BUTTON_SX}>
             Discard Changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={newFileOpen} onClose={() => setNewFileOpen(false)} fullWidth maxWidth="xs" PaperProps={{ sx: DIALOG_PAPER_SX }}>
+        <DialogTitle sx={DIALOG_TITLE_SX}>
+          <DialogHeaderBlock
+            title="New File"
+            subtitle={resolvedUploadTarget ? `Create a new file in ${resolvedUploadTarget}` : "Select a destination folder first."}
+          />
+        </DialogTitle>
+        <DialogContent sx={DIALOG_CONTENT_SX}>
+          <TextField
+            autoFocus
+            fullWidth
+            label="File Name"
+            value={newFileName}
+            onChange={(event) => setNewFileName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !newFileValidation && resolvedUploadTarget && !actionBusy) {
+                event.preventDefault();
+                void handleCreateFile();
+              }
+            }}
+            error={Boolean(newFileName && newFileValidation)}
+            helperText={newFileName && newFileValidation ? newFileValidation : " "}
+            sx={{ ...DIALOG_INPUT_SX, mt: 1.2 }}
+          />
+        </DialogContent>
+        <DialogActions sx={DIALOG_ACTIONS_SX}>
+          <Button onClick={() => setNewFileOpen(false)} sx={DIALOG_BUTTON_SX}>
+            Cancel
+          </Button>
+          <Button onClick={() => void handleCreateFile()} disabled={!newFileName.trim() || Boolean(newFileValidation) || !resolvedUploadTarget || !!actionBusy} sx={DIALOG_PRIMARY_BUTTON_SX}>
+            Create & Edit
           </Button>
         </DialogActions>
       </Dialog>
