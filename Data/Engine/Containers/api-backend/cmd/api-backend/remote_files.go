@@ -276,16 +276,17 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 			return
 		}
 		files := remoteFileUploadFiles(r)
-		if len(files) == 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_files_required"})
-			return
-		}
 		manifestItems := uploadManifestFromMultipartForm(r.FormValue("manifest"), files)
 		if len(manifestItems) == 0 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_files_required"})
 			return
 		}
-		if len(manifestItems) != len(files) {
+		manifestOnlyEmptyUpload := remoteFileManifestOnlyEmptyUpload(files, manifestItems)
+		if len(files) == 0 && !manifestOnlyEmptyUpload {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_files_required"})
+			return
+		}
+		if len(files) > 0 && len(manifestItems) != len(files) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_manifest_mismatch"})
 			return
 		}
@@ -337,9 +338,16 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 		manifestToUpload := make([]map[string]any, 0, len(manifestItems))
 		overwriteKeys := []string{}
 		skippedCount := 0
-		for index, file := range files {
-			manifestRow := manifestItems[index]
-			filename := sanitizeUploadName(firstText(cleanText(manifestRow["name"]), file.Filename))
+		for index, manifestRow := range manifestItems {
+			var file *multipart.FileHeader
+			if index < len(files) {
+				file = files[index]
+			}
+			fileNameFallback := ""
+			if file != nil {
+				fileNameFallback = file.Filename
+			}
+			filename := sanitizeUploadName(firstText(cleanText(manifestRow["name"]), fileNameFallback))
 			clientKey := firstText(cleanText(manifestRow["client_key"]), filename)
 			if filename == "" || clientKey == "" {
 				continue
@@ -351,10 +359,12 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 			case "replace":
 				overwriteKeys = append(overwriteKeys, clientKey)
 			}
-			filesToUpload = append(filesToUpload, file)
+			if file != nil {
+				filesToUpload = append(filesToUpload, file)
+			}
 			manifestToUpload = append(manifestToUpload, manifestRow)
 		}
-		if len(filesToUpload) == 0 {
+		if len(manifestToUpload) == 0 {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"ok":            true,
 				"status":        "skipped",
@@ -1080,6 +1090,21 @@ func uploadManifestFromMultipartForm(value string, files []*multipart.FileHeader
 		})
 	}
 	return normalizeUploadManifestItems(fallbackRows)
+}
+
+func remoteFileManifestOnlyEmptyUpload(files []*multipart.FileHeader, manifestItems []map[string]any) bool {
+	if len(files) != 0 || len(manifestItems) == 0 {
+		return false
+	}
+	for _, row := range manifestItems {
+		if sanitizeUploadName(cleanText(row["name"])) == "" || cleanText(row["relative_path"]) == "" {
+			return false
+		}
+		if coerceInt64(row["size_bytes"]) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeConflictResolutionMap(value string) map[string]string {

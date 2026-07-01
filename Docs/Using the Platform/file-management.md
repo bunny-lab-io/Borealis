@@ -1,6 +1,6 @@
 # File Management
 
-File Management lets operators browse and change a device filesystem without opening a shell. Use it for remote upload, download, folder transfer, rename, move, delete, copy, paste, folder creation, and lightweight text edits.
+File Management lets operators browse and change a device filesystem without opening a shell. Use it for remote upload, download, folder transfer, rename, move, delete, copy, paste, folder and text-file creation, and lightweight text edits.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Agent_File_Management.png" alt="Borealis Agent File Management" loading="lazy">
@@ -29,7 +29,8 @@ Duplicate uploads show a replace-or-skip decision before transfer begins.
 ## Edit And Organize
 
 - Right-click files or folders for contextual actions.
-- Text editing opens one remote file at a time and saves back in place.
+- `New File` creates an empty text file in the current destination and opens it in the lightweight editor.
+- Text editing opens one remote INI, log, script, config, or other basic text file at a time. Successful saves close the editor and refresh the current file view.
 - Copy and cut stay operator-local until paste asks the remote agent to perform the filesystem operation.
 
 !!! warning
