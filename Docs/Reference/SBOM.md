@@ -150,9 +150,9 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | webui-frontend | socket.io-client | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @testing-library/jest-dom | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @testing-library/react | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @vitejs/plugin-react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @vitejs/plugin-react ^4.7.0 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | jsdom | [MIT](https://github.com/jsdom/jsdom/blob/main/LICENSE.txt) |
-| webui-frontend | vite | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | vite ^6.4.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | vitest | [MIT](https://github.com/vitest-dev/vitest/blob/main/LICENSE) |
 | wireguard-tunnel | Debian Bookworm base image (`debian:bookworm-slim`) | [Debian Free Software Guidelines / package-specific licenses](https://www.debian.org/legal/licenses/) |
 | wireguard-tunnel | Python (system Python on Linux) | [PSF License](https://docs.python.org/3/license.html) |
