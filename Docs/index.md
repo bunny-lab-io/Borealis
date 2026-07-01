@@ -24,7 +24,7 @@ Status means productized support in current Borealis codebase and docs, not long
     | WireGuard Tunnel | Maintain outbound WireGuard transport for remote operations and Engine-side automation reachability. | Full | Full | - |
     | Remote Shell Host | Expose interactive shell over managed WireGuard tunnel. | Full | Full | - |
     | Remote Desktop | Run endpoint-side remote desktop service used by Apache Guacamole browser sessions. | Full | - | - |
-    | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, and edit text files remotely. | Full | Full | - |
+    | File Operations | Browse, upload, folder-upload, download, cancel transfers, copy, cut, paste, rename, move, delete, create folders, create text files, and edit text files remotely. | Full | Full | - |
     | Registry Operations | Browse and edit Windows registry keys and values from Device Summary. | Full | - | - |
     | Process Operations | Report live process data and accept process-control actions such as End Task. | Full | Full | - |
     | Service Operations | Report service inventory and accept start, stop, and restart actions. | Full | Full | - |
