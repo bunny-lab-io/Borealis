@@ -803,14 +803,18 @@ export function buildRemoteChildPath(parentPath, childName, platform = "") {
   return `${parent.replace(/\/+$/, "")}/${name}`;
 }
 
-function createEmptyTextUploadFile(fileName) {
-  if (typeof File === "function") {
-    return new File([""], fileName, { type: "text/plain", lastModified: Date.now() });
-  }
-  const blob = new Blob([""], { type: "text/plain" });
-  blob.name = fileName;
-  blob.lastModified = Date.now();
-  return blob;
+function buildEmptyTextFileManifest(fileName) {
+  const normalizedName = normalizeText(fileName);
+  if (!normalizedName) return [];
+  return [
+    {
+      client_key: normalizedName,
+      name: normalizedName,
+      relative_path: normalizedName,
+      size_bytes: 0,
+      modified_at: Math.floor(Date.now() / 1000),
+    },
+  ];
 }
 
 function buildUploadManifest(files = [], { preserveRelativePath = false } = {}) {
@@ -2653,7 +2657,19 @@ export default function RemoteFileManagement({ device }) {
       const uploadFiles = Array.isArray(files) ? files : [];
       const uploadManifest = Array.isArray(manifest) ? manifest : [];
       const normalizedTarget = normalizeText(targetPath);
-      if (!uploadFiles.length || !hostname || !normalizedTarget || uploadManifest.length !== uploadFiles.length) return false;
+      const manifestOnlyEmptyUpload =
+        Boolean(options?.allowEmptyManifest) &&
+        !uploadFiles.length &&
+        uploadManifest.length > 0 &&
+        uploadManifest.every((row) => Number(row?.size_bytes || 0) === 0 && normalizeText(row?.name) && normalizeText(row?.relative_path));
+      if (
+        !hostname ||
+        !normalizedTarget ||
+        (!uploadFiles.length && !manifestOnlyEmptyUpload) ||
+        (uploadFiles.length > 0 && uploadManifest.length !== uploadFiles.length)
+      ) {
+        return false;
+      }
       setActionBusy("upload");
       try {
         const formData = new FormData();
@@ -2698,9 +2714,10 @@ export default function RemoteFileManagement({ device }) {
           pendingCreatedFilesRef.current[transferId] = createdFile;
         }
         setActiveTransfers((previous) => ({ ...previous, [data.transfer_id]: data }));
+        const itemCount = Number(data?.item_count || uploadFiles.length || uploadManifest.length);
         await notifyOperator({
-          title: "Upload Started",
-          message: `Uploading ${Number(data?.item_count || uploadFiles.length)} item${Number(data?.item_count || uploadFiles.length) === 1 ? "" : "s"} to ${normalizedTarget}.`,
+          title: normalizeText(options?.startedTitle) || "Upload Started",
+          message: normalizeText(options?.startedMessage) || `Uploading ${itemCount} item${itemCount === 1 ? "" : "s"} to ${normalizedTarget}.`,
           icon: "upload",
           variant: "info",
         });
@@ -2708,7 +2725,7 @@ export default function RemoteFileManagement({ device }) {
         return true;
       } catch (uploadError) {
         await notifyOperator({
-          title: "Upload Failed",
+          title: normalizeText(options?.errorTitle) || "Upload Failed",
           message: String(uploadError?.message || uploadError),
           icon: "error",
           variant: "error",
@@ -3147,8 +3164,7 @@ export default function RemoteFileManagement({ device }) {
       }
       return;
     }
-    const uploadFile = createEmptyTextUploadFile(fileName);
-    const manifest = buildUploadManifest([uploadFile]);
+    const manifest = buildEmptyTextFileManifest(fileName);
     if (manifest.length !== 1) {
       await notifyOperator({
         title: "Create File Failed",
@@ -3178,12 +3194,16 @@ export default function RemoteFileManagement({ device }) {
         throw new Error(`${fileName} already exists in ${destination}.`);
       }
       const createdPath = buildRemoteChildPath(destination, fileName, platform);
-      const accepted = await startUploadRequest([uploadFile], manifest, destination, {}, {
+      const accepted = await startUploadRequest([], manifest, destination, {}, {
+        allowEmptyManifest: true,
         createdFile: {
           path: createdPath,
           parentPath: destination,
           name: fileName,
         },
+        startedTitle: "Creating File",
+        startedMessage: `Creating ${createdPath}.`,
+        errorTitle: "Create File Failed",
       });
       if (accepted) {
         setNewFileOpen(false);

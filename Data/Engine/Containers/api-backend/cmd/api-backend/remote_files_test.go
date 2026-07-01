@@ -249,6 +249,107 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 	}
 }
 
+func TestRemoteFileUploadAllowsManifestOnlyEmptyFile(t *testing.T) {
+	var sawUpload bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		switch r.URL.Path {
+		case "/remote-ops/host-service/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+		case "/remote-ops/host-service/call":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("worker request body decode failed: %v", err)
+			}
+			payload, _ := body["payload"].(map[string]any)
+			if payload["action"] != "upload_conflicts" || payload["target_path"] != "C:\\Temp" {
+				t.Fatalf("unexpected conflict payload %#v", payload)
+			}
+			items, _ := payload["items"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("expected one conflict item, got %#v", payload["items"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"called": true,
+				"response": map[string]any{
+					"ok":          true,
+					"target_path": "C:\\Temp",
+					"conflicts":   []any{},
+				},
+			})
+		case "/remote-files/transfers/upload":
+			sawUpload = true
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatalf("multipart parse failed: %v", err)
+			}
+			if r.FormValue("hostname") != "LAB-OPERATOR-01" || r.FormValue("device_guid") == "" || r.FormValue("target_path") != "C:\\Temp" {
+				t.Fatalf("unexpected upload form host=%q guid=%q target=%q", r.FormValue("hostname"), r.FormValue("device_guid"), r.FormValue("target_path"))
+			}
+			if files := r.MultipartForm.File["files"]; len(files) != 0 {
+				t.Fatalf("expected manifest-only upload to omit file parts, got %#v", files)
+			}
+			var manifest []map[string]any
+			if err := json.Unmarshal([]byte(r.FormValue("manifest")), &manifest); err != nil {
+				t.Fatalf("manifest decode failed: %v", err)
+			}
+			if len(manifest) != 1 || manifest[0]["name"] != "Test.ini" || manifest[0]["size_bytes"].(float64) != 0 {
+				t.Fatalf("unexpected manifest %#v", manifest)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"transfer_id":    "transfer-empty",
+				"direction":      "upload",
+				"status":         "pending",
+				"hostname":       "LAB-OPERATOR-01",
+				"bytes_complete": 0,
+				"bytes_total":    0,
+				"item_count":     1,
+			})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			GUID:     "00000000-0000-4000-8000-000000000123",
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerRemoteFileRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("target_path", "C:\\Temp"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("manifest", `[{"client_key":"Test.ini","name":"Test.ini","relative_path":"Test.ini","size_bytes":0,"modified_at":0}]`); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/files/LAB-OPERATOR-01/upload", &body)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawUpload {
+		t.Fatalf("expected manifest-only upload request")
+	}
+}
+
 func TestRemoteFileTransferContentProxiesWorkerStream(t *testing.T) {
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {

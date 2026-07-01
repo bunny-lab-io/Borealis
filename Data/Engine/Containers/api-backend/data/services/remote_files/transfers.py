@@ -136,6 +136,23 @@ def _upload_manifest_from_form(form_value: Any, files: Iterable[Any]) -> list[Di
     return _normalize_upload_manifest_items(fallback_rows)
 
 
+def _manifest_has_only_empty_files(manifest_items: Iterable[Dict[str, Any]]) -> bool:
+    rows = list(manifest_items or [])
+    if not rows:
+        return False
+    for row in rows:
+        if not _sanitize_upload_name((row or {}).get("name")):
+            return False
+        if not _sanitize_relative_upload_path((row or {}).get("relative_path"), fallback_name=(row or {}).get("name")):
+            return False
+        try:
+            if int((row or {}).get("size_bytes") or 0) != 0:
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def _transfer_status_snapshot(session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "transfer_id": session.get("transfer_id") or "",
@@ -233,16 +250,21 @@ class FileTransferStore:
         bytes_total = 0
         manifest_list = list(manifest_items or [])
         upload_list = list(files or [])
-        if manifest_list and len(manifest_list) != len(upload_list):
+        manifest_only_empty_upload = not upload_list and _manifest_has_only_empty_files(manifest_list)
+        if manifest_list and len(manifest_list) != len(upload_list) and not manifest_only_empty_upload:
             shutil.rmtree(session_dir, ignore_errors=True)
             raise ValueError("upload_manifest_mismatch")
         overwrite_source = list(overwrite_keys or []) or list(overwrite_names or [])
         overwrite_lookup = {_normalize_text(key): True for key in overwrite_source if _normalize_text(key)}
-        paired_rows = (
-            zip(upload_list, manifest_list)
-            if manifest_list
-            else ((storage, {"name": getattr(storage, "filename", ""), "relative_path": getattr(storage, "filename", "")}) for storage in upload_list)
-        )
+        if manifest_only_empty_upload:
+            paired_rows = ((None, manifest_row) for manifest_row in manifest_list)
+        elif manifest_list:
+            paired_rows = zip(upload_list, manifest_list)
+        else:
+            paired_rows = (
+                (storage, {"name": getattr(storage, "filename", ""), "relative_path": getattr(storage, "filename", "")})
+                for storage in upload_list
+            )
         for storage, manifest_row in paired_rows:
             filename = _sanitize_upload_name((manifest_row or {}).get("name") or getattr(storage, "filename", ""))
             relative_path = _sanitize_relative_upload_path((manifest_row or {}).get("relative_path"), fallback_name=filename)
@@ -251,7 +273,10 @@ class FileTransferStore:
                 continue
             item_id = uuid.uuid4().hex
             stored_path = uploads_dir / f"{item_id}.bin"
-            storage.save(stored_path)
+            if storage is None:
+                stored_path.write_bytes(b"")
+            else:
+                storage.save(stored_path)
             try:
                 size_bytes = int(stored_path.stat().st_size)
             except Exception:

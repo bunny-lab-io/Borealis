@@ -26,6 +26,7 @@ from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.services.remote_files.transfers import (
     FILE_TRANSFER_SESSION_TTL_SECONDS,
     FileTransferStore,
+    _manifest_has_only_empty_files,
     _normalize_text as _normalize_file_text,
     _normalize_transfer_entries,
     _sanitize_upload_name,
@@ -555,8 +556,20 @@ class SiteWorkerSocketRuntime:
                 overwrite_keys = json.loads(_normalize_file_text(request.form.get("overwrite_keys")) or "[]")
             except Exception:
                 overwrite_keys = []
-            if not hostname or not device_guid or not target_path or not files or not manifest_items:
-                return jsonify({"error": "invalid_request"}), 400
+            manifest_only_empty_upload = _manifest_has_only_empty_files(manifest_items)
+            missing_fields = []
+            if not hostname:
+                missing_fields.append("hostname")
+            if not device_guid:
+                missing_fields.append("device_guid")
+            if not target_path:
+                missing_fields.append("target_path")
+            if not manifest_items:
+                missing_fields.append("manifest")
+            if not files and not manifest_only_empty_upload:
+                missing_fields.append("files")
+            if missing_fields:
+                return jsonify({"error": "invalid_request", "missing": missing_fields}), 400
             try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
