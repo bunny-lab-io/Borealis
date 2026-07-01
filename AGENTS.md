@@ -248,6 +248,50 @@ PR MERGE REQUESTED: Are you sure?
 
 If operator confirms, merge PR before originally tasked work is complete only when operator explicitly accepts risk. Urge operator to finish changes before merge if merge would leave codebase broken or unsafe.
 
+## Working on Dependabot Security and Quality Alerts
+Dependabot alerts are not normal GitHub issues. Read them through the authenticated GitHub API first, then create Borealis issue and PR records using repository issue workflow above.
+
+When operator provides Dependabot alert URL or number:
+1. Resolve repository from local checkout with `gh repo view --json nameWithOwner,defaultBranchRef` unless operator provided explicit repo.
+2. Read exact alert through authenticated API before asking operator for screenshot or paste:
+
+```bash
+gh api "/repos/<owner>/<repo>/dependabot/alerts/<alert_number>"
+```
+
+3. List open alerts when operator asks for queue or next item:
+
+```bash
+gh api "/repos/<owner>/<repo>/dependabot/alerts?state=open&per_page=100"
+```
+
+4. Extract and retain these fields:
+   * Alert number, state, `html_url`, created/fixed/dismissed timestamps.
+   * Dependency package ecosystem/name, manifest path, scope, relationship.
+   * Security advisory GHSA/CVE identifiers, summary, severity, CVSS, CWEs, references.
+   * Vulnerability vulnerable range, first patched version, vulnerable functions.
+   * Dependabot tags such as runtime/development scope and patch availability when present.
+5. If API returns auth, permission, or not-found failure, state exact blocker and ask operator to paste alert text or screenshot.
+
+For every alert, create separate GitHub issue before implementation. Issue body must include:
+* Dependabot alert number and URL.
+* Package/ecosystem, manifest path, current resolved version, patched version, direct or transitive path.
+* Borealis impact: affected runtime, reachable surface, auth requirement, public/network exposure, confidentiality/integrity/availability effect.
+* Mitigation effort: dependency update path, expected code changes, docs/SBOM impact, migration/deploy impact.
+* Criticality: severity plus Borealis-specific priority.
+* Validation path from relevant docs.
+
+Work alerts one at a time in operator-provided order. Create branch `issue/<appropriate-dashed-name>` and PR `issue/<appropriate-dashed-name>` for each alert. Do not combine multiple Dependabot alerts into one issue or PR unless operator explicitly changes this rule.
+
+Use package-native minimal updates:
+* Go: use documented Borealis Go toolchain when available, then `go mod tidy`, module graph proof, and relevant Go tests.
+* npm/WebUI: do not run `npm` or `vite` builds from staging source under `Data/Engine/Containers/*/data`; update manifests/locks only as needed and follow WebUI/runtime validation docs.
+* Python/container/base image: follow relevant runtime docs before changing generated, vendored, deployment, or image files.
+
+Update `Docs/Reference/SBOM.md` whenever dependency version, vendored software, downloaded software, or runtime third-party inventory changes.
+
+Prefer fixing and merging to `main`; GitHub closes Dependabot alerts after rescan. Do not dismiss or manually close Dependabot alerts unless operator explicitly asks. If dismissing, record reason in the associated issue or PR.
+
 ---
 
 ## Long-Running and Recurring Work
