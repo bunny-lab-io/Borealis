@@ -43,7 +43,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
-| api-backend | golang.org/x/crypto v0.33.0 (Go scrypt KDF support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
+| api-backend | golang.org/x/crypto v0.35.0 (Go scrypt KDF, Curve25519 tunnel helper, and SSH private-key parsing support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
 | api-backend | github.com/go-ldap/ldap/v3 v3.4.8 (Go LDAP/LDAPS directory-provider support) | [MIT](https://github.com/go-ldap/ldap/blob/master/LICENSE) |
 | api-backend | github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 (Go LDAP NTLM support dependency) | [MIT](https://github.com/Azure/go-ntlmssp/blob/master/LICENSE) |
 | api-backend | github.com/go-asn1-ber/asn1-ber v1.5.5 (Go LDAP ASN.1 BER codec dependency) | [MIT](https://github.com/go-asn1-ber/asn1-ber/blob/master/LICENSE) |
@@ -163,7 +163,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Tecnativa Docker Socket Proxy container image (`ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`) | [Apache-2.0](https://github.com/Tecnativa/docker-socket-proxy/blob/master/LICENSE.txt) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
-| shared-engine | Go toolchain (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go toolchain 1.23.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
 
 ## Maintenance Notes
 
