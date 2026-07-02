@@ -31,7 +31,6 @@ import {
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
   AccountTree as DirectoryIcon,
-  AccountTreeRounded as EngineStatusIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   DashboardCustomizeRounded as PageStyleTemplateIcon,
   ReceiptLong as LogsIcon,
@@ -220,12 +219,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Server Info",
         navKey: "server",
         to: APP_PATHS.server,
-      },
-      {
-        icon: EngineStatusIcon,
-        label: "Engine Status",
-        navKey: "engine-status",
-        to: APP_PATHS.engineStatus,
       },
       {
         icon: BackupRestoreIcon,

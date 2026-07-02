@@ -52,7 +52,6 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     ### Related documentation
 
-    - [Engine Status](engine-status.md)
     - [Engine Log Management](engine-log-management.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
@@ -76,3 +75,4 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
     - Server Info is informational first; raw log inspection belongs in Engine Log Management.
+    - Legacy `/engine-status` URLs redirect to `/server`; the old Engine Status React Flow page was retired.

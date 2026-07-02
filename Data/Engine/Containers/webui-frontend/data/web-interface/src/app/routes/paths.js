@@ -50,7 +50,6 @@ export const APP_PATHS = {
   siteAssignment: "/users/site-assignment",
   backupRestore: "/backup-restore",
   server: "/server",
-  engineStatus: "/engine-status",
   logs: "/logs",
   metadataFields: "/metadata-fields",
   devTools: "/dev-tools",
