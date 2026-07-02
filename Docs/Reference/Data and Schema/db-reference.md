@@ -712,11 +712,14 @@ finally:
     - Used by:
     - `/api/agent/details` ingestion refresh when `details.patches` is present.
     - `GET /api/patches/audit`.
+    - `POST /api/patches/install`.
     - `GET /api/device/patches/<hostname>`.
+    - `POST /api/device/patches/<hostname>/install`.
     - Notes:
     - Non-patch `/api/agent/details` payloads preserve existing patch rows.
     - Pending rows use `source=wua_pending`; installed rows use `source=wua_history` or `source=quick_fix_engineering`.
     - Pending metadata can include `is_downloaded`, `is_mandatory`, `requires_reboot`, `update_id`, and `revision_number`.
+    - Ad-hoc install requests read pending rows from this table for target resolution, but no policy or run-history table exists for Patch Management yet.
 
     ### Scheduling and Automation
     #### `scheduled_jobs`

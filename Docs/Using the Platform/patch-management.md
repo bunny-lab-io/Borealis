@@ -1,6 +1,6 @@
 # Patch Management
 
-Patch Management shows Windows patch inventory collected by Borealis agents. This first version is audit-only: it lists pending Windows Update Agent items and installed KB history, but it does not install patches, approve patches, schedule maintenance windows, or orchestrate reboots.
+Patch Management shows Windows patch inventory collected by Borealis agents. Operators can request one pending update on one device, or request one pending update across all visible devices that currently report it. Policies, approvals, maintenance windows, and reboot orchestration are not implemented yet.
 
 ## Open Fleet Patch Audit
 
@@ -8,6 +8,7 @@ Patch Management shows Windows patch inventory collected by Borealis agents. Thi
 2. Use `State` to switch between pending and installed inventory.
 3. Use `Severity` to narrow Windows Update Agent rows when severity is available.
 4. Select device counts when you need to jump back to Device Inventory for affected endpoints.
+5. Use `Install` on a pending row to ask every visible device with that update pending to install it.
 
 Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` so operators with assigned sites only see patch inventory they can access.
 
@@ -17,6 +18,7 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 2. Select a device hostname.
 3. Select `Patch Management` from the Device Summary sidebar.
 4. Use `Query Patch Inventory` when you need a fresh Windows Update Agent and installed KB snapshot.
+5. Use `Install` on a pending row to ask that device to install the selected update.
 
 Pending rows come from Windows Update Agent search results that are not installed and not hidden. Installed rows come from `Get-HotFix` and Windows Update Agent history, then Borealis de-duplicates them by KB or update identity.
 
@@ -26,15 +28,17 @@ Pending rows come from Windows Update Agent search results that are not installe
 
 !!! warning
 
-    Patch Management v1 is inventory-only. It does not install updates, approve updates, handle reboot windows, or replace existing patching policy tooling.
+    Patch Management ad-hoc install requests do not approve updates, schedule maintenance windows, force reboots, or replace existing patching policy tooling. Offline agents are not queued for later install; the request must reach the live SYSTEM socket.
 
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints
 
     - `GET /api/patches/audit` - fleet patch inventory, scoped to operator site access.
+    - `POST /api/patches/install` - request one pending patch on every visible device that has the selected patch key pending.
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
+    - `POST /api/device/patches/<hostname>/install` - request one pending patch over the device SYSTEM socket.
     - `POST /api/agent/details` - accepts `details.patches` from the Agent `patch_management` role.
 
     ### Related documentation
@@ -57,6 +61,9 @@ Pending rows come from Windows Update Agent search results that are not installe
     ### Runtime behavior
 
     - Windows agents collect pending updates through native Windows Update Agent COM and installed KB rows through `Get-HotFix` plus WUA history.
+    - Pending rows come from WUA `IsInstalled=0 and IsHidden=0`, so they can be available but not downloaded yet. Download status stays in `is_downloaded`.
+    - Install requests use live Socket.IO `patch_install_request` calls. The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback.
+    - The Agent downloads the matched update when needed, calls WUA install for the matched update collection, never reboots the device, and refreshes patch inventory after the attempt.
     - Non-Windows agents report the role as unsupported in Agent Health.
     - Agent rows use `state=pending` or `state=installed`.
     - Agent rows use `source=wua_pending`, `source=wua_history`, or `source=quick_fix_engineering`.

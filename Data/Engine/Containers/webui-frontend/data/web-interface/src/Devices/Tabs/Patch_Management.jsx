@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Typography } from "@mui/material";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
+import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -95,6 +96,7 @@ export default function PatchManagementTab({ hostname = "" }) {
   const [loadError, setLoadError] = useState("");
   const [stateFilter, setStateFilter] = useState("pending");
   const [refreshBusy, setRefreshBusy] = useState(false);
+  const [installBusyKey, setInstallBusyKey] = useState("");
   const normalizedHostname = useMemo(() => text(hostname), [hostname]);
 
   const loadPatchRows = useCallback(async () => {
@@ -173,6 +175,51 @@ export default function PatchManagementTab({ hostname = "" }) {
     }
   }, [normalizedHostname, notifyOperator, refreshBusy, requestPatchDataRefresh]);
 
+  const handleInstallPatch = useCallback(
+    async (row = {}) => {
+      if (!normalizedHostname || installBusyKey) return;
+      const patchKey = text(row.patch_key);
+      const rowKey = patchKey || text(row.inventory_id || row.id) || text(row.kb || row.title);
+      if (!patchKey || text(row.state).toLowerCase() !== "pending") return;
+      const patchLabel = text(row.kb) || text(row.title) || "selected update";
+      if (typeof window !== "undefined") {
+        const confirmed = window.confirm(`Install ${patchLabel} on ${normalizedHostname}?`);
+        if (!confirmed) return;
+      }
+      setInstallBusyKey(rowKey);
+      try {
+        const response = await fetch(`/api/device/patches/${encodeURIComponent(normalizedHostname)}/install`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            patch_key: patchKey,
+            inventory_id: row.inventory_id || row.id,
+          }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+        requestPatchDataRefresh({ burst: true });
+        await notifyOperator({
+          title: "Patch Install Requested",
+          message: `Borealis asked <b>${normalizedHostname}</b> to install <b>${patchLabel}</b>.`,
+          icon: "success",
+          variant: "success",
+        });
+      } catch (error) {
+        await notifyOperator({
+          title: "Patch Install Failed",
+          message: `Could not request <b>${patchLabel}</b> install on <b>${normalizedHostname}</b>: ${String(error?.message || error)}`,
+          icon: "error",
+          variant: "error",
+        });
+      } finally {
+        setInstallBusyKey("");
+      }
+    },
+    [installBusyKey, normalizedHostname, notifyOperator, requestPatchDataRefresh]
+  );
+
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
     if (!socket || !normalizedHostname) return undefined;
@@ -236,6 +283,47 @@ export default function PatchManagementTab({ hostname = "" }) {
         valueFormatter: (params) => formatState(params.value),
       },
       {
+        field: "install",
+        headerName: "Install",
+        width: 122,
+        minWidth: 122,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          const patchKey = text(row.patch_key);
+          const rowKey = patchKey || text(row.inventory_id || row.id) || text(row.kb || row.title);
+          const disabled = text(row.state).toLowerCase() !== "pending" || !patchKey || Boolean(installBusyKey);
+          return (
+            <Button
+              size="small"
+              startIcon={<SystemUpdateAltRoundedIcon fontSize="small" />}
+              disabled={disabled}
+              onClick={() => handleInstallPatch(row)}
+              sx={{
+                minWidth: 92,
+                borderRadius: 999,
+                px: 1.15,
+                py: 0.25,
+                color: "#031525",
+                textTransform: "none",
+                fontWeight: 700,
+                background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+                "&:hover": { background: "linear-gradient(135deg, #93ddff 0%, #d0a0ff 100%)" },
+                "&.Mui-disabled": {
+                  color: "rgba(148,163,184,0.65)",
+                  background: "rgba(15,23,42,0.55)",
+                  border: "1px solid rgba(148,163,184,0.18)",
+                },
+              }}
+            >
+              {installBusyKey === rowKey ? "Sending" : "Install"}
+            </Button>
+          );
+        },
+      },
+      {
         field: "severity",
         headerName: "Severity",
         width: 145,
@@ -291,7 +379,7 @@ export default function PatchManagementTab({ hostname = "" }) {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
     ],
-    []
+    [handleInstallPatch, installBusyKey]
   );
 
   return (

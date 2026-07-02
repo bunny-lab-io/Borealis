@@ -3,6 +3,7 @@ package patchmanagement
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -22,6 +23,7 @@ const (
 	patchBoostInterval   = 5 * time.Second
 	patchBoostWindow     = 45 * time.Second
 	patchCommandTimeout  = 3 * time.Minute
+	patchInstallTimeout  = 90 * time.Minute
 )
 
 var kbPattern = regexp.MustCompile(`(?i)\bKB\d{4,9}\b`)
@@ -42,6 +44,9 @@ type Manager struct {
 	lastRefreshAt     int64
 	lastPatchCount    int
 	fastPollUntil     time.Time
+	installRunning    bool
+	lastInstallAt     int64
+	lastInstallError  string
 }
 
 type Patch struct {
@@ -127,6 +132,9 @@ func (m *Manager) Health() RoleHealth {
 	lastError := m.lastError
 	lastRefreshAt := m.lastRefreshAt
 	lastPatchCount := m.lastPatchCount
+	installRunning := m.installRunning
+	lastInstallAt := m.lastInstallAt
+	lastInstallError := m.lastInstallError
 	m.mu.Unlock()
 
 	details := map[string]any{
@@ -134,7 +142,12 @@ func (m *Manager) Health() RoleHealth {
 		"patch_count":         strconv.Itoa(lastPatchCount),
 		"last_refresh_at":     strconv.FormatInt(lastRefreshAt, 10),
 		"refresh_interval_ms": strconv.Itoa(int(patchRefreshInterval / time.Millisecond)),
+		"install_running":     strconv.FormatBool(installRunning),
+		"last_install_at":     strconv.FormatInt(lastInstallAt, 10),
 		"runtime":             "go",
+	}
+	if strings.TrimSpace(lastInstallError) != "" {
+		details["last_install_error"] = lastInstallError
 	}
 	if !supported {
 		details["running_status"] = "Unsupported"
@@ -199,6 +212,46 @@ func (m *Manager) HandleRefreshRequest(ctx context.Context, payload any) (any, e
 		"ok":     true,
 		"status": "accepted",
 		"reason": reason,
+	}, nil
+}
+
+func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, error) {
+	body, ok := payload.(map[string]any)
+	if !ok {
+		return errorResponse("invalid_request", "Patch install payload must be an object."), nil
+	}
+	if !m.matchesTarget(body) {
+		return errorResponse("not_for_host", "The patch install request targeted another device."), nil
+	}
+	if !m.supported {
+		return errorResponse("unsupported_platform", fallbackText(m.unsupportedReason, "Patch management is unsupported on this platform.")), nil
+	}
+	patch := patchInstallRequest(body)
+	if patch == nil {
+		return errorResponse("patch_required", "Patch install payload must include patch identity."), nil
+	}
+	if state := normalizePatchState(patch["state"]); state != "" && state != "pending" {
+		return errorResponse("patch_not_pending", "Only pending Windows updates can be installed."), nil
+	}
+	if !m.beginInstall() {
+		return errorResponse("install_in_progress", "Another patch install is already running on this device."), nil
+	}
+	requestID := cleanText(body["request_id"])
+	if requestID == "" {
+		requestID = fmt.Sprintf("patch-%d", time.Now().UnixNano())
+	}
+	patch["request_id"] = requestID
+	patch["requested_at"] = coerceInt64(body["requested_at"])
+	patch["requested_by"] = cleanText(body["requested_by"])
+	patch["scope"] = cleanText(body["scope"])
+	go m.runInstall(context.Background(), patch, requestID)
+	return map[string]any{
+		"ok":         true,
+		"status":     "accepted",
+		"request_id": requestID,
+		"patch_key":  cleanText(patch["patch_key"]),
+		"kb":         cleanText(patch["kb"]),
+		"title":      cleanText(patch["title"]),
 	}, nil
 }
 
@@ -292,6 +345,52 @@ func (m *Manager) collectPatches(ctx context.Context) ([]Patch, error) {
 	return parseWindowsPatchInventory(result.Stdout)
 }
 
+func (m *Manager) beginInstall() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.installRunning {
+		return false
+	}
+	m.installRunning = true
+	m.lastInstallError = ""
+	return true
+}
+
+func (m *Manager) finishInstall(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.installRunning = false
+	m.lastInstallAt = time.Now().Unix()
+	if err != nil {
+		m.lastInstallError = err.Error()
+	} else {
+		m.lastInstallError = ""
+	}
+}
+
+func (m *Manager) runInstall(ctx context.Context, patch map[string]any, requestID string) {
+	err := m.installPatch(ctx, patch)
+	m.finishInstall(err)
+	m.RequestRefresh("patch_install_complete:" + fallbackText(requestID, "unknown"))
+}
+
+func (m *Manager) installPatch(ctx context.Context, patch map[string]any) error {
+	if !m.supported {
+		return fmt.Errorf("%s", fallbackText(m.unsupportedReason, "unsupported platform"))
+	}
+	result, err := m.runner(ctx, patchInstallTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchInstallScript(patch))
+	if parsed := parsePatchInstallResult(result.Stdout); parsed != nil {
+		if okValue, exists := parsed["ok"]; exists && !truthy(okValue) {
+			message := fallbackText(cleanText(parsed["message"]), fallbackText(cleanText(parsed["error"]), "patch install failed"))
+			return fmt.Errorf("%s", message)
+		}
+	}
+	if err != nil || result.ExitCode != 0 {
+		return commandError(result, err)
+	}
+	return nil
+}
+
 func (m *Manager) publishPatches(ctx context.Context, snapshot Snapshot) error {
 	if m.authClient == nil {
 		return fmt.Errorf("auth client unavailable")
@@ -330,6 +429,47 @@ func (m *Manager) matchesTarget(payload map[string]any) bool {
 		return false
 	}
 	return true
+}
+
+func patchInstallRequest(body map[string]any) map[string]any {
+	rawPatch, _ := body["patch"].(map[string]any)
+	metadata := normalizeMetadata(firstNonNil(firstValue(rawPatch, "metadata"), body["metadata"]))
+	out := map[string]any{}
+	for _, key := range []string{"patch_key", "kb", "title", "state", "source", "classification", "severity"} {
+		value := firstNonNil(firstValue(rawPatch, key), body[key])
+		if clean := cleanText(value); clean != "" {
+			out[key] = clean
+		}
+	}
+	updateID := cleanText(firstNonNil(firstValue(metadata, "update_id", "updateID"), firstValue(rawPatch, "update_id", "updateID"), firstValue(body, "update_id", "updateID")))
+	if updateID != "" {
+		out["update_id"] = updateID
+	}
+	revision := coerceInt64(firstNonNil(firstValue(metadata, "revision_number", "revision"), firstValue(rawPatch, "revision_number", "revision"), firstValue(body, "revision_number", "revision")))
+	if revision > 0 {
+		out["revision_number"] = revision
+	}
+	if len(metadata) > 0 {
+		out["metadata"] = metadata
+	}
+	if cleanText(out["patch_key"]) == "" && cleanText(out["kb"]) == "" && cleanText(out["title"]) == "" && updateID == "" {
+		return nil
+	}
+	if kb := normalizeKB(out["kb"]); kb != "" {
+		out["kb"] = kb
+	}
+	return out
+}
+
+func parsePatchInstallResult(output string) map[string]any {
+	if strings.TrimSpace(output) == "" {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		return nil
+	}
+	return payload
 }
 
 func parseWindowsPatchInventory(output string) ([]Patch, error) {
@@ -666,6 +806,34 @@ func firstValue(values map[string]any, keys ...string) any {
 	return nil
 }
 
+func firstNonNil(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func truthy(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		switch strings.ToLower(strings.TrimSpace(typed)) {
+		case "true", "1", "yes", "y", "ok", "accepted", "succeeded", "success":
+			return true
+		}
+	case float64:
+		return typed != 0
+	case int:
+		return typed != 0
+	case int64:
+		return typed != 0
+	}
+	return false
+}
+
 func anySlice(value any) []any {
 	switch typed := value.(type) {
 	case nil:
@@ -733,6 +901,126 @@ func fallbackText(value string, fallback string) string {
 		return value
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func windowsPatchInstallScript(request map[string]any) string {
+	payload, _ := json.Marshal(request)
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	return fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
+$request = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')))
+function Write-BorealisPatchResult {
+  param($Payload)
+  $Payload | ConvertTo-Json -Depth 8 -Compress
+}
+function Get-BorealisKB {
+  param($Values, [string]$Title)
+  foreach ($value in @($Values)) {
+    $text = "$value".Trim()
+    if (-not $text) { continue }
+    if ($text -match '(?i)\bKB\d{4,9}\b') { return $Matches[0].ToUpperInvariant() }
+    if ($text -match '^\d{4,9}$') { return "KB$text" }
+  }
+  if ($Title -match '(?i)\bKB\d{4,9}\b') { return $Matches[0].ToUpperInvariant() }
+  return ''
+}
+function Test-BorealisPatchMatch {
+  param($Update, $Request)
+  $title = "$($Update.Title)".Trim()
+  $requestedUpdateId = "$($Request.update_id)".Trim()
+  $requestedRevision = "$($Request.revision_number)".Trim()
+  if ($requestedUpdateId) {
+    $candidateUpdateId = ''
+    $candidateRevision = ''
+    try { $candidateUpdateId = "$($Update.Identity.UpdateID)".Trim() } catch {}
+    try { $candidateRevision = "$($Update.Identity.RevisionNumber)".Trim() } catch {}
+    if ($candidateUpdateId -and $candidateUpdateId.Equals($requestedUpdateId, [StringComparison]::OrdinalIgnoreCase)) {
+      if (-not $requestedRevision -or $candidateRevision -eq $requestedRevision) { return $true }
+    }
+    return $false
+  }
+  $requestedKB = "$($Request.kb)".Trim()
+  if (-not $requestedKB) {
+    $patchKey = "$($Request.patch_key)".Trim()
+    if ($patchKey -match '(?i)\bKB\d{4,9}\b') { $requestedKB = $Matches[0].ToUpperInvariant() }
+  }
+  if ($requestedKB) {
+    if ($requestedKB -match '^\d{4,9}$') { $requestedKB = "KB$requestedKB" }
+    $candidateKB = Get-BorealisKB $Update.KBArticleIDs $title
+    if ($candidateKB -and $candidateKB.Equals($requestedKB.ToUpperInvariant(), [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  $requestedTitle = "$($Request.title)".Trim()
+  if ($requestedTitle -and $title.Equals($requestedTitle, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  return $false
+}
+try {
+  $session = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher()
+  $searchResult = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  $matches = @()
+  foreach ($update in @($searchResult.Updates)) {
+    if (Test-BorealisPatchMatch $update $request) {
+      $matches += $update
+    }
+  }
+  if ($matches.Count -lt 1) {
+    Write-BorealisPatchResult @{ ok = $false; error = 'update_not_found'; message = 'Matching Windows update was not found.' }
+    exit 2
+  }
+  $collection = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($update in $matches) {
+    try {
+      if (-not $update.EulaAccepted) { $update.AcceptEula() }
+    } catch {}
+    [void]$collection.Add($update)
+  }
+  $needsDownload = $false
+  foreach ($update in $matches) {
+    try {
+      if (-not [bool]$update.IsDownloaded) { $needsDownload = $true }
+    } catch {
+      $needsDownload = $true
+    }
+  }
+  if ($needsDownload) {
+    $downloader = $session.CreateUpdateDownloader()
+    $downloader.Updates = $collection
+    [void]$downloader.Download()
+  }
+  $installCollection = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($update in $matches) {
+    $downloaded = $false
+    try { $downloaded = [bool]$update.IsDownloaded } catch {}
+    if ($downloaded) { [void]$installCollection.Add($update) }
+  }
+  if ($installCollection.Count -lt 1) {
+    Write-BorealisPatchResult @{ ok = $false; error = 'download_failed'; message = 'Windows Update Agent did not download the selected update.' }
+    exit 3
+  }
+  $installer = $session.CreateUpdateInstaller()
+  $installer.Updates = $installCollection
+  try { $installer.ForceQuiet = $true } catch {}
+  try { $installer.AllowSourcePrompts = $false } catch {}
+  $installResult = $installer.Install()
+  $resultCode = [int]$installResult.ResultCode
+  $ok = ($resultCode -eq 2 -or $resultCode -eq 3)
+  $titles = @()
+  foreach ($update in $matches) { $titles += "$($update.Title)".Trim() }
+  Write-BorealisPatchResult @{
+    ok = $ok
+    status = $(if ($ok) { 'completed' } else { 'failed' })
+    result_code = $resultCode
+    reboot_required = [bool]$installResult.RebootRequired
+    matched_count = [int]$matches.Count
+    installed_count = [int]$installCollection.Count
+    titles = $titles
+  }
+  if (-not $ok) { exit 4 }
+} catch {
+  Write-BorealisPatchResult @{ ok = $false; error = 'install_failed'; message = "$($_.Exception.Message)".Trim() }
+  exit 5
+}
+`, encoded)
 }
 
 func windowsPatchInventoryScript() string {

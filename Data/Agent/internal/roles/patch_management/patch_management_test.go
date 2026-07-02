@@ -1,9 +1,11 @@
 package patchmanagement
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseWindowsPatchInventoryPendingWUA(t *testing.T) {
@@ -110,5 +112,70 @@ func TestPatchManagementUnsupportedHealth(t *testing.T) {
 	health := manager.Health()
 	if health.Status != "unsupported" || health.StatusCode != "unsupported" {
 		t.Fatalf("expected unsupported health on non-Windows test runtime, got %#v", health)
+	}
+}
+
+func TestPatchInstallRequestNormalizesIdentity(t *testing.T) {
+	spec := patchInstallRequest(map[string]any{
+		"patch": map[string]any{
+			"patch_key": "kb:KB5000001:state:pending",
+			"kb":        "5000001",
+			"title":     "Security Update",
+			"state":     "pending",
+			"metadata": map[string]any{
+				"update_id":       "11111111-1111-1111-1111-111111111111",
+				"revision_number": float64(7),
+			},
+		},
+	})
+	if spec == nil {
+		t.Fatalf("expected install spec")
+	}
+	if spec["kb"] != "KB5000001" || spec["update_id"] != "11111111-1111-1111-1111-111111111111" || spec["revision_number"] != int64(7) {
+		t.Fatalf("unexpected install spec %#v", spec)
+	}
+}
+
+func TestPatchInstallRequestAcceptedRunsAsync(t *testing.T) {
+	manager := New(nil, "LAB-OPERATOR-01", "system")
+	manager.supported = true
+	manager.unsupportedReason = ""
+	manager.publisher = func(context.Context, Snapshot) error { return nil }
+	installStarted := make(chan struct{}, 1)
+	manager.runner = func(_ context.Context, _ time.Duration, _ string, args ...string) (commandResult, error) {
+		script := ""
+		if len(args) > 0 {
+			script = args[len(args)-1]
+		}
+		if strings.Contains(script, "CreateUpdateInstaller") {
+			installStarted <- struct{}{}
+			return commandResult{Stdout: `{"ok":true,"status":"completed"}`}, nil
+		}
+		return commandResult{Stdout: `[]`}, nil
+	}
+
+	response, err := manager.HandleInstallRequest(context.Background(), map[string]any{
+		"hostname": "LAB-OPERATOR-01",
+		"patch": map[string]any{
+			"patch_key": "update:33333333-3333-3333-3333-333333333333:9:state:pending",
+			"title":     "Driver update without KB",
+			"state":     "pending",
+			"metadata": map[string]any{
+				"update_id":       "33333333-3333-3333-3333-333333333333",
+				"revision_number": 9,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("install request failed: %v", err)
+	}
+	payload, _ := response.(map[string]any)
+	if payload["status"] != "accepted" || payload["ok"] != true {
+		t.Fatalf("unexpected install response %#v", payload)
+	}
+	select {
+	case <-installStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("install runner was not called")
 	}
 }

@@ -68,12 +68,12 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 ### Patch Management
 | CSV row or capability cluster | Borealis status | Evidence | Notes |
 | --- | --- | --- | --- |
-| Windows patch management | Partial but still a gap | `Docs/Using the Platform/patch-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-auditing.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | Borealis has inventory-only Windows patch audit using WUA pending items, WUA history, and `Get-HotFix`. Install actions, approvals, policies, maintenance windows, reboot handling, and compliance workflows remain absent. |
+| Windows patch management | Partial but still a gap | `Docs/Using the Platform/patch-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-auditing.md`, `Docs/Reference/Core Runtimes/agent-runtime.md` | Borealis has Windows patch audit plus live ad-hoc WUA install requests for one device or all visible devices with one pending update. Approvals, policies, maintenance windows, reboot handling, and compliance workflows remain absent. |
 | Windows build / feature updates | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-auditing.md` | No productized feature-update lane was found. |
 | Third-party application patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/Assemblies/assemblies.md`, `Docs/Reference/Data and Schema/integrations.md` | Borealis can script and automate, but not through a supported third-party patch catalog or policy system. |
 | macOS patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `README.md` | No macOS patch product surface was found. |
 | Linux patching | Absent | `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Reference/Core Runtimes/engine-runtime.md` | Engine-side automation exists, but there is no Borealis patching product for Linux endpoints. |
-| WUA monitoring / remediation | Partial but still a gap | `Docs/Using the Platform/patch-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-auditing.md` | Borealis can audit pending WUA items and installed WUA history, but does not remediate or enforce Windows Update policy. |
+| WUA monitoring / remediation | Partial but still a gap | `Docs/Using the Platform/patch-management.md`, `Docs/Reference/Data and Schema/api-reference.md`, `Docs/Using the Platform/device-auditing.md` | Borealis can audit pending WUA items, installed WUA history, and request live WUA installs, but does not enforce Windows Update policy. |
 
 ### Software Management Delta Since The Initial Matrix Pass
 - Borealis now has a real Windows software-management surface instead of just passive inventory.
@@ -158,7 +158,7 @@ The matrix suggests these gaps are not edge-case asks. They show up repeatedly a
 - Current Borealis position:
   - Borealis can automate patching through scripts or Ansible in an ad hoc way.
   - Borealis now has a meaningful Installed Software control surface for inventory, uninstall, override governance, and immediate software refresh.
-  - Borealis now ships Windows patch inventory and WUA-style pending/update-history audit.
+  - Borealis now ships Windows patch inventory, WUA-style pending/update-history audit, and live ad-hoc install triggers.
   - Borealis still does not ship approval workflows, maintenance windows, deployment policy, reboot orchestration, or compliance reporting.
 - Immediate product implication:
   - Patching is the most leverage-rich way to turn Borealis from a strong automation/remote-access platform into a real incumbent RMM replacement.

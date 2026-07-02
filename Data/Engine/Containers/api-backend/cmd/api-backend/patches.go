@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -13,6 +14,10 @@ import (
 type patchInventoryStore interface {
 	listPatchAudit(ctx context.Context, profile operatorProfile) ([]map[string]any, error)
 	listDevicePatches(ctx context.Context, profile operatorProfile, hostname string) ([]map[string]any, string, int, error)
+}
+
+type patchInstallStore interface {
+	listPatchInstallTargets(ctx context.Context, profile operatorProfile, request patchInstallLookupRequest) ([]patchInstallTarget, int, error)
 }
 
 type patchInventoryRow struct {
@@ -37,10 +42,26 @@ type patchInventoryRow struct {
 	SiteName        sql.NullString
 }
 
+type patchInstallLookupRequest struct {
+	Hostname    string
+	PatchKey    string
+	InventoryID int64
+	KB          string
+	Title       string
+	SiteID      int64
+}
+
+type patchInstallTarget struct {
+	Row   patchInventoryRow
+	Route *agentWorkerRoute
+}
+
 func registerPatchRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/patches/audit", patchAuditHandler(auth))
+	mux.HandleFunc("POST /api/patches/install", fleetPatchInstallHandler(auth))
 	mux.HandleFunc("GET /api/device/patches/{hostname}", devicePatchesHandler(auth))
 	mux.HandleFunc("POST /api/device/patches/{hostname}/refresh", patchRefreshHandler(auth))
+	mux.HandleFunc("POST /api/device/patches/{hostname}/install", devicePatchInstallHandler(auth))
 	mux.HandleFunc("/api/patches/", patchSubtreeHandler(fallback))
 }
 
@@ -183,6 +204,98 @@ func patchRefreshHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
+func devicePatchInstallHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			return
+		}
+		request := patchInstallLookupFromBody(body)
+		request.Hostname = r.PathValue("hostname")
+		if !request.hasPatchIdentity() {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "patch_required"})
+			return
+		}
+		store, ok := auth.store.(patchInstallStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "patch_install_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		targets, status, err := store.listPatchInstallTargets(ctx, profile, request)
+		cancel()
+		if err != nil {
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		if len(targets) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "patch_not_found"})
+			return
+		}
+		summary := dispatchPatchInstallTargets(r.Context(), auth, profile, targets[:1], "device")
+		if patchInstallIntFromAny(summary["accepted_count"]) == 0 {
+			writeJSON(w, firstPatchInstallFailureStatus(summary), map[string]any{
+				"error":   firstPatchInstallFailureError(summary),
+				"status":  "failed",
+				"results": summary["results"],
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, summary)
+	}
+}
+
+func fleetPatchInstallHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		profile, err := auth.currentProfile(r.Context(), r)
+		if err != nil {
+			if isUnauthorizedAuthError(err) {
+				writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_unavailable", "detail": err.Error()})
+			return
+		}
+		body, err := readJSONMap(r)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": "Request body must be valid JSON."})
+			return
+		}
+		request := patchInstallLookupFromBody(body)
+		if !request.hasPatchIdentity() {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "patch_required"})
+			return
+		}
+		store, ok := auth.store.(patchInstallStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "patch_install_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		targets, status, err := store.listPatchInstallTargets(ctx, profile, request)
+		cancel()
+		if err != nil {
+			writeJSON(w, status, map[string]any{"error": err.Error()})
+			return
+		}
+		if len(targets) == 0 {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "patch_not_found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, dispatchPatchInstallTargets(r.Context(), auth, profile, targets, "fleet"))
+	}
+}
+
 func patchSubtreeHandler(fallback http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if fallback == nil {
@@ -190,6 +303,169 @@ func patchSubtreeHandler(fallback http.Handler) http.HandlerFunc {
 			return
 		}
 		fallback.ServeHTTP(w, r)
+	}
+}
+
+func patchInstallLookupFromBody(body map[string]any) patchInstallLookupRequest {
+	patch, _ := body["patch"].(map[string]any)
+	request := patchInstallLookupRequest{
+		PatchKey: cleanText(firstNonEmpty(firstValueFromMap(patch, "patch_key"), body["patch_key"])),
+		KB:       normalizePatchKB(firstNonEmpty(firstValueFromMap(patch, "kb"), body["kb"])),
+		Title:    cleanText(firstNonEmpty(firstValueFromMap(patch, "title"), body["title"])),
+	}
+	request.InventoryID = coercePatchInstallInt64(firstNonEmpty(firstValueFromMap(patch, "inventory_id"), firstValueFromMap(patch, "id"), body["inventory_id"], body["id"]))
+	request.SiteID = coercePatchInstallInt64(firstNonEmpty(body["site_id"], firstValueFromMap(patch, "site_id")))
+	return request
+}
+
+func (r patchInstallLookupRequest) hasPatchIdentity() bool {
+	return r.InventoryID > 0 || r.PatchKey != "" || r.KB != "" || r.Title != ""
+}
+
+func firstValueFromMap(values map[string]any, key string) any {
+	if values == nil {
+		return nil
+	}
+	return values[key]
+}
+
+func coercePatchInstallInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		parsed, _ := strconv.ParseInt(cleanText(value), 10, 64)
+		return parsed
+	}
+}
+
+func dispatchPatchInstallTargets(ctx context.Context, auth *authService, profile operatorProfile, targets []patchInstallTarget, scope string) map[string]any {
+	requestedAt := time.Now().Unix()
+	requestedBy := firstText(cleanText(profile.Username), "unknown")
+	results := make([]map[string]any, 0, len(targets))
+	accepted := 0
+	failed := 0
+	for idx, target := range targets {
+		rowPayload := patchInventoryPayload(target.Row)
+		hostname := cleanText(rowPayload["hostname"])
+		result := map[string]any{
+			"hostname":  hostname,
+			"agent_id":  cleanText(rowPayload["agent_id"]),
+			"patch_key": cleanText(rowPayload["patch_key"]),
+			"kb":        cleanText(rowPayload["kb"]),
+			"title":     cleanText(rowPayload["title"]),
+		}
+		if target.Route == nil {
+			failed++
+			result["status"] = "failed"
+			result["http_status"] = http.StatusServiceUnavailable
+			result["error"] = "site_worker_unavailable"
+			result["message"] = "No active site-worker route is available for this device."
+			results = append(results, result)
+			continue
+		}
+		requestID := "patch-" + strconv.FormatInt(requestedAt, 10) + "-" + strconv.Itoa(idx+1)
+		eventPayload := map[string]any{
+			"hostname":     hostname,
+			"agent_id":     cleanText(rowPayload["agent_id"]),
+			"requested_at": requestedAt,
+			"requested_by": requestedBy,
+			"request_id":   requestID,
+			"scope":        scope,
+			"patch":        rowPayload,
+		}
+		response, workerStatus, workerErr := callWorkerHostServiceEvent(ctx, auth, target.Route, map[string]any{
+			"hostname":        hostname,
+			"service_mode":    "system",
+			"event_name":      "patch_install_request",
+			"payload":         eventPayload,
+			"timeout_seconds": 12,
+		}, 15*time.Second)
+		if workerErr != nil {
+			failed++
+			result["status"] = "failed"
+			result["http_status"] = workerStatus
+			result["error"] = firstText(cleanText(workerErr["error"]), "patch_install_failed")
+			result["message"] = cleanText(workerErr["message"])
+			results = append(results, result)
+			continue
+		}
+		accepted++
+		result["status"] = firstText(cleanText(response["status"]), "accepted")
+		result["request_id"] = firstText(cleanText(response["request_id"]), requestID)
+		results = append(results, result)
+	}
+	status := "accepted"
+	if accepted > 0 && failed > 0 {
+		status = "partial"
+	} else if accepted == 0 {
+		status = "failed"
+	}
+	return map[string]any{
+		"status":         status,
+		"requested_at":   requestedAt,
+		"requested_by":   requestedBy,
+		"target_count":   len(targets),
+		"accepted_count": accepted,
+		"failed_count":   failed,
+		"results":        results,
+	}
+}
+
+func patchInstallIntFromAny(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		parsed, _ := strconv.Atoi(cleanText(value))
+		return parsed
+	}
+}
+
+func firstPatchInstallFailureStatus(summary map[string]any) int {
+	for _, raw := range anySliceFromAny(summary["results"]) {
+		row, _ := raw.(map[string]any)
+		status := patchInstallIntFromAny(row["http_status"])
+		if status >= 400 {
+			return status
+		}
+	}
+	return http.StatusBadGateway
+}
+
+func firstPatchInstallFailureError(summary map[string]any) string {
+	for _, raw := range anySliceFromAny(summary["results"]) {
+		row, _ := raw.(map[string]any)
+		if err := cleanText(row["error"]); err != "" {
+			return err
+		}
+	}
+	return "patch_install_failed"
+}
+
+func anySliceFromAny(value any) []any {
+	switch typed := value.(type) {
+	case []any:
+		return typed
+	case []map[string]any:
+		out := make([]any, 0, len(typed))
+		for _, row := range typed {
+			out = append(out, row)
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -365,6 +641,122 @@ func (s *postgresOperatorStore) listDevicePatches(ctx context.Context, profile o
 		return nil, "", http.StatusInternalServerError, err
 	}
 	return result, nullString(device.Hostname), http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) listPatchInstallTargets(ctx context.Context, profile operatorProfile, request patchInstallLookupRequest) ([]patchInstallTarget, int, error) {
+	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if allowedSiteIDs != nil && len(allowedSiteIDs) == 0 {
+		return []patchInstallTarget{}, http.StatusOK, nil
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+
+	query := `
+		SELECT
+			dpi.id,
+			dpi.device_guid,
+			dpi.patch_key,
+			dpi.kb,
+			dpi.title,
+			dpi.state,
+			dpi.source,
+			dpi.classification,
+			dpi.severity,
+			dpi.installed_on,
+			dpi.published_at,
+			dpi.captured_at,
+			dpi.metadata_json,
+			d.guid,
+			d.hostname,
+			d.agent_id,
+			d.operating_system,
+			ds.site_id,
+			s.name
+		  FROM engine.device_patch_inventory AS dpi
+		  JOIN engine.devices AS d
+		    ON d.guid = dpi.device_guid
+	 LEFT JOIN engine.device_sites AS ds
+		    ON ds.device_hostname = d.hostname
+	 LEFT JOIN engine.sites AS s
+		    ON s.id = ds.site_id
+		 WHERE LOWER(TRIM(COALESCE(dpi.state, ''))) = 'pending'
+	`
+	args := []any{}
+	addArg := func(value any) string {
+		args = append(args, value)
+		return "$" + strconv.Itoa(len(args))
+	}
+	if request.Hostname != "" {
+		query += " AND LOWER(d.hostname) = LOWER(" + addArg(request.Hostname) + ")"
+	}
+	switch {
+	case request.InventoryID > 0:
+		query += " AND dpi.id = " + addArg(request.InventoryID)
+	case request.PatchKey != "":
+		query += " AND dpi.patch_key = " + addArg(request.PatchKey)
+	case request.KB != "":
+		query += " AND UPPER(COALESCE(dpi.kb, '')) = UPPER(" + addArg(request.KB) + ")"
+	case request.Title != "":
+		query += " AND LOWER(COALESCE(dpi.title, '')) = LOWER(" + addArg(request.Title) + ")"
+	default:
+		return []patchInstallTarget{}, http.StatusOK, nil
+	}
+	if request.SiteID > 0 {
+		query += " AND ds.site_id = " + addArg(request.SiteID)
+	}
+	if allowedSiteIDs != nil {
+		placeholders := make([]string, 0, len(allowedSiteIDs))
+		for _, siteID := range allowedSiteIDs {
+			placeholders = append(placeholders, addArg(siteID))
+		}
+		query += " AND ds.site_id IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	query += " ORDER BY LOWER(d.hostname), dpi.id"
+
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	targets := []patchInstallTarget{}
+	siteIDs := map[int64]struct{}{}
+	for rows.Next() {
+		row, err := scanPatchInventoryRow(rows)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if row.SiteID.Valid && row.SiteID.Int64 > 0 {
+			siteIDs[row.SiteID.Int64] = struct{}{}
+		}
+		targets = append(targets, patchInstallTarget{Row: row})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	routeCache := map[int64]*agentWorkerRoute{}
+	for siteID := range siteIDs {
+		route, err := fetchAgentWorkerRoute(ctx, conn, siteID)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		routeCache[siteID] = route
+	}
+	for idx := range targets {
+		if targets[idx].Row.SiteID.Valid {
+			targets[idx].Route = routeCache[targets[idx].Row.SiteID.Int64]
+		}
+	}
+	return targets, http.StatusOK, nil
 }
 
 type patchRowScanner interface {

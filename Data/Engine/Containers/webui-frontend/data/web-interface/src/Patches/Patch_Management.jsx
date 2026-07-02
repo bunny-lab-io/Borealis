@@ -6,6 +6,7 @@ import { AgGridReact } from "ag-grid-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { BOREALIS_BLUE, CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import {
@@ -139,11 +140,13 @@ export default function PatchManagement() {
   const gridRef = useRef(null);
   const patchRefreshTimersRef = useRef([]);
   const navigate = useNavigate();
+  const notifyOperator = useAppNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const [patchRows, setPatchRows] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [stateFilter, setStateFilter] = useState("pending");
   const [severityFilter, setSeverityFilter] = useState("");
+  const [installBusyKey, setInstallBusyKey] = useState("");
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
@@ -294,6 +297,50 @@ export default function PatchManagement() {
     [navigate]
   );
 
+  const handleInstallPatchFleet = useCallback(
+    async (row = {}) => {
+      const patchKey = text(row.patch_key);
+      const rowKey = text(row.id) || patchKey || text(row.kb || row.title);
+      if (!patchKey || text(row.state).toLowerCase() !== "pending" || installBusyKey) return;
+      const deviceCount = Number(row.device_count || 0) || 0;
+      const patchLabel = text(row.kb) || text(row.title) || "selected update";
+      if (typeof window !== "undefined") {
+        const confirmed = window.confirm(`Install ${patchLabel} on ${deviceCount.toLocaleString()} device(s) that report it pending?`);
+        if (!confirmed) return;
+      }
+      setInstallBusyKey(rowKey);
+      try {
+        const body = { patch_key: patchKey };
+        if (selectedSiteId) body.site_id = Number(selectedSiteId);
+        const response = await fetch("/api/patches/install", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+        requestPatchAuditRefresh({ burst: true });
+        await notifyOperator({
+          title: "Patch Install Requested",
+          message: `Borealis sent <b>${patchLabel}</b> to <b>${Number(payload?.accepted_count || 0).toLocaleString()}</b> device(s).`,
+          icon: "success",
+          variant: "success",
+        });
+      } catch (error) {
+        await notifyOperator({
+          title: "Patch Install Failed",
+          message: `Could not request <b>${patchLabel}</b> install: ${String(error?.message || error)}`,
+          icon: "error",
+          variant: "error",
+        });
+      } finally {
+        setInstallBusyKey("");
+      }
+    },
+    [installBusyKey, notifyOperator, requestPatchAuditRefresh, selectedSiteId]
+  );
+
   const columnDefs = useMemo(
     () => [
       {
@@ -316,6 +363,47 @@ export default function PatchManagement() {
         width: 135,
         minWidth: 135,
         valueFormatter: (params) => formatState(params.value),
+      },
+      {
+        field: "install",
+        headerName: "Install",
+        width: 122,
+        minWidth: 122,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          const patchKey = text(row.patch_key);
+          const rowKey = text(row.id) || patchKey || text(row.kb || row.title);
+          const disabled = text(row.state).toLowerCase() !== "pending" || !patchKey || Boolean(installBusyKey);
+          return (
+            <Button
+              size="small"
+              startIcon={<SystemUpdateAltRoundedIcon fontSize="small" />}
+              disabled={disabled}
+              onClick={() => handleInstallPatchFleet(row)}
+              sx={{
+                minWidth: 92,
+                borderRadius: 999,
+                px: 1.15,
+                py: 0.25,
+                color: "#031525",
+                textTransform: "none",
+                fontWeight: 700,
+                background: "linear-gradient(135deg, #7dd3fc 0%, #c084fc 100%)",
+                "&:hover": { background: "linear-gradient(135deg, #93ddff 0%, #d0a0ff 100%)" },
+                "&.Mui-disabled": {
+                  color: "rgba(148,163,184,0.65)",
+                  background: "rgba(15,23,42,0.55)",
+                  border: "1px solid rgba(148,163,184,0.18)",
+                },
+              }}
+            >
+              {installBusyKey === rowKey ? "Sending" : "Install"}
+            </Button>
+          );
+        },
       },
       {
         field: "severity",
@@ -371,7 +459,7 @@ export default function PatchManagement() {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
     ],
-    [openDevicesForPatch]
+    [handleInstallPatchFleet, installBusyKey, openDevicesForPatch]
   );
 
   return (

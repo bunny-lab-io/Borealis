@@ -64,6 +64,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `DELETE /api/device/activity/<hostname>` - clear activity history.
     - `GET /api/device/patches/<hostname>` - cached patch inventory for an in-scope device.
     - `POST /api/device/patches/<hostname>/refresh` - request fresh patch inventory over the device SYSTEM socket.
+    - `POST /api/device/patches/<hostname>/install` - request one pending Windows update install over the device SYSTEM socket.
     - `GET /api/device/registry/<hostname>/roots` - Registry Editor roots view.
     - `GET /api/device/registry/<hostname>/children?path=<registry-path>` - Registry Editor key view.
 
