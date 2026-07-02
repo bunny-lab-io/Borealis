@@ -82,7 +82,7 @@ Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wiregu
 Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info and Engine Status read status through `docker-proxy` or job-scheduler snapshots, and service actions are queued for `job-scheduler` execution.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info and Sites read status through `docker-proxy` or job-scheduler snapshots, and service actions are queued for `job-scheduler` execution.
 
 `docker-proxy`:
 ```text

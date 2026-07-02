@@ -43,5 +43,4 @@ Use this section for daily Borealis work: sites, inventory, approvals, filters, 
 - [User Management](user-management.md) - manage local and cached directory operators.
 - [Backup and Restore](backup-restore.md) - export or import encrypted Engine configuration backups.
 - [Server Info](server-info.md) - inspect Engine runtime health and service controls.
-- [Engine Status](engine-status.md) - read the live worker and service topology canvas.
 - [Engine Log Management](engine-log-management.md) - browse logs, set retention, and open raw log files.

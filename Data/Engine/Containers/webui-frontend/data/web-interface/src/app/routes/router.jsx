@@ -545,16 +545,7 @@ export function buildAppRoutes() {
                 },
                 {
                   path: "engine-status",
-                  handle: {
-                    title: "Engine Status",
-                    breadcrumb: "Engine Status",
-                    navKey: "engine-status",
-                    pageKey: "engine-status",
-                  },
-                  lazy: lazyNamed(
-                    () => import("../route-modules/adminRoutes.jsx"),
-                    "EngineStatusRoute"
-                  ),
+                  element: <Navigate to={APP_PATHS.server} replace />,
                 },
                 {
                   path: "backup-restore",
