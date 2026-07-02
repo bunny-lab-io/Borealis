@@ -1,6 +1,6 @@
 # Device Auditing
 
-Device Auditing is the normal starting point for understanding a managed endpoint. Use it to read current inventory, online state, role health, software, services, sessions, activity history, and device-specific operational tabs.
+Device Auditing is the normal starting point for understanding a managed endpoint. Use it to read current inventory, online state, role health, software, patches, services, sessions, activity history, and device-specific operational tabs.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Device_List.png" alt="Borealis Device Inventory page" loading="lazy">
@@ -21,6 +21,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Device Summary` shows high-level identity, OS, hardware, network, current user, uptime, and description.
 - Storage usage warnings ignore `CD-ROM` drives so optical media does not count as disk pressure.
 - `Installed Software` shows software inventory and software actions.
+- `Patch Management` shows pending and installed Windows patch inventory.
 - `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
 - `Activity History` shows quick job and automation output tied to the device.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
@@ -42,7 +43,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 
 - Device missing from normal inventory: verify it is approved and assigned to a site you can see.
 - Wrong site: update site assignment from Sites or the device assignment flow.
-- Software, service, or process data stale: use the tab refresh action or wait for the next agent poll.
+- Software, patch, service, or process data stale: use the tab refresh action or wait for the next agent poll.
 - Current-user automation unavailable: check session helper readiness in Agent Health and session inventory.
 
 ??? example "Detailed Codex Breakdown"
@@ -61,6 +62,8 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `POST /api/agent/details` - full inventory payload.
     - `GET /api/device/activity/<hostname>` - activity history.
     - `DELETE /api/device/activity/<hostname>` - clear activity history.
+    - `GET /api/device/patches/<hostname>` - cached patch inventory for an in-scope device.
+    - `POST /api/device/patches/<hostname>/refresh` - request fresh patch inventory over the device SYSTEM socket.
     - `GET /api/device/registry/<hostname>/roots` - Registry Editor roots view.
     - `GET /api/device/registry/<hostname>/children?path=<registry-path>` - Registry Editor key view.
 
@@ -77,8 +80,10 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Device List UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Device Summary UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Summary.jsx`
     - Registry Editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Remote_Registry_Editor.jsx`
+    - Patch Management tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Patch_Management.jsx`
     - Agent Health UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Agent_Health.jsx`
     - Agent audit role: `Data/Agent/internal/roles/device_audit/`
+    - Agent patch role: `Data/Agent/internal/roles/patch_management/`
 
     ### Runtime behavior
 
@@ -89,3 +94,4 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Heavy inventory lands through `/api/agent/details`; heartbeat carries lightweight metrics and metadata deltas.
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.
+    - Patch data is normalized into `device_patch_inventory`; non-patch details payloads preserve existing patch rows.

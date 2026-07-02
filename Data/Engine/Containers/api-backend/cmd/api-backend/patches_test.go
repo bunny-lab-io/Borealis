@@ -1,0 +1,205 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestNormalizeAgentPatchInventoryKBAndMetadata(t *testing.T) {
+	rows := normalizeAgentPatchInventory([]any{
+		map[string]any{
+			"title":          "2026-06 Cumulative Update for Windows 11 KB5063060",
+			"state":          "ready_to_install",
+			"source":         "windows_update_agent",
+			"classification": "Security Updates",
+			"severity":       "Critical",
+			"metadata": map[string]any{
+				"is_downloaded":   true,
+				"is_mandatory":    false,
+				"requires_reboot": true,
+				"update_id":       "UPDATE-GUID-1",
+				"revision_number": float64(201),
+			},
+		},
+	})
+
+	if len(rows) != 1 {
+		t.Fatalf("expected one normalized patch, got %d", len(rows))
+	}
+	row := rows[0]
+	if row["kb"] != "KB5063060" || row["state"] != "pending" || row["source"] != "wua_pending" {
+		t.Fatalf("unexpected normalized row %#v", row)
+	}
+	if row["patch_key"] != "kb:KB5063060:state:pending" {
+		t.Fatalf("unexpected patch key %q", row["patch_key"])
+	}
+	metadata, _ := row["metadata"].(map[string]any)
+	if metadata["is_downloaded"] != true || metadata["requires_reboot"] != true || metadata["update_id"] != "UPDATE-GUID-1" {
+		t.Fatalf("unexpected metadata %#v", metadata)
+	}
+}
+
+func TestNormalizeAgentPatchInventoryDedupesInstalledSources(t *testing.T) {
+	rows := normalizeAgentPatchInventory([]map[string]any{
+		{
+			"kb":           "KB5010001",
+			"title":        "Security Update for Windows",
+			"state":        "installed",
+			"source":       "wua_history",
+			"installed_on": int64(1700000100),
+		},
+		{
+			"hotfix_id":    "5010001",
+			"title":        "Security Update for Windows 11 KB5010001",
+			"state":        "succeeded",
+			"source":       "quickfixengineering",
+			"installed_on": int64(1700000200),
+		},
+	})
+
+	if len(rows) != 1 {
+		t.Fatalf("expected deduped installed row, got %#v", rows)
+	}
+	row := rows[0]
+	if row["kb"] != "KB5010001" || row["state"] != "installed" || row["source"] != "quick_fix_engineering" {
+		t.Fatalf("unexpected deduped row %#v", row)
+	}
+	if row["installed_on"] != int64(1700000100) {
+		t.Fatalf("expected first installed timestamp preserved, got %#v", row["installed_on"])
+	}
+}
+
+func TestPatchInventoryRowKeyFallsBackToUpdateIdentityAndTitleHash(t *testing.T) {
+	updateRows := normalizeAgentPatchInventory([]map[string]any{
+		{
+			"title":  "Servicing Stack Update",
+			"state":  "pending",
+			"source": "wua_pending",
+			"metadata": map[string]any{
+				"update_id":       "ABCDEF",
+				"revision_number": 42,
+			},
+		},
+	})
+	if len(updateRows) != 1 || updateRows[0]["patch_key"] != "update:abcdef:42:state:pending" {
+		t.Fatalf("unexpected update identity fallback %#v", updateRows)
+	}
+
+	titleRows := normalizeAgentPatchInventory([]map[string]any{
+		{"title": "Driver Update Without KB", "state": "pending", "source": "wua_pending"},
+	})
+	if len(titleRows) != 1 {
+		t.Fatalf("expected title fallback row, got %#v", titleRows)
+	}
+	key := cleanText(titleRows[0]["patch_key"])
+	if !strings.HasPrefix(key, "title:") || !strings.HasSuffix(key, ":state:pending") {
+		t.Fatalf("unexpected title fallback key %q", key)
+	}
+}
+
+func TestPatchInventorySignatureIgnoresCapturedAt(t *testing.T) {
+	left := []map[string]any{
+		{"kb": "KB5010001", "title": "Security Update", "state": "installed", "source": "wua_history", "captured_at": int64(1700000100)},
+	}
+	right := []map[string]any{
+		{"kb": "5010001", "title": "Security Update", "state": "success", "source": "history", "captured_at": int64(1700000999)},
+	}
+	if patchInventorySignature(left) != patchInventorySignature(right) {
+		t.Fatalf("expected signatures to ignore captured_at")
+	}
+}
+
+func TestPatchRefreshHandlerQueuesWorkerEvent(t *testing.T) {
+	var sawEvent bool
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("worker request body decode failed: %v", err)
+		}
+		if r.URL.Path != "/remote-ops/host-service/event" {
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+		sawEvent = true
+		if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "patch_inventory_refresh_request" {
+			t.Fatalf("unexpected event body %#v", body)
+		}
+		if body["allow_pending"] != true || body["pending_ttl_seconds"].(float64) != 180 {
+			t.Fatalf("unexpected pending flags %#v", body)
+		}
+		payload, _ := body["payload"].(map[string]any)
+		if payload["requested_by"] != "operator" || payload["reason"] != "operator_query_patch_inventory" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
+			t.Fatalf("unexpected refresh payload %#v", payload)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"emitted": true})
+	}))
+	defer worker.Close()
+
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerPatchRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/device/patches/LAB-OPERATOR-01/refresh", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !sawEvent {
+		t.Fatalf("expected worker event")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["status"] != "queued" || payload["hostname"] != "LAB-OPERATOR-01" || payload["agent_id"] != "LAB-OPERATOR-01_SYSTEM" {
+		t.Fatalf("unexpected refresh response %#v", payload)
+	}
+}
+
+func TestEngineBackupIncludesPatchInventory(t *testing.T) {
+	specs := engineBackupTableSpecs()
+	found := false
+	for _, spec := range specs {
+		if spec.Name != "engine.device_patch_inventory" {
+			continue
+		}
+		found = true
+		if !spec.Export || !spec.Restore || !spec.ResetSerials {
+			t.Fatalf("unexpected patch inventory backup spec %#v", spec)
+		}
+	}
+	if !found {
+		t.Fatalf("missing patch inventory backup spec")
+	}
+
+	payload := engineBackupPayload{
+		Tables: map[string]engineBackupTable{
+			"engine.device_patch_inventory": {
+				Rows: []map[string]any{{"patch_key": "kb:KB5010001:state:installed"}},
+			},
+		},
+	}
+	analysis := analyzeEngineBackupPayload(payload)
+	summaryRows, _ := analysis["summary"].([]engineBackupAnalysisRow)
+	for _, row := range summaryRows {
+		if row.ID == "patch_inventory" && row.Count == 1 {
+			return
+		}
+	}
+	t.Fatalf("missing patch inventory summary row %#v", analysis["summary"])
+}

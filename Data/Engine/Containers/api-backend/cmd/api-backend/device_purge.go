@@ -406,6 +406,12 @@ func purgeDeviceRows(ctx context.Context, tx *sql.Tx, record devicePurgeRecord) 
 	if err != nil {
 		return nil, err
 	}
+	deleted["device_patch_inventory"], err = purgeDeleteWhere(ctx, tx, "engine.device_patch_inventory", []devicePurgeCondition{
+		{Clause: "UPPER(device_guid) = UPPER(?)", Args: nonEmptyArgs(record.GUID)},
+	})
+	if err != nil {
+		return nil, err
+	}
 	deleted["device_sites"], err = purgeDeleteWhere(ctx, tx, "engine.device_sites", []devicePurgeCondition{
 		{Clause: "LOWER(device_hostname) = LOWER(?)", Args: nonEmptyArgs(record.Hostname)},
 	})

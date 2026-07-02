@@ -698,6 +698,26 @@ finally:
     - Notes:
     - Raw software blobs still live on `devices.software` for UI detail display, but matching uses this normalized table first.
 
+    #### `device_patch_inventory`
+    - Status: Active.
+    - Purpose: Normalized Windows patch inventory for fleet audit and Device Summary patch views.
+    - Columns: `id`, `device_guid`, `patch_key`, `kb`, `title`, `state`, `source`, `classification`, `severity`, `installed_on`, `published_at`, `captured_at`, `metadata_json`.
+    - Constraints and indexes:
+    - `id` autoincrement primary key.
+    - `idx_device_patch_inventory_guid` on `device_guid`.
+    - `idx_device_patch_inventory_patch_key` on `patch_key`.
+    - `idx_device_patch_inventory_kb` on `kb`.
+    - `idx_device_patch_inventory_state` on `state`.
+    - `idx_device_patch_inventory_guid_state` on `(device_guid, state)`.
+    - Used by:
+    - `/api/agent/details` ingestion refresh when `details.patches` is present.
+    - `GET /api/patches/audit`.
+    - `GET /api/device/patches/<hostname>`.
+    - Notes:
+    - Non-patch `/api/agent/details` payloads preserve existing patch rows.
+    - Pending rows use `source=wua_pending`; installed rows use `source=wua_history` or `source=quick_fix_engineering`.
+    - Pending metadata can include `is_downloaded`, `is_mandatory`, `requires_reboot`, `update_id`, and `revision_number`.
+
     ### Scheduling and Automation
     #### `scheduled_jobs`
     - Status: Active.

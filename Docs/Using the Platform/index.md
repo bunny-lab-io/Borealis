@@ -25,6 +25,7 @@ Use this section for daily Borealis work: sites, inventory, approvals, filters, 
 - [Process Management](process-management.md) - inspect live processes and end tasks.
 - [Service Management](service-management.md) - inspect services and send start, stop, or restart actions.
 - [Software Management](software-management.md) - audit installed software, refresh inventory, and run supported uninstall actions.
+- [Patch Management](patch-management.md) - audit pending and installed Windows patch inventory.
 
 ## Automation
 

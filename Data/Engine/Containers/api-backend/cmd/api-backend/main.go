@@ -104,6 +104,7 @@ func main() {
 	registerMetadataRoutes(mux, auth)
 	registerDeviceRoutes(mux, auth, devicePurgeRuntime{vpn: vpnRuntime, vnc: vncRuntime}, operatorRealtime)
 	registerSoftwareRoutes(mux, auth, fallback)
+	registerPatchRoutes(mux, auth, fallback)
 	registerAgentMaintenanceRoutes(mux, auth)
 	registerProcessRoutes(mux, auth, fallback)
 	registerRemoteFileRoutes(mux, auth, fallback)

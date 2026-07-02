@@ -15,6 +15,7 @@ import (
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/current_user"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/device_audit"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/file_management"
+	patchmanagement "github.com/bunny-lab-io/borealis/go-agent/internal/roles/patch_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/process_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/registry_management"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/roles/remote_shell"
@@ -49,6 +50,7 @@ type Agent struct {
 	dispatcher    *currentuser.Dispatcher
 	auditor       *deviceaudit.Auditor
 	files         *filemanagement.Manager
+	patches       *patchmanagement.Manager
 	processes     *processmanagement.Manager
 	registry      *registrymanagement.Manager
 	remoteShell   *remoteshell.Manager
@@ -114,6 +116,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	dispatcher := currentuser.NewDispatcher()
 	auditor := deviceaudit.NewAuditor()
 	fileManager := filemanagement.New(authClient, hostname)
+	patchManager := patchmanagement.New(authClient, hostname, options.ServiceMode)
 	processManager := processmanagement.New(hostname)
 	registryManager := registrymanagement.New(hostname, options.ServiceMode)
 	remoteShellManager := remoteshell.New(hostname, options.ServiceMode, configPath)
@@ -132,6 +135,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		dispatcher:  dispatcher,
 		auditor:     auditor,
 		files:       fileManager,
+		patches:     patchManager,
 		processes:   processManager,
 		registry:    registryManager,
 		remoteShell: remoteShellManager,
@@ -194,6 +198,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	if a.services != nil {
 		a.services.Start(ctx)
+	}
+	if a.patches != nil {
+		a.patches.Start(ctx)
 	}
 	if a.software != nil {
 		a.software.Start(ctx)
@@ -336,6 +343,9 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.services != nil {
 		socket.On("service_control_action", a.services.HandleControlAction)
 	}
+	if a.patches != nil {
+		socket.On("patch_inventory_refresh_request", a.patches.HandleRefreshRequest)
+	}
 	if a.software != nil {
 		socket.On("software_inventory_refresh_request", a.software.HandleRefreshRequest)
 	}
@@ -365,6 +375,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 				"runtime":             "go",
 				"system_scripts":      true,
 				"file_management":     true,
+				"patch_management":    true,
 				"process_management":  true,
 				"registry_management": true,
 				"remote_shell":        true,
@@ -508,6 +519,18 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if a.services != nil {
 		serviceHealth = a.services.Health()
 	}
+	patchHealth := patchmanagement.RoleHealth{
+		Status:     "unsupported",
+		StatusCode: "unsupported",
+		Detail:     "Patch Management role is unavailable.",
+		Details: map[string]any{
+			"running_status": "Unavailable",
+			"runtime":        "go",
+		},
+	}
+	if a.patches != nil {
+		patchHealth = a.patches.Health()
+	}
 	softwareHealth := softwaremanagement.RoleHealth{
 		Status:     "unsupported",
 		StatusCode: "unsupported",
@@ -581,6 +604,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		roleSnapshotFromHealth("system:registry_management", "registry_management", "Registry Management", "system", registryHealth.Status, registryHealth.StatusCode, registryHealth.Detail, registryHealth.Details, now),
 		roleSnapshotFromHealth("system:remote_shell", "remote_shell", "Remote Shell", "system", remoteShellHealth.Status, remoteShellHealth.StatusCode, remoteShellHealth.Detail, remoteShellHealth.Details, now),
 		roleSnapshotFromHealth("system:service_management", "service_management", "Service Management", "system", serviceHealth.Status, serviceHealth.StatusCode, serviceHealth.Detail, serviceHealth.Details, now),
+		roleSnapshotFromHealth("system:patch_management", "patch_management", "Patch Management", "system", patchHealth.Status, patchHealth.StatusCode, patchHealth.Detail, patchHealth.Details, now),
 		roleSnapshotFromHealth("system:software_management", "software_management", "Software Management", "system", softwareHealth.Status, softwareHealth.StatusCode, softwareHealth.Detail, softwareHealth.Details, now),
 		roleSnapshotFromHealth("system:vnc", "vnc", "UltraVNC Service", "system", vncHealth.Status, vncHealth.StatusCode, vncHealth.Detail, vncHealth.Details, now),
 		roleSnapshotFromHealth("system:wireguard_tunnel", "wireguard_tunnel", "WireGuard VPN", "system", wireGuardHealth.Status, wireGuardHealth.StatusCode, wireGuardHealth.Detail, wireGuardHealth.Details, now),

@@ -23,6 +23,7 @@ import StorageRoundedIcon from "@mui/icons-material/StorageRounded";
 import MemoryRoundedIcon from "@mui/icons-material/MemoryRounded";
 import LanRoundedIcon from "@mui/icons-material/LanRounded";
 import AppsRoundedIcon from "@mui/icons-material/AppsRounded";
+import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import SettingsRoundedIcon from "@mui/icons-material/SettingsRounded";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import ListAltRoundedIcon from "@mui/icons-material/ListAltRounded";
@@ -43,6 +44,7 @@ import { ClearDeviceActivityDialog } from "../../Dialogs.jsx";
 import { AgGridReact } from "ag-grid-react";
 import ActivityHistoryTab from "./Activity_History.jsx";
 import InstalledSoftwareTab from "./Installed_Software.jsx";
+import PatchManagementTab from "./Patch_Management.jsx";
 import DeviceWatchdogsTab from "./Device_Watchdogs.jsx";
 import RemoteShellTab from "./Remote_Shell.jsx";
 import RemoteFileManagementTab from "./Remote_File_Management.jsx";
@@ -1890,7 +1892,12 @@ export default function DeviceSummary() {
       const payloadHost = String(payload?.hostname || "").trim().toLowerCase();
       const payloadChange = String(payload?.change || "").trim().toLowerCase();
       if (!payloadHost || payloadHost !== expectedHost) return;
-      if (payloadChange && payloadChange !== "software_updated" && payloadChange !== "updated") return;
+      if (
+        payloadChange &&
+        payloadChange !== "software_updated" &&
+        payloadChange !== "patches_updated" &&
+        payloadChange !== "updated"
+      ) return;
       if (reloadTimer) {
         window.clearTimeout(reloadTimer);
       }
@@ -2994,12 +3001,16 @@ export default function DeviceSummary() {
   };
 
   const renderSoftware = () => (
-      <InstalledSoftwareTab
+    <InstalledSoftwareTab
       softwareRows={softwareRows}
       hostname={activityHostname}
       operatingSystem={summary.operating_system || meta.operatingSystem || ""}
       onSoftwareDataRefresh={requestSoftwareDataRefresh}
     />
+  );
+
+  const renderPatches = () => (
+    <PatchManagementTab hostname={activityHostname} />
   );
 
   const renderServicesTab = () => (
@@ -4183,6 +4194,12 @@ export default function DeviceSummary() {
               active={activeView("inventory", "software")}
               onClick={() => setActiveWorkspace("inventory", "software")}
             />
+            <SidebarNavRow
+              icon={<SystemUpdateAltRoundedIcon fontSize="small" />}
+              label="Patch Management"
+              active={activeView("inventory", "patches")}
+              onClick={() => setActiveWorkspace("inventory", "patches")}
+            />
           </SidebarSection>
 
           <SidebarSection sectionId="backend" title="Backend Tools">
@@ -4325,7 +4342,11 @@ export default function DeviceSummary() {
     return (
       <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0, minWidth: 0 }}>
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-          {view === "software" ? renderSoftware() : renderDeviceSummaryTab()}
+          {view === "patches"
+            ? renderPatches()
+            : view === "software"
+              ? renderSoftware()
+              : renderDeviceSummaryTab()}
         </Box>
       </Box>
     );

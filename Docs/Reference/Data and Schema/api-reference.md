@@ -96,6 +96,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - persist a hotloaded global uninstall blocklist rule for the selected software row.
     - `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded global uninstall blocklist rules for the selected software row.
     - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
+    - `GET /api/patches/audit` (Token Authenticated) - list normalized patch inventory for all devices visible to the operator.
+    - `GET /api/device/patches/<hostname>` (Token Authenticated) - list normalized patch inventory for one in-scope device.
+    - `POST /api/device/patches/<hostname>/refresh` (Token Authenticated) - queue an immediate patch inventory refresh over the device SYSTEM socket.
     - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
     - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the Device Summary `File Management` roots view for an in-scope device.
     - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.

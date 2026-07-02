@@ -52,6 +52,7 @@ type agentDetailsUpdateResult struct {
 	Hostname          string
 	ServicesChanged   bool
 	SoftwareChanged   bool
+	PatchesChanged    bool
 	RememberDuplicate bool
 }
 
@@ -248,6 +249,11 @@ func agentDetailsHandler(auth *authService, signer *agentJWTSigner, dpop *dpopVe
 			if result.SoftwareChanged {
 				if err := broadcaster.broadcastDeviceEvent(r.Context(), "device_inventory_changed", map[string]any{"hostname": result.Hostname, "change": "software_updated"}); err != nil {
 					logDebug("agents", "device_inventory_changed broadcast failed: "+err.Error())
+				}
+			}
+			if result.PatchesChanged {
+				if err := broadcaster.broadcastDeviceEvent(r.Context(), "device_inventory_changed", map[string]any{"hostname": result.Hostname, "change": "patches_updated"}); err != nil {
+					logDebug("agents", "device_inventory_changed patch broadcast failed: "+err.Error())
 				}
 			}
 		}

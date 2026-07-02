@@ -25,6 +25,7 @@ const maxSoftwareIconBytes = 512 * 1024
 var (
 	windowsStoreGUIDNamePattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	softwareIconHashPattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	patchKBPattern              = regexp.MustCompile(`(?i)\bKB\d{4,9}\b`)
 	allowedSoftwareIconMIMEs    = map[string]bool{
 		"image/png":     true,
 		"image/jpeg":    true,
@@ -51,6 +52,13 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	summary := ensureMap(details, "summary")
 	if rawSoftware, exists := details["software"]; exists {
 		details["software"] = normalizeAgentSoftwareInventory(rawSoftware)
+	}
+	patchesPresent := false
+	normalizedPatches := []map[string]any{}
+	if rawPatches, exists := details["patches"]; exists {
+		patchesPresent = true
+		normalizedPatches = normalizeAgentPatchInventory(rawPatches)
+		details["patches"] = normalizedPatches
 	}
 	var incomingServices map[string]any
 	if rawServices, exists := details["services"]; exists {
@@ -202,7 +210,7 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 	servicesChanged := canonicalJSON(mapSliceToAny(existingServices)) != canonicalJSON(columns["services_payload"])
 	softwareChanged := canonicalJSON(normalizeAgentSoftwareInventory(parseJSON(existing.Row.Software))) != canonicalJSON(normalizeAgentSoftwareInventory(merged["software"]))
 
-	if err := s.writeAgentDetails(ctx, agentDetailsWriteInput{
+	patchesChanged, err := s.writeAgentDetails(ctx, agentDetailsWriteInput{
 		Hostname:        hostname,
 		Description:     nullString(existing.Row.Description),
 		CreatedAt:       createdAt,
@@ -212,8 +220,11 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 		Fingerprint:     deviceCtx.Fingerprint,
 		Columns:         columns,
 		Software:        normalizeAgentSoftwareInventory(merged["software"]),
+		PatchesPresent:  patchesPresent,
+		Patches:         normalizedPatches,
 		IconAssets:      iconAssets,
-	}); err != nil {
+	})
+	if err != nil {
 		return agentDetailsUpdateResult{}, http.StatusInternalServerError, err
 	}
 
@@ -225,6 +236,7 @@ func (s *postgresOperatorStore) updateAgentDetails(ctx context.Context, deviceCt
 		Hostname:          hostname,
 		ServicesChanged:   servicesChanged,
 		SoftwareChanged:   softwareChanged,
+		PatchesChanged:    patchesChanged,
 		RememberDuplicate: true,
 	}, http.StatusOK, nil
 }
@@ -239,6 +251,8 @@ type agentDetailsWriteInput struct {
 	Fingerprint     string
 	Columns         map[string]any
 	Software        []map[string]any
+	PatchesPresent  bool
+	Patches         []map[string]any
 	IconAssets      []softwareIconAsset
 }
 
@@ -299,15 +313,15 @@ func queryAgentDetailsExisting(ctx context.Context, conn *sql.Conn, predicate st
 	return item, true, nil
 }
 
-func (s *postgresOperatorStore) writeAgentDetails(ctx context.Context, input agentDetailsWriteInput) error {
+func (s *postgresOperatorStore) writeAgentDetails(ctx context.Context, input agentDetailsWriteInput) (bool, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	committed := false
 	defer func() {
@@ -328,38 +342,45 @@ func (s *postgresOperatorStore) writeAgentDetails(ctx context.Context, input age
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && string(pqErr.Code) == "23505" {
-			return errors.New("device_update_conflict")
+			return false, errors.New("device_update_conflict")
 		}
-		return err
+		return false, err
 	}
 	if input.GUID != "" {
 		if err := syncAgentDetailsSoftwareInventory(ctx, tx, input.GUID, input.Software); err != nil {
-			return err
+			return false, err
+		}
+	}
+	patchesChanged := false
+	if input.GUID != "" && input.PatchesPresent {
+		patchesChanged, err = syncAgentDetailsPatchInventory(ctx, tx, input.GUID, input.Patches)
+		if err != nil {
+			return false, err
 		}
 	}
 	if len(input.IconAssets) > 0 {
 		if err := upsertSoftwareIconAssetsTx(ctx, tx, input.IconAssets); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if input.GUID != "" && input.Fingerprint != "" {
 		nowISO := time.Now().UTC().Format(time.RFC3339)
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.devices SET ssl_key_fingerprint=$1, key_added_at=COALESCE(key_added_at, $2) WHERE UPPER(guid)=UPPER($3)`, strings.ToLower(input.Fingerprint), nowISO, input.GUID); err != nil {
-			return err
+			return false, err
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO engine.device_keys(id, guid, ssl_key_fingerprint, added_at)
 			VALUES($1,$2,$3,$4)
 			ON CONFLICT(guid, ssl_key_fingerprint) DO NOTHING
 		`, randomHexID(), input.GUID, strings.ToLower(input.Fingerprint), nowISO); err != nil {
-			return err
+			return false, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return false, err
 	}
 	committed = true
-	return nil
+	return patchesChanged, nil
 }
 
 func agentDetailsUpsertSQL() string {
@@ -482,6 +503,235 @@ func normalizeAgentSoftwareInventory(raw any) []map[string]any {
 		return left < right
 	})
 	return out
+}
+
+func normalizeAgentPatchInventory(raw any) []map[string]any {
+	entries := anySlice(raw)
+	byKey := map[string]map[string]any{}
+	for _, item := range entries {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		row := normalizeAgentPatchRow(entry)
+		if row == nil {
+			continue
+		}
+		key := cleanText(row["patch_key"])
+		if existing := byKey[key]; existing != nil {
+			byKey[key] = mergeAgentPatchRows(existing, row)
+			continue
+		}
+		byKey[key] = row
+	}
+	out := make([]map[string]any, 0, len(byKey))
+	for _, row := range byKey {
+		out = append(out, row)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left := strings.ToLower(cleanText(out[i]["state"])) + "|" + strings.ToLower(cleanText(out[i]["kb"])) + "|" + strings.ToLower(cleanText(out[i]["title"]))
+		right := strings.ToLower(cleanText(out[j]["state"])) + "|" + strings.ToLower(cleanText(out[j]["kb"])) + "|" + strings.ToLower(cleanText(out[j]["title"]))
+		return left < right
+	})
+	return out
+}
+
+func normalizeAgentPatchRow(entry map[string]any) map[string]any {
+	title := cleanText(entry["title"])
+	kb := normalizePatchKB(firstNonEmpty(entry["kb"], entry["hotfix_id"], entry["kb_article_id"]))
+	if kb == "" {
+		kb = normalizePatchKB(title)
+	}
+	if title == "" && kb == "" {
+		return nil
+	}
+	state := normalizePatchState(entry["state"])
+	if state == "" {
+		state = "pending"
+	}
+	source := normalizePatchSource(entry["source"])
+	if source == "" {
+		source = "wua_pending"
+	}
+	metadata := patchMetadata(entry["metadata"])
+	row := map[string]any{
+		"kb":             kb,
+		"title":          title,
+		"state":          state,
+		"source":         source,
+		"classification": cleanText(entry["classification"]),
+		"severity":       cleanText(entry["severity"]),
+		"installed_on":   coerceInt64(firstNonEmpty(entry["installed_on"], entry["installed_at"])),
+		"published_at":   coerceInt64(firstNonEmpty(entry["published_at"], entry["last_deployment_change_at"])),
+		"captured_at":    coerceInt64(entry["captured_at"]),
+		"metadata":       metadata,
+	}
+	if coerceInt64(row["captured_at"]) <= 0 {
+		row["captured_at"] = time.Now().Unix()
+	}
+	row["patch_key"] = patchInventoryRowKey(row)
+	if cleanText(row["patch_key"]) == "" {
+		return nil
+	}
+	return row
+}
+
+func mergeAgentPatchRows(left map[string]any, right map[string]any) map[string]any {
+	out := copyMap(left)
+	if cleanText(out["kb"]) == "" {
+		out["kb"] = cleanText(right["kb"])
+	}
+	if len(cleanText(right["title"])) > len(cleanText(out["title"])) {
+		out["title"] = cleanText(right["title"])
+	}
+	for _, key := range []string{"classification", "severity"} {
+		if cleanText(out[key]) == "" && cleanText(right[key]) != "" {
+			out[key] = cleanText(right[key])
+		}
+	}
+	if coerceInt64(out["installed_on"]) <= 0 && coerceInt64(right["installed_on"]) > 0 {
+		out["installed_on"] = coerceInt64(right["installed_on"])
+	}
+	if coerceInt64(out["published_at"]) <= 0 && coerceInt64(right["published_at"]) > 0 {
+		out["published_at"] = coerceInt64(right["published_at"])
+	}
+	if coerceInt64(right["captured_at"]) > coerceInt64(out["captured_at"]) {
+		out["captured_at"] = coerceInt64(right["captured_at"])
+	}
+	if cleanText(out["source"]) == "wua_history" && cleanText(right["source"]) == "quick_fix_engineering" {
+		out["source"] = "quick_fix_engineering"
+	}
+	leftMetadata := agentDetailsMapFromAny(out["metadata"])
+	for key, value := range agentDetailsMapFromAny(right["metadata"]) {
+		if _, exists := leftMetadata[key]; !exists {
+			leftMetadata[key] = value
+		}
+	}
+	if len(leftMetadata) > 0 {
+		out["metadata"] = leftMetadata
+	}
+	return out
+}
+
+func patchMetadata(value any) map[string]any {
+	raw := agentDetailsMapFromAny(value)
+	out := map[string]any{}
+	for key, rawValue := range raw {
+		cleanKey := cleanText(key)
+		if cleanKey == "" || rawValue == nil {
+			continue
+		}
+		switch typed := rawValue.(type) {
+		case string:
+			if cleanText(typed) != "" {
+				out[cleanKey] = cleanText(typed)
+			}
+		case bool:
+			out[cleanKey] = typed
+		case float64:
+			if typed != 0 {
+				out[cleanKey] = typed
+			}
+		default:
+			if cleanText(typed) != "" {
+				out[cleanKey] = typed
+			}
+		}
+	}
+	return out
+}
+
+func patchInventoryRowKey(row map[string]any) string {
+	state := normalizePatchState(row["state"])
+	if state == "" {
+		state = "pending"
+	}
+	if kb := normalizePatchKB(row["kb"]); kb != "" {
+		return "kb:" + strings.ToUpper(kb) + ":state:" + state
+	}
+	metadata := agentDetailsMapFromAny(row["metadata"])
+	updateID := cleanText(firstNonEmpty(metadata["update_id"], metadata["updateID"]))
+	revision := cleanText(firstNonEmpty(metadata["revision_number"], metadata["revision"]))
+	if updateID != "" {
+		if revision != "" {
+			return "update:" + strings.ToLower(updateID) + ":" + revision + ":state:" + state
+		}
+		return "update:" + strings.ToLower(updateID) + ":state:" + state
+	}
+	title := strings.ToLower(cleanText(row["title"]))
+	if title == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(title))
+	return fmt.Sprintf("title:%x:state:%s", sum[:], state)
+}
+
+func normalizePatchKB(value any) string {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			if kb := normalizePatchKBText(cleanText(item)); kb != "" {
+				return kb
+			}
+		}
+	case []string:
+		for _, item := range typed {
+			if kb := normalizePatchKBText(cleanText(item)); kb != "" {
+				return kb
+			}
+		}
+	}
+	return normalizePatchKBText(cleanText(value))
+}
+
+func normalizePatchKBText(value string) string {
+	text := strings.ToUpper(strings.TrimSpace(value))
+	if text == "" {
+		return ""
+	}
+	if matches := patchKBPattern.FindString(text); matches != "" {
+		return strings.ToUpper(matches)
+	}
+	digits := strings.TrimLeft(text, "KBkb")
+	if digits != "" {
+		allDigits := true
+		for _, ch := range digits {
+			if ch < '0' || ch > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits && len(digits) >= 4 && len(digits) <= 9 {
+			return "KB" + digits
+		}
+	}
+	return ""
+}
+
+func normalizePatchState(value any) string {
+	text := strings.ToLower(cleanText(value))
+	switch text {
+	case "pending", "available", "ready", "ready_to_install", "not_installed":
+		return "pending"
+	case "installed", "succeeded", "success":
+		return "installed"
+	default:
+		return text
+	}
+}
+
+func normalizePatchSource(value any) string {
+	text := strings.ToLower(cleanText(value))
+	switch text {
+	case "wua", "windows_update", "windows_update_agent", "pending", "wua_pending":
+		return "wua_pending"
+	case "history", "wua_history", "windows_update_history":
+		return "wua_history"
+	case "qfe", "hotfix", "get_hotfix", "quickfixengineering", "quick_fix_engineering":
+		return "quick_fix_engineering"
+	default:
+		return text
+	}
 }
 
 func normalizeDeviceServicesAny(raw any, defaultCapturedAt int64) map[string]any {
@@ -735,6 +985,132 @@ func syncAgentDetailsSoftwareInventory(ctx context.Context, tx *sql.Tx, guid str
 		}
 	}
 	return nil
+}
+
+func syncAgentDetailsPatchInventory(ctx context.Context, tx *sql.Tx, guid string, rows []map[string]any) (bool, error) {
+	guid = normalizeCanonicalGUID(guid)
+	if guid == "" {
+		return false, nil
+	}
+	existing, err := loadPatchInventoryRowsTx(ctx, tx, guid)
+	if err != nil {
+		return false, err
+	}
+	changed := patchInventorySignature(existing) != patchInventorySignature(rows)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM engine.device_patch_inventory WHERE device_guid=$1`, guid); err != nil {
+		return false, err
+	}
+	now := time.Now().Unix()
+	for _, row := range normalizeAgentPatchInventory(rows) {
+		patchKey := cleanText(row["patch_key"])
+		title := cleanText(row["title"])
+		if patchKey == "" || (title == "" && cleanText(row["kb"]) == "") {
+			continue
+		}
+		metadata := mustJSONString(agentDetailsMapFromAny(row["metadata"]))
+		capturedAt := coerceInt64(row["captured_at"])
+		if capturedAt <= 0 {
+			capturedAt = now
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO engine.device_patch_inventory(
+				device_guid, patch_key, kb, title, state, source, classification, severity,
+				installed_on, published_at, captured_at, metadata_json
+			)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		`,
+			guid,
+			patchKey,
+			cleanText(row["kb"]),
+			title,
+			normalizePatchState(row["state"]),
+			normalizePatchSource(row["source"]),
+			cleanText(row["classification"]),
+			cleanText(row["severity"]),
+			nullableInt64Value(coerceInt64(row["installed_on"])),
+			nullableInt64Value(coerceInt64(row["published_at"])),
+			capturedAt,
+			metadata,
+		); err != nil {
+			return false, err
+		}
+	}
+	return changed, nil
+}
+
+func loadPatchInventoryRowsTx(ctx context.Context, tx *sql.Tx, guid string) ([]map[string]any, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT patch_key, kb, title, state, source, classification, severity, installed_on, published_at, metadata_json
+		  FROM engine.device_patch_inventory
+		 WHERE UPPER(device_guid)=UPPER($1)
+	  ORDER BY patch_key, id
+	`, guid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []map[string]any{}
+	for rows.Next() {
+		var item struct {
+			PatchKey       sql.NullString
+			KB             sql.NullString
+			Title          sql.NullString
+			State          sql.NullString
+			Source         sql.NullString
+			Classification sql.NullString
+			Severity       sql.NullString
+			InstalledOn    sql.NullInt64
+			PublishedAt    sql.NullInt64
+			MetadataJSON   sql.NullString
+		}
+		if err := rows.Scan(&item.PatchKey, &item.KB, &item.Title, &item.State, &item.Source, &item.Classification, &item.Severity, &item.InstalledOn, &item.PublishedAt, &item.MetadataJSON); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]any{
+			"patch_key":      cleanText(nullString(item.PatchKey)),
+			"kb":             cleanText(nullString(item.KB)),
+			"title":          cleanText(nullString(item.Title)),
+			"state":          normalizePatchState(nullString(item.State)),
+			"source":         normalizePatchSource(nullString(item.Source)),
+			"classification": cleanText(nullString(item.Classification)),
+			"severity":       cleanText(nullString(item.Severity)),
+			"installed_on":   nullableInt(item.InstalledOn),
+			"published_at":   nullableInt(item.PublishedAt),
+			"metadata":       agentDetailsMapFromAny(parseJSON(item.MetadataJSON)),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func patchInventorySignature(rows []map[string]any) string {
+	normalized := make([]map[string]any, 0, len(rows))
+	for _, row := range normalizeAgentPatchInventory(rows) {
+		metadata := agentDetailsMapFromAny(row["metadata"])
+		normalized = append(normalized, map[string]any{
+			"patch_key":      cleanText(row["patch_key"]),
+			"kb":             cleanText(row["kb"]),
+			"title":          cleanText(row["title"]),
+			"state":          normalizePatchState(row["state"]),
+			"source":         normalizePatchSource(row["source"]),
+			"classification": cleanText(row["classification"]),
+			"severity":       cleanText(row["severity"]),
+			"installed_on":   coerceInt64(row["installed_on"]),
+			"published_at":   coerceInt64(row["published_at"]),
+			"metadata":       metadata,
+		})
+	}
+	sort.SliceStable(normalized, func(i, j int) bool {
+		return cleanText(normalized[i]["patch_key"]) < cleanText(normalized[j]["patch_key"])
+	})
+	data, err := json.Marshal(normalized)
+	if err != nil {
+		data = []byte(fmt.Sprint(normalized))
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func upsertSoftwareIconAssetsTx(ctx context.Context, tx *sql.Tx, assets []softwareIconAsset) error {
