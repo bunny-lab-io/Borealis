@@ -16,6 +16,7 @@ const (
 	schedulerKindOnboardingRun        = "onboarding_run"
 	schedulerKindScheduledRun         = "scheduled_run"
 	schedulerKindScheduledWorkflowRun = "scheduled_workflow_run"
+	schedulerKindPatchInstallRun      = "patch_install_run"
 	schedulerKindAgentMaintenanceRun  = "agent_maintenance_run"
 )
 
@@ -166,6 +167,30 @@ func schedulerWorkItemFromPayload(kind string, body map[string]any) (schedulerWo
 			RunID:     runID,
 			Payload:   payload,
 			Priority:  40,
+		}, false, nil
+	case schedulerKindPatchInstallRun:
+		runID := schedulerRequiredID(body["run_id"])
+		jobID := schedulerRequiredID(body["job_id"])
+		if !jobID.Valid || !runID.Valid {
+			return schedulerWorkItemInsert{}, false, errors.New("job_id_and_run_id_required")
+		}
+		payload := map[string]any{
+			"job_id":          jobID.Int64,
+			"run_id":          runID.Int64,
+			"scheduled_ts":    coerceInt64(body["scheduled_ts"]),
+			"hostname":        cleanText(body["hostname"]),
+			"patch_component": schedulerAnyMap(body["patch_component"]),
+			"task_link":       schedulerAnyMap(body["task_link"]),
+		}
+		return schedulerWorkItemInsert{
+			DedupeKey: fmt.Sprintf("patch-install:%d", runID.Int64),
+			Kind:      schedulerKindPatchInstallRun,
+			SiteID:    schedulerOptionalInt64(body["site_id"]),
+			Lane:      schedulerLaneScheduledJob,
+			JobID:     jobID,
+			RunID:     runID,
+			Payload:   payload,
+			Priority:  46,
 		}, false, nil
 	default:
 		return schedulerWorkItemInsert{}, false, fmt.Errorf("unsupported_work_item_kind:%s", kind)

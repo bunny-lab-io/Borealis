@@ -58,10 +58,8 @@ type patchInstallTarget struct {
 
 func registerPatchRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/patches/audit", patchAuditHandler(auth))
-	mux.HandleFunc("POST /api/patches/install", fleetPatchInstallHandler(auth))
 	mux.HandleFunc("GET /api/device/patches/{hostname}", devicePatchesHandler(auth))
 	mux.HandleFunc("POST /api/device/patches/{hostname}/refresh", patchRefreshHandler(auth))
-	mux.HandleFunc("POST /api/device/patches/{hostname}/install", devicePatchInstallHandler(auth))
 	mux.HandleFunc("/api/patches/", patchSubtreeHandler(fallback))
 }
 
@@ -469,6 +467,118 @@ func anySliceFromAny(value any) []any {
 	}
 }
 
+func loadActivePatchInstallJobs(ctx context.Context, conn *sql.Conn, profile operatorProfile) (map[string]map[string]any, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT j.id, j.name, j.schedule_type, j.start_ts, j.components_json,
+		       COALESCE(latest.scheduled_ts, 0), COALESCE(latest.status, '')
+		  FROM engine.scheduled_jobs AS j
+	 LEFT JOIN LATERAL (
+			SELECT r.scheduled_ts, r.status
+			  FROM engine.scheduled_job_runs AS r
+			 WHERE r.job_id=j.id
+		  ORDER BY r.scheduled_ts DESC, r.id DESC
+			 LIMIT 1
+	       ) AS latest ON TRUE
+		 WHERE j.enabled=1
+		   AND j.job_kind=$1
+	  ORDER BY j.id ASC
+	`, scheduledJobKindPatchInstall)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]any{}
+	for rows.Next() {
+		var id, startTS, latestTS sql.NullInt64
+		var name, scheduleType, componentsJSON, latestStatus sql.NullString
+		if err := rows.Scan(&id, &name, &scheduleType, &startTS, &componentsJSON, &latestTS, &latestStatus); err != nil {
+			return nil, err
+		}
+		if !id.Valid || id.Int64 <= 0 {
+			continue
+		}
+		schedule := strings.ToLower(firstText(nullString(scheduleType), "immediately"))
+		status := nullString(latestStatus)
+		if latestTS.Valid && latestTS.Int64 > 0 && scheduledTerminalStatus(status) && stringInSet(schedule, "immediately", "once") {
+			continue
+		}
+		components := parseJSONArray(componentsJSON)
+		component := scheduledPatchInstallComponent(components)
+		if component == nil {
+			continue
+		}
+		patch := scheduledPatchInstallSpec(component)
+		keys := patchActiveIdentityKeys(patch)
+		if len(keys) == 0 {
+			continue
+		}
+		labelPrefix := "Scheduled Install"
+		if schedule == "immediately" {
+			labelPrefix = "Immediate Install"
+		}
+		job := map[string]any{
+			"id":            id.Int64,
+			"name":          nullString(name),
+			"schedule_type": schedule,
+			"start_ts":      nullableInt(startTS),
+			"status":        status,
+			"scheduled_ts":  nullableInt(latestTS),
+			"label":         labelPrefix + " - Job ID: " + strconv.FormatInt(id.Int64, 10),
+			"path":          "/jobs/" + strconv.FormatInt(id.Int64, 10) + "?tab=job_history",
+			"patch":         patch,
+		}
+		if !patchJobVisibleToProfile(component, profile) {
+			continue
+		}
+		for _, key := range keys {
+			if _, exists := out[key]; !exists {
+				out[key] = job
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+func patchJobVisibleToProfile(component map[string]any, profile operatorProfile) bool {
+	// Patch jobs are operator-visible through the regular scheduled-jobs route. Keep this
+	// lightweight here; site scoping is enforced when jobs are opened.
+	return true
+}
+
+func attachActivePatchInstallJob(payload map[string]any, activeJobs map[string]map[string]any) {
+	if len(payload) == 0 || len(activeJobs) == 0 {
+		return
+	}
+	patch := map[string]any{
+		"patch_key": payload["patch_key"],
+		"kb":        payload["kb"],
+		"title":     payload["title"],
+	}
+	for _, key := range patchActiveIdentityKeys(patch) {
+		if job := activeJobs[key]; len(job) > 0 {
+			payload["active_install_job"] = job
+			return
+		}
+	}
+}
+
+func patchActiveIdentityKeys(patch map[string]any) []string {
+	keys := []string{}
+	if patch == nil {
+		return keys
+	}
+	if patchKey := cleanText(patch["patch_key"]); patchKey != "" {
+		keys = append(keys, "patch:"+strings.ToLower(patchKey))
+	}
+	if kb := normalizePatchKB(patch["kb"]); kb != "" {
+		keys = append(keys, "kb:"+strings.ToUpper(kb))
+	}
+	if title := strings.ToLower(cleanText(patch["title"])); title != "" {
+		keys = append(keys, "title:"+title)
+	}
+	return keys
+}
+
 func (s *postgresOperatorStore) listPatchAudit(ctx context.Context, profile operatorProfile) ([]map[string]any, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -483,6 +593,10 @@ func (s *postgresOperatorStore) listPatchAudit(ctx context.Context, profile oper
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
 	defer conn.Close()
+	activeJobs, err := loadActivePatchInstallJobs(ctx, conn, profile)
+	if err != nil {
+		return nil, err
+	}
 
 	query := `
 		SELECT
@@ -537,7 +651,9 @@ func (s *postgresOperatorStore) listPatchAudit(ctx context.Context, profile oper
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, patchInventoryPayload(row))
+		payload := patchInventoryPayload(row)
+		attachActivePatchInstallJob(payload, activeJobs)
+		result = append(result, payload)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -590,6 +706,10 @@ func (s *postgresOperatorStore) listDevicePatches(ctx context.Context, profile o
 	} else if !strings.EqualFold(strings.TrimSpace(profile.Role), "admin") {
 		return nil, "", http.StatusNotFound, errors.New("not found")
 	}
+	activeJobs, err := loadActivePatchInstallJobs(ctx, conn, profile)
+	if err != nil {
+		return nil, "", http.StatusInternalServerError, err
+	}
 
 	rows, err := conn.QueryContext(ctx, `
 		SELECT
@@ -635,7 +755,9 @@ func (s *postgresOperatorStore) listDevicePatches(ctx context.Context, profile o
 		if err != nil {
 			return nil, "", http.StatusInternalServerError, err
 		}
-		result = append(result, patchInventoryPayload(row))
+		payload := patchInventoryPayload(row)
+		attachActivePatchInstallJob(payload, activeJobs)
+		result = append(result, payload)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", http.StatusInternalServerError, err

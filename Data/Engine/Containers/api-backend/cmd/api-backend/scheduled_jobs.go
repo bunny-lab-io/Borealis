@@ -27,6 +27,7 @@ const (
 	scheduledJobKindAutomation       = "automation"
 	scheduledJobKindOnboarding       = "onboarding"
 	scheduledJobKindAgentMaintenance = "agent_maintenance"
+	scheduledJobKindPatchInstall     = "patch_install"
 	scheduledSkipNoTargets           = "no_devices_targeted"
 	defaultOnboardingSSHPort         = 22
 	defaultScheduledRunHistoryDays   = 30
@@ -1987,6 +1988,8 @@ func normalizeScheduledJobKind(value string) string {
 		return scheduledJobKindOnboarding
 	case "agent_maintenance", "agent_update", "agent_channel_switch":
 		return scheduledJobKindAgentMaintenance
+	case "patch_install", "patch_management", "patch_deployment", "ad_hoc_patch_install", "policy_patch_install":
+		return scheduledJobKindPatchInstall
 	default:
 		return scheduledJobKindAutomation
 	}

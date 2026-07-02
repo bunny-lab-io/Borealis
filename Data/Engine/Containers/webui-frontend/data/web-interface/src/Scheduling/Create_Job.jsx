@@ -567,7 +567,22 @@ const isAnsibleComponentRecord = (component) => {
   return typeRaw === "ansible" || typeRaw === "playbook" || subtypeRaw === "ansible" || subtypeRaw === "playbook";
 };
 
+const isPatchComponentRecord = (component) => {
+  const typeRaw = String(
+    component?.kind ||
+    component?.type ||
+    component?.component_type ||
+    component?.assembly_type ||
+    component?.assemblyType ||
+    ""
+  ).trim().toLowerCase();
+  return typeRaw === "patch_install" || typeRaw === "patch_management";
+};
+
 const componentExecutionDomain = (component) => {
+  if (isPatchComponentRecord(component)) {
+    return "patch";
+  }
   if (isWorkflowComponentRecord(component)) {
     return "workflow";
   }
@@ -1494,6 +1509,8 @@ export default function CreateJob() {
     hasHydratedJobPayload(initialJob) ? initialJob : null
   );
   const [quickJobDraft, setQuickJobDraft] = useState(() => location.state?.quickJobDraft || null);
+  const [patchJobDraft, setPatchJobDraft] = useState(() => location.state?.patchJobDraft || null);
+  const [jobKind, setJobKind] = useState("automation");
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
   // Components the job will run: {type:'script'|'workflow', path, name, description}
@@ -1503,6 +1520,7 @@ export default function CreateJob() {
     [components]
   );
   const isWorkflowJob = workflowComponentCount > 0;
+  const isPatchJob = jobKind === "patch_install";
   const [targets, setTargets] = useState([]); // array of target descriptors
   const [filterCatalog, setFilterCatalog] = useState([]);
   const [, setLoadingFilterCatalog] = useState(false);
@@ -1549,6 +1567,9 @@ export default function CreateJob() {
     [pageTitleJobName]
   );
   const resolvedPageSubtitle = useMemo(() => {
+    if (isPatchJob) {
+      return "Schedule Windows patch deployment through Borealis job lanes.";
+    }
     if (isWorkflowJob) {
       return "Workflow-backed jobs execute one saved workflow. Targets and execution context are defined inside the workflow itself.";
     }
@@ -1556,7 +1577,7 @@ export default function CreateJob() {
       return "Launch immediately or save as a quick job with your selected assemblies.";
     }
     return PAGE_SUBTITLE;
-  }, [isWorkflowJob, scheduleType]);
+  }, [isPatchJob, isWorkflowJob, scheduleType]);
   const sendNotification = useAppNotifications({
     title: resolvedPageTitle,
     icon: "pendingactions",
@@ -1605,6 +1626,7 @@ export default function CreateJob() {
 
   useEffect(() => {
     setQuickJobDraft(location.state?.quickJobDraft || null);
+    setPatchJobDraft(location.state?.patchJobDraft || null);
   }, [location.key, location.state]);
 
   useEffect(() => {
@@ -2115,6 +2137,17 @@ export default function CreateJob() {
     }
     return "";
   }, [components]);
+  const patchJobSummary = useMemo(() => {
+    if (!isPatchJob) return null;
+    const component = components.find((item) => isPatchComponentRecord(item)) || {};
+    const patch = component.patch && typeof component.patch === "object" ? component.patch : {};
+    return {
+      kb: String(patch.kb || "").trim() || "No KB",
+      title: String(patch.title || component.name || "Patch Install").trim(),
+      patchKey: String(patch.patch_key || "").trim(),
+      targetCount: targets.length,
+    };
+  }, [components, isPatchJob, targets.length]);
   const [deviceRows, setDeviceRows] = useState([]);
   const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
   const devicePickerGridApiRef = useRef(null);
@@ -2947,6 +2980,14 @@ export default function CreateJob() {
       if (!comp || typeof comp !== "object") return comp;
       const { localId, ...rest } = comp;
       const sanitized = { ...rest };
+      if (isPatchComponentRecord(comp)) {
+        sanitized.kind = "patch_install";
+        sanitized.type = "patch_install";
+        sanitized.component_type = "patch_install";
+        sanitized.assembly_type = "patch_install";
+        delete sanitized.assemblyGuid;
+        return sanitized;
+      }
       const guidRaw = comp.assembly_guid || comp.assemblyGuid || "";
       if (guidRaw) {
         sanitized.assembly_guid = String(guidRaw).trim().toLowerCase();
@@ -3033,13 +3074,19 @@ export default function CreateJob() {
     const hasRequiredTargets = isWorkflowJob ? true : targets.length > 0;
     const base = jobName.trim().length > 0 && components.length > 0 && hasRequiredTargets;
     if (!base) return false;
+    if (isPatchJob) {
+      if (scheduleType !== "immediately") {
+        return !!startDateTime;
+      }
+      return true;
+    }
     const needsCredential = !isWorkflowJob && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount);
     if (needsCredential && !selectedCredentialId) return false;
     if (scheduleType !== "immediately") {
       return !!startDateTime;
     }
     return true;
-  }, [jobName, components.length, isWorkflowJob, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
+  }, [jobName, components.length, isWorkflowJob, isPatchJob, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
 
   const handleJobNameInputChange = useCallback((value) => {
     setJobName(value);
@@ -3991,6 +4038,7 @@ export default function CreateJob() {
           typeof resolvedInitialJob.name === "string" ? resolvedInitialJob.name.trim() : ""
         );
         setTargets(normalizeTargetList(resolvedInitialJob.targets || []));
+        setJobKind(String(resolvedInitialJob.job_kind || resolvedInitialJob.kind || "automation").trim().toLowerCase() || "automation");
         setScheduleType(
           resolvedInitialJob.schedule_type || resolvedInitialJob.schedule?.type || "immediately"
         );
@@ -4026,6 +4074,7 @@ export default function CreateJob() {
       } else if (!initialJob && hydratedFormKeyRef.current !== "new") {
         hydratedFormKeyRef.current = "new";
         setPageTitleJobName("");
+        setJobKind("automation");
         setComponents([]);
         setComponentVarErrors({});
         setSelectedCredentialId("");
@@ -4222,21 +4271,21 @@ export default function CreateJob() {
         .map((component) => componentExecutionDomain(component))
         .filter(Boolean)
     );
-    if (workflowComponents.length > 1) {
+    if (!isPatchJob && workflowComponents.length > 1) {
       alert("Workflow-backed scheduled jobs currently support exactly one workflow component.");
       return;
     }
-    if (workflowComponents.length === 1 && workflowComponents.length !== components.length) {
+    if (!isPatchJob && workflowComponents.length === 1 && workflowComponents.length !== components.length) {
       alert("Workflow-backed scheduled jobs cannot mix workflow, script, or Ansible components.");
       return;
     }
-    if (componentDomains.has("script") && componentDomains.has("ansible")) {
+    if (!isPatchJob && componentDomains.has("script") && componentDomains.has("ansible")) {
       alert("Scheduled jobs cannot mix script assemblies with Ansible playbook assemblies. Remove the cross-domain assemblies or split them into separate jobs.");
       return;
     }
-    const workflowMode = workflowComponents.length === 1;
+    const workflowMode = !isPatchJob && workflowComponents.length === 1;
     const requiresAnsibleOnly = !workflowMode && ANSIBLE_EXEC_CONTEXTS.includes(execContext);
-    if (requiresAnsibleOnly) {
+    if (!isPatchJob && requiresAnsibleOnly) {
       const hasNonAnsibleComponent = components.some((component) => !isAnsibleComponentRecord(component));
       if (hasNonAnsibleComponent) {
         alert("Jobs using SSH or WinRM execution contexts must contain only Ansible playbook assemblies.");
@@ -4244,7 +4293,7 @@ export default function CreateJob() {
       }
     }
     const requiresScriptOnly = !workflowMode && SCRIPT_EXEC_CONTEXTS.includes(execContext);
-    if (requiresScriptOnly) {
+    if (!isPatchJob && requiresScriptOnly) {
       const hasNonScriptComponent = components.some(
         (component) => isWorkflowComponentRecord(component) || isAnsibleComponentRecord(component)
       );
@@ -4253,7 +4302,7 @@ export default function CreateJob() {
         return;
       }
     }
-    if (!workflowMode && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount) && !selectedCredentialId) {
+    if (!isPatchJob && !workflowMode && remoteExec && !(isWinRMExecContext(execContext) && useSvcAccount) && !selectedCredentialId) {
       alert("Please select a credential for this execution context.");
       return;
     }
@@ -4284,9 +4333,10 @@ export default function CreateJob() {
       targets: workflowMode ? [] : serializeTargetsForSave(targets),
       schedule: { type: scheduleType, start: scheduleType !== "immediately" ? wallClockStringFromEnginePickerValue(startDateTime) : null },
       duration: { stopAfterEnabled: expiration !== "no_expire", expiration },
-      execution_context: workflowMode ? "system" : execContext,
-      credential_id: workflowMode ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),
-      use_service_account: workflowMode ? false : (isWinRMExecContext(execContext) ? Boolean(useSvcAccount) : false)
+      execution_context: workflowMode || isPatchJob ? "system" : execContext,
+      credential_id: workflowMode || isPatchJob ? null : (remoteExec && !useSvcAccount && selectedCredentialId ? Number(selectedCredentialId) : null),
+      use_service_account: workflowMode || isPatchJob ? false : (isWinRMExecContext(execContext) ? Boolean(useSvcAccount) : false),
+      job_kind: isPatchJob ? "patch_install" : "automation"
     };
     try {
       const resp = await fetch(initialJob && initialJob.id ? `/api/scheduled_jobs/${initialJob.id}` : "/api/scheduled_jobs", {
@@ -4310,18 +4360,20 @@ export default function CreateJob() {
   const tabDefs = useMemo(() => {
     const base = [
       { key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon },
-      { key: "components", label: "Assemblies", icon: AppsIcon },
     ];
+    if (!isPatchJob) {
+      base.push({ key: "components", label: "Assemblies", icon: AppsIcon });
+    }
     if (!isWorkflowJob) {
       base.push({ key: "targets", label: "Targets", icon: DevicesRoundedIcon });
     }
     base.push({ key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon });
-    if (!isWorkflowJob) {
+    if (!isWorkflowJob && !isPatchJob) {
       base.push({ key: "context", label: "Execution Context", icon: SettingsApplicationsRoundedIcon });
     }
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
-  }, [editing, isWorkflowJob]);
+  }, [editing, isPatchJob, isWorkflowJob]);
   const tabDefKeys = useMemo(() => tabDefs.map((tabDef) => tabDef.key), [tabDefs]);
   const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
     param: "tab",
@@ -4465,6 +4517,56 @@ export default function CreateJob() {
       return previous.id === quickJobDraft.id ? null : previous;
     });
   }, [editing, normalizeTargetList, quickJobDraft, selectTabKey, tabDefs]);
+
+  useEffect(() => {
+    if (editing) return;
+    if (!patchJobDraft || !patchJobDraft.id) return;
+    if (quickDraftAppliedRef.current === patchJobDraft.id) return;
+    quickDraftAppliedRef.current = patchJobDraft.id;
+    const incomingTargets = Array.isArray(patchJobDraft.targets)
+      ? patchJobDraft.targets
+      : Array.isArray(patchJobDraft.hostnames)
+        ? patchJobDraft.hostnames
+        : [];
+    const normalizedTargets = normalizeTargetList(incomingTargets);
+    const patch = patchJobDraft.patch && typeof patchJobDraft.patch === "object" ? patchJobDraft.patch : {};
+    const patchLabel = String(patch.kb || patch.title || patch.patch_key || "Patch").trim();
+    const title = String(patch.title || patchLabel).trim();
+    const count = Number(patchJobDraft.target_count || normalizedTargets.length || 0) || 0;
+    const triggerLabel = String(patchJobDraft.trigger_label || "Ad-Hoc Install").trim() || "Ad-Hoc Install";
+    const initialName = String(
+      patchJobDraft.job_name ||
+        `[${triggerLabel}] ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`
+    ).trim();
+    setJobKind("patch_install");
+    setTargets(normalizedTargets);
+    setSelectedDeviceTargets({});
+    setSelectedFilterTargets({});
+    setComponents([
+      {
+        kind: "patch_install",
+        type: "patch_install",
+        name: patchLabel,
+        patch,
+        trigger: String(patchJobDraft.trigger || "ad_hoc").trim() || "ad_hoc",
+        source: String(patchJobDraft.source || "patch_management").trim() || "patch_management",
+        localId: `patch-install-${patchJobDraft.id}`,
+      },
+    ]);
+    setComponentVarErrors({});
+    setScheduleType(String(patchJobDraft.scheduleType || "immediately").trim().toLowerCase() || "immediately");
+    setExpiration(String(patchJobDraft.expiration || "2h").trim() || "2h");
+    setExecContext("system");
+    setSelectedCredentialId("");
+    setUseSvcAccount(false);
+    setJobName(initialName);
+    setPageTitleJobName(initialName);
+    selectTabKey("schedule");
+    setPatchJobDraft((previous) => {
+      if (!previous) return previous;
+      return previous.id === patchJobDraft.id ? null : previous;
+    });
+  }, [editing, normalizeTargetList, patchJobDraft, selectTabKey]);
 
   useEffect(() => {
     if (!quickJobMeta?.allowAutoRename) return;
@@ -4634,6 +4736,28 @@ export default function CreateJob() {
         {activeTabKey === "schedule" && (
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Schedule" />
+            {patchJobSummary ? (
+              <Box
+                sx={{
+                  mb: 2,
+                  display: "grid",
+                  gridTemplateColumns: { xs: "1fr", md: "140px minmax(220px, 1fr) 130px" },
+                  gap: 1,
+                  alignItems: "center",
+                  color: MAGIC_UI.textBright,
+                }}
+              >
+                <Typography sx={{ fontSize: 13, fontWeight: 700, color: BOREALIS_BLUE }}>
+                  {patchJobSummary.kb}
+                </Typography>
+                <Typography sx={{ fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {patchJobSummary.title}
+                </Typography>
+                <Typography sx={{ fontSize: 13, color: MAGIC_UI.textMuted }}>
+                  {patchJobSummary.targetCount.toLocaleString()} {patchJobSummary.targetCount === 1 ? "Device" : "Devices"}
+                </Typography>
+              </Box>
+            ) : null}
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <TextField
                 select

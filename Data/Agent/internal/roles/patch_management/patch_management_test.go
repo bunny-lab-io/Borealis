@@ -179,3 +179,45 @@ func TestPatchInstallRequestAcceptedRunsAsync(t *testing.T) {
 		t.Fatalf("install runner was not called")
 	}
 }
+
+func TestPatchInstallRequestWaitsForCompletion(t *testing.T) {
+	manager := New(nil, "LAB-OPERATOR-01", "system")
+	manager.supported = true
+	manager.unsupportedReason = ""
+	manager.publisher = func(context.Context, Snapshot) error { return nil }
+	manager.runner = func(_ context.Context, _ time.Duration, _ string, args ...string) (commandResult, error) {
+		script := ""
+		if len(args) > 0 {
+			script = args[len(args)-1]
+		}
+		if strings.Contains(script, "CreateUpdateInstaller") {
+			return commandResult{Stdout: `{"ok":true,"status":"completed","result_code":2,"reboot_required":false,"installed_count":1}`, Stderr: "", ExitCode: 0}, nil
+		}
+		return commandResult{Stdout: `[]`, ExitCode: 0}, nil
+	}
+
+	response, err := manager.HandleInstallRequest(context.Background(), map[string]any{
+		"hostname":            "LAB-OPERATOR-01",
+		"wait_for_completion": true,
+		"request_id":          "patch-job-1-run-2",
+		"patch": map[string]any{
+			"patch_key": "kb:KB5000001:state:pending",
+			"kb":        "KB5000001",
+			"title":     "Security Update",
+			"state":     "pending",
+		},
+	})
+	if err != nil {
+		t.Fatalf("install request failed: %v", err)
+	}
+	payload, _ := response.(map[string]any)
+	if payload["status"] != "completed" || payload["ok"] != true || payload["request_id"] != "patch-job-1-run-2" {
+		t.Fatalf("unexpected install response %#v", payload)
+	}
+	if payload["result_code"] != float64(2) || payload["installed_count"] != float64(1) {
+		t.Fatalf("expected WUA result details in response %#v", payload)
+	}
+	if manager.Health().Details["install_running"] != "false" {
+		t.Fatalf("install running flag was not cleared")
+	}
+}

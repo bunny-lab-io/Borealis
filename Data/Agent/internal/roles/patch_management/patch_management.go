@@ -244,6 +244,10 @@ func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, e
 	patch["requested_at"] = coerceInt64(body["requested_at"])
 	patch["requested_by"] = cleanText(body["requested_by"])
 	patch["scope"] = cleanText(body["scope"])
+	if truthy(body["wait_for_completion"]) || truthy(body["wait"]) {
+		result := m.runInstallSync(ctx, patch, requestID)
+		return result, nil
+	}
 	go m.runInstall(context.Background(), patch, requestID)
 	return map[string]any{
 		"ok":         true,
@@ -369,26 +373,70 @@ func (m *Manager) finishInstall(err error) {
 }
 
 func (m *Manager) runInstall(ctx context.Context, patch map[string]any, requestID string) {
-	err := m.installPatch(ctx, patch)
+	_, err := m.installPatch(ctx, patch)
 	m.finishInstall(err)
 	m.RequestRefresh("patch_install_complete:" + fallbackText(requestID, "unknown"))
 }
 
-func (m *Manager) installPatch(ctx context.Context, patch map[string]any) error {
+func (m *Manager) runInstallSync(ctx context.Context, patch map[string]any, requestID string) map[string]any {
+	result, err := m.installPatch(ctx, patch)
+	m.finishInstall(err)
+	m.RequestRefresh("patch_install_complete:" + fallbackText(requestID, "unknown"))
+	response := map[string]any{
+		"ok":         err == nil,
+		"status":     "completed",
+		"request_id": requestID,
+		"patch_key":  cleanText(patch["patch_key"]),
+		"kb":         cleanText(patch["kb"]),
+		"title":      cleanText(patch["title"]),
+		"stdout":     result.Stdout,
+		"stderr":     result.Stderr,
+		"exit_code":  result.ExitCode,
+	}
+	if result.Parsed != nil {
+		response["result"] = result.Parsed
+		for _, key := range []string{"result_code", "reboot_required", "matched_count", "installed_count"} {
+			if value, ok := result.Parsed[key]; ok {
+				response[key] = value
+			}
+		}
+	}
+	if err != nil {
+		response["status"] = "failed"
+		response["error"] = "patch_install_failed"
+		response["message"] = err.Error()
+	}
+	return response
+}
+
+type patchInstallResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Parsed   map[string]any
+}
+
+func (m *Manager) installPatch(ctx context.Context, patch map[string]any) (patchInstallResult, error) {
 	if !m.supported {
-		return fmt.Errorf("%s", fallbackText(m.unsupportedReason, "unsupported platform"))
+		return patchInstallResult{}, fmt.Errorf("%s", fallbackText(m.unsupportedReason, "unsupported platform"))
 	}
 	result, err := m.runner(ctx, patchInstallTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchInstallScript(patch))
-	if parsed := parsePatchInstallResult(result.Stdout); parsed != nil {
+	installResult := patchInstallResult{
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
+		ExitCode: result.ExitCode,
+		Parsed:   parsePatchInstallResult(result.Stdout),
+	}
+	if parsed := installResult.Parsed; parsed != nil {
 		if okValue, exists := parsed["ok"]; exists && !truthy(okValue) {
 			message := fallbackText(cleanText(parsed["message"]), fallbackText(cleanText(parsed["error"]), "patch install failed"))
-			return fmt.Errorf("%s", message)
+			return installResult, fmt.Errorf("%s", message)
 		}
 	}
 	if err != nil || result.ExitCode != 0 {
-		return commandError(result, err)
+		return installResult, commandError(result, err)
 	}
-	return nil
+	return installResult, nil
 }
 
 func (m *Manager) publishPatches(ctx context.Context, snapshot Snapshot) error {
@@ -772,10 +820,13 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, name, args...)
-	stdout, err := cmd.Output()
-	result := commandResult{Stdout: string(stdout)}
+	var stdout strings.Builder
+	var stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	result := commandResult{Stdout: stdout.String(), Stderr: stderr.String()}
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		result.Stderr = string(exitErr.Stderr)
 		result.ExitCode = exitErr.ExitCode()
 		return result, err
 	}

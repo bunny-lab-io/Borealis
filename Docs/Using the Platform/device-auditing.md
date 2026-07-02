@@ -21,7 +21,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Device Summary` shows high-level identity, OS, hardware, network, current user, uptime, and description.
 - Storage usage warnings ignore `CD-ROM` drives so optical media does not count as disk pressure.
 - `Installed Software` shows software inventory and software actions.
-- `Patch Management` shows pending and installed Windows patch inventory.
+- `Patch Management` shows pending and installed Windows patch inventory and can open Scheduled Job drafts for ad-hoc Windows update installs.
 - `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
 - `Activity History` shows quick job and automation output tied to the device.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
@@ -64,7 +64,6 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - `DELETE /api/device/activity/<hostname>` - clear activity history.
     - `GET /api/device/patches/<hostname>` - cached patch inventory for an in-scope device.
     - `POST /api/device/patches/<hostname>/refresh` - request fresh patch inventory over the device SYSTEM socket.
-    - `POST /api/device/patches/<hostname>/install` - request one pending Windows update install over the device SYSTEM socket.
     - `GET /api/device/registry/<hostname>/roots` - Registry Editor roots view.
     - `GET /api/device/registry/<hostname>/children?path=<registry-path>` - Registry Editor key view.
 
@@ -96,3 +95,4 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Session inventory includes helper readiness fields so current-user execution can distinguish a logged-in user from a helper-ready session.
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.
     - Patch data is normalized into `device_patch_inventory`; non-patch details payloads preserve existing patch rows.
+    - Device-level patch install actions open Scheduled Job drafts with `job_kind=patch_install`; the scheduler handles target history, execution, stdout/stderr capture, and timeout state.

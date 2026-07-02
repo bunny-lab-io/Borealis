@@ -194,6 +194,9 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		if err := m.processScheduledRunWork(ctx); err != nil {
 			log.Printf("failed to process scheduled run work: %v", err)
 		}
+		if err := m.processPatchInstallWork(ctx); err != nil {
+			log.Printf("failed to process patch install work: %v", err)
+		}
 		if err := m.processOnboardingWork(ctx); err != nil {
 			log.Printf("failed to process onboarding work: %v", err)
 		}
@@ -383,6 +386,9 @@ func (m *goSchedulerManager) processScheduledJobTick(ctx context.Context, profil
 	if jobKind == scheduledJobKindOnboarding {
 		return m.processOnboardingTick(ctx, job, jobID, *occurrence, now, components, rawTargets)
 	}
+	if jobKind == scheduledJobKindPatchInstall {
+		return m.processPatchInstallTick(ctx, profile, job, jobID, *occurrence, now, components, rawTargets, online)
+	}
 	buckets := scheduledClassifyComponents(components)
 	if len(buckets.Workflow) > 0 && (len(buckets.Workflow) != 1 || len(buckets.Script) > 0 || len(buckets.Ansible) > 0) {
 		log.Printf("skipping invalid workflow-backed scheduled job configuration job=%d", jobID)
@@ -516,6 +522,83 @@ func (m *goSchedulerManager) processScheduledJobTick(ctx context.Context, profil
 			continue
 		}
 		if expSeconds != nil && *occurrence+*expSeconds <= now {
+			if err := m.markScheduledRunExpired(ctx, runID, now, "Device offline"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *goSchedulerManager) processPatchInstallTick(ctx context.Context, profile operatorProfile, job scheduledJobRow, jobID, occurrence, now int64, components, rawTargets []any, online map[string]bool) error {
+	component := scheduledPatchInstallComponent(components)
+	if component == nil {
+		return nil
+	}
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	runs, err := loadScheduledRunsForOccurrence(ctx, conn, jobID, occurrence)
+	if closeErr := conn.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if len(runs) == 0 {
+		resolution, err := m.store.resolveScheduledRerunTargets(ctx, profile, rawTargets)
+		if err != nil {
+			resolution = scheduledTargetResolution{Targets: []*scheduledResolvedTarget{}}
+		}
+		if err := m.store.recordScheduledPatchInstallSnapshot(ctx, jobID, occurrence, scheduledPatchInstallDisplayName(component), resolution.Targets, now); err != nil {
+			return err
+		}
+		conn, err := m.store.db.Conn(ctx)
+		if err != nil {
+			return errors.Join(errOperatorStoreDown, err)
+		}
+		runs, err = loadScheduledRunsForOccurrence(ctx, conn, jobID, occurrence)
+		if closeErr := conn.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+	}
+	expSeconds := schedulerParseExpiration(nullString(job.Expiration))
+	for _, run := range runs {
+		if scheduledTerminalStatus(nullString(run.Status)) || nullString(run.Status) == scheduledStatusRunning {
+			continue
+		}
+		runID := nullInt(run.ID)
+		if runID <= 0 {
+			continue
+		}
+		host := strings.TrimSpace(nullString(run.TargetHostname))
+		if host == "" {
+			continue
+		}
+		if online[strings.ToLower(host)] {
+			siteID := int64(0)
+			for candidate := range m.siteTargetRowsForRun(ctx, runID) {
+				siteID = candidate
+				break
+			}
+			if _, err := m.enqueueWorkItem(ctx, schedulerKindPatchInstallRun, map[string]any{
+				"job_id":          jobID,
+				"run_id":          runID,
+				"scheduled_ts":    occurrence,
+				"site_id":         siteID,
+				"hostname":        host,
+				"patch_component": component,
+				"task_link":       schedulerTaskLink(jobID, runID, patchInstallComponentKind),
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		if expSeconds != nil && occurrence+*expSeconds <= now {
 			if err := m.markScheduledRunExpired(ctx, runID, now, "Device offline"); err != nil {
 				return err
 			}
@@ -884,7 +967,16 @@ func (m *goSchedulerManager) callSiteWorkerHostService(ctx context.Context, rout
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(internalTokenHeader, goInternalToken(m.secret))
-	resp, err := m.httpClient.Do(req)
+	client := m.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if client.Timeout > 0 && timeout > client.Timeout {
+		clone := *client
+		clone.Timeout = timeout
+		client = &clone
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "site_worker_unavailable", err
 	}

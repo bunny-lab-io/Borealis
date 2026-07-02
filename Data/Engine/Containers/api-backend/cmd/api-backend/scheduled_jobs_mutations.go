@@ -13,6 +13,7 @@ import (
 )
 
 const onboardingComponentKind = "device_onboarding"
+const patchInstallComponentKind = "patch_install"
 
 var onboardingBranchPattern = regexp.MustCompile(`^[A-Za-z0-9._/\-]+$`)
 
@@ -213,11 +214,18 @@ func buildScheduledJobCreateValues(ctx context.Context, conn *sql.Conn, profile 
 	if jobKind == scheduledJobKindOnboarding {
 		executionContext = "onboarding_local_network"
 	}
+	if jobKind == scheduledJobKindPatchInstall {
+		executionContext = "system"
+	}
 	credentialID := scheduledOptionalPositiveInt64(payload["credential_id"])
 	_, useServiceAccountProvided := payload["use_service_account"]
 	useServiceAccount := normalizeScheduledAnsibleTransport(executionContext) == "winrm" && (!useServiceAccountProvided || boolFromAny(payload["use_service_account"]))
 	if jobKind == scheduledJobKindOnboarding {
 		useServiceAccount = false
+	}
+	if jobKind == scheduledJobKindPatchInstall {
+		useServiceAccount = false
+		credentialID = sql.NullInt64{}
 	}
 	enabled := true
 	if raw, ok := payload["enabled"]; ok {
@@ -318,6 +326,11 @@ func buildScheduledJobUpdateValues(ctx context.Context, conn *sql.Conn, profile 
 			values.Components = []any{map[string]any{"kind": onboardingComponentKind, "install_branch": "main"}}
 		}
 	}
+	if values.JobKind == scheduledJobKindPatchInstall {
+		values.ExecutionContext = "system"
+		values.UseServiceAccount = false
+		values.CredentialID = sql.NullInt64{}
+	}
 	return validateScheduledJobMutation(ctx, conn, values)
 }
 
@@ -338,6 +351,18 @@ func validateScheduledJobMutation(ctx context.Context, conn *sql.Conn, values sc
 		if errText := validateScheduledOnboardingConfig(values.Components, values.Targets, values.CredentialID); errText != "" {
 			return values, nil, map[string]any{"error": errText}, http.StatusBadRequest, errors.New(errText)
 		}
+	} else if values.JobKind == scheduledJobKindPatchInstall {
+		if errText := validateScheduledPatchInstallConfig(values.Components, values.Targets); errText != "" {
+			return values, nil, map[string]any{"error": errText}, http.StatusBadRequest, errors.New(errText)
+		}
+		if errText, err := validateScheduledTargetsForSave(ctx, conn, values.Targets); err != nil {
+			return values, nil, nil, http.StatusInternalServerError, err
+		} else if errText != "" {
+			return values, nil, map[string]any{"error": errText}, http.StatusBadRequest, errors.New(errText)
+		}
+		values.ExecutionContext = "system"
+		values.UseServiceAccount = false
+		values.CredentialID = sql.NullInt64{}
 	} else {
 		if workflowErr != "" {
 			return values, nil, map[string]any{"error": workflowErr}, http.StatusBadRequest, errors.New(workflowErr)
@@ -642,6 +667,24 @@ func validateScheduledRemoteCredentialForContext(components []any, executionCont
 	return ""
 }
 
+func validateScheduledPatchInstallConfig(components []any, targets []any) string {
+	component := scheduledPatchInstallComponent(components)
+	if component == nil {
+		return "Patch install jobs require a patch install component."
+	}
+	if len(targets) == 0 {
+		return "Patch install jobs require at least one target device."
+	}
+	patch := scheduledPatchInstallSpec(component)
+	if cleanText(patch["patch_key"]) == "" && normalizePatchKB(firstNonEmpty(patch["kb"], "")) == "" && cleanText(patch["title"]) == "" {
+		return "Patch install component requires patch_key, KB, or title."
+	}
+	if state := normalizePatchState(cleanText(patch["state"])); state != "" && state != "pending" {
+		return "Patch install jobs can only target pending updates."
+	}
+	return ""
+}
+
 func validateScheduledWorkflowJobConfiguration(components []any, targets []any, executionContext string, credentialID sql.NullInt64, useServiceAccount bool) string {
 	workflowComponents := scheduledWorkflowComponents(components)
 	if len(workflowComponents) == 0 {
@@ -725,6 +768,9 @@ func scheduledComponentExecutionDomain(component any) string {
 	if !ok {
 		return ""
 	}
+	if scheduledIsPatchInstallComponent(entry) {
+		return "patch"
+	}
 	if scheduledIsWorkflowComponent(entry) {
 		return "workflow"
 	}
@@ -756,6 +802,10 @@ func scheduledIsWorkflowComponent(entry map[string]any) bool {
 
 func scheduledIsAnsibleComponent(entry map[string]any) bool {
 	return scheduledComponentHasValue(entry, "ansible") || scheduledComponentHasValue(entry, "playbook")
+}
+
+func scheduledIsPatchInstallComponent(entry map[string]any) bool {
+	return scheduledComponentHasValue(entry, patchInstallComponentKind) || scheduledComponentHasValue(entry, "patch_management")
 }
 
 func scheduledComponentHasValue(entry map[string]any, wanted string) bool {

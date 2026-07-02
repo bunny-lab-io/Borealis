@@ -242,125 +242,22 @@ func TestPatchRefreshHandlerQueuesWorkerEvent(t *testing.T) {
 	}
 }
 
-func TestDevicePatchInstallHandlerCallsAgent(t *testing.T) {
-	var sawCall bool
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
-			t.Fatalf("unexpected internal token %q", got)
-		}
-		if r.URL.Path != "/remote-ops/host-service/call" {
-			t.Fatalf("unexpected worker path %s", r.URL.Path)
-		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("worker request body decode failed: %v", err)
-		}
-		sawCall = true
-		if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "patch_install_request" {
-			t.Fatalf("unexpected call body %#v", body)
-		}
-		payload, _ := body["payload"].(map[string]any)
-		patch, _ := payload["patch"].(map[string]any)
-		if payload["scope"] != "device" || payload["requested_by"] != "operator" || patch["patch_key"] != "kb:KB5000001:state:pending" || patch["update_id"] != "11111111-1111-1111-1111-111111111111" {
-			t.Fatalf("unexpected patch install payload %#v", payload)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"called": true,
-			"response": map[string]any{
-				"ok":         true,
-				"status":     "accepted",
-				"request_id": "agent-request-1",
-			},
-		})
-	}))
-	defer worker.Close()
-
-	route := routeForTestWorker(t, worker.URL)
-	store := &patchInstallTestStore{
-		profile: operatorProfile{Username: "operator", Role: "Admin"},
-		targets: []patchInstallTarget{
-			patchInstallTargetForTest("LAB-OPERATOR-01", "kb:KB5000001:state:pending", route),
-		},
-	}
+func TestPatchInstallPublicRoutesAreSchedulerOnly(t *testing.T) {
+	store := &patchInstallTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	mux := http.NewServeMux()
 	registerPatchRoutes(mux, patchInstallTestAuth(store), http.NotFoundHandler())
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/device/patches/LAB-OPERATOR-01/install", strings.NewReader(`{"patch_key":"kb:KB5000001:state:pending"}`))
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	mux.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if !sawCall {
-		t.Fatalf("expected worker call")
-	}
-	if store.seen.Hostname != "LAB-OPERATOR-01" || store.seen.PatchKey != "kb:KB5000001:state:pending" {
-		t.Fatalf("unexpected lookup request %#v", store.seen)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("response decode failed: %v", err)
-	}
-	if payload["status"] != "accepted" || payload["accepted_count"].(float64) != 1 {
-		t.Fatalf("unexpected install response %#v", payload)
-	}
-}
-
-func TestFleetPatchInstallHandlerDispatchesVisibleTargets(t *testing.T) {
-	var sawCalls int
-	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/remote-ops/host-service/call" {
-			t.Fatalf("unexpected worker path %s", r.URL.Path)
+	for _, path := range []string{"/api/device/patches/LAB-OPERATOR-01/install", "/api/patches/install"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"patch_key":"kb:KB5000001:state:pending"}`))
+		request.Header.Set("Authorization", "Bearer "+testAuthToken)
+		mux.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected scheduler-only route %s to be unregistered, got %d body=%s", path, recorder.Code, recorder.Body.String())
 		}
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("worker request body decode failed: %v", err)
-		}
-		sawCalls++
-		payload, _ := body["payload"].(map[string]any)
-		if payload["scope"] != "fleet" {
-			t.Fatalf("unexpected fleet payload %#v", payload)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"called":   true,
-			"response": map[string]any{"ok": true, "status": "accepted"},
-		})
-	}))
-	defer worker.Close()
-
-	route := routeForTestWorker(t, worker.URL)
-	store := &patchInstallTestStore{
-		profile: operatorProfile{Username: "operator", Role: "Admin"},
-		targets: []patchInstallTarget{
-			patchInstallTargetForTest("LAB-OPERATOR-01", "kb:KB5000001:state:pending", route),
-			patchInstallTargetForTest("LAB-OPERATOR-02", "kb:KB5000001:state:pending", route),
-		},
 	}
-	mux := http.NewServeMux()
-	registerPatchRoutes(mux, patchInstallTestAuth(store), http.NotFoundHandler())
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/api/patches/install", strings.NewReader(`{"patch_key":"kb:KB5000001:state:pending","site_id":7}`))
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	mux.ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if sawCalls != 2 {
-		t.Fatalf("expected two worker calls, got %d", sawCalls)
-	}
-	if store.seen.PatchKey != "kb:KB5000001:state:pending" || store.seen.SiteID != 7 {
-		t.Fatalf("unexpected fleet lookup %#v", store.seen)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("response decode failed: %v", err)
-	}
-	if payload["status"] != "accepted" || payload["target_count"].(float64) != 2 || payload["accepted_count"].(float64) != 2 {
-		t.Fatalf("unexpected fleet response %#v", payload)
+	if store.seen.hasPatchIdentity() {
+		t.Fatalf("direct install route should not resolve patch targets: %#v", store.seen)
 	}
 }
 

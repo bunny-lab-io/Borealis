@@ -1,6 +1,6 @@
 # Scheduled Jobs
 
-Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use them for routine script runs, workflow launches, Engine-side Ansible playbooks, agent maintenance, and local-network onboarding.
+Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use them for routine script runs, workflow launches, Engine-side Ansible playbooks, agent maintenance, Windows patch installs, and local-network onboarding.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Scheduled_Job_List.png" alt="Borealis Scheduled Job List" loading="lazy">
@@ -18,7 +18,7 @@ Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use th
 7. Choose execution context when needed.
 8. Save.
 
-Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context.
+Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context. Patch Management opens this page with the selected KB, trigger type, and targets already filled when operators schedule an ad-hoc Windows update install.
 
 ## Choose Schedule
 
@@ -32,6 +32,7 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 - Historical Runs groups past occurrences.
 - Device rows show target status, output, errors, and skipped reasons.
 - Ansible playbooks store per-target or shared recap output depending on execution mode.
+- Patch install jobs store per-device install result, timeout or failure state, and available Windows Update stdout/stderr detail.
 
 ## Onboarding Jobs
 
@@ -78,9 +79,11 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     ### Runtime behavior
 
     - `job-scheduler` owns scheduled ticks, queue leases, service actions, and site-worker lifecycle.
+    - `job_kind=patch_install` stores a single `patch_install` component, uses system execution context, and bypasses assembly credential selection.
     - Schedule create/update accepts offsetless wall-clock values such as `2026-06-25T00:00` as Engine-local time. Offset-bearing RFC3339 values remain absolute instants.
     - Daily, weekly, monthly, and yearly recurrence preserves Engine-local wall-clock time across daylight saving changes.
     - Site workers execute site-scoped pressure work outside `api-backend`.
     - Each due occurrence resolves targets once and freezes membership in run target rows.
     - Filter targets preserve allowed site scope from creation/edit time.
     - Remote SSH/WinRM Ansible requires active WireGuard peer IP and selected credential or service account path.
+    - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.

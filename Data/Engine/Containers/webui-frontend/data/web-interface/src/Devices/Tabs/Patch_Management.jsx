@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Button, Tooltip, Typography } from "@mui/material";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
+import { useNavigate } from "react-router-dom";
+import { APP_PATHS } from "../../app/routes/paths.js";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -91,12 +93,12 @@ function FilterSliderBlock({ label = "", children }) {
 export default function PatchManagementTab({ hostname = "" }) {
   const gridRef = useRef(null);
   const patchRefreshTimersRef = useRef([]);
+  const navigate = useNavigate();
   const notifyOperator = useAppNotifications();
   const [patchRows, setPatchRows] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [stateFilter, setStateFilter] = useState("pending");
   const [refreshBusy, setRefreshBusy] = useState(false);
-  const [installBusyKey, setInstallBusyKey] = useState("");
   const normalizedHostname = useMemo(() => text(hostname), [hostname]);
 
   const loadPatchRows = useCallback(async () => {
@@ -176,48 +178,47 @@ export default function PatchManagementTab({ hostname = "" }) {
   }, [normalizedHostname, notifyOperator, refreshBusy, requestPatchDataRefresh]);
 
   const handleInstallPatch = useCallback(
-    async (row = {}) => {
-      if (!normalizedHostname || installBusyKey) return;
+    (row = {}) => {
+      if (!normalizedHostname || row.active_install_job) return;
       const patchKey = text(row.patch_key);
-      const rowKey = patchKey || text(row.inventory_id || row.id) || text(row.kb || row.title);
       if (!patchKey || text(row.state).toLowerCase() !== "pending") return;
-      const patchLabel = text(row.kb) || text(row.title) || "selected update";
-      if (typeof window !== "undefined") {
-        const confirmed = window.confirm(`Install ${patchLabel} on ${normalizedHostname}?`);
-        if (!confirmed) return;
-      }
-      setInstallBusyKey(rowKey);
-      try {
-        const response = await fetch(`/api/device/patches/${encodeURIComponent(normalizedHostname)}/install`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            patch_key: patchKey,
-            inventory_id: row.inventory_id || row.id,
-          }),
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
-        requestPatchDataRefresh({ burst: true });
-        await notifyOperator({
-          title: "Patch Install Requested",
-          message: `Borealis asked <b>${normalizedHostname}</b> to install <b>${patchLabel}</b>.`,
-          icon: "success",
-          variant: "success",
-        });
-      } catch (error) {
-        await notifyOperator({
-          title: "Patch Install Failed",
-          message: `Could not request <b>${patchLabel}</b> install on <b>${normalizedHostname}</b>: ${String(error?.message || error)}`,
-          icon: "error",
-          variant: "error",
-        });
-      } finally {
-        setInstallBusyKey("");
-      }
+      const patchLabel = text(row.kb) || text(row.title) || "Patch";
+      const title = text(row.title) || patchLabel;
+      const patch = {
+        patch_key: patchKey,
+        kb: text(row.kb),
+        title,
+        state: text(row.state) || "pending",
+        source: text(row.source),
+        classification: text(row.classification),
+        severity: text(row.severity),
+        metadata: row.metadata || {},
+      };
+      const targets = [{
+        kind: "device",
+        hostname: normalizedHostname,
+        device_guid: text(row.device_guid),
+        site_id: row.site_id ?? null,
+        site_name: text(row.site_name),
+        operating_system: text(row.operating_system),
+      }];
+      navigate(`${APP_PATHS.jobNew}?tab=schedule`, {
+        state: {
+          patchJobDraft: {
+            id: `patch-device-${patchKey}-${normalizedHostname}-${Date.now()}`,
+            source: "device",
+            trigger: "ad_hoc",
+            trigger_label: "Ad-Hoc Install",
+            patch,
+            targets,
+            target_count: 1,
+            expiration: "2h",
+            job_name: `[Ad-Hoc Install] ${patchLabel} - ${title} - 1 Device`,
+          },
+        },
+      });
     },
-    [installBusyKey, normalizedHostname, notifyOperator, requestPatchDataRefresh]
+    [navigate, normalizedHostname]
   );
 
   useEffect(() => {
@@ -285,16 +286,40 @@ export default function PatchManagementTab({ hostname = "" }) {
       {
         field: "install",
         headerName: "Install",
-        width: 122,
-        minWidth: 122,
+        width: 240,
+        minWidth: 240,
         sortable: false,
         filter: false,
         resizable: false,
         cellRenderer: (params) => {
           const row = params.data || {};
           const patchKey = text(row.patch_key);
-          const rowKey = patchKey || text(row.inventory_id || row.id) || text(row.kb || row.title);
-          const disabled = text(row.state).toLowerCase() !== "pending" || !patchKey || Boolean(installBusyKey);
+          const activeJob = row.active_install_job || null;
+          if (activeJob?.id) {
+            const label = text(activeJob.label) || `Scheduled Install - Job ID: ${activeJob.id}`;
+            const jobPath = text(activeJob.path) || `${APP_PATHS.job(activeJob.id)}?tab=job_history`;
+            return (
+              <Tooltip title="This patch already has an ad-hoc deployment job. Let that job finish, time out, or delete it before scheduling this KB again.">
+                <Button
+                  size="small"
+                  onClick={() => navigate(jobPath)}
+                  sx={{
+                    minWidth: 190,
+                    px: 0.8,
+                    py: 0.25,
+                    color: "#58a6ff",
+                    textTransform: "none",
+                    fontWeight: 700,
+                    justifyContent: "flex-start",
+                    "&:hover": { background: "rgba(88,166,255,0.1)" },
+                  }}
+                >
+                  {label}
+                </Button>
+              </Tooltip>
+            );
+          }
+          const disabled = text(row.state).toLowerCase() !== "pending" || !patchKey;
           return (
             <Button
               size="small"
@@ -318,7 +343,7 @@ export default function PatchManagementTab({ hostname = "" }) {
                 },
               }}
             >
-              {installBusyKey === rowKey ? "Sending" : "Install"}
+              Install
             </Button>
           );
         },
@@ -379,7 +404,7 @@ export default function PatchManagementTab({ hostname = "" }) {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
     ],
-    [handleInstallPatch, installBusyKey]
+    [handleInstallPatch, navigate]
   );
 
   return (
