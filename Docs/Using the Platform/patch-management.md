@@ -20,6 +20,10 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 
 Pending rows come from Windows Update Agent search results that are not installed and not hidden. Installed rows come from `Get-HotFix` and Windows Update Agent history, then Borealis de-duplicates them by KB or update identity.
 
+!!! info
+
+    Windows Update Agent often leaves severity empty even when classification is populated. Borealis displays those rows as `Unspecified` instead of guessing severity from classification.
+
 !!! warning
 
     Patch Management v1 is inventory-only. It does not install updates, approve updates, handle reboot windows, or replace existing patching policy tooling.

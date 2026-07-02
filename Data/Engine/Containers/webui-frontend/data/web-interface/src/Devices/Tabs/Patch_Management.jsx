@@ -70,32 +70,6 @@ function formatTimestamp(value) {
   return new Date(numeric * 1000).toLocaleString();
 }
 
-function PatchStateBadge({ value }) {
-  const state = text(value).toLowerCase();
-  const pending = state === "pending";
-  return (
-    <Box
-      component="span"
-      sx={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 78,
-        borderRadius: 999,
-        px: 1,
-        py: 0.25,
-        fontSize: 11,
-        fontWeight: 700,
-        color: pending ? "#fef3c7" : "#bbf7d0",
-        border: pending ? "1px solid rgba(251,191,36,0.42)" : "1px solid rgba(52,211,153,0.38)",
-        background: pending ? "rgba(251,191,36,0.12)" : "rgba(52,211,153,0.12)",
-      }}
-    >
-      {formatState(value)}
-    </Box>
-  );
-}
-
 function boolLabel(value) {
   if (value === true) return "Yes";
   if (value === false) return "No";
@@ -243,7 +217,7 @@ export default function PatchManagementTab({ hostname = "" }) {
       {
         field: "kb",
         headerName: "KB",
-        width: 135,
+        width: 120,
         minWidth: 120,
         valueGetter: (params) => text(params.data?.kb) || "No KB",
       },
@@ -258,8 +232,8 @@ export default function PatchManagementTab({ hostname = "" }) {
         field: "state",
         headerName: "State",
         width: 135,
-        minWidth: 125,
-        cellRenderer: (params) => <PatchStateBadge value={params.value} />,
+        minWidth: 135,
+        valueFormatter: (params) => formatState(params.value),
       },
       {
         field: "severity",
