@@ -18,7 +18,7 @@ Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use th
 7. Choose execution context when needed.
 8. Save.
 
-Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context. Patch Management opens this page on the `Schedule` tab with the selected KB, trigger type, and targets already filled when operators schedule an ad-hoc Windows update install. Bulk patch installs use this page for shared timing, then create one scheduled job per selected patch.
+Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context. Patch Management opens this page on the `Schedule` tab with the selected KB, trigger type, targets, and return path already filled when operators schedule an ad-hoc Windows update install. Bulk patch installs use this page for shared timing, then create one scheduled job per selected patch.
 
 ## Choose Schedule
 
@@ -81,6 +81,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - `job-scheduler` owns scheduled ticks, queue leases, service actions, and site-worker lifecycle.
     - `job_kind=patch_install` stores a single `patch_install` component, uses system execution context, and bypasses assembly credential selection.
     - New Patch Management drafts expose only the `Schedule` tab in `Create_Job.jsx`; Patch Management supplies job name, patch component, target list, and system execution context.
+    - New Patch Management drafts include an internal `return_to` route so successful creation returns to the originating fleet or device Patch Management page.
     - Bulk Patch Management drafts never store multiple KBs in one job. `Create_Job.jsx` loops over selected patch items and creates one `job_kind=patch_install` scheduled job for each patch using the same schedule/duration payload.
     - Schedule create/update accepts offsetless wall-clock values such as `2026-06-25T00:00` as Engine-local time. Offset-bearing RFC3339 values remain absolute instants.
     - Daily, weekly, monthly, and yearly recurrence preserves Engine-local wall-clock time across daylight saving changes.

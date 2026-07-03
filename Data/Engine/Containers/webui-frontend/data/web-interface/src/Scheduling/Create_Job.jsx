@@ -133,6 +133,23 @@ const CREATE_JOB_TAB_KEY_BY_URL = Object.freeze({
   job_history: "history",
   history: "history",
 });
+
+function normalizePatchJobReturnPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/") && !raw.startsWith("//")) {
+    return raw;
+  }
+  if (typeof window === "undefined") return "";
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) return "";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "";
+  }
+}
+
 const JOB_HISTORY_SUBTAB_URL_BY_KEY = Object.freeze({
   current: "current_run",
   historical: "historical_runs",
@@ -1510,7 +1527,14 @@ export default function CreateJob() {
   );
   const [quickJobDraft, setQuickJobDraft] = useState(() => location.state?.quickJobDraft || null);
   const [patchJobDraft, setPatchJobDraft] = useState(() => location.state?.patchJobDraft || null);
+  const [patchJobReturnTo, setPatchJobReturnTo] = useState(() =>
+    normalizePatchJobReturnPath(location.state?.patchJobDraft?.return_to)
+  );
   const [patchJobBatch, setPatchJobBatch] = useState(null);
+  const patchJobReturnPath = useMemo(
+    () => normalizePatchJobReturnPath(patchJobBatch?.return_to || patchJobReturnTo),
+    [patchJobBatch?.return_to, patchJobReturnTo]
+  );
   const [jobKind, setJobKind] = useState("automation");
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
@@ -1634,7 +1658,11 @@ export default function CreateJob() {
     setQuickJobDraft(location.state?.quickJobDraft || null);
     const nextPatchDraft = location.state?.patchJobDraft || null;
     setPatchJobDraft(nextPatchDraft);
-    if (!nextPatchDraft) setPatchJobBatch(null);
+    setPatchJobReturnTo(normalizePatchJobReturnPath(nextPatchDraft?.return_to));
+    if (!nextPatchDraft) {
+      setPatchJobBatch(null);
+      setPatchJobReturnTo("");
+    }
   }, [location.key, location.state]);
 
   useEffect(() => {
@@ -4404,7 +4432,7 @@ export default function CreateJob() {
           createdCount += 1;
         }
         sendNotification(`${createdCount.toLocaleString()} Patch Install Jobs Created Successfully`);
-        navigate(APP_PATHS.jobs);
+        navigate(patchJobReturnPath || APP_PATHS.jobs);
       } catch (err) {
         const prefix = createdCount > 0 ? `${createdCount.toLocaleString()} job(s) were created before failure. ` : "";
         alert(`${prefix}${String(err.message || err)}`);
@@ -4436,7 +4464,7 @@ export default function CreateJob() {
         const createdName = savedJob?.name || jobName || "Job";
         sendNotification(`Job ${createdName} Created Successfully`);
       }
-      navigate(APP_PATHS.jobs);
+      navigate(isPatchJob && !(initialJob && initialJob.id) ? (patchJobReturnPath || APP_PATHS.jobs) : APP_PATHS.jobs);
     } catch (err) {
       alert(String(err.message || err));
     }
@@ -4611,6 +4639,8 @@ export default function CreateJob() {
     if (quickDraftAppliedRef.current === patchJobDraft.id) return;
     quickDraftAppliedRef.current = patchJobDraft.id;
     const triggerLabel = String(patchJobDraft.trigger_label || "Ad-Hoc Install").trim() || "Ad-Hoc Install";
+    const normalizedReturnTo = normalizePatchJobReturnPath(patchJobDraft.return_to);
+    setPatchJobReturnTo(normalizedReturnTo);
     const rawItems = Array.isArray(patchJobDraft.items) ? patchJobDraft.items : [];
     if (rawItems.length > 1 || patchJobDraft.bulk) {
       const normalizedItems = rawItems
@@ -4652,6 +4682,7 @@ export default function CreateJob() {
           source: String(patchJobDraft.source || "patch_management").trim() || "patch_management",
           trigger: String(patchJobDraft.trigger || "bulk_ad_hoc").trim() || "bulk_ad_hoc",
           trigger_label: triggerLabel,
+          return_to: normalizedReturnTo,
           items: normalizedItems,
         });
         setJobKind("patch_install");

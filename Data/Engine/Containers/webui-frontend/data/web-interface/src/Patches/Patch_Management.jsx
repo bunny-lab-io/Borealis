@@ -3,7 +3,7 @@ import { Box, Button, Checkbox, Tooltip, Typography } from "@mui/material";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { BOREALIS_BLUE, CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
@@ -70,6 +70,12 @@ function formatTimestamp(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "";
   return new Date(numeric * 1000).toLocaleString();
+}
+
+function microsoftUpdateCatalogURL(kb) {
+  const normalized = text(kb).toUpperCase();
+  if (!/^KB\d{4,9}$/.test(normalized)) return "";
+  return `https://www.catalog.update.microsoft.com/Search.aspx?q=${encodeURIComponent(normalized)}`;
 }
 
 function normalizedPatchKey(row = {}) {
@@ -205,6 +211,7 @@ export default function PatchManagement() {
   const gridRef = useRef(null);
   const patchRefreshTimersRef = useRef([]);
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [patchRows, setPatchRows] = useState([]);
   const [loadError, setLoadError] = useState("");
@@ -361,6 +368,10 @@ export default function PatchManagement() {
     () => new Set(selectedBulkRows.map(patchSelectionIdentity).filter(Boolean)).size,
     [selectedBulkRows]
   );
+  const patchReturnTo = useMemo(
+    () => `${location.pathname || APP_PATHS.patchManagement}${location.search || ""}`,
+    [location.pathname, location.search]
+  );
 
   const togglePatchSelection = useCallback((row = {}) => {
     const rowID = text(row.id);
@@ -409,11 +420,12 @@ export default function PatchManagement() {
             target_count: item.target_count,
             expiration: "2h",
             job_name: item.job_name,
+            return_to: patchReturnTo,
           },
         },
       });
     },
-    [navigate]
+    [navigate, patchReturnTo]
   );
 
   const handleBulkInstallFleet = useCallback(() => {
@@ -433,10 +445,11 @@ export default function PatchManagement() {
           bulk: true,
           items,
           expiration: "2h",
+          return_to: patchReturnTo,
         },
       },
     });
-  }, [navigate, selectedBulkPatchCount, selectedBulkRows]);
+  }, [navigate, patchReturnTo, selectedBulkPatchCount, selectedBulkRows]);
 
   const pageHeaderActions = useMemo(
     () => [
@@ -497,6 +510,33 @@ export default function PatchManagement() {
         width: 120,
         minWidth: 120,
         valueGetter: (params) => text(params.data?.kb) || "No KB",
+        cellRenderer: (params) => {
+          const kb = text(params.value);
+          const catalogURL = microsoftUpdateCatalogURL(kb);
+          if (!catalogURL) {
+            return <Typography component="span" sx={{ color: MAGIC_UI.textBright, fontSize: 13 }}>{kb || "No KB"}</Typography>;
+          }
+          return (
+            <Tooltip title={`Open ${kb} in Microsoft Update Catalog`}>
+              <Typography
+                component="a"
+                href={catalogURL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => event.stopPropagation()}
+                sx={{
+                  color: BOREALIS_BLUE,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  textDecoration: "none",
+                  "&:hover": { textDecoration: "underline" },
+                }}
+              >
+                {kb}
+              </Typography>
+            </Tooltip>
+          );
+        },
       },
       {
         field: "title",
