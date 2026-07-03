@@ -156,6 +156,23 @@ func TestParsePatchInstallProgressJSONL(t *testing.T) {
 	}
 }
 
+func TestWindowsPatchInstallScriptFallsBackToKBWhenIdentityIsStale(t *testing.T) {
+	script := windowsPatchInstallScript(map[string]any{
+		"request_id":      "patch-job-243-run-6889",
+		"patch_key":       "kb:KB2267602:state:pending",
+		"kb":              "KB2267602",
+		"title":           "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602",
+		"update_id":       "fffd624f-7798-480c-9a2b-a3d947fa358e",
+		"revision_number": int64(200),
+	})
+	if !strings.Contains(script, "function Test-BorealisKBMatch") {
+		t.Fatalf("expected explicit KB fallback matcher in installer script")
+	}
+	if strings.Contains(script, "return $false\n  }\n  $requestedKB") {
+		t.Fatalf("installer script still short-circuits on stale WUA identity")
+	}
+}
+
 func TestPatchInstallProgressPayloadIncludesSchedulerContext(t *testing.T) {
 	payload := patchInstallProgressPayload("LAB-OPERATOR-01", map[string]any{
 		"request_id":           "patch-job-9-run-12",

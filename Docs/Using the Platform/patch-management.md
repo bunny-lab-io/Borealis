@@ -82,7 +82,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Bulk scheduled patch jobs use names like `[Bulk Ad-Hoc Install] - KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Scheduler snapshots target membership into `scheduled_job_runs` and `scheduled_job_run_targets`, then queues `patch_install_run` work items on the scheduled-job lane.
     - Patch install workers call the site worker host-service bridge, which emits Agent `patch_install_request` with `wait_for_completion=true` over the device SYSTEM socket.
-    - The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback.
+    - The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback. If a pending update identity changes between inventory and install, common with Defender definitions, the Agent can still match the current available update by KB.
     - The Agent downloads the matched update when needed, uses WUA async download/install jobs, posts live progress to `/api/agent/patches/install-progress`, never reboots the device, captures available stdout/stderr/result data, and refreshes patch inventory after the attempt.
     - Scheduler writes patch install stdout/stderr/result detail to normal Scheduled Job activity and target history surfaces.
     - Scheduled Job device rows derive `patch_progress` from `activity_history.metadata_json.patch_progress` and keep canonical `job_status=Running` while displaying `Downloading n%` or `Installing n%`.

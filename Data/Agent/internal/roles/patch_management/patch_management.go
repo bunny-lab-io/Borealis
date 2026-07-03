@@ -1300,6 +1300,20 @@ function Get-BorealisKB {
   if ($Title -match '(?i)\bKB\d{4,9}\b') { return $Matches[0].ToUpperInvariant() }
   return ''
 }
+function Test-BorealisKBMatch {
+  param($Values, [string]$Title, [string]$RequestedKB)
+  $expected = Get-BorealisKB @($RequestedKB) ''
+  if (-not $expected) { return $false }
+  foreach ($value in @($Values)) {
+    $candidate = Get-BorealisKB @($value) ''
+    if ($candidate -and $candidate.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  foreach ($match in [regex]::Matches("$Title", '(?i)\bKB\d{4,9}\b')) {
+    $candidate = Get-BorealisKB @($match.Value) ''
+    if ($candidate -and $candidate.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
 function Test-BorealisPatchMatch {
   param($Update, $Request)
   $title = "$($Update.Title)".Trim()
@@ -1313,7 +1327,6 @@ function Test-BorealisPatchMatch {
     if ($candidateUpdateId -and $candidateUpdateId.Equals($requestedUpdateId, [StringComparison]::OrdinalIgnoreCase)) {
       if (-not $requestedRevision -or $candidateRevision -eq $requestedRevision) { return $true }
     }
-    return $false
   }
   $requestedKB = "$($Request.kb)".Trim()
   if (-not $requestedKB) {
@@ -1321,9 +1334,7 @@ function Test-BorealisPatchMatch {
     if ($patchKey -match '(?i)\bKB\d{4,9}\b') { $requestedKB = $Matches[0].ToUpperInvariant() }
   }
   if ($requestedKB) {
-    if ($requestedKB -match '^\d{4,9}$') { $requestedKB = "KB$requestedKB" }
-    $candidateKB = Get-BorealisKB $Update.KBArticleIDs $title
-    if ($candidateKB -and $candidateKB.Equals($requestedKB.ToUpperInvariant(), [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    if (Test-BorealisKBMatch $Update.KBArticleIDs $title $requestedKB) { return $true }
   }
   $requestedTitle = "$($Request.title)".Trim()
   if ($requestedTitle -and $title.Equals($requestedTitle, [StringComparison]::OrdinalIgnoreCase)) { return $true }
