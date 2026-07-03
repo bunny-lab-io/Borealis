@@ -19,6 +19,31 @@ type patchInstallTestStore struct {
 	seen    patchInstallLookupRequest
 }
 
+type patchProgressEndpointStore struct {
+	agentIngestTestStore
+	seenDeviceCtx deviceBearerAuthContext
+	seenPayload   map[string]any
+	result        map[string]any
+	status        int
+	err           error
+}
+
+func (s *patchProgressEndpointStore) recordPatchInstallProgress(_ context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (map[string]any, int, error) {
+	s.seenDeviceCtx = deviceCtx
+	s.seenPayload = payload
+	status := s.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if s.err != nil {
+		return nil, status, s.err
+	}
+	if s.result != nil {
+		return s.result, status, nil
+	}
+	return normalizePatchInstallProgressPayload(payload), status, nil
+}
+
 func (s *patchInstallTestStore) lookupOperator(_ context.Context, username string, fallbackRole string) (operatorProfile, error) {
 	profile := s.profile
 	if profile.Username == "" {
@@ -206,6 +231,61 @@ func TestPatchActiveIdentityKeysIncludeWUAIdentityAndTitleKB(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("missing active identity %q from %#v", want, keys)
 		}
+	}
+}
+
+func TestPatchInstallProgressEndpointUsesDeviceAuth(t *testing.T) {
+	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
+	signer := testAgentJWTSigner(t)
+	token, err := signer.issueAccessToken(guid, "fingerprint", 4, agentAccessTokenTTL)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	store := &patchProgressEndpointStore{
+		agentIngestTestStore: agentIngestTestStore{
+			deviceAuthFound: true,
+			deviceAuthRecord: deviceBearerAuthRecord{
+				GUID:         guid,
+				Fingerprint:  "fingerprint",
+				TokenVersion: 4,
+				Status:       "active",
+			},
+		},
+	}
+	auth := &authService{
+		verifier: &tokenVerifier{secret: []byte("test-secret"), maxAge: time.Hour, now: time.Now},
+		store:    store,
+		timeout:  time.Second,
+	}
+	body := `{"scheduled_job_id":9,"scheduled_job_run_id":12,"phase":"install","percent":42,"kb":"KB5000001","captured_at":1783000999}`
+	request := httptest.NewRequest(http.MethodPost, patchInstallProgressRoutePath, strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+token)
+	recorder := httptest.NewRecorder()
+
+	agentPatchInstallProgressHandler(auth, signer, &dpopVerifier{seenJTI: map[string]time.Time{}}, nil).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected progress ok, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.seenDeviceCtx.GUID != normalizeCanonicalGUID(guid) {
+		t.Fatalf("device auth context not passed: %#v", store.seenDeviceCtx)
+	}
+	if store.seenPayload["phase"] != "install" || coerceInt64(store.seenPayload["percent"]) != 42 {
+		t.Fatalf("progress payload not passed: %#v", store.seenPayload)
+	}
+}
+
+func TestPatchProgressFromActivitiesUsesLatestMetadata(t *testing.T) {
+	activities := []map[string]any{
+		{"metadata": map[string]any{"patch_progress": map[string]any{"phase": "download", "percent": int64(25), "captured_at": int64(100)}}},
+		{"metadata": map[string]any{"patch_progress": map[string]any{"phase": "install", "percent": int64(42), "captured_at": int64(200)}}},
+	}
+	progress := patchProgressFromActivities(activities)
+	if progress == nil {
+		t.Fatalf("expected patch progress")
+	}
+	if progress["phase"] != "install" || progress["display_label"] != "Installing 42%" {
+		t.Fatalf("unexpected patch progress %#v", progress)
 	}
 }
 

@@ -1,6 +1,7 @@
 package patchmanagement
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -33,6 +34,8 @@ type Manager struct {
 	hostname          string
 	serviceMode       string
 	runner            commandRunner
+	installRunner     patchInstallCommandRunner
+	progressPoster    patchProgressPoster
 	publisher         func(context.Context, Snapshot) error
 	wakeup            chan struct{}
 	mu                sync.Mutex
@@ -81,6 +84,8 @@ type commandResult struct {
 }
 
 type commandRunner func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error)
+type patchInstallCommandRunner func(ctx context.Context, timeout time.Duration, request map[string]any, onProgress func(map[string]any)) (patchInstallResult, error)
+type patchProgressPoster func(ctx context.Context, payload map[string]any) error
 
 func New(authClient *auth.Client, hostname string, serviceMode string) *Manager {
 	supported, reason := detectSupport()
@@ -92,8 +97,10 @@ func New(authClient *auth.Client, hostname string, serviceMode string) *Manager 
 		wakeup:            make(chan struct{}, 1),
 		supported:         supported,
 		unsupportedReason: reason,
+		installRunner:     runWindowsPatchInstallCommand,
 	}
 	manager.publisher = manager.publishPatches
+	manager.progressPoster = manager.postPatchInstallProgress
 	return manager
 }
 
@@ -244,6 +251,18 @@ func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, e
 	patch["requested_at"] = coerceInt64(body["requested_at"])
 	patch["requested_by"] = cleanText(body["requested_by"])
 	patch["scope"] = cleanText(body["scope"])
+	if jobID := coerceInt64(firstValue(body, "scheduled_job_id", "job_id")); jobID > 0 {
+		patch["scheduled_job_id"] = jobID
+	}
+	if runID := coerceInt64(firstValue(body, "scheduled_job_run_id", "run_id")); runID > 0 {
+		patch["scheduled_job_run_id"] = runID
+	}
+	if targetHostname := cleanText(firstValue(body, "hostname", "target_hostname")); targetHostname != "" {
+		patch["hostname"] = targetHostname
+	}
+	if agentID := cleanText(body["agent_id"]); agentID != "" {
+		patch["agent_id"] = agentID
+	}
 	if truthy(body["wait_for_completion"]) || truthy(body["wait"]) {
 		result := m.runInstallSync(ctx, patch, requestID)
 		return result, nil
@@ -420,23 +439,47 @@ func (m *Manager) installPatch(ctx context.Context, patch map[string]any) (patch
 	if !m.supported {
 		return patchInstallResult{}, fmt.Errorf("%s", fallbackText(m.unsupportedReason, "unsupported platform"))
 	}
-	result, err := m.runner(ctx, patchInstallTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchInstallScript(patch))
-	installResult := patchInstallResult{
-		Stdout:   result.Stdout,
-		Stderr:   result.Stderr,
-		ExitCode: result.ExitCode,
-		Parsed:   parsePatchInstallResult(result.Stdout),
+	runner := m.installRunner
+	if runner == nil {
+		runner = runWindowsPatchInstallCommand
 	}
+	installResult, err := runner(ctx, patchInstallTimeout, patch, func(progress map[string]any) {
+		m.queuePatchInstallProgress(patch, progress)
+	})
 	if parsed := installResult.Parsed; parsed != nil {
 		if okValue, exists := parsed["ok"]; exists && !truthy(okValue) {
 			message := fallbackText(cleanText(parsed["message"]), fallbackText(cleanText(parsed["error"]), "patch install failed"))
 			return installResult, fmt.Errorf("%s", message)
 		}
 	}
-	if err != nil || result.ExitCode != 0 {
-		return installResult, commandError(result, err)
+	if err != nil || installResult.ExitCode != 0 {
+		return installResult, commandError(commandResult{Stdout: installResult.Stdout, Stderr: installResult.Stderr, ExitCode: installResult.ExitCode}, err)
 	}
 	return installResult, nil
+}
+
+func (m *Manager) queuePatchInstallProgress(patch map[string]any, progress map[string]any) {
+	if m == nil || len(progress) == 0 || m.progressPoster == nil {
+		return
+	}
+	payload := patchInstallProgressPayload(m.hostname, patch, progress)
+	if len(payload) == 0 {
+		return
+	}
+	poster := m.progressPoster
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = poster(ctx, payload)
+	}()
+}
+
+func (m *Manager) postPatchInstallProgress(ctx context.Context, payload map[string]any) error {
+	if m == nil || m.authClient == nil {
+		return nil
+	}
+	_, err := m.authClient.PostJSON(ctx, "/api/agent/patches/install-progress", payload, nil)
+	return err
 }
 
 func (m *Manager) publishPatches(ctx context.Context, snapshot Snapshot) error {
@@ -513,9 +556,155 @@ func parsePatchInstallResult(output string) map[string]any {
 	if strings.TrimSpace(output) == "" {
 		return nil
 	}
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if payload := parsePatchInstallResultLine(lines[i]); payload != nil {
+			return payload
+		}
+	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
 		return nil
+	}
+	if isPatchInstallResultPayload(payload) {
+		return payload
+	}
+	return nil
+}
+
+func parsePatchInstallResultLine(line string) map[string]any {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		return nil
+	}
+	if !isPatchInstallResultPayload(payload) {
+		return nil
+	}
+	delete(payload, "kind")
+	return payload
+}
+
+func isPatchInstallResultPayload(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	kind := strings.ToLower(cleanText(payload["kind"]))
+	if kind == "result" {
+		return true
+	}
+	if kind != "" && kind != "final" {
+		return false
+	}
+	if _, ok := payload["ok"]; ok {
+		return true
+	}
+	status := strings.ToLower(cleanText(payload["status"]))
+	return stringInSet(status, "completed", "failed", "success", "succeeded")
+}
+
+func parsePatchInstallProgressLine(line string) map[string]any {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		return nil
+	}
+	kind := strings.ToLower(cleanText(payload["kind"]))
+	phase := normalizePatchInstallProgressPhase(payload["phase"])
+	if kind != "progress" && phase == "" {
+		return nil
+	}
+	if phase == "" {
+		phase = "install"
+	}
+	out := map[string]any{
+		"kind":  "progress",
+		"phase": phase,
+	}
+	for _, key := range []string{"request_id", "scheduled_job_id", "scheduled_job_run_id", "hostname", "agent_id", "patch_key", "kb", "title", "update_id", "revision_number", "message"} {
+		if value := firstValue(payload, key); value != nil && cleanText(value) != "" {
+			out[key] = value
+		}
+	}
+	for _, key := range []string{"percent", "current_update_index", "current_update_percent", "captured_at"} {
+		if value := coerceInt64(payload[key]); value > 0 || key == "percent" {
+			out[key] = value
+		}
+	}
+	if stdout := cleanText(payload["stdout"]); stdout != "" {
+		out["stdout"] = stdout
+	}
+	if stderr := cleanText(payload["stderr"]); stderr != "" {
+		out["stderr"] = stderr
+	}
+	return out
+}
+
+func normalizePatchInstallProgressPhase(value any) string {
+	switch strings.ToLower(cleanText(value)) {
+	case "download", "downloading":
+		return "download"
+	case "install", "installing":
+		return "install"
+	case "search", "searching", "prepare", "preparing":
+		return "prepare"
+	case "finalize", "finalizing":
+		return "finalize"
+	default:
+		return ""
+	}
+}
+
+func patchInstallProgressPayload(hostname string, patch map[string]any, progress map[string]any) map[string]any {
+	if len(progress) == 0 {
+		return nil
+	}
+	payload := map[string]any{}
+	copyIfPresent := func(dstKey string, values ...any) {
+		for _, value := range values {
+			if cleanText(value) != "" {
+				payload[dstKey] = value
+				return
+			}
+		}
+	}
+	copyIfInt := func(dstKey string, values ...any) {
+		for _, value := range values {
+			if number := coerceInt64(value); number > 0 || dstKey == "percent" {
+				payload[dstKey] = number
+				return
+			}
+		}
+	}
+	copyIfPresent("request_id", progress["request_id"], patch["request_id"])
+	copyIfInt("scheduled_job_id", progress["scheduled_job_id"], patch["scheduled_job_id"])
+	copyIfInt("scheduled_job_run_id", progress["scheduled_job_run_id"], patch["scheduled_job_run_id"])
+	copyIfPresent("hostname", progress["hostname"], patch["hostname"], hostname)
+	copyIfPresent("agent_id", progress["agent_id"], patch["agent_id"])
+	copyIfPresent("patch_key", progress["patch_key"], patch["patch_key"])
+	copyIfPresent("kb", progress["kb"], patch["kb"])
+	copyIfPresent("title", progress["title"], patch["title"])
+	copyIfPresent("update_id", progress["update_id"], patch["update_id"])
+	copyIfInt("revision_number", progress["revision_number"], patch["revision_number"])
+	copyIfPresent("phase", normalizePatchInstallProgressPhase(progress["phase"]))
+	if payload["phase"] == nil {
+		payload["phase"] = "install"
+	}
+	copyIfInt("percent", progress["percent"])
+	copyIfInt("current_update_index", progress["current_update_index"])
+	copyIfInt("current_update_percent", progress["current_update_percent"])
+	copyIfPresent("message", progress["message"])
+	copyIfPresent("stdout", progress["stdout"])
+	copyIfPresent("stderr", progress["stderr"])
+	copyIfInt("captured_at", progress["captured_at"])
+	if payload["captured_at"] == nil {
+		payload["captured_at"] = time.Now().Unix()
 	}
 	return payload
 }
@@ -837,6 +1026,81 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 	return result, nil
 }
 
+func runWindowsPatchInstallCommand(ctx context.Context, timeout time.Duration, request map[string]any, onProgress func(map[string]any)) (patchInstallResult, error) {
+	commandCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(commandCtx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchInstallScript(request))
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return patchInstallResult{ExitCode: -1}, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return patchInstallResult{ExitCode: -1}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return patchInstallResult{ExitCode: -1}, err
+	}
+
+	var stdout strings.Builder
+	var stderr strings.Builder
+	var parsed map[string]any
+	stdoutDone := make(chan error, 1)
+	stderrDone := make(chan error, 1)
+
+	go func() {
+		scanner := bufio.NewScanner(stdoutPipe)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
+		for scanner.Scan() {
+			line := scanner.Text()
+			stdout.WriteString(line)
+			stdout.WriteString("\n")
+			if progress := parsePatchInstallProgressLine(line); progress != nil && onProgress != nil {
+				onProgress(progress)
+			}
+			if result := parsePatchInstallResultLine(line); result != nil {
+				parsed = result
+			}
+		}
+		stdoutDone <- scanner.Err()
+	}()
+	go func() {
+		scanner := bufio.NewScanner(stderrPipe)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4<<20)
+		for scanner.Scan() {
+			stderr.WriteString(scanner.Text())
+			stderr.WriteString("\n")
+		}
+		stderrDone <- scanner.Err()
+	}()
+
+	waitErr := cmd.Wait()
+	stdoutErr := <-stdoutDone
+	stderrErr := <-stderrDone
+	exitCode := 0
+	if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		exitCode = exitErr.ExitCode()
+	} else if waitErr != nil {
+		exitCode = -1
+	}
+	result := patchInstallResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+		Parsed:   parsed,
+	}
+	if result.Parsed == nil {
+		result.Parsed = parsePatchInstallResult(result.Stdout)
+	}
+	if stdoutErr != nil && waitErr == nil {
+		waitErr = stdoutErr
+	}
+	if stderrErr != nil && waitErr == nil {
+		waitErr = stderrErr
+	}
+	return result, waitErr
+}
+
 func errorResponse(code string, message string) map[string]any {
 	return map[string]any{
 		"ok":      false,
@@ -954,15 +1218,76 @@ func fallbackText(value string, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
+func stringInSet(value string, candidates ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range candidates {
+		if value == strings.ToLower(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
+}
+
 func windowsPatchInstallScript(request map[string]any) string {
 	payload, _ := json.Marshal(request)
 	encoded := base64.StdEncoding.EncodeToString(payload)
 	return fmt.Sprintf(`
 $ErrorActionPreference = 'Stop'
 $request = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')))
+function Write-BorealisPatchPayload {
+  param($Payload)
+  if (-not $Payload.ContainsKey('captured_at') -or $null -eq $Payload['captured_at']) {
+    try { $Payload['captured_at'] = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } catch {}
+  }
+  [Console]::Out.WriteLine(($Payload | ConvertTo-Json -Depth 8 -Compress))
+  [Console]::Out.Flush()
+}
 function Write-BorealisPatchResult {
   param($Payload)
-  $Payload | ConvertTo-Json -Depth 8 -Compress
+  $Payload['kind'] = 'result'
+  Write-BorealisPatchPayload $Payload
+}
+$script:BorealisLastProgress = @{}
+function Write-BorealisPatchProgress {
+  param([string]$Phase, $Job, [string]$Message, [bool]$Force, [int]$PercentOverride = -1)
+  $progress = $null
+  try { if ($null -ne $Job) { $progress = $Job.GetProgress() } } catch {}
+  $percent = 0
+  $currentIndex = 0
+  $currentPercent = 0
+  try { $percent = [int]$progress.PercentComplete } catch {}
+  try { $currentIndex = [int]$progress.CurrentUpdateIndex } catch {}
+  try { $currentPercent = [int]$progress.CurrentUpdatePercentComplete } catch {}
+  if ($PercentOverride -ge 0) { $percent = $PercentOverride; $currentPercent = $PercentOverride }
+  if ($percent -lt 0) { $percent = 0 }
+  if ($percent -gt 100) { $percent = 100 }
+  if ($currentPercent -lt 0) { $currentPercent = 0 }
+  if ($currentPercent -gt 100) { $currentPercent = 100 }
+  $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $signature = "$Phase|$percent|$currentIndex|$currentPercent|$Message"
+  $previous = $script:BorealisLastProgress[$Phase]
+  if (-not $Force -and $null -ne $previous -and $previous.signature -eq $signature -and (($nowMs - [int64]$previous.at) -lt 15000)) {
+    return
+  }
+  $script:BorealisLastProgress[$Phase] = @{ signature = $signature; at = $nowMs }
+  Write-BorealisPatchPayload @{
+    kind = 'progress'
+    request_id = "$($request.request_id)".Trim()
+    scheduled_job_id = $request.scheduled_job_id
+    scheduled_job_run_id = $request.scheduled_job_run_id
+    hostname = "$($request.hostname)".Trim()
+    agent_id = "$($request.agent_id)".Trim()
+    patch_key = "$($request.patch_key)".Trim()
+    kb = "$($request.kb)".Trim()
+    title = "$($request.title)".Trim()
+    update_id = "$($request.update_id)".Trim()
+    revision_number = $request.revision_number
+    phase = $Phase
+    percent = $percent
+    current_update_index = $currentIndex
+    current_update_percent = $currentPercent
+    message = $Message
+  }
 }
 function Get-BorealisKB {
   param($Values, [string]$Title)
@@ -1005,6 +1330,7 @@ function Test-BorealisPatchMatch {
   return $false
 }
 try {
+  Write-BorealisPatchProgress 'prepare' $null 'Searching Windows Update Agent for matching update.' $true
   $session = New-Object -ComObject Microsoft.Update.Session
   $searcher = $session.CreateUpdateSearcher()
   $searchResult = $searcher.Search("IsInstalled=0 and IsHidden=0")
@@ -1036,7 +1362,20 @@ try {
   if ($needsDownload) {
     $downloader = $session.CreateUpdateDownloader()
     $downloader.Updates = $collection
-    [void]$downloader.Download()
+    Write-BorealisPatchProgress 'download' $null 'Downloading selected update.' $true
+    $downloadJob = $downloader.BeginDownload($null, $null)
+    try {
+      while (-not [bool]$downloadJob.IsCompleted) {
+        Write-BorealisPatchProgress 'download' $downloadJob 'Downloading selected update.' $false
+        Start-Sleep -Seconds 2
+      }
+      Write-BorealisPatchProgress 'download' $downloadJob 'Download complete.' $true
+      [void]$downloadJob.GetResult()
+    } finally {
+      try { $downloadJob.CleanUp() } catch {}
+    }
+  } else {
+    Write-BorealisPatchProgress 'download' $null 'Selected update already downloaded.' $true 100
   }
   $installCollection = New-Object -ComObject Microsoft.Update.UpdateColl
   foreach ($update in $matches) {
@@ -1052,7 +1391,18 @@ try {
   $installer.Updates = $installCollection
   try { $installer.ForceQuiet = $true } catch {}
   try { $installer.AllowSourcePrompts = $false } catch {}
-  $installResult = $installer.Install()
+  Write-BorealisPatchProgress 'install' $null 'Installing selected update.' $true
+  $installJob = $installer.BeginInstall($null, $null)
+  try {
+    while (-not [bool]$installJob.IsCompleted) {
+      Write-BorealisPatchProgress 'install' $installJob 'Installing selected update.' $false
+      Start-Sleep -Seconds 2
+    }
+    Write-BorealisPatchProgress 'install' $installJob 'Install complete.' $true
+    $installResult = $installJob.GetResult()
+  } finally {
+    try { $installJob.CleanUp() } catch {}
+  }
   $resultCode = [int]$installResult.ResultCode
   $ok = ($resultCode -eq 2 -or $resultCode -eq 3)
   $titles = @()

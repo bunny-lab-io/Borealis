@@ -136,6 +136,47 @@ func TestPatchInstallRequestNormalizesIdentity(t *testing.T) {
 	}
 }
 
+func TestParsePatchInstallProgressJSONL(t *testing.T) {
+	line := `{"kind":"progress","request_id":"patch-job-1-run-2","phase":"install","percent":42,"current_update_index":0,"current_update_percent":42,"message":"Installing selected update.","captured_at":1783000999}`
+	progress := parsePatchInstallProgressLine(line)
+	if progress == nil {
+		t.Fatalf("expected progress payload")
+	}
+	if progress["phase"] != "install" || progress["percent"] != int64(42) || progress["captured_at"] != int64(1783000999) {
+		t.Fatalf("unexpected progress payload %#v", progress)
+	}
+
+	output := strings.Join([]string{
+		`{"kind":"progress","phase":"download","percent":100}`,
+		`{"kind":"result","ok":true,"status":"completed","result_code":2,"installed_count":1}`,
+	}, "\n")
+	result := parsePatchInstallResult(output)
+	if result == nil || result["ok"] != true || result["result_code"] != float64(2) {
+		t.Fatalf("unexpected parsed JSONL result %#v", result)
+	}
+}
+
+func TestPatchInstallProgressPayloadIncludesSchedulerContext(t *testing.T) {
+	payload := patchInstallProgressPayload("LAB-OPERATOR-01", map[string]any{
+		"request_id":           "patch-job-9-run-12",
+		"scheduled_job_id":     int64(9),
+		"scheduled_job_run_id": int64(12),
+		"kb":                   "KB5000001",
+		"title":                "Security Update",
+	}, map[string]any{
+		"phase":       "download",
+		"percent":     int64(37),
+		"message":     "Downloading selected update.",
+		"captured_at": int64(1783001111),
+	})
+	if payload["request_id"] != "patch-job-9-run-12" || payload["scheduled_job_id"] != int64(9) || payload["scheduled_job_run_id"] != int64(12) {
+		t.Fatalf("scheduler context missing from payload %#v", payload)
+	}
+	if payload["hostname"] != "LAB-OPERATOR-01" || payload["phase"] != "download" || payload["percent"] != int64(37) {
+		t.Fatalf("unexpected progress payload %#v", payload)
+	}
+}
+
 func TestPatchInstallRequestAcceptedRunsAsync(t *testing.T) {
 	manager := New(nil, "LAB-OPERATOR-01", "system")
 	manager.supported = true
@@ -143,15 +184,11 @@ func TestPatchInstallRequestAcceptedRunsAsync(t *testing.T) {
 	manager.publisher = func(context.Context, Snapshot) error { return nil }
 	installStarted := make(chan struct{}, 1)
 	manager.runner = func(_ context.Context, _ time.Duration, _ string, args ...string) (commandResult, error) {
-		script := ""
-		if len(args) > 0 {
-			script = args[len(args)-1]
-		}
-		if strings.Contains(script, "CreateUpdateInstaller") {
-			installStarted <- struct{}{}
-			return commandResult{Stdout: `{"ok":true,"status":"completed"}`}, nil
-		}
 		return commandResult{Stdout: `[]`}, nil
+	}
+	manager.installRunner = func(_ context.Context, _ time.Duration, _ map[string]any, _ func(map[string]any)) (patchInstallResult, error) {
+		installStarted <- struct{}{}
+		return patchInstallResult{Stdout: `{"ok":true,"status":"completed"}`, Parsed: map[string]any{"ok": true, "status": "completed"}}, nil
 	}
 
 	response, err := manager.HandleInstallRequest(context.Background(), map[string]any{
@@ -186,14 +223,18 @@ func TestPatchInstallRequestWaitsForCompletion(t *testing.T) {
 	manager.unsupportedReason = ""
 	manager.publisher = func(context.Context, Snapshot) error { return nil }
 	manager.runner = func(_ context.Context, _ time.Duration, _ string, args ...string) (commandResult, error) {
-		script := ""
-		if len(args) > 0 {
-			script = args[len(args)-1]
-		}
-		if strings.Contains(script, "CreateUpdateInstaller") {
-			return commandResult{Stdout: `{"ok":true,"status":"completed","result_code":2,"reboot_required":false,"installed_count":1}`, Stderr: "", ExitCode: 0}, nil
-		}
 		return commandResult{Stdout: `[]`, ExitCode: 0}, nil
+	}
+	manager.installRunner = func(_ context.Context, _ time.Duration, _ map[string]any, onProgress func(map[string]any)) (patchInstallResult, error) {
+		if onProgress != nil {
+			onProgress(map[string]any{"kind": "progress", "phase": "install", "percent": 42, "captured_at": int64(1783000999)})
+		}
+		return patchInstallResult{
+			Stdout:   `{"ok":true,"status":"completed","result_code":2,"reboot_required":false,"installed_count":1}`,
+			Stderr:   "",
+			ExitCode: 0,
+			Parsed:   map[string]any{"ok": true, "status": "completed", "result_code": float64(2), "reboot_required": false, "installed_count": float64(1)},
+		}, nil
 	}
 
 	response, err := manager.HandleInstallRequest(context.Background(), map[string]any{

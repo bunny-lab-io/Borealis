@@ -653,6 +653,37 @@ const StatusPill = ({ label, theme }) => {
   );
 };
 
+const patchProgressLabel = (progress, status) => {
+  if (!progress || typeof progress !== "object") return "";
+  if (normalizeJobStatusKey(status) !== "running") return "";
+  const direct = String(progress.display_label || "").trim();
+  if (direct) return direct;
+  const percentValue = Number(progress.percent);
+  const percent = Number.isFinite(percentValue) ? Math.max(0, Math.min(100, Math.round(percentValue))) : null;
+  const phase = String(progress.phase || "").trim().toLowerCase();
+  if (phase === "download") return percent == null ? "Downloading" : `Downloading ${percent}%`;
+  if (phase === "install") return percent == null ? "Installing" : `Installing ${percent}%`;
+  if (phase === "prepare") return "Preparing";
+  if (phase === "finalize") return "Finalizing";
+  return "";
+};
+
+const patchProgressTooltip = (progress) => {
+  if (!progress || typeof progress !== "object") return "";
+  const lines = [];
+  const label = String(progress.display_label || "").trim();
+  const kb = String(progress.kb || "").trim();
+  const title = String(progress.title || "").trim();
+  const message = String(progress.message || "").trim();
+  if (label) lines.push(label);
+  if (kb) lines.push(kb);
+  if (title) lines.push(title);
+  if (message) lines.push(message);
+  const capturedAt = Number(progress.captured_at || 0);
+  if (capturedAt > 0) lines.push(`Updated ${new Date(capturedAt * 1000).toLocaleString()}`);
+  return lines.join("\n");
+};
+
 const GLASS_PANEL_BASE_SX = {
   background: MAGIC_UI.panelBg,
   borderRadius: 3,
@@ -2900,24 +2931,33 @@ export default function CreateJob() {
 
   const jobHistoryGridRows = useMemo(
     () =>
-      deviceFiltered.map((row, index) => ({
-        id: `${row.hostname || "device"}-${index}`,
-        hostname: row.hostname || "",
-        online: Boolean(row.online),
-        onlineLabel: row?.online ? "Online" : "Offline",
-        site: row.site || "",
-        ranOn: row.ran_on,
-        jobStatus: row.job_status || "",
-        jobStatusLabel: JOB_RESULT_THEME[normalizeJobStatusKey(row?.job_status || "")]?.label || (row.job_status || ""),
-        jobStatusSortRank: getJobStatusSortRank(row?.job_status || ""),
-        hasStdOut:
-          Boolean(row.has_stdout) ||
-          (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stdout))),
-        hasStdErr:
-          Boolean(row.has_stderr) ||
-          (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stderr))),
-        raw: row,
-      })).map((row) => ({
+      deviceFiltered.map((row, index) => {
+        const progress = row?.patch_progress && typeof row.patch_progress === "object" ? row.patch_progress : null;
+        const canonicalLabel = JOB_RESULT_THEME[normalizeJobStatusKey(row?.job_status || "")]?.label || (row.job_status || "");
+        const displayLabel = String(row?.display_status_label || "").trim() || patchProgressLabel(progress, row?.job_status || "") || canonicalLabel;
+        const progressTooltip = String(row?.status_tooltip || "").trim() || patchProgressTooltip(progress);
+        return {
+          id: `${row.hostname || "device"}-${index}`,
+          hostname: row.hostname || "",
+          online: Boolean(row.online),
+          onlineLabel: row?.online ? "Online" : "Offline",
+          site: row.site || "",
+          ranOn: row.ran_on,
+          jobStatus: row.job_status || "",
+          jobStatusLabel: displayLabel,
+          jobStatusFilterLabel: canonicalLabel,
+          jobStatusTooltip: progressTooltip,
+          jobStatusSortRank: getJobStatusSortRank(row?.job_status || ""),
+          patchProgress: progress,
+          hasStdOut:
+            Boolean(row.has_stdout) ||
+            (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stdout))),
+          hasStdErr:
+            Boolean(row.has_stderr) ||
+            (Array.isArray(row.activities) && row.activities.some((activity) => Boolean(activity?.has_stderr))),
+          raw: row,
+        };
+      }).map((row) => ({
         ...row,
         outputState:
           row.hasStdOut && row.hasStdErr
@@ -3268,6 +3308,21 @@ export default function CreateJob() {
     return () => { if (t) clearInterval(t); };
   }, [editing, loadHistory]);
 
+  useEffect(() => {
+    if (!editing || !initialJob?.id) return undefined;
+    const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
+    if (!socket || typeof socket.on !== "function") return undefined;
+    const handlePatchProgress = (payload = {}) => {
+      const jobId = String(payload?.scheduled_job_id || payload?.progress?.scheduled_job_id || "");
+      if (jobId && jobId !== String(initialJob.id)) return;
+      void loadHistory();
+    };
+    socket.on("scheduled_job_patch_progress", handlePatchProgress);
+    return () => {
+      socket.off("scheduled_job_patch_progress", handlePatchProgress);
+    };
+  }, [editing, initialJob?.id, loadHistory]);
+
   const clearJobHistory = useCallback(async () => {
     if (!editing || !initialJob?.id || clearingHistory) return;
     setClearingHistory(true);
@@ -3282,11 +3337,17 @@ export default function CreateJob() {
     }
   }, [clearingHistory, editing, initialJob?.id, loadHistory]);
 
-  const resultChip = useCallback((status) => {
+  const resultChip = useCallback((status, displayLabel = "", tooltip = "") => {
     const key = normalizeJobStatusKey(status);
     const theme = JOB_RESULT_THEME[key] || JOB_RESULT_THEME.default;
-    const label = JOB_RESULT_THEME[key]?.label || status || "Status";
-    return <StatusPill label={label} theme={theme} />;
+    const label = displayLabel || JOB_RESULT_THEME[key]?.label || status || "Status";
+    const pill = <StatusPill label={label} theme={theme} />;
+    if (!tooltip) return pill;
+    return (
+      <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}>
+        <span>{pill}</span>
+      </Tooltip>
+    );
   }, []);
 
   const aggregatedHistory = useMemo(() => {
@@ -3887,7 +3948,7 @@ export default function CreateJob() {
           />
         );
       },
-      JobStatusRenderer: (params) => resultChip(params.data?.jobStatus || ""),
+      JobStatusRenderer: (params) => resultChip(params.data?.jobStatus || "", params.data?.jobStatusLabel || "", params.data?.jobStatusTooltip || ""),
       OutputActionsRenderer: (params) => {
         const row = params.data;
         if (!row) return null;
@@ -4025,6 +4086,7 @@ export default function CreateJob() {
         cellRenderer: "JobStatusRenderer",
         cellClass: "status-pill-cell",
         filter: "agSetColumnFilter",
+        filterValueGetter: (params) => params.data?.jobStatusFilterLabel || params.data?.jobStatusLabel || "",
         comparator: (valueA, valueB, nodeA, nodeB) => {
           const rankA = nodeA?.data?.jobStatusSortRank ?? JOB_STATUS_SORT_RANK.default;
           const rankB = nodeB?.data?.jobStatusSortRank ?? JOB_STATUS_SORT_RANK.default;

@@ -25,6 +25,7 @@ scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
 scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
 scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
+activity_history.metadata_json.patch_progress stores latest scheduled Windows patch install progress.
 
 watchdogs (id) ---------------< watchdog_sites (watchdog_id)
 watchdogs (id) ---------------< watchdog_targets (watchdog_id)

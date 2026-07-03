@@ -6,6 +6,7 @@ const GO_REALTIME_EVENTS = [
   "device_inventory_changed",
   "device_services_changed",
   "borealis_notification",
+  "scheduled_job_patch_progress",
   "server_operator_presence_changed",
   "watchdog_incidents_changed",
   "device_watchdogs_changed",

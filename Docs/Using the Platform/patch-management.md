@@ -34,6 +34,10 @@ Pending rows come from Windows Update Agent search results that are not installe
 
     Patch Management ad-hoc install jobs do not approve updates, force reboots, or replace existing patching policy tooling. Offline agents at execution time remain visible in Scheduled Job results so operators can retry or reschedule after the device returns.
 
+!!! info
+
+    Scheduled patch install jobs show live Windows Update Agent progress in the Scheduled Jobs current-run device rows. Running rows display labels such as `Downloading 42%` and `Installing 18%`. WUA progress is Microsoft-reported and can pause, jump, or stay on one percentage for large updates.
+
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints
@@ -42,6 +46,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
     - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk flows call this once per selected patch.
+    - `POST /api/agent/patches/install-progress` - device-authenticated Agent progress update for scheduled patch installs. The Engine stores latest progress in scheduled activity metadata and emits `scheduled_job_patch_progress`.
     - `POST /api/agent/details` - accepts `details.patches` from the Agent `patch_management` role.
 
     ### Related documentation
@@ -78,8 +83,9 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Scheduler snapshots target membership into `scheduled_job_runs` and `scheduled_job_run_targets`, then queues `patch_install_run` work items on the scheduled-job lane.
     - Patch install workers call the site worker host-service bridge, which emits Agent `patch_install_request` with `wait_for_completion=true` over the device SYSTEM socket.
     - The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback.
-    - The Agent downloads the matched update when needed, calls WUA install for the matched update collection, never reboots the device, captures available stdout/stderr/result data, and refreshes patch inventory after the attempt.
+    - The Agent downloads the matched update when needed, uses WUA async download/install jobs, posts live progress to `/api/agent/patches/install-progress`, never reboots the device, captures available stdout/stderr/result data, and refreshes patch inventory after the attempt.
     - Scheduler writes patch install stdout/stderr/result detail to normal Scheduled Job activity and target history surfaces.
+    - Scheduled Job device rows derive `patch_progress` from `activity_history.metadata_json.patch_progress` and keep canonical `job_status=Running` while displaying `Downloading n%` or `Installing n%`.
     - Fleet and device patch APIs attach `active_install_job` while an enabled patch install job for the same KB, patch key, WUA update identity, KB discovered in title, or title is still active. The UI replaces `Install` with `Immediate - Job ID: <id>` or `Scheduled - Job ID: <id>` until that job completes, times out, or is deleted.
     - Non-Windows agents report the role as unsupported in Agent Health.
     - Agent rows use `state=pending` or `state=installed`.
