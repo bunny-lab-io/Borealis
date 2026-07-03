@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Checkbox, Tooltip, Typography } from "@mui/material";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
@@ -79,6 +79,61 @@ function boolLabel(value) {
   return "";
 }
 
+function patchSelectionIdentity(row = {}) {
+  return (
+    (text(row.kb) ? `kb:${text(row.kb).toUpperCase()}` : "") ||
+    (text(row.patch_key) ? `patch:${text(row.patch_key).toLowerCase()}` : "") ||
+    (text(row.title) ? `title:${text(row.title).toLowerCase()}` : "")
+  );
+}
+
+function canSelectPatchForInstall(row = {}) {
+  return text(row.state).toLowerCase() === "pending" && Boolean(text(row.patch_key)) && !row.active_install_job;
+}
+
+function patchDraftJobName(prefix, patchLabel, title, count) {
+  return `[${prefix}] - ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`;
+}
+
+function devicePatchDraftItem(row = {}, normalizedHostname = "", { triggerLabel = "Ad-Hoc Install" } = {}) {
+  if (!normalizedHostname || row.active_install_job) return null;
+  const patchKey = text(row.patch_key);
+  if (!patchKey || text(row.state).toLowerCase() !== "pending") return null;
+  const patchLabel = text(row.kb) || text(row.title) || "Patch";
+  const title = text(row.title) || patchLabel;
+  const patch = {
+    patch_key: patchKey,
+    kb: text(row.kb),
+    title,
+    state: text(row.state) || "pending",
+    source: text(row.source),
+    classification: text(row.classification),
+    severity: text(row.severity),
+    metadata: row.metadata || {},
+  };
+  const targets = [{
+    kind: "device",
+    hostname: normalizedHostname,
+    device_guid: text(row.device_guid),
+    site_id: row.site_id ?? null,
+    site_name: text(row.site_name),
+    operating_system: text(row.operating_system),
+  }];
+  return {
+    id: `${patchKey}-${patchSelectionIdentity(row) || text(row.id)}`,
+    source: "device",
+    trigger: triggerLabel === "Bulk Ad-Hoc Install" ? "bulk_ad_hoc" : "ad_hoc",
+    trigger_label: triggerLabel,
+    patch,
+    targets,
+    target_count: 1,
+    job_name:
+      triggerLabel === "Bulk Ad-Hoc Install"
+        ? patchDraftJobName(triggerLabel, patchLabel, title, 1)
+        : `[${triggerLabel}] ${patchLabel} - ${title} - 1 Device`,
+  };
+}
+
 function FilterSliderBlock({ label = "", children }) {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
@@ -99,6 +154,7 @@ export default function PatchManagementTab({ hostname = "" }) {
   const [loadError, setLoadError] = useState("");
   const [stateFilter, setStateFilter] = useState("pending");
   const [refreshBusy, setRefreshBusy] = useState(false);
+  const [selectedPatchRows, setSelectedPatchRows] = useState({});
   const normalizedHostname = useMemo(() => text(hostname), [hostname]);
 
   const loadPatchRows = useCallback(async () => {
@@ -179,41 +235,20 @@ export default function PatchManagementTab({ hostname = "" }) {
 
   const handleInstallPatch = useCallback(
     (row = {}) => {
-      if (!normalizedHostname || row.active_install_job) return;
-      const patchKey = text(row.patch_key);
-      if (!patchKey || text(row.state).toLowerCase() !== "pending") return;
-      const patchLabel = text(row.kb) || text(row.title) || "Patch";
-      const title = text(row.title) || patchLabel;
-      const patch = {
-        patch_key: patchKey,
-        kb: text(row.kb),
-        title,
-        state: text(row.state) || "pending",
-        source: text(row.source),
-        classification: text(row.classification),
-        severity: text(row.severity),
-        metadata: row.metadata || {},
-      };
-      const targets = [{
-        kind: "device",
-        hostname: normalizedHostname,
-        device_guid: text(row.device_guid),
-        site_id: row.site_id ?? null,
-        site_name: text(row.site_name),
-        operating_system: text(row.operating_system),
-      }];
+      const item = devicePatchDraftItem(row, normalizedHostname);
+      if (!item) return;
       navigate(`${APP_PATHS.jobNew}?tab=schedule`, {
         state: {
           patchJobDraft: {
-            id: `patch-device-${patchKey}-${normalizedHostname}-${Date.now()}`,
+            id: `patch-device-${text(row.patch_key)}-${normalizedHostname}-${Date.now()}`,
             source: "device",
-            trigger: "ad_hoc",
-            trigger_label: "Ad-Hoc Install",
-            patch,
-            targets,
-            target_count: 1,
+            trigger: item.trigger,
+            trigger_label: item.trigger_label,
+            patch: item.patch,
+            targets: item.targets,
+            target_count: item.target_count,
             expiration: "2h",
-            job_name: `[Ad-Hoc Install] ${patchLabel} - ${title} - 1 Device`,
+            job_name: item.job_name,
           },
         },
       });
@@ -260,8 +295,100 @@ export default function PatchManagementTab({ hostname = "" }) {
     [patchRows, stateFilter]
   );
 
+  useEffect(() => {
+    setSelectedPatchRows((previous) => {
+      const validIds = new Set(displayRows.filter(canSelectPatchForInstall).map((row, index) => text(row.patch_key || row.id || index)));
+      const next = {};
+      Object.entries(previous).forEach(([key, value]) => {
+        if (value && validIds.has(key)) next[key] = true;
+      });
+      const previousKeys = Object.keys(previous);
+      const nextKeys = Object.keys(next);
+      if (previousKeys.length === nextKeys.length && nextKeys.every((key) => previous[key])) return previous;
+      return next;
+    });
+  }, [displayRows]);
+
+  const rowSelectionId = useCallback((row = {}, index = 0) => text(row.patch_key || row.id || index), []);
+
+  const selectedBulkRows = useMemo(
+    () => displayRows.filter((row, index) => selectedPatchRows[rowSelectionId(row, index)] && canSelectPatchForInstall(row)),
+    [displayRows, rowSelectionId, selectedPatchRows]
+  );
+
+  const selectedBulkPatchCount = useMemo(
+    () => new Set(selectedBulkRows.map(patchSelectionIdentity).filter(Boolean)).size,
+    [selectedBulkRows]
+  );
+
+  const togglePatchSelection = useCallback((row = {}, index = 0) => {
+    const rowID = rowSelectionId(row, index);
+    if (!rowID || !canSelectPatchForInstall(row)) return;
+    setSelectedPatchRows((previous) => {
+      const next = { ...previous };
+      if (next[rowID]) {
+        delete next[rowID];
+      } else {
+        next[rowID] = true;
+      }
+      return next;
+    });
+  }, [rowSelectionId]);
+
+  const handleBulkInstall = useCallback(() => {
+    if (selectedBulkPatchCount < 2) return;
+    const items = selectedBulkRows
+      .map((row) => devicePatchDraftItem(row, normalizedHostname, { triggerLabel: "Bulk Ad-Hoc Install" }))
+      .filter(Boolean);
+    if (items.length < 2) return;
+    navigate(`${APP_PATHS.jobNew}?tab=schedule`, {
+      state: {
+        patchJobDraft: {
+          id: `patch-bulk-device-${normalizedHostname}-${Date.now()}`,
+          source: "device",
+          trigger: "bulk_ad_hoc",
+          trigger_label: "Bulk Ad-Hoc Install",
+          mode: "bulk",
+          bulk: true,
+          items,
+          expiration: "2h",
+        },
+      },
+    });
+  }, [navigate, normalizedHostname, selectedBulkPatchCount, selectedBulkRows]);
+
   const columnDefs = useMemo(
     () => [
+      {
+        colId: "select",
+        headerName: "",
+        width: 52,
+        minWidth: 52,
+        maxWidth: 52,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          const rowID = rowSelectionId(row, params.node?.rowIndex || 0);
+          const eligible = canSelectPatchForInstall(row);
+          return (
+            <Checkbox
+              size="small"
+              checked={Boolean(eligible && selectedPatchRows[rowID])}
+              disabled={!eligible}
+              onClick={(event) => event.stopPropagation()}
+              onChange={() => togglePatchSelection(row, params.node?.rowIndex || 0)}
+              sx={{
+                p: 0.2,
+                color: "rgba(148,163,184,0.65)",
+                "&.Mui-checked": { color: "#58a6ff" },
+                "&.Mui-disabled": { color: "rgba(71,85,105,0.5)" },
+              }}
+            />
+          );
+        },
+      },
       {
         field: "kb",
         headerName: "KB",
@@ -404,7 +531,7 @@ export default function PatchManagementTab({ hostname = "" }) {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
     ],
-    [handleInstallPatch, navigate]
+    [handleInstallPatch, navigate, rowSelectionId, selectedPatchRows, togglePatchSelection]
   );
 
   return (
@@ -418,14 +545,24 @@ export default function PatchManagementTab({ hostname = "" }) {
             onChange={setStateFilter}
           />
         </FilterSliderBlock>
-        <Button
-          startIcon={<RefreshRoundedIcon />}
-          disabled={!normalizedHostname || refreshBusy}
-          onClick={handleQueryPatchInventory}
-          sx={PRIMARY_REFRESH_BUTTON_SX}
-        >
-          {refreshBusy ? "Querying..." : "Query Patch Inventory"}
-        </Button>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, flexWrap: "wrap" }}>
+          <Button
+            startIcon={<SystemUpdateAltRoundedIcon />}
+            disabled={selectedBulkPatchCount < 2}
+            onClick={handleBulkInstall}
+            sx={PRIMARY_REFRESH_BUTTON_SX}
+          >
+            Bulk Install
+          </Button>
+          <Button
+            startIcon={<RefreshRoundedIcon />}
+            disabled={!normalizedHostname || refreshBusy}
+            onClick={handleQueryPatchInventory}
+            sx={PRIMARY_REFRESH_BUTTON_SX}
+          >
+            {refreshBusy ? "Querying..." : "Query Patch Inventory"}
+          </Button>
+        </Box>
       </Box>
       {loadError ? (
         <Box sx={{ color: "rgba(248,113,113,0.95)", fontSize: "0.84rem" }}>

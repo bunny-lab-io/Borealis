@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Checkbox, Tooltip, Typography } from "@mui/material";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
@@ -80,6 +80,70 @@ function normalizedPatchKey(row = {}) {
   );
 }
 
+function patchSelectionIdentity(row = {}) {
+  return (
+    (text(row.kb) ? `kb:${text(row.kb).toUpperCase()}` : "") ||
+    (text(row.patch_key) ? `patch:${text(row.patch_key).toLowerCase()}` : "") ||
+    (text(row.title) ? `title:${text(row.title).toLowerCase()}` : "")
+  );
+}
+
+function canSelectPatchForInstall(row = {}) {
+  return text(row.state).toLowerCase() === "pending" && Boolean(text(row.patch_key)) && !row.active_install_job;
+}
+
+function patchDraftJobName(prefix, patchLabel, title, count) {
+  return `[${prefix}] - ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`;
+}
+
+function fleetPatchDraftItem(row = {}, { triggerLabel = "Ad-Hoc Install" } = {}) {
+  const patchKey = text(row.patch_key);
+  if (!patchKey || text(row.state).toLowerCase() !== "pending" || row.active_install_job) return null;
+  const childRows = Array.isArray(row.childRows) ? row.childRows : [];
+  const targetsByHost = new Map();
+  childRows.forEach((item) => {
+    const hostname = text(item.hostname);
+    if (!hostname || targetsByHost.has(hostname.toLowerCase())) return;
+    targetsByHost.set(hostname.toLowerCase(), {
+      kind: "device",
+      hostname,
+      device_guid: text(item.device_guid),
+      site_id: item.site_id ?? null,
+      site_name: text(item.site_name),
+      operating_system: text(item.operating_system),
+    });
+  });
+  const targets = Array.from(targetsByHost.values());
+  if (!targets.length) return null;
+  const first = childRows[0] || {};
+  const patch = {
+    patch_key: patchKey,
+    kb: text(row.kb),
+    title: text(row.title),
+    state: text(row.state) || "pending",
+    source: text(row.source),
+    classification: text(row.classification),
+    severity: text(row.severity),
+    metadata: first.metadata || {},
+  };
+  const patchLabel = text(row.kb) || text(row.title) || "Patch";
+  const title = text(row.title) || patchLabel;
+  const count = targets.length;
+  return {
+    id: `${patchKey}-${patchSelectionIdentity(row) || text(row.id)}`,
+    source: "fleet",
+    trigger: triggerLabel === "Bulk Ad-Hoc Install" ? "bulk_ad_hoc" : "ad_hoc",
+    trigger_label: triggerLabel,
+    patch,
+    targets,
+    target_count: count,
+    job_name:
+      triggerLabel === "Bulk Ad-Hoc Install"
+        ? patchDraftJobName(triggerLabel, patchLabel, title, count)
+        : `[${triggerLabel}] ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`,
+  };
+}
+
 function FilterSliderBlock({ label = "", children }) {
   return (
     <Box sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
@@ -146,16 +210,11 @@ export default function PatchManagement() {
   const [loadError, setLoadError] = useState("");
   const [stateFilter, setStateFilter] = useState("pending");
   const [severityFilter, setSeverityFilter] = useState("");
+  const [selectedPatchRows, setSelectedPatchRows] = useState({});
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
   );
-
-  useRoutePageChrome({
-    title: PAGE_TITLE,
-    subtitle: PAGE_SUBTITLE,
-    Icon: SystemUpdateAltRoundedIcon,
-  });
 
   const loadPatchRows = useCallback(async () => {
     try {
@@ -279,6 +338,44 @@ export default function PatchManagement() {
 
   const displayRows = useMemo(() => buildPatchFleetRows(visibleRows), [visibleRows]);
 
+  useEffect(() => {
+    setSelectedPatchRows((previous) => {
+      const validIds = new Set(displayRows.filter(canSelectPatchForInstall).map((row) => text(row.id)));
+      const next = {};
+      Object.entries(previous).forEach(([key, value]) => {
+        if (value && validIds.has(key)) next[key] = true;
+      });
+      const previousKeys = Object.keys(previous);
+      const nextKeys = Object.keys(next);
+      if (previousKeys.length === nextKeys.length && nextKeys.every((key) => previous[key])) return previous;
+      return next;
+    });
+  }, [displayRows]);
+
+  const selectedBulkRows = useMemo(
+    () => displayRows.filter((row) => selectedPatchRows[text(row.id)] && canSelectPatchForInstall(row)),
+    [displayRows, selectedPatchRows]
+  );
+
+  const selectedBulkPatchCount = useMemo(
+    () => new Set(selectedBulkRows.map(patchSelectionIdentity).filter(Boolean)).size,
+    [selectedBulkRows]
+  );
+
+  const togglePatchSelection = useCallback((row = {}) => {
+    const rowID = text(row.id);
+    if (!rowID || !canSelectPatchForInstall(row)) return;
+    setSelectedPatchRows((previous) => {
+      const next = { ...previous };
+      if (next[rowID]) {
+        delete next[rowID];
+      } else {
+        next[rowID] = true;
+      }
+      return next;
+    });
+  }, []);
+
   const openDevicesForPatch = useCallback(
     (row = {}) => {
       const hostnames = Array.isArray(row.hostnames) ? row.hostnames.filter(Boolean) : [];
@@ -298,50 +395,20 @@ export default function PatchManagement() {
 
   const handleInstallPatchFleet = useCallback(
     (row = {}) => {
-      const patchKey = text(row.patch_key);
-      if (!patchKey || text(row.state).toLowerCase() !== "pending" || row.active_install_job) return;
-      const childRows = Array.isArray(row.childRows) ? row.childRows : [];
-      const targetsByHost = new Map();
-      childRows.forEach((item) => {
-        const hostname = text(item.hostname);
-        if (!hostname || targetsByHost.has(hostname.toLowerCase())) return;
-        targetsByHost.set(hostname.toLowerCase(), {
-          kind: "device",
-          hostname,
-          device_guid: text(item.device_guid),
-          site_id: item.site_id ?? null,
-          site_name: text(item.site_name),
-          operating_system: text(item.operating_system),
-        });
-      });
-      const targets = Array.from(targetsByHost.values());
-      if (!targets.length) return;
-      const first = childRows[0] || {};
-      const patch = {
-        patch_key: patchKey,
-        kb: text(row.kb),
-        title: text(row.title),
-        state: text(row.state) || "pending",
-        source: text(row.source),
-        classification: text(row.classification),
-        severity: text(row.severity),
-        metadata: first.metadata || {},
-      };
-      const patchLabel = text(row.kb) || text(row.title) || "Patch";
-      const title = text(row.title) || patchLabel;
-      const count = targets.length;
+      const item = fleetPatchDraftItem(row);
+      if (!item) return;
       navigate(`${APP_PATHS.jobNew}?tab=schedule`, {
         state: {
           patchJobDraft: {
-            id: `patch-fleet-${patchKey}-${Date.now()}`,
+            id: `patch-fleet-${text(row.patch_key)}-${Date.now()}`,
             source: "fleet",
-            trigger: "ad_hoc",
-            trigger_label: "Ad-Hoc Install",
-            patch,
-            targets,
-            target_count: count,
+            trigger: item.trigger,
+            trigger_label: item.trigger_label,
+            patch: item.patch,
+            targets: item.targets,
+            target_count: item.target_count,
             expiration: "2h",
-            job_name: `[Ad-Hoc Install] ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`,
+            job_name: item.job_name,
           },
         },
       });
@@ -349,8 +416,81 @@ export default function PatchManagement() {
     [navigate]
   );
 
+  const handleBulkInstallFleet = useCallback(() => {
+    if (selectedBulkPatchCount < 2) return;
+    const items = selectedBulkRows
+      .map((row) => fleetPatchDraftItem(row, { triggerLabel: "Bulk Ad-Hoc Install" }))
+      .filter(Boolean);
+    if (items.length < 2) return;
+    navigate(`${APP_PATHS.jobNew}?tab=schedule`, {
+      state: {
+        patchJobDraft: {
+          id: `patch-bulk-fleet-${Date.now()}`,
+          source: "fleet",
+          trigger: "bulk_ad_hoc",
+          trigger_label: "Bulk Ad-Hoc Install",
+          mode: "bulk",
+          bulk: true,
+          items,
+          expiration: "2h",
+        },
+      },
+    });
+  }, [navigate, selectedBulkPatchCount, selectedBulkRows]);
+
+  const pageHeaderActions = useMemo(
+    () => [
+      {
+        id: "patch-management-bulk-install",
+        label: "Bulk Install",
+        icon: <SystemUpdateAltRoundedIcon />,
+        tone: "primary",
+        disabled: selectedBulkPatchCount < 2,
+        onClick: handleBulkInstallFleet,
+      },
+    ],
+    [handleBulkInstallFleet, selectedBulkPatchCount]
+  );
+
+  useRoutePageChrome({
+    title: PAGE_TITLE,
+    subtitle: PAGE_SUBTITLE,
+    Icon: SystemUpdateAltRoundedIcon,
+    actions: pageHeaderActions,
+  });
+
   const columnDefs = useMemo(
     () => [
+      {
+        colId: "select",
+        headerName: "",
+        width: 52,
+        minWidth: 52,
+        maxWidth: 52,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: (params) => {
+          const row = params.data || {};
+          const rowID = text(row.id);
+          const eligible = canSelectPatchForInstall(row);
+          return (
+            <Checkbox
+              size="small"
+              checked={Boolean(eligible && selectedPatchRows[rowID])}
+              disabled={!eligible}
+              onClick={(event) => event.stopPropagation()}
+              onChange={() => togglePatchSelection(row)}
+              sx={{
+                p: 0.2,
+                color: "rgba(148,163,184,0.65)",
+                "&.Mui-checked": { color: BOREALIS_BLUE },
+                "&.Mui-disabled": { color: "rgba(71,85,105,0.5)" },
+              }}
+            />
+          );
+        },
+      },
       {
         field: "kb",
         headerName: "KB",
@@ -491,7 +631,7 @@ export default function PatchManagement() {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
     ],
-    [handleInstallPatchFleet, navigate, openDevicesForPatch]
+    [handleInstallPatchFleet, navigate, openDevicesForPatch, selectedPatchRows, togglePatchSelection]
   );
 
   return (

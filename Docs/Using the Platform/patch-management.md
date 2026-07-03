@@ -9,6 +9,7 @@ Patch Management shows Windows patch inventory collected by Borealis agents. Ope
 3. Use `Severity` to narrow Windows Update Agent rows when severity is available.
 4. Select device counts when you need to jump back to Device Inventory for affected endpoints.
 5. Use `Install` on a pending row to open a prefilled Scheduled Job draft for every visible device with that update pending.
+6. Select two or more pending rows and use `Bulk Install` to schedule separate one-KB jobs that share the same immediate or one-time schedule.
 
 Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` so operators with assigned sites only see patch inventory they can access.
 
@@ -19,6 +20,7 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 3. Select `Patch Management` from the Device Summary sidebar.
 4. Use `Query Patch Inventory` when you need a fresh Windows Update Agent and installed KB snapshot.
 5. Use `Install` on a pending row to open a prefilled Scheduled Job draft for that device and selected update.
+6. Select two or more pending rows and use `Bulk Install` to schedule separate one-KB jobs for that device with shared timing.
 
 Pending rows come from Windows Update Agent search results that are not installed and not hidden. Installed rows come from `Get-HotFix` and Windows Update Agent history, then Borealis de-duplicates them by KB or update identity.
 
@@ -37,7 +39,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `GET /api/patches/audit` - fleet patch inventory, scoped to operator site access. Rows include `active_install_job` when an enabled scheduled patch install already owns that patch.
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
-    - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow.
+    - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk flows call this once per selected patch.
     - `POST /api/agent/details` - accepts `details.patches` from the Agent `patch_management` role.
 
     ### Related documentation
@@ -65,7 +67,9 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Windows agents collect pending updates through native Windows Update Agent COM and installed KB rows through `Get-HotFix` plus WUA history.
     - Pending rows come from WUA `IsInstalled=0 and IsHidden=0`, so they can be available but not downloaded yet. Download status stays in `is_downloaded`.
     - Install buttons do not trigger WUA directly. They open `Create_Job.jsx` with a `patch_install` component, selected patch metadata, and frozen targets prefilled.
+    - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
     - Scheduled patch jobs use names like `[Ad-Hoc Install] KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
+    - Bulk scheduled patch jobs use names like `[Bulk Ad-Hoc Install] - KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Scheduler snapshots target membership into `scheduled_job_runs` and `scheduled_job_run_targets`, then queues `patch_install_run` work items on the scheduled-job lane.
     - Patch install workers call the site worker host-service bridge, which emits Agent `patch_install_request` with `wait_for_completion=true` over the device SYSTEM socket.
     - The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback.

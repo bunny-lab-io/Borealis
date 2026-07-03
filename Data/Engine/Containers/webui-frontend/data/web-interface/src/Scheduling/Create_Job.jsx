@@ -1510,6 +1510,7 @@ export default function CreateJob() {
   );
   const [quickJobDraft, setQuickJobDraft] = useState(() => location.state?.quickJobDraft || null);
   const [patchJobDraft, setPatchJobDraft] = useState(() => location.state?.patchJobDraft || null);
+  const [patchJobBatch, setPatchJobBatch] = useState(null);
   const [jobKind, setJobKind] = useState("automation");
   const [jobName, setJobName] = useState("");
   const [pageTitleJobName, setPageTitleJobName] = useState("");
@@ -1521,6 +1522,7 @@ export default function CreateJob() {
   );
   const isWorkflowJob = workflowComponentCount > 0;
   const isPatchJob = jobKind === "patch_install";
+  const isPatchBatchJob = isPatchJob && Array.isArray(patchJobBatch?.items) && patchJobBatch.items.length > 1;
   const [targets, setTargets] = useState([]); // array of target descriptors
   const [filterCatalog, setFilterCatalog] = useState([]);
   const [, setLoadingFilterCatalog] = useState(false);
@@ -1567,6 +1569,9 @@ export default function CreateJob() {
     [pageTitleJobName]
   );
   const resolvedPageSubtitle = useMemo(() => {
+    if (isPatchBatchJob) {
+      return "Schedule separate one-KB Windows patch jobs with shared timing.";
+    }
     if (isPatchJob) {
       return "Schedule Windows patch deployment through Borealis job lanes.";
     }
@@ -1577,7 +1582,7 @@ export default function CreateJob() {
       return "Launch immediately or save as a quick job with your selected assemblies.";
     }
     return PAGE_SUBTITLE;
-  }, [isPatchJob, isWorkflowJob, scheduleType]);
+  }, [isPatchBatchJob, isPatchJob, isWorkflowJob, scheduleType]);
   const sendNotification = useAppNotifications({
     title: resolvedPageTitle,
     icon: "pendingactions",
@@ -1626,7 +1631,9 @@ export default function CreateJob() {
 
   useEffect(() => {
     setQuickJobDraft(location.state?.quickJobDraft || null);
-    setPatchJobDraft(location.state?.patchJobDraft || null);
+    const nextPatchDraft = location.state?.patchJobDraft || null;
+    setPatchJobDraft(nextPatchDraft);
+    if (!nextPatchDraft) setPatchJobBatch(null);
   }, [location.key, location.state]);
 
   useEffect(() => {
@@ -2139,6 +2146,23 @@ export default function CreateJob() {
   }, [components]);
   const patchJobSummary = useMemo(() => {
     if (!isPatchJob) return null;
+    if (isPatchBatchJob) {
+      return {
+        bulk: true,
+        items: patchJobBatch.items.map((item) => {
+          const patch = item.patch && typeof item.patch === "object" ? item.patch : {};
+          return {
+            kb: String(patch.kb || "").trim() || "No KB",
+            title: String(patch.title || item.name || "Patch Install").trim(),
+            targetCount: Number(item.target_count || (Array.isArray(item.targets) ? item.targets.length : 0)) || 0,
+            jobName: String(item.job_name || "").trim(),
+          };
+        }),
+        targetCount: patchJobBatch.items.reduce((total, item) => {
+          return total + (Number(item.target_count || (Array.isArray(item.targets) ? item.targets.length : 0)) || 0);
+        }, 0),
+      };
+    }
     const component = components.find((item) => isPatchComponentRecord(item)) || {};
     const patch = component.patch && typeof component.patch === "object" ? component.patch : {};
     return {
@@ -2147,7 +2171,7 @@ export default function CreateJob() {
       patchKey: String(patch.patch_key || "").trim(),
       targetCount: targets.length,
     };
-  }, [components, isPatchJob, targets.length]);
+  }, [components, isPatchBatchJob, isPatchJob, patchJobBatch, targets.length]);
   const [deviceRows, setDeviceRows] = useState([]);
   const [deviceStatusFilter, setDeviceStatusFilter] = useState(null);
   const devicePickerGridApiRef = useRef(null);
@@ -3074,7 +3098,19 @@ export default function CreateJob() {
     const hasRequiredTargets = isWorkflowJob ? true : targets.length > 0;
     const base = jobName.trim().length > 0 && components.length > 0 && hasRequiredTargets;
     if (!base) return false;
+    if (isPatchBatchJob) {
+      if (!["immediately", "once"].includes(scheduleType)) return false;
+      const hasValidBatchItems = patchJobBatch.items.every((item) => {
+        return Array.isArray(item.targets) && item.targets.length > 0 && item.patch && (item.patch.patch_key || item.patch.kb || item.patch.title);
+      });
+      if (!hasValidBatchItems) return false;
+      if (scheduleType !== "immediately") {
+        return !!startDateTime;
+      }
+      return true;
+    }
     if (isPatchJob) {
+      if (!["immediately", "once"].includes(scheduleType)) return false;
       if (scheduleType !== "immediately") {
         return !!startDateTime;
       }
@@ -3086,7 +3122,7 @@ export default function CreateJob() {
       return !!startDateTime;
     }
     return true;
-  }, [jobName, components.length, isWorkflowJob, isPatchJob, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
+  }, [jobName, components.length, isWorkflowJob, isPatchBatchJob, isPatchJob, patchJobBatch, targets.length, scheduleType, startDateTime, remoteExec, selectedCredentialId, execContext, useSvcAccount]);
 
   const handleJobNameInputChange = useCallback((value) => {
     setJobName(value);
@@ -4326,6 +4362,54 @@ export default function CreateJob() {
       return;
     }
     setComponentVarErrors({});
+    if (isPatchBatchJob) {
+      const schedulePayload = {
+        type: scheduleType,
+        start: scheduleType !== "immediately" ? wallClockStringFromEnginePickerValue(startDateTime) : null,
+      };
+      const durationPayload = { stopAfterEnabled: expiration !== "no_expire", expiration };
+      let createdCount = 0;
+      try {
+        for (const item of patchJobBatch.items) {
+          const patch = item.patch && typeof item.patch === "object" ? item.patch : {};
+          const patchLabel = String(patch.kb || patch.title || patch.patch_key || item.name || "Patch").trim();
+          const payload = {
+            name: item.job_name || `[${item.trigger_label || "Bulk Ad-Hoc Install"}] - ${patchLabel}`,
+            components: [{
+              kind: "patch_install",
+              type: "patch_install",
+              component_type: "patch_install",
+              assembly_type: "patch_install",
+              name: patchLabel,
+              patch,
+              trigger: item.trigger || patchJobBatch.trigger || "bulk_ad_hoc",
+              source: item.source || patchJobBatch.source || "patch_management",
+            }],
+            targets: serializeTargetsForSave(item.targets),
+            schedule: schedulePayload,
+            duration: durationPayload,
+            execution_context: "system",
+            credential_id: null,
+            use_service_account: false,
+            job_kind: "patch_install",
+          };
+          const resp = await fetch("/api/scheduled_jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(data.error || data.message || `HTTP ${resp.status}`);
+          createdCount += 1;
+        }
+        sendNotification(`${createdCount.toLocaleString()} Patch Install Jobs Created Successfully`);
+        navigate(APP_PATHS.jobs);
+      } catch (err) {
+        const prefix = createdCount > 0 ? `${createdCount.toLocaleString()} job(s) were created before failure. ` : "";
+        alert(`${prefix}${String(err.message || err)}`);
+      }
+      return;
+    }
     const payloadComponents = sanitizeComponentsForSave(components);
     const payload = {
       name: jobName,
@@ -4358,13 +4442,14 @@ export default function CreateJob() {
   };
 
   const tabDefs = useMemo(() => {
-    const base = [
-      { key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon },
-    ];
-    if (!isPatchJob) {
+    const base = [];
+    if (!isPatchBatchJob) {
+      base.push({ key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon });
+    }
+    if (!isPatchJob && !isPatchBatchJob) {
       base.push({ key: "components", label: "Assemblies", icon: AppsIcon });
     }
-    if (!isWorkflowJob) {
+    if (!isWorkflowJob && !isPatchBatchJob) {
       base.push({ key: "targets", label: "Targets", icon: DevicesRoundedIcon });
     }
     base.push({ key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon });
@@ -4373,7 +4458,7 @@ export default function CreateJob() {
     }
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
-  }, [editing, isPatchJob, isWorkflowJob]);
+  }, [editing, isPatchBatchJob, isPatchJob, isWorkflowJob]);
   const tabDefKeys = useMemo(() => tabDefs.map((tabDef) => tabDef.key), [tabDefs]);
   const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
     param: "tab",
@@ -4459,7 +4544,7 @@ export default function CreateJob() {
         : []),
       {
         id: "scheduled-job-save",
-        label: editing ? "Save Changes" : "Create Job",
+        label: editing ? "Save Changes" : isPatchBatchJob ? "Create Jobs" : "Create Job",
         icon: editing ? <CheckIcon /> : <AddIcon />,
         tone: "primary",
         disabled: !isValid,
@@ -4470,7 +4555,7 @@ export default function CreateJob() {
         },
       },
     ],
-    [clearJobHistory, clearingHistory, editing, handleRerunJob, isValid, navigate, rerunningJob, resolvedInitialJob?.enabled]
+    [clearJobHistory, clearingHistory, editing, handleRerunJob, isPatchBatchJob, isValid, navigate, rerunningJob, resolvedInitialJob?.enabled]
   );
 
   useRoutePageChrome({
@@ -4523,6 +4608,82 @@ export default function CreateJob() {
     if (!patchJobDraft || !patchJobDraft.id) return;
     if (quickDraftAppliedRef.current === patchJobDraft.id) return;
     quickDraftAppliedRef.current = patchJobDraft.id;
+    const triggerLabel = String(patchJobDraft.trigger_label || "Ad-Hoc Install").trim() || "Ad-Hoc Install";
+    const rawItems = Array.isArray(patchJobDraft.items) ? patchJobDraft.items : [];
+    if (rawItems.length > 1 || patchJobDraft.bulk) {
+      const normalizedItems = rawItems
+        .map((item, index) => {
+          const patch = item?.patch && typeof item.patch === "object" ? item.patch : {};
+          const itemTargets = normalizeTargetList(Array.isArray(item?.targets) ? item.targets : []);
+          const patchLabel = String(patch.kb || patch.title || patch.patch_key || "Patch").trim();
+          const title = String(patch.title || patchLabel).trim();
+          const count = Number(item?.target_count || itemTargets.length || 0) || 0;
+          return {
+            id: String(item?.id || `patch-bulk-item-${index}`),
+            patch,
+            targets: itemTargets,
+            target_count: count,
+            trigger: String(item?.trigger || patchJobDraft.trigger || "bulk_ad_hoc").trim() || "bulk_ad_hoc",
+            trigger_label: String(item?.trigger_label || triggerLabel).trim() || triggerLabel,
+            source: String(item?.source || patchJobDraft.source || "patch_management").trim() || "patch_management",
+            name: patchLabel,
+            job_name: String(
+              item?.job_name ||
+                `[${triggerLabel}] - ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`
+            ).trim(),
+          };
+        })
+        .filter((item) => item.targets.length > 0 && item.patch && (item.patch.patch_key || item.patch.kb || item.patch.title));
+      if (normalizedItems.length > 1) {
+        const firstItem = normalizedItems[0];
+        const targetsByKey = new Map();
+        normalizedItems.forEach((item) => {
+          item.targets.forEach((target) => {
+            const key = String(target.device_guid || target.hostname || JSON.stringify(target)).trim().toLowerCase();
+            if (key && !targetsByKey.has(key)) targetsByKey.set(key, target);
+          });
+        });
+        const unionTargets = Array.from(targetsByKey.values());
+        const initialName = `Bulk Patch Install - ${normalizedItems.length.toLocaleString()} Updates`;
+        setPatchJobBatch({
+          id: patchJobDraft.id,
+          source: String(patchJobDraft.source || "patch_management").trim() || "patch_management",
+          trigger: String(patchJobDraft.trigger || "bulk_ad_hoc").trim() || "bulk_ad_hoc",
+          trigger_label: triggerLabel,
+          items: normalizedItems,
+        });
+        setJobKind("patch_install");
+        setTargets(unionTargets);
+        setSelectedDeviceTargets({});
+        setSelectedFilterTargets({});
+        setComponents([
+          {
+            kind: "patch_install",
+            type: "patch_install",
+            name: firstItem.name,
+            patch: firstItem.patch,
+            trigger: firstItem.trigger,
+            source: firstItem.source,
+            localId: `patch-install-${patchJobDraft.id}`,
+          },
+        ]);
+        setComponentVarErrors({});
+        setScheduleType(String(patchJobDraft.scheduleType || "immediately").trim().toLowerCase() || "immediately");
+        setExpiration(String(patchJobDraft.expiration || "2h").trim() || "2h");
+        setExecContext("system");
+        setSelectedCredentialId("");
+        setUseSvcAccount(false);
+        setJobName(initialName);
+        setPageTitleJobName(initialName);
+        selectTabKey("schedule");
+        setPatchJobDraft((previous) => {
+          if (!previous) return previous;
+          return previous.id === patchJobDraft.id ? null : previous;
+        });
+        return;
+      }
+    }
+    setPatchJobBatch(null);
     const incomingTargets = Array.isArray(patchJobDraft.targets)
       ? patchJobDraft.targets
       : Array.isArray(patchJobDraft.hostnames)
@@ -4533,7 +4694,6 @@ export default function CreateJob() {
     const patchLabel = String(patch.kb || patch.title || patch.patch_key || "Patch").trim();
     const title = String(patch.title || patchLabel).trim();
     const count = Number(patchJobDraft.target_count || normalizedTargets.length || 0) || 0;
-    const triggerLabel = String(patchJobDraft.trigger_label || "Ad-Hoc Install").trim() || "Ad-Hoc Install";
     const initialName = String(
       patchJobDraft.job_name ||
         `[${triggerLabel}] ${patchLabel} - ${title} - ${count.toLocaleString()} ${count === 1 ? "Device" : "Devices"}`
@@ -4737,26 +4897,65 @@ export default function CreateJob() {
           <Box sx={TAB_SECTION_SX}>
             <SectionHeader title="Schedule" />
             {patchJobSummary ? (
-              <Box
-                sx={{
-                  mb: 2,
-                  display: "grid",
-                  gridTemplateColumns: { xs: "1fr", md: "140px minmax(220px, 1fr) 130px" },
-                  gap: 1,
-                  alignItems: "center",
-                  color: MAGIC_UI.textBright,
-                }}
-              >
-                <Typography sx={{ fontSize: 13, fontWeight: 700, color: BOREALIS_BLUE }}>
-                  {patchJobSummary.kb}
-                </Typography>
-                <Typography sx={{ fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {patchJobSummary.title}
-                </Typography>
-                <Typography sx={{ fontSize: 13, color: MAGIC_UI.textMuted }}>
-                  {patchJobSummary.targetCount.toLocaleString()} {patchJobSummary.targetCount === 1 ? "Device" : "Devices"}
-                </Typography>
-              </Box>
+              patchJobSummary.bulk ? (
+                <Box
+                  sx={{
+                    mb: 2,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 0.75,
+                    maxHeight: 180,
+                    overflow: "auto",
+                    pr: 0.5,
+                  }}
+                >
+                  {patchJobSummary.items.map((item, index) => (
+                    <Box
+                      key={`${item.kb}-${item.title}-${index}`}
+                      sx={{
+                        display: "grid",
+                        gridTemplateColumns: { xs: "1fr", md: "140px minmax(220px, 1fr) 130px" },
+                        gap: 1,
+                        alignItems: "center",
+                        color: MAGIC_UI.textBright,
+                        borderBottom: "1px solid rgba(148,163,184,0.12)",
+                        pb: 0.65,
+                      }}
+                    >
+                      <Typography sx={{ fontSize: 13, fontWeight: 700, color: BOREALIS_BLUE }}>
+                        {item.kb}
+                      </Typography>
+                      <Typography sx={{ fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {item.title}
+                      </Typography>
+                      <Typography sx={{ fontSize: 13, color: MAGIC_UI.textMuted }}>
+                        {item.targetCount.toLocaleString()} {item.targetCount === 1 ? "Device" : "Devices"}
+                      </Typography>
+                    </Box>
+                  ))}
+                </Box>
+              ) : (
+                <Box
+                  sx={{
+                    mb: 2,
+                    display: "grid",
+                    gridTemplateColumns: { xs: "1fr", md: "140px minmax(220px, 1fr) 130px" },
+                    gap: 1,
+                    alignItems: "center",
+                    color: MAGIC_UI.textBright,
+                  }}
+                >
+                  <Typography sx={{ fontSize: 13, fontWeight: 700, color: BOREALIS_BLUE }}>
+                    {patchJobSummary.kb}
+                  </Typography>
+                  <Typography sx={{ fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {patchJobSummary.title}
+                  </Typography>
+                  <Typography sx={{ fontSize: 13, color: MAGIC_UI.textMuted }}>
+                    {patchJobSummary.targetCount.toLocaleString()} {patchJobSummary.targetCount === 1 ? "Device" : "Devices"}
+                  </Typography>
+                </Box>
+              )
             ) : null}
             <Box sx={{ display: "flex", gap: 2, flexWrap: "wrap" }}>
               <TextField
@@ -4770,15 +4969,17 @@ export default function CreateJob() {
               >
                 <MenuItem value="immediately">Immediately</MenuItem>
                 <MenuItem value="once">At selected date and time</MenuItem>
-                <MenuItem value="every_5_minutes">Every 5 Minutes</MenuItem>
-                <MenuItem value="every_10_minutes">Every 10 Minutes</MenuItem>
-                <MenuItem value="every_15_minutes">Every 15 Minutes</MenuItem>
-                <MenuItem value="every_30_minutes">Every 30 Minutes</MenuItem>
-                <MenuItem value="every_hour">Every Hour</MenuItem>
-                <MenuItem value="daily">Daily</MenuItem>
-                <MenuItem value="weekly">Weekly</MenuItem>
-                <MenuItem value="monthly">Monthly</MenuItem>
-                <MenuItem value="yearly">Yearly</MenuItem>
+                {!isPatchJob ? [
+                  <MenuItem key="every_5_minutes" value="every_5_minutes">Every 5 Minutes</MenuItem>,
+                  <MenuItem key="every_10_minutes" value="every_10_minutes">Every 10 Minutes</MenuItem>,
+                  <MenuItem key="every_15_minutes" value="every_15_minutes">Every 15 Minutes</MenuItem>,
+                  <MenuItem key="every_30_minutes" value="every_30_minutes">Every 30 Minutes</MenuItem>,
+                  <MenuItem key="every_hour" value="every_hour">Every Hour</MenuItem>,
+                  <MenuItem key="daily" value="daily">Daily</MenuItem>,
+                  <MenuItem key="weekly" value="weekly">Weekly</MenuItem>,
+                  <MenuItem key="monthly" value="monthly">Monthly</MenuItem>,
+                  <MenuItem key="yearly" value="yearly">Yearly</MenuItem>,
+                ] : null}
               </TextField>
               {scheduleType !== "immediately" && (
                 <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -5508,8 +5709,14 @@ export default function CreateJob() {
       >
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
-            title={initialJob && initialJob.id ? "Save Job Changes" : "Create Job"}
-            subtitle={initialJob && initialJob.id ? "Confirm the changes before updating this scheduled job." : "Confirm the job configuration before creating it."}
+            title={initialJob && initialJob.id ? "Save Job Changes" : isPatchBatchJob ? "Create Patch Jobs" : "Create Job"}
+            subtitle={
+              initialJob && initialJob.id
+                ? "Confirm the changes before updating this scheduled job."
+                : isPatchBatchJob
+                  ? `Confirm ${patchJobBatch.items.length.toLocaleString()} one-KB patch jobs using the selected schedule.`
+                  : "Confirm the job configuration before creating it."
+            }
           />
         </DialogTitle>
         <DialogActions sx={DIALOG_ACTIONS_SX}>
