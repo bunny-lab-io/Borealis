@@ -1521,7 +1521,8 @@ export default function CreateJob() {
     [components]
   );
   const isWorkflowJob = workflowComponentCount > 0;
-  const isPatchJob = jobKind === "patch_install";
+  const hasPendingPatchDraft = Boolean(!(initialJob && initialJob.id) && patchJobDraft?.id);
+  const isPatchJob = jobKind === "patch_install" || hasPendingPatchDraft;
   const isPatchBatchJob = isPatchJob && Array.isArray(patchJobBatch?.items) && patchJobBatch.items.length > 1;
   const [targets, setTargets] = useState([]); // array of target descriptors
   const [filterCatalog, setFilterCatalog] = useState([]);
@@ -4442,23 +4443,24 @@ export default function CreateJob() {
   };
 
   const tabDefs = useMemo(() => {
+    if (isPatchJob) {
+      const patchTabs = [{ key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon }];
+      if (editing) patchTabs.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
+      return patchTabs;
+    }
     const base = [];
-    if (!isPatchBatchJob) {
-      base.push({ key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon });
-    }
-    if (!isPatchJob && !isPatchBatchJob) {
-      base.push({ key: "components", label: "Assemblies", icon: AppsIcon });
-    }
-    if (!isWorkflowJob && !isPatchBatchJob) {
+    base.push({ key: "name", label: "Job Name", icon: DriveFileRenameOutlineIcon });
+    base.push({ key: "components", label: "Assemblies", icon: AppsIcon });
+    if (!isWorkflowJob) {
       base.push({ key: "targets", label: "Targets", icon: DevicesRoundedIcon });
     }
     base.push({ key: "schedule", label: "Schedule", icon: ScheduleRoundedIcon });
-    if (!isWorkflowJob && !isPatchJob) {
+    if (!isWorkflowJob) {
       base.push({ key: "context", label: "Execution Context", icon: SettingsApplicationsRoundedIcon });
     }
     if (editing) base.push({ key: "history", label: "Job History", icon: HistoryRoundedIcon });
     return base;
-  }, [editing, isPatchBatchJob, isPatchJob, isWorkflowJob]);
+  }, [editing, isPatchJob, isWorkflowJob]);
   const tabDefKeys = useMemo(() => tabDefs.map((tabDef) => tabDef.key), [tabDefs]);
   const { activeKey: activeTabUrlKey, setActiveKey: setActiveTabUrlKey } = useUrlTabState({
     param: "tab",

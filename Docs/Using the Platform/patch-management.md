@@ -8,8 +8,8 @@ Patch Management shows Windows patch inventory collected by Borealis agents. Ope
 2. Use `State` to switch between pending and installed inventory.
 3. Use `Severity` to narrow Windows Update Agent rows when severity is available.
 4. Select device counts when you need to jump back to Device Inventory for affected endpoints.
-5. Use `Install` on a pending row to open a prefilled Scheduled Job draft for every visible device with that update pending.
-6. Select two or more pending rows and use `Bulk Install` to schedule separate one-KB jobs that share the same immediate or one-time schedule.
+5. Use `Install` on a pending row to open a Schedule-only Scheduled Job draft for every visible device with that update pending.
+6. Select two or more pending rows and use `Bulk Install` to open a Schedule-only draft that creates separate one-KB jobs sharing the same immediate or one-time schedule.
 
 Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` so operators with assigned sites only see patch inventory they can access.
 
@@ -19,8 +19,8 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 2. Select a device hostname.
 3. Select `Patch Management` from the Device Summary sidebar.
 4. Use `Query Patch Inventory` when you need a fresh Windows Update Agent and installed KB snapshot.
-5. Use `Install` on a pending row to open a prefilled Scheduled Job draft for that device and selected update.
-6. Select two or more pending rows and use `Bulk Install` to schedule separate one-KB jobs for that device with shared timing.
+5. Use `Install` on a pending row to open a Schedule-only Scheduled Job draft for that device and selected update.
+6. Select two or more pending rows and use `Bulk Install` to open a Schedule-only draft that creates separate one-KB jobs for that device with shared timing.
 
 Pending rows come from Windows Update Agent search results that are not installed and not hidden. Installed rows come from `Get-HotFix` and Windows Update Agent history, then Borealis de-duplicates them by KB or update identity.
 
@@ -67,6 +67,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Windows agents collect pending updates through native Windows Update Agent COM and installed KB rows through `Get-HotFix` plus WUA history.
     - Pending rows come from WUA `IsInstalled=0 and IsHidden=0`, so they can be available but not downloaded yet. Download status stays in `is_downloaded`.
     - Install buttons do not trigger WUA directly. They open `Create_Job.jsx` with a `patch_install` component, selected patch metadata, and frozen targets prefilled.
+    - Patch install drafts show only the `Schedule` tab during creation. Job name, target, assembly, and execution-context tabs stay hidden because Patch Management owns those values.
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
     - Scheduled patch jobs use names like `[Ad-Hoc Install] KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Bulk scheduled patch jobs use names like `[Bulk Ad-Hoc Install] - KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
@@ -75,7 +76,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - The Agent matches WUA updates by update identity/revision first, KB second, then exact title fallback.
     - The Agent downloads the matched update when needed, calls WUA install for the matched update collection, never reboots the device, captures available stdout/stderr/result data, and refreshes patch inventory after the attempt.
     - Scheduler writes patch install stdout/stderr/result detail to normal Scheduled Job activity and target history surfaces.
-    - Fleet and device patch APIs attach `active_install_job` while an enabled patch install job for the same KB, patch key, or title is still active. The UI replaces `Install` with a Scheduled Job link until that job completes, times out, or is deleted.
+    - Fleet and device patch APIs attach `active_install_job` while an enabled patch install job for the same KB, patch key, WUA update identity, KB discovered in title, or title is still active. The UI replaces `Install` with `Immediate - Job ID: <id>` or `Scheduled - Job ID: <id>` until that job completes, times out, or is deleted.
     - Non-Windows agents report the role as unsupported in Agent Health.
     - Agent rows use `state=pending` or `state=installed`.
     - Agent rows use `source=wua_pending`, `source=wua_history`, or `source=quick_fix_engineering`.

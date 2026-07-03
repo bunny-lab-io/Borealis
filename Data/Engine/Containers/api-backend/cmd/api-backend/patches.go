@@ -512,9 +512,9 @@ func loadActivePatchInstallJobs(ctx context.Context, conn *sql.Conn, profile ope
 		if len(keys) == 0 {
 			continue
 		}
-		labelPrefix := "Scheduled Install"
+		labelPrefix := "Scheduled"
 		if schedule == "immediately" {
-			labelPrefix = "Immediate Install"
+			labelPrefix = "Immediate"
 		}
 		job := map[string]any{
 			"id":            id.Int64,
@@ -550,9 +550,12 @@ func attachActivePatchInstallJob(payload map[string]any, activeJobs map[string]m
 		return
 	}
 	patch := map[string]any{
-		"patch_key": payload["patch_key"],
-		"kb":        payload["kb"],
-		"title":     payload["title"],
+		"patch_key":       payload["patch_key"],
+		"kb":              payload["kb"],
+		"title":           payload["title"],
+		"metadata":        payload["metadata"],
+		"update_id":       payload["update_id"],
+		"revision_number": payload["revision_number"],
 	}
 	for _, key := range patchActiveIdentityKeys(patch) {
 		if job := activeJobs[key]; len(job) > 0 {
@@ -567,14 +570,38 @@ func patchActiveIdentityKeys(patch map[string]any) []string {
 	if patch == nil {
 		return keys
 	}
+	addKey := func(key string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		for _, existing := range keys {
+			if existing == key {
+				return
+			}
+		}
+		keys = append(keys, key)
+	}
 	if patchKey := cleanText(patch["patch_key"]); patchKey != "" {
-		keys = append(keys, "patch:"+strings.ToLower(patchKey))
+		addKey("patch:" + strings.ToLower(patchKey))
 	}
 	if kb := normalizePatchKB(patch["kb"]); kb != "" {
-		keys = append(keys, "kb:"+strings.ToUpper(kb))
+		addKey("kb:" + strings.ToUpper(kb))
+	}
+	if titleKB := normalizePatchKB(patch["title"]); titleKB != "" {
+		addKey("kb:" + strings.ToUpper(titleKB))
+	}
+	metadata := schedulerAnyMap(patch["metadata"])
+	updateID := cleanText(firstPresentAny(metadata["update_id"], metadata["updateID"], patch["update_id"], patch["updateID"]))
+	if updateID != "" {
+		updateKey := "update:" + strings.ToLower(updateID)
+		if revision := coerceInt64(firstPresentAny(metadata["revision_number"], metadata["revision"], patch["revision_number"], patch["revision"])); revision > 0 {
+			addKey(updateKey + ":" + strconv.FormatInt(revision, 10))
+		}
+		addKey(updateKey)
 	}
 	if title := strings.ToLower(cleanText(patch["title"])); title != "" {
-		keys = append(keys, "title:"+title)
+		addKey("title:" + title)
 	}
 	return keys
 }

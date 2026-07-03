@@ -183,6 +183,32 @@ func TestPatchInventorySignatureIgnoresCapturedAt(t *testing.T) {
 	}
 }
 
+func TestPatchActiveIdentityKeysIncludeWUAIdentityAndTitleKB(t *testing.T) {
+	keys := patchActiveIdentityKeys(map[string]any{
+		"patch_key": "update:abcdef:42:state:pending",
+		"title":     "SQL Server 2017 RTM Azure Connect Pack KB5050533",
+		"metadata": map[string]any{
+			"update_id":       "ABCDEF",
+			"revision_number": 42,
+		},
+	})
+	seen := map[string]bool{}
+	for _, key := range keys {
+		seen[key] = true
+	}
+	for _, want := range []string{
+		"patch:update:abcdef:42:state:pending",
+		"kb:KB5050533",
+		"update:abcdef:42",
+		"update:abcdef",
+		"title:sql server 2017 rtm azure connect pack kb5050533",
+	} {
+		if !seen[want] {
+			t.Fatalf("missing active identity %q from %#v", want, keys)
+		}
+	}
+}
+
 func TestPatchRefreshHandlerQueuesWorkerEvent(t *testing.T) {
 	var sawEvent bool
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

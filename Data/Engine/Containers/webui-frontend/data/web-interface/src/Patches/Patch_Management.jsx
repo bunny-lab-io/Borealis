@@ -525,7 +525,7 @@ export default function PatchManagement() {
           const patchKey = text(row.patch_key);
           const activeJob = row.active_install_job || null;
           if (activeJob?.id) {
-            const label = text(activeJob.label) || `Scheduled Install - Job ID: ${activeJob.id}`;
+            const label = text(activeJob.label) || `Scheduled - Job ID: ${activeJob.id}`;
             const jobPath = text(activeJob.path) || `${APP_PATHS.job(activeJob.id)}?tab=job_history`;
             return (
               <Tooltip title="This patch already has an ad-hoc deployment job. Let that job finish, time out, or delete it before scheduling this KB again.">
