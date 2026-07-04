@@ -1048,6 +1048,11 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
         cur.execute("PRAGMA table_info(patch_policies)")
         policy_columns = {row[1] for row in cur.fetchall()}
         for column_name, sql in (
+            ("name", "ALTER TABLE patch_policies ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
+            ("description", "ALTER TABLE patch_policies ADD COLUMN description TEXT"),
+            ("policy_type", "ALTER TABLE patch_policies ADD COLUMN policy_type TEXT NOT NULL DEFAULT 'site'"),
+            ("enabled", "ALTER TABLE patch_policies ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"),
+            ("locked", "ALTER TABLE patch_policies ADD COLUMN locked INTEGER NOT NULL DEFAULT 0"),
             ("role_scope", "ALTER TABLE patch_policies ADD COLUMN role_scope TEXT NOT NULL DEFAULT 'Both'"),
             ("approval_mode", "ALTER TABLE patch_policies ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'conservative_msp'"),
             ("deferral_days", "ALTER TABLE patch_policies ADD COLUMN deferral_days INTEGER NOT NULL DEFAULT 14"),
@@ -1059,9 +1064,23 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
             ("reboot_schedule_type", "ALTER TABLE patch_policies ADD COLUMN reboot_schedule_type TEXT NOT NULL DEFAULT 'weekly'"),
             ("reboot_start_ts", "ALTER TABLE patch_policies ADD COLUMN reboot_start_ts INTEGER"),
             ("force_reboot_logged_in", "ALTER TABLE patch_policies ADD COLUMN force_reboot_logged_in INTEGER NOT NULL DEFAULT 0"),
+            ("created_by", "ALTER TABLE patch_policies ADD COLUMN created_by TEXT"),
+            ("updated_by", "ALTER TABLE patch_policies ADD COLUMN updated_by TEXT"),
+            ("created_at", "ALTER TABLE patch_policies ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"),
+            ("updated_at", "ALTER TABLE patch_policies ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"),
         ):
             if column_name not in policy_columns:
                 cur.execute(sql)
+        cur.execute(
+            """
+            UPDATE patch_policies
+               SET policy_type = 'global',
+                   locked = 1,
+                   role_scope = 'Both'
+             WHERE lower(trim(name)) = 'global patch policy'
+               AND policy_type <> 'global'
+            """
+        )
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_patch_policies_type_enabled
