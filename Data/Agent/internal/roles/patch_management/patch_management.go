@@ -1247,6 +1247,22 @@ function Write-BorealisPatchResult {
   $Payload['kind'] = 'result'
   Write-BorealisPatchPayload $Payload
 }
+function Get-BorealisErrorMessage {
+  param($ErrorRecord)
+  $message = ''
+  try { $message = "$($ErrorRecord.Exception.Message)".Trim() } catch {}
+  if (-not $message) { $message = "$ErrorRecord".Trim() }
+  $hresult = ''
+  try {
+    $code = [int64]$ErrorRecord.Exception.HResult
+    if ($code -ne 0) {
+      if ($code -lt 0) { $code = $code + 4294967296 }
+      $hresult = ('0x{0:X8}' -f $code)
+    }
+  } catch {}
+  if ($hresult) { return "$message (HRESULT $hresult)" }
+  return $message
+}
 $script:BorealisLastProgress = @{}
 function Write-BorealisPatchProgress {
   param([string]$Phase, $Job, [string]$Message, [bool]$Force, [int]$PercentOverride = -1)
@@ -1377,25 +1393,41 @@ try {
     $script:BorealisPatchPhase = 'download'
     $downloadState = "$($request.request_id)".Trim()
     Write-BorealisPatchProgress 'download' $null 'Downloading selected update.' $true
-    $downloadJob = $downloader.BeginDownload($null, $null, $downloadState)
+    $downloadJob = $null
+    $downloadResult = $null
     try {
-      while (-not [bool]$downloadJob.IsCompleted) {
-        Write-BorealisPatchProgress 'download' $downloadJob 'Downloading selected update.' $false
-        Start-Sleep -Seconds 2
+      try {
+        $downloadJob = $downloader.BeginDownload($null, $null, $downloadState)
+      } catch {
+        $asyncError = Get-BorealisErrorMessage $_
+        Write-BorealisPatchProgress 'download' $null "WUA async download did not start; using synchronous download. $asyncError" $true
+        $downloadResult = $downloader.Download()
       }
-      Write-BorealisPatchProgress 'download' $downloadJob 'Download complete.' $true
-      [void]$downloader.EndDownload($downloadJob)
+      if ($null -ne $downloadJob) {
+        while (-not [bool]$downloadJob.IsCompleted) {
+          Write-BorealisPatchProgress 'download' $downloadJob 'Downloading selected update.' $false
+          Start-Sleep -Seconds 2
+        }
+        Write-BorealisPatchProgress 'download' $downloadJob 'Download complete.' $true
+        $downloadResult = $downloader.EndDownload($downloadJob)
+      } else {
+        Write-BorealisPatchProgress 'download' $null 'Download complete.' $true 100
+      }
     } finally {
       try { if ($null -ne $downloadJob) { $downloadJob.CleanUp() } } catch {}
+    }
+    $downloadResultCode = 0
+    try { $downloadResultCode = [int]$downloadResult.ResultCode } catch {}
+    if ($downloadResultCode -ne 2 -and $downloadResultCode -ne 3) {
+      Write-BorealisPatchResult @{ ok = $false; error = 'download_failed'; phase = 'download'; result_code = $downloadResultCode; message = 'Windows Update Agent did not download the selected update.' }
+      exit 3
     }
   } else {
     Write-BorealisPatchProgress 'download' $null 'Selected update already downloaded.' $true 100
   }
   $installCollection = New-Object -ComObject Microsoft.Update.UpdateColl
   foreach ($update in $matches) {
-    $downloaded = $false
-    try { $downloaded = [bool]$update.IsDownloaded } catch {}
-    if ($downloaded) { [void]$installCollection.Add($update) }
+    [void]$installCollection.Add($update)
   }
   if ($installCollection.Count -lt 1) {
     Write-BorealisPatchResult @{ ok = $false; error = 'download_failed'; message = 'Windows Update Agent did not download the selected update.' }
@@ -1408,14 +1440,26 @@ try {
   $script:BorealisPatchPhase = 'install'
   $installState = "$($request.request_id)".Trim()
   Write-BorealisPatchProgress 'install' $null 'Installing selected update.' $true
-  $installJob = $installer.BeginInstall($null, $null, $installState)
+  $installJob = $null
+  $installResult = $null
   try {
-    while (-not [bool]$installJob.IsCompleted) {
-      Write-BorealisPatchProgress 'install' $installJob 'Installing selected update.' $false
-      Start-Sleep -Seconds 2
+    try {
+      $installJob = $installer.BeginInstall($null, $null, $installState)
+    } catch {
+      $asyncError = Get-BorealisErrorMessage $_
+      Write-BorealisPatchProgress 'install' $null "WUA async install did not start; using synchronous install. $asyncError" $true
+      $installResult = $installer.Install()
     }
-    Write-BorealisPatchProgress 'install' $installJob 'Install complete.' $true
-    $installResult = $installer.EndInstall($installJob)
+    if ($null -ne $installJob) {
+      while (-not [bool]$installJob.IsCompleted) {
+        Write-BorealisPatchProgress 'install' $installJob 'Installing selected update.' $false
+        Start-Sleep -Seconds 2
+      }
+      Write-BorealisPatchProgress 'install' $installJob 'Install complete.' $true
+      $installResult = $installer.EndInstall($installJob)
+    } else {
+      Write-BorealisPatchProgress 'install' $null 'Install complete.' $true 100
+    }
   } finally {
     try { if ($null -ne $installJob) { $installJob.CleanUp() } } catch {}
   }
@@ -1436,7 +1480,7 @@ try {
 } catch {
   $phase = "$script:BorealisPatchPhase".Trim()
   if (-not $phase) { $phase = 'install' }
-  Write-BorealisPatchResult @{ ok = $false; error = 'install_failed'; phase = $phase; message = "$($_.Exception.Message)".Trim() }
+  Write-BorealisPatchResult @{ ok = $false; error = 'install_failed'; phase = $phase; message = (Get-BorealisErrorMessage $_) }
   exit 5
 }
 `, encoded)
