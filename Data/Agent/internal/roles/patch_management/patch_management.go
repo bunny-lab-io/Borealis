@@ -1265,7 +1265,7 @@ function Get-BorealisErrorMessage {
 }
 $script:BorealisLastProgress = @{}
 function Write-BorealisPatchProgress {
-  param([string]$Phase, $Job, [string]$Message, [bool]$Force, [int]$PercentOverride = -1)
+  param([string]$Phase, $Job, [string]$Message, [bool]$Force, [int]$PercentOverride = -1, [string]$Diagnostic = '')
   $progress = $null
   try { if ($null -ne $Job) { $progress = $Job.GetProgress() } } catch {}
   $percent = 0
@@ -1286,7 +1286,7 @@ function Write-BorealisPatchProgress {
     return
   }
   $script:BorealisLastProgress[$Phase] = @{ signature = $signature; at = $nowMs }
-  Write-BorealisPatchPayload @{
+  $payload = @{
     kind = 'progress'
     request_id = "$($request.request_id)".Trim()
     scheduled_job_id = $request.scheduled_job_id
@@ -1304,6 +1304,8 @@ function Write-BorealisPatchProgress {
     current_update_percent = $currentPercent
     message = $Message
   }
+  if ($Diagnostic) { $payload['stderr'] = $Diagnostic }
+  Write-BorealisPatchPayload $payload
 }
 function Get-BorealisKB {
   param($Values, [string]$Title)
@@ -1400,7 +1402,7 @@ try {
         $downloadJob = $downloader.BeginDownload($null, $null, $downloadState)
       } catch {
         $asyncError = Get-BorealisErrorMessage $_
-        Write-BorealisPatchProgress 'download' $null "WUA async download did not start; using synchronous download. $asyncError" $true
+        Write-BorealisPatchProgress 'download' $null 'Using synchronous WUA download path.' $true -1 $asyncError
         $downloadResult = $downloader.Download()
       }
       if ($null -ne $downloadJob) {
@@ -1447,7 +1449,7 @@ try {
       $installJob = $installer.BeginInstall($null, $null, $installState)
     } catch {
       $asyncError = Get-BorealisErrorMessage $_
-      Write-BorealisPatchProgress 'install' $null "WUA async install did not start; using synchronous install. $asyncError" $true
+      Write-BorealisPatchProgress 'install' $null 'Using synchronous WUA install path.' $true -1 $asyncError
       $installResult = $installer.Install()
     }
     if ($null -ne $installJob) {

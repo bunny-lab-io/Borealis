@@ -186,8 +186,9 @@ func TestWindowsPatchInstallScriptUsesWUAAsyncBeginEndContract(t *testing.T) {
 		"$installer.BeginInstall($null, $null, $installState)",
 		"$installer.EndInstall($installJob)",
 		"$installer.Install()",
-		"WUA async download did not start; using synchronous download.",
-		"WUA async install did not start; using synchronous install.",
+		"Using synchronous WUA download path.",
+		"Using synchronous WUA install path.",
+		"$payload['stderr'] = $Diagnostic",
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("installer script missing WUA async contract fragment %q", expected)
