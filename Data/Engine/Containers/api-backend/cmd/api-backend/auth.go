@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -65,7 +66,9 @@ type operatorStore interface {
 }
 
 type postgresOperatorStore struct {
-	db *sql.DB
+	db                  *sql.DB
+	patchPolicySchemaMu sync.Mutex
+	patchPolicySchemaOK bool
 }
 
 type authService struct {

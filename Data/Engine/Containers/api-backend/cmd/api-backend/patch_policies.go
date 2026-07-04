@@ -339,6 +339,9 @@ func patchPolicyEvaluate(w http.ResponseWriter, r *http.Request, auth *authServi
 }
 
 func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile operatorProfile, policyType string) ([]map[string]any, error) {
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, err
+	}
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
 		return nil, err
@@ -393,6 +396,9 @@ func (s *postgresOperatorStore) patchPolicyMetadata(ctx context.Context, profile
 }
 
 func (s *postgresOperatorStore) getPatchPolicy(ctx context.Context, profile operatorProfile, policyID int64) (map[string]any, bool, error) {
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, false, err
+	}
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
 		return nil, false, err
@@ -415,6 +421,9 @@ func (s *postgresOperatorStore) getPatchPolicy(ctx context.Context, profile oper
 func (s *postgresOperatorStore) savePatchPolicy(ctx context.Context, profile operatorProfile, policyID *int64, body map[string]any) (map[string]any, int, error) {
 	if !strings.EqualFold(strings.TrimSpace(profile.Role), "admin") {
 		return map[string]any{"error": "forbidden"}, http.StatusForbidden, errors.New("admin required")
+	}
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -562,6 +571,9 @@ func (s *postgresOperatorStore) deletePatchPolicy(ctx context.Context, profile o
 	if !strings.EqualFold(strings.TrimSpace(profile.Role), "admin") {
 		return map[string]any{"error": "forbidden"}, http.StatusForbidden, errors.New("admin required")
 	}
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
@@ -595,6 +607,9 @@ func (s *postgresOperatorStore) deletePatchPolicy(ctx context.Context, profile o
 }
 
 func (s *postgresOperatorStore) previewPatchPolicy(ctx context.Context, profile operatorProfile, policyID *int64, body map[string]any) (map[string]any, int, error) {
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, http.StatusInternalServerError, errors.Join(errOperatorStoreDown, err)
@@ -647,6 +662,9 @@ func (s *postgresOperatorStore) effectivePatchPolicy(ctx context.Context, profil
 	hostname = cleanText(hostname)
 	if hostname == "" {
 		return map[string]any{"error": "hostname_required"}, http.StatusBadRequest, errors.New("hostname required")
+	}
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, http.StatusInternalServerError, err
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -1382,6 +1400,9 @@ func (s *postgresOperatorStore) patchPolicyDynamicConflicts(ctx context.Context,
 }
 
 func (s *postgresOperatorStore) evaluatePatchPoliciesAt(ctx context.Context, profile operatorProfile, onlyPolicyID int64, scheduledTS int64, now int64, manual bool) (map[string]any, error) {
+	if err := s.ensurePatchPolicySchema(ctx); err != nil {
+		return nil, err
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
