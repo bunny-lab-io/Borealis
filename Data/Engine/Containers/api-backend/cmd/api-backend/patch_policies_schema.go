@@ -126,12 +126,15 @@ func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 			target_type TEXT NOT NULL,
 			device_guid TEXT,
 			hostname TEXT,
+			site_id BIGINT REFERENCES engine.sites(id) ON DELETE SET NULL,
 			filter_id BIGINT REFERENCES engine.device_filters(id) ON DELETE SET NULL,
 			reason TEXT,
 			created_by TEXT,
 			created_at BIGINT NOT NULL
 		)`,
+		`ALTER TABLE engine.patch_policy_exclusions ADD COLUMN IF NOT EXISTS site_id BIGINT REFERENCES engine.sites(id) ON DELETE SET NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_policy ON engine.patch_policy_exclusions(policy_id, exclusion_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_site_host ON engine.patch_policy_exclusions(site_id, hostname)`,
 		`CREATE TABLE IF NOT EXISTS engine.patch_policy_rules (
 			id BIGSERIAL PRIMARY KEY,
 			policy_id BIGINT NOT NULL REFERENCES engine.patch_policies(id) ON DELETE CASCADE,

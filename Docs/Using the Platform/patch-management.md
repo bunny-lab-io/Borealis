@@ -42,7 +42,7 @@ Device / Filter policies override site and global policy behavior. Direct same-l
 
 ## Exclusions and Reboots
 
-Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Excluded devices still count as covered during conflict checks.
+Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Hostname exclusions require a site selection so duplicate hostnames in different sites stay distinct. Excluded devices still count as covered during conflict checks.
 
 Reboots are off by default. If enabled, reboot policy can use a separate schedule. Agents skip rebooting devices with a logged-in user unless the policy explicitly allows forced logged-in-user reboots.
 

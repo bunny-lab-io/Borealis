@@ -378,11 +378,13 @@ export function policySavePayload(draft = {}, policyType = "site") {
     exclusions: (Array.isArray(draft.exclusions) ? draft.exclusions : [])
       .map((item) => {
         const targetType = text(item.target_type) || "device";
+        const siteId = targetType === "filter" ? "" : Number(item.site_id || 0) || "";
         return {
           exclusion_type: text(item.exclusion_type) || "unmanaged",
           target_type: targetType,
           hostname: targetType === "filter" ? "" : text(item.hostname),
           device_guid: targetType === "filter" ? "" : text(item.device_guid),
+          site_id: siteId,
           filter_id: targetType === "filter" ? Number(item.filter_id || 0) || "" : "",
           reason: text(item.reason),
         };
@@ -492,7 +494,7 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
       ...previous,
       exclusions: [
         ...(Array.isArray(previous.exclusions) ? previous.exclusions : []),
-        { exclusion_type: exclusionType, target_type: "device", hostname: "", reason: "" },
+        { exclusion_type: exclusionType, target_type: "device", hostname: "", site_id: "", reason: "" },
       ],
     }));
   }, []);
@@ -796,13 +798,28 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
                       ))}
                     </TextField>
                   ) : (
-                    <TextField
-                      label="Hostname"
-                      value={exclusion.hostname || ""}
-                      onChange={(event) => updateExclusion(index, "hostname", event.target.value)}
-                      size="small"
-                      sx={{ minWidth: 220, flex: 1 }}
-                    />
+                    <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ minWidth: { md: 440 }, flex: 1 }}>
+                      <TextField
+                        label="Site"
+                        select
+                        value={Number(exclusion.site_id || 0) || ""}
+                        onChange={(event) => updateExclusion(index, "site_id", Number(event.target.value || 0) || "")}
+                        size="small"
+                        sx={{ minWidth: 200, flex: 0.8 }}
+                      >
+                        <MenuItem value="">Select site</MenuItem>
+                        {siteOptions.map((site) => (
+                          <MenuItem key={site.id} value={Number(site.id)}>{site.name || `Site ${site.id}`}</MenuItem>
+                        ))}
+                      </TextField>
+                      <TextField
+                        label="Hostname"
+                        value={exclusion.hostname || ""}
+                        onChange={(event) => updateExclusion(index, "hostname", event.target.value)}
+                        size="small"
+                        sx={{ minWidth: 220, flex: 1 }}
+                      />
+                    </Stack>
                   )}
                   <TextField
                     label="Reason"

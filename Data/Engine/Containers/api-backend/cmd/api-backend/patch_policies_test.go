@@ -77,3 +77,55 @@ func TestPatchPolicySaveBodyRequiresSitesForSitePolicy(t *testing.T) {
 		t.Fatalf("unexpected normalized values %#v", values)
 	}
 }
+
+func TestPatchPolicyHostnameExclusionRequiresSite(t *testing.T) {
+	_, errText := normalizePatchPolicySaveBody(map[string]any{
+		"name":        "Scoped Device Policy",
+		"policy_type": "device_filter",
+		"targets":     []any{map[string]any{"target_type": "filter", "filter_id": float64(8)}},
+		"exclusions":  []any{map[string]any{"exclusion_type": "frozen", "target_type": "device", "hostname": "DUPLICATE-HOST"}},
+	}, patchPolicyRow{}, 1783000000, "operator")
+	if errText != "Device hostname exclusions require a site." {
+		t.Fatalf("expected site validation error, got %q", errText)
+	}
+
+	values, errText := normalizePatchPolicySaveBody(map[string]any{
+		"name":        "Scoped Device Policy",
+		"policy_type": "device_filter",
+		"targets":     []any{map[string]any{"target_type": "filter", "filter_id": float64(8)}},
+		"exclusions":  []any{map[string]any{"exclusion_type": "frozen", "target_type": "device", "hostname": "DUPLICATE-HOST", "site_id": float64(7)}},
+	}, patchPolicyRow{}, 1783000000, "operator")
+	if errText != "" {
+		t.Fatalf("unexpected validation error: %s", errText)
+	}
+	if len(values.Exclusions) != 1 || values.Exclusions[0].SiteID != 7 {
+		t.Fatalf("expected site-scoped exclusion, got %#v", values.Exclusions)
+	}
+}
+
+func TestPatchPolicyHostnameExclusionKeysAreSiteAware(t *testing.T) {
+	siteSevenKeys := patchPolicyCoverageKeys(nil, []patchPolicyExclusionRef{{
+		ExclusionType: patchPolicyExclusionFrozen,
+		TargetType:    "device",
+		Hostname:      "DUPLICATE-HOST",
+		SiteID:        7,
+	}})
+	if key, ok := patchPolicyTargetOverlapsKeys(siteSevenKeys, "device", "", "duplicate-host", 0, 7); !ok || key != "device-host:7:duplicate-host" {
+		t.Fatalf("expected same-site hostname overlap, got key=%q ok=%v", key, ok)
+	}
+	if key, ok := patchPolicyTargetOverlapsKeys(siteSevenKeys, "device", "", "duplicate-host", 0, 8); ok {
+		t.Fatalf("different site hostname should not overlap, got key=%q", key)
+	}
+	if key, ok := patchPolicyTargetOverlapsKeys(siteSevenKeys, "device", "", "duplicate-host", 0, 0); !ok || key != "device-host:7:duplicate-host" {
+		t.Fatalf("global hostname should overlap site-specific coverage, got key=%q ok=%v", key, ok)
+	}
+
+	globalKeys := patchPolicyCoverageKeys(nil, []patchPolicyExclusionRef{{
+		ExclusionType: patchPolicyExclusionFrozen,
+		TargetType:    "device",
+		Hostname:      "DUPLICATE-HOST",
+	}})
+	if key, ok := patchPolicyTargetOverlapsKeys(globalKeys, "device", "", "duplicate-host", 0, 7); !ok || key != "device-host:*:duplicate-host" {
+		t.Fatalf("site-specific hostname should overlap global coverage, got key=%q ok=%v", key, ok)
+	}
+}

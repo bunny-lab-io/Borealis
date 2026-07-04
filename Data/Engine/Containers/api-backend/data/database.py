@@ -1136,19 +1136,31 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
                 target_type TEXT NOT NULL,
                 device_guid TEXT,
                 hostname TEXT,
+                site_id INTEGER,
                 filter_id INTEGER,
                 reason TEXT,
                 created_by TEXT,
                 created_at INTEGER NOT NULL,
                 FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE SET NULL,
                 FOREIGN KEY(filter_id) REFERENCES device_filters(id) ON DELETE SET NULL
             )
             """
         )
+        cur.execute("PRAGMA table_info(patch_policy_exclusions)")
+        exclusion_columns = {row[1] for row in cur.fetchall()}
+        if "site_id" not in exclusion_columns:
+            cur.execute("ALTER TABLE patch_policy_exclusions ADD COLUMN site_id INTEGER")
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_policy
                 ON patch_policy_exclusions(policy_id, exclusion_type)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_site_host
+                ON patch_policy_exclusions(site_id, hostname)
             """
         )
         cur.execute(

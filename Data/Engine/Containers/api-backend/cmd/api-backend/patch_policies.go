@@ -91,6 +91,8 @@ type patchPolicyExclusionRef struct {
 	TargetType    string
 	DeviceGUID    string
 	Hostname      string
+	SiteID        int64
+	SiteName      string
 	FilterID      int64
 	Reason        string
 	CreatedBy     string
@@ -532,9 +534,9 @@ func (s *postgresOperatorStore) savePatchPolicy(ctx context.Context, profile ope
 	}
 	for _, exclusion := range values.Exclusions {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO engine.patch_policy_exclusions(policy_id, exclusion_type, target_type, device_guid, hostname, filter_id, reason, created_by, created_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		`, id, exclusion.ExclusionType, exclusion.TargetType, nullEmpty(exclusion.DeviceGUID), nullEmpty(exclusion.Hostname), nullablePositiveInt64Arg(exclusion.FilterID), nullEmpty(exclusion.Reason), profile.Username, now); err != nil {
+			INSERT INTO engine.patch_policy_exclusions(policy_id, exclusion_type, target_type, device_guid, hostname, site_id, filter_id, reason, created_by, created_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		`, id, exclusion.ExclusionType, exclusion.TargetType, nullEmpty(exclusion.DeviceGUID), nullEmpty(exclusion.Hostname), nullablePositiveInt64Arg(exclusion.SiteID), nullablePositiveInt64Arg(exclusion.FilterID), nullEmpty(exclusion.Reason), profile.Username, now); err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
 	}
@@ -852,18 +854,19 @@ func loadPatchPolicyAssociations(ctx context.Context, conn *sql.Conn, ids []int6
 		return nil, nil, nil, nil, err
 	}
 	exclusionRows, err := conn.QueryContext(ctx, `
-		SELECT policy_id, exclusion_type, target_type, device_guid, hostname, filter_id, reason, created_by, created_at
-		  FROM engine.patch_policy_exclusions
-		 WHERE policy_id IN (`+inSQL+`)
-	  ORDER BY id
+		SELECT e.policy_id, e.exclusion_type, e.target_type, e.device_guid, e.hostname, e.site_id, s.name, e.filter_id, e.reason, e.created_by, e.created_at
+		  FROM engine.patch_policy_exclusions AS e
+		  LEFT JOIN engine.sites AS s ON s.id=e.site_id
+		 WHERE e.policy_id IN (`+inSQL+`)
+	  ORDER BY e.id
 	`, args...)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 	for exclusionRows.Next() {
-		var policyID, filterID, createdAt sql.NullInt64
-		var exclusionType, targetType, guid, hostname, reason, createdBy sql.NullString
-		if err := exclusionRows.Scan(&policyID, &exclusionType, &targetType, &guid, &hostname, &filterID, &reason, &createdBy, &createdAt); err != nil {
+		var policyID, siteID, filterID, createdAt sql.NullInt64
+		var exclusionType, targetType, guid, hostname, siteName, reason, createdBy sql.NullString
+		if err := exclusionRows.Scan(&policyID, &exclusionType, &targetType, &guid, &hostname, &siteID, &siteName, &filterID, &reason, &createdBy, &createdAt); err != nil {
 			_ = exclusionRows.Close()
 			return nil, nil, nil, nil, err
 		}
@@ -875,6 +878,8 @@ func loadPatchPolicyAssociations(ctx context.Context, conn *sql.Conn, ids []int6
 			"target_type":    cleanText(targetType.String),
 			"device_guid":    cleanText(guid.String),
 			"hostname":       cleanText(hostname.String),
+			"site_id":        nullableInt(siteID),
+			"site_name":      cleanText(siteName.String),
 			"filter_id":      nullableInt(filterID),
 			"reason":         cleanText(reason.String),
 			"created_by":     cleanText(createdBy.String),
@@ -1038,6 +1043,9 @@ func normalizePatchPolicySaveBody(body map[string]any, existing patchPolicyRow, 
 	values.Targets = patchPolicyTargetsFromAny(firstPresentAny(body["targets"], existing.Targets))
 	values.Exclusions = patchPolicyExclusionsFromAny(firstPresentAny(body["exclusions"], existing.Exclusions), actor)
 	values.Rules = patchPolicyRulesFromAny(firstPresentAny(body["rules"], patchPolicyRulePayloads(existing.Rules)), actor, now)
+	if errText := patchPolicyExclusionValidationError(values.Exclusions); errText != "" {
+		return patchPolicySaveValues{}, errText
+	}
 	if values.PolicyType == patchPolicyTypeSite && len(values.SiteIDs) == 0 {
 		return patchPolicySaveValues{}, "Site policies require at least one site."
 	}
@@ -1155,14 +1163,14 @@ func patchPolicyDirectTargetConflicts(ctx context.Context, conn *sql.Conn, polic
 		return nil
 	}
 	rows, err := conn.QueryContext(ctx, `
-		SELECT p.id, p.name, t.target_type, t.device_guid, t.hostname, t.filter_id
+		SELECT p.id, p.name, t.target_type, t.device_guid, t.hostname, NULL::BIGINT AS site_id, t.filter_id
 		  FROM engine.patch_policies AS p
 		  JOIN engine.patch_policy_targets AS t ON t.policy_id=p.id
 		 WHERE p.policy_type='device_filter'
 		   AND p.enabled=1
 		   AND p.id<>$1
 		UNION ALL
-		SELECT p.id, p.name, e.target_type, e.device_guid, e.hostname, e.filter_id
+		SELECT p.id, p.name, e.target_type, e.device_guid, e.hostname, e.site_id, e.filter_id
 		  FROM engine.patch_policies AS p
 		  JOIN engine.patch_policy_exclusions AS e ON e.policy_id=p.id
 		 WHERE p.policy_type='device_filter'
@@ -1175,13 +1183,13 @@ func patchPolicyDirectTargetConflicts(ctx context.Context, conn *sql.Conn, polic
 	defer rows.Close()
 	conflicts := []map[string]any{}
 	for rows.Next() {
-		var id, filterID sql.NullInt64
+		var id, siteID, filterID sql.NullInt64
 		var name, targetType, guid, hostname sql.NullString
-		if err := rows.Scan(&id, &name, &targetType, &guid, &hostname, &filterID); err != nil {
+		if err := rows.Scan(&id, &name, &targetType, &guid, &hostname, &siteID, &filterID); err != nil {
 			return []map[string]any{{"type": "target_conflict_check_failed", "message": err.Error()}}
 		}
-		key := patchPolicyTargetKey(targetType.String, guid.String, hostname.String, nullInt(filterID))
-		if key == "" || !keys[key] {
+		key, ok := patchPolicyTargetOverlapsKeys(keys, targetType.String, guid.String, hostname.String, nullInt(filterID), nullInt(siteID))
+		if !ok {
 			continue
 		}
 		conflicts = append(conflicts, map[string]any{"type": "same_layer_target_overlap", "policy_id": nullInt(id), "policy_name": nullString(name), "target_key": key})
@@ -1332,9 +1340,11 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 			continue
 		}
 		mode := patchPolicyExclusionFrozen
+		siteID := derefInt64(target.SiteID)
 		for _, key := range []string{
-			patchPolicyTargetKey("device", target.DeviceGUID, target.Hostname, 0),
+			patchPolicyTargetKeyWithSite("device", target.DeviceGUID, target.Hostname, 0, siteID),
 			patchPolicyTargetKey("device", target.DeviceGUID, "", 0),
+			patchPolicyTargetKeyWithSite("device", "", target.Hostname, 0, siteID),
 			patchPolicyTargetKey("device", "", target.Hostname, 0),
 		} {
 			if v := exclusionModeByTarget[key]; v != "" {
@@ -1342,7 +1352,7 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 				break
 			}
 		}
-		modeByDevice[patchPolicyDeviceIdentity(patchPolicyDevice{DeviceGUID: target.DeviceGUID, Hostname: target.Hostname, SiteID: derefInt64(target.SiteID)})] = mode
+		modeByDevice[patchPolicyDeviceIdentity(patchPolicyDevice{DeviceGUID: target.DeviceGUID, Hostname: target.Hostname, SiteID: siteID})] = mode
 	}
 	for idx := range devices {
 		if mode := modeByDevice[patchPolicyDeviceIdentity(devices[idx])]; mode != "" {
@@ -2030,6 +2040,8 @@ func patchPolicyExclusionsFromAny(value any, actor string) []patchPolicyExclusio
 		filterID := coerceInt64(firstPresentAny(entry["filter_id"], entry["id"]))
 		hostname := cleanText(entry["hostname"])
 		guid := strings.ToLower(normalizeCanonicalGUID(firstPresentAny(entry["device_guid"], entry["guid"])))
+		siteID := coerceInt64(firstPresentAny(entry["site_id"], entry["siteId"]))
+		siteName := cleanText(firstPresentAny(entry["site_name"], entry["siteName"], entry["site"]))
 		if targetType == "" {
 			if filterID > 0 {
 				targetType = "filter"
@@ -2040,9 +2052,22 @@ func patchPolicyExclusionsFromAny(value any, actor string) []patchPolicyExclusio
 		if exclusionType == "" || targetType == "" {
 			continue
 		}
-		out = append(out, patchPolicyExclusionRef{ExclusionType: exclusionType, TargetType: targetType, DeviceGUID: guid, Hostname: hostname, FilterID: filterID, Reason: cleanText(entry["reason"]), CreatedBy: actor})
+		if targetType == "filter" {
+			siteID = 0
+			siteName = ""
+		}
+		out = append(out, patchPolicyExclusionRef{ExclusionType: exclusionType, TargetType: targetType, DeviceGUID: guid, Hostname: hostname, SiteID: siteID, SiteName: siteName, FilterID: filterID, Reason: cleanText(entry["reason"]), CreatedBy: actor})
 	}
 	return out
+}
+
+func patchPolicyExclusionValidationError(exclusions []patchPolicyExclusionRef) string {
+	for _, exclusion := range exclusions {
+		if exclusion.TargetType == "device" && exclusion.DeviceGUID == "" && exclusion.Hostname != "" && exclusion.SiteID <= 0 {
+			return "Device hostname exclusions require a site."
+		}
+	}
+	return ""
 }
 
 func patchPolicyRulesFromAny(value any, actor string, now int64) []patchPolicyRule {
@@ -2075,7 +2100,7 @@ func patchPolicyTargetPayload(target patchPolicyTargetRef) map[string]any {
 }
 
 func patchPolicyExclusionPayload(exclusion patchPolicyExclusionRef) map[string]any {
-	return map[string]any{"exclusion_type": exclusion.ExclusionType, "target_type": exclusion.TargetType, "device_guid": exclusion.DeviceGUID, "hostname": exclusion.Hostname, "filter_id": nullablePositiveInt64Any(exclusion.FilterID), "reason": exclusion.Reason, "created_by": exclusion.CreatedBy}
+	return map[string]any{"exclusion_type": exclusion.ExclusionType, "target_type": exclusion.TargetType, "device_guid": exclusion.DeviceGUID, "hostname": exclusion.Hostname, "site_id": nullablePositiveInt64Any(exclusion.SiteID), "site_name": exclusion.SiteName, "filter_id": nullablePositiveInt64Any(exclusion.FilterID), "reason": exclusion.Reason, "created_by": exclusion.CreatedBy}
 }
 
 func patchPolicyCoverageKeys(targets []patchPolicyTargetRef, exclusions []patchPolicyExclusionRef) map[string]bool {
@@ -2086,7 +2111,7 @@ func patchPolicyCoverageKeys(targets []patchPolicyTargetRef, exclusions []patchP
 		}
 	}
 	for _, exclusion := range exclusions {
-		if key := patchPolicyTargetKey(exclusion.TargetType, exclusion.DeviceGUID, exclusion.Hostname, exclusion.FilterID); key != "" {
+		if key := patchPolicyTargetKeyWithSite(exclusion.TargetType, exclusion.DeviceGUID, exclusion.Hostname, exclusion.FilterID, exclusion.SiteID); key != "" {
 			keys[key] = true
 		}
 	}
@@ -2103,10 +2128,14 @@ func patchPolicyScheduledTarget(entry map[string]any) map[string]any {
 
 func patchPolicyTargetIdentityFromAny(value any) string {
 	entry := schedulerAnyMap(value)
-	return patchPolicyTargetKey(cleanText(entry["kind"]), cleanText(firstPresentAny(entry["device_guid"], entry["guid"])), cleanText(entry["hostname"]), coerceInt64(firstPresentAny(entry["filter_id"], entry["id"])))
+	return patchPolicyTargetKeyWithSite(cleanText(entry["kind"]), cleanText(firstPresentAny(entry["device_guid"], entry["guid"])), cleanText(entry["hostname"]), coerceInt64(firstPresentAny(entry["filter_id"], entry["id"])), coerceInt64(firstPresentAny(entry["site_id"], entry["siteId"])))
 }
 
 func patchPolicyTargetKey(targetType string, guid string, hostname string, filterID int64) string {
+	return patchPolicyTargetKeyWithSite(targetType, guid, hostname, filterID, 0)
+}
+
+func patchPolicyTargetKeyWithSite(targetType string, guid string, hostname string, filterID int64, siteID int64) string {
 	targetType = normalizePatchPolicyTargetType(targetType)
 	switch targetType {
 	case "filter":
@@ -2118,10 +2147,41 @@ func patchPolicyTargetKey(targetType string, guid string, hostname string, filte
 			return "device-guid:" + guid
 		}
 		if hostname = strings.ToLower(strings.TrimSpace(hostname)); hostname != "" {
-			return "device-host:" + hostname
+			if siteID > 0 {
+				return "device-host:" + strconv.FormatInt(siteID, 10) + ":" + hostname
+			}
+			return "device-host:*:" + hostname
 		}
 	}
 	return ""
+}
+
+func patchPolicyTargetOverlapsKeys(keys map[string]bool, targetType string, guid string, hostname string, filterID int64, siteID int64) (string, bool) {
+	key := patchPolicyTargetKeyWithSite(targetType, guid, hostname, filterID, siteID)
+	if key != "" && keys[key] {
+		return key, true
+	}
+	if normalizePatchPolicyTargetType(targetType) != "device" || strings.ToLower(normalizeCanonicalGUID(guid)) != "" {
+		return "", false
+	}
+	host := strings.ToLower(strings.TrimSpace(hostname))
+	if host == "" {
+		return "", false
+	}
+	globalKey := patchPolicyTargetKeyWithSite("device", "", host, 0, 0)
+	if siteID > 0 {
+		if keys[globalKey] {
+			return globalKey, true
+		}
+		return "", false
+	}
+	suffix := ":" + host
+	for candidate := range keys {
+		if candidate != globalKey && strings.HasPrefix(candidate, "device-host:") && strings.HasSuffix(candidate, suffix) {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func patchPolicyDeviceIdentity(device patchPolicyDevice) string {

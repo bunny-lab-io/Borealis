@@ -389,7 +389,7 @@ export default function PatchPolicyEditor() {
       ...previous,
       exclusions: [
         ...(Array.isArray(previous.exclusions) ? previous.exclusions : []),
-        { exclusion_type: exclusionType, target_type: "device", hostname: "", reason: "" },
+        { exclusion_type: exclusionType, target_type: "device", hostname: "", site_id: "", reason: "" },
       ],
     }));
   }, []);
@@ -496,6 +496,16 @@ export default function PatchPolicyEditor() {
 
   const siteOptions = Array.isArray(metadata?.sites) ? metadata.sites : [];
   const filterOptions = Array.isArray(metadata?.filters) ? metadata.filters : [];
+  const selectedSiteIDSet = useMemo(
+    () => new Set((Array.isArray(draft.site_ids) ? draft.site_ids : []).map(Number).filter(Boolean)),
+    [draft.site_ids]
+  );
+  const exclusionSiteOptions = useMemo(() => {
+    if (policyType !== "site" || selectedSiteIDSet.size === 0) {
+      return siteOptions;
+    }
+    return siteOptions.filter((site) => selectedSiteIDSet.has(Number(site.id)));
+  }, [policyType, selectedSiteIDSet, siteOptions]);
   const ruleRows = Array.isArray(draft.rules) ? draft.rules : [];
   const targetRows = Array.isArray(draft.targets) ? draft.targets : [];
   const exclusionRows = Array.isArray(draft.exclusions) ? draft.exclusions : [];
@@ -940,13 +950,29 @@ export default function PatchPolicyEditor() {
                       ))}
                     </TextField>
                   ) : (
-                    <TextField
-                      label="Hostname"
-                      value={exclusion.hostname || ""}
-                      onChange={(event) => updateExclusion(index, "hostname", event.target.value)}
-                      size="small"
-                      sx={{ minWidth: 220, flex: 1, ...INPUT_FIELD_SX }}
-                    />
+                    <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ minWidth: { md: 440 }, flex: 1 }}>
+                      <TextField
+                        label="Site"
+                        select
+                        value={Number(exclusion.site_id || 0) || ""}
+                        onChange={(event) => updateExclusion(index, "site_id", Number(event.target.value || 0) || "")}
+                        size="small"
+                        sx={{ minWidth: 200, flex: 0.8, ...SELECT_FIELD_SX }}
+                        SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
+                      >
+                        <MenuItem value="">Select site</MenuItem>
+                        {exclusionSiteOptions.map((site) => (
+                          <MenuItem key={site.id} value={Number(site.id)}>{site.name || `Site ${site.id}`}</MenuItem>
+                        ))}
+                      </TextField>
+                      <TextField
+                        label="Hostname"
+                        value={exclusion.hostname || ""}
+                        onChange={(event) => updateExclusion(index, "hostname", event.target.value)}
+                        size="small"
+                        sx={{ minWidth: 220, flex: 1, ...INPUT_FIELD_SX }}
+                      />
+                    </Stack>
                   )}
                   <TextField
                     label="Reason"

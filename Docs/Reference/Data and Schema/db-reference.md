@@ -748,7 +748,7 @@ finally:
     - Notes:
     - Engine DB init seeds exactly one locked `policy_type='global'` policy when none exists. Existing Global Patch Policy rows are not overwritten on redeploy.
     - Site policy scope is stored in `patch_policy_sites`; device/filter scope is stored in `patch_policy_targets`.
-    - `patch_policy_exclusions` stores `unmanaged` and `frozen` coverage. Exclusions still count as covered for conflict detection.
+    - `patch_policy_exclusions` stores `unmanaged` and `frozen` coverage. Device hostname exclusions include `site_id` when no device GUID is present so duplicate hostnames across sites remain distinct. Exclusions still count as covered for conflict detection.
     - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation.
 
     #### `patch_policy_runs`

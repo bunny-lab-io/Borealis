@@ -99,13 +99,13 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
     - `GET /api/patches/audit` (Token Authenticated) - list normalized patch inventory for all devices visible to the operator, including `active_install_job` when an enabled scheduled patch install already owns a matching KB, patch key, or title.
     - `GET /api/patches/policies` (Token Authenticated) - list patch policies, optionally filtered by `type=site` or `type=device_filter`.
-    - `POST /api/patches/policies` (Admin) - create a patch policy.
+    - `POST /api/patches/policies` (Admin) - create a patch policy. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
     - `GET /api/patches/policies/metadata` (Token Authenticated) - policy editor metadata for sites, device filters, role scopes, rule types, match types, exclusions, and defaults.
     - `POST /api/patches/policies/evaluate` (Admin) - manually evaluate all due policies or a single `policy_id`.
     - `GET /api/patches/policies/effective?hostname=<hostname>` (Token Authenticated) - return effective policy hierarchy for one device.
     - `POST /api/patches/policies/conflicts` (Token Authenticated) - preview policy coverage and conflict state for a draft policy payload.
     - `GET /api/patches/policies/<policy_id>` (Token Authenticated) - get one visible patch policy.
-    - `PUT /api/patches/policies/<policy_id>` (Admin) - update a patch policy. Same-layer conflicts return `policy_conflict`; parent block overrides require confirmation.
+    - `PUT /api/patches/policies/<policy_id>` (Admin) - update a patch policy. Same-layer conflicts return `policy_conflict`; parent block overrides require confirmation. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
     - `DELETE /api/patches/policies/<policy_id>` (Admin) - delete one unlocked patch policy. The Global Patch Policy is locked.
     - `POST /api/patches/policies/<policy_id>/preview` (Token Authenticated) - preview targets, dynamic filter conflicts, and parent override warnings for a saved policy.
     - `GET /api/device/patches/<hostname>` (Token Authenticated) - list normalized patch inventory for one in-scope device.
