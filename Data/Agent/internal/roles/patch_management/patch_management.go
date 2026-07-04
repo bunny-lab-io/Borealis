@@ -1342,6 +1342,7 @@ function Test-BorealisPatchMatch {
 }
 try {
   Write-BorealisPatchProgress 'prepare' $null 'Searching Windows Update Agent for matching update.' $true
+  $script:BorealisPatchPhase = 'search'
   $session = New-Object -ComObject Microsoft.Update.Session
   $searcher = $session.CreateUpdateSearcher()
   $searchResult = $searcher.Search("IsInstalled=0 and IsHidden=0")
@@ -1373,17 +1374,19 @@ try {
   if ($needsDownload) {
     $downloader = $session.CreateUpdateDownloader()
     $downloader.Updates = $collection
+    $script:BorealisPatchPhase = 'download'
+    $downloadState = "$($request.request_id)".Trim()
     Write-BorealisPatchProgress 'download' $null 'Downloading selected update.' $true
-    $downloadJob = $downloader.BeginDownload($null, $null)
+    $downloadJob = $downloader.BeginDownload($null, $null, $downloadState)
     try {
       while (-not [bool]$downloadJob.IsCompleted) {
         Write-BorealisPatchProgress 'download' $downloadJob 'Downloading selected update.' $false
         Start-Sleep -Seconds 2
       }
       Write-BorealisPatchProgress 'download' $downloadJob 'Download complete.' $true
-      [void]$downloadJob.GetResult()
+      [void]$downloader.EndDownload($downloadJob)
     } finally {
-      try { $downloadJob.CleanUp() } catch {}
+      try { if ($null -ne $downloadJob) { $downloadJob.CleanUp() } } catch {}
     }
   } else {
     Write-BorealisPatchProgress 'download' $null 'Selected update already downloaded.' $true 100
@@ -1402,17 +1405,19 @@ try {
   $installer.Updates = $installCollection
   try { $installer.ForceQuiet = $true } catch {}
   try { $installer.AllowSourcePrompts = $false } catch {}
+  $script:BorealisPatchPhase = 'install'
+  $installState = "$($request.request_id)".Trim()
   Write-BorealisPatchProgress 'install' $null 'Installing selected update.' $true
-  $installJob = $installer.BeginInstall($null, $null)
+  $installJob = $installer.BeginInstall($null, $null, $installState)
   try {
     while (-not [bool]$installJob.IsCompleted) {
       Write-BorealisPatchProgress 'install' $installJob 'Installing selected update.' $false
       Start-Sleep -Seconds 2
     }
     Write-BorealisPatchProgress 'install' $installJob 'Install complete.' $true
-    $installResult = $installJob.GetResult()
+    $installResult = $installer.EndInstall($installJob)
   } finally {
-    try { $installJob.CleanUp() } catch {}
+    try { if ($null -ne $installJob) { $installJob.CleanUp() } } catch {}
   }
   $resultCode = [int]$installResult.ResultCode
   $ok = ($resultCode -eq 2 -or $resultCode -eq 3)
@@ -1429,7 +1434,9 @@ try {
   }
   if (-not $ok) { exit 4 }
 } catch {
-  Write-BorealisPatchResult @{ ok = $false; error = 'install_failed'; message = "$($_.Exception.Message)".Trim() }
+  $phase = "$script:BorealisPatchPhase".Trim()
+  if (-not $phase) { $phase = 'install' }
+  Write-BorealisPatchResult @{ ok = $false; error = 'install_failed'; phase = $phase; message = "$($_.Exception.Message)".Trim() }
   exit 5
 }
 `, encoded)

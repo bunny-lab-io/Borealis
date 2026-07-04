@@ -173,6 +173,27 @@ func TestWindowsPatchInstallScriptFallsBackToKBWhenIdentityIsStale(t *testing.T)
 	}
 }
 
+func TestWindowsPatchInstallScriptUsesWUAAsyncBeginEndContract(t *testing.T) {
+	script := windowsPatchInstallScript(map[string]any{
+		"request_id": "patch-job-247-run-6896",
+		"kb":         "KB2267602",
+		"title":      "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602",
+	})
+	for _, expected := range []string{
+		"$downloader.BeginDownload($null, $null, $downloadState)",
+		"$downloader.EndDownload($downloadJob)",
+		"$installer.BeginInstall($null, $null, $installState)",
+		"$installer.EndInstall($installJob)",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("installer script missing WUA async contract fragment %q", expected)
+		}
+	}
+	if strings.Contains(script, ".GetResult()") {
+		t.Fatalf("installer script still reads async WUA result from job.GetResult")
+	}
+}
+
 func TestPatchInstallProgressPayloadIncludesSchedulerContext(t *testing.T) {
 	payload := patchInstallProgressPayload("LAB-OPERATOR-01", map[string]any{
 		"request_id":           "patch-job-9-run-12",
