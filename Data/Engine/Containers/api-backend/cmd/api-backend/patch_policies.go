@@ -26,6 +26,7 @@ const (
 
 	patchPolicyExclusionUnmanaged = "unmanaged"
 	patchPolicyExclusionFrozen    = "frozen"
+	patchPolicyExclusionOverride  = "managed_override"
 )
 
 type patchPolicyStore interface {
@@ -99,15 +100,29 @@ type patchPolicyExclusionRef struct {
 }
 
 type patchPolicyDevice struct {
-	DeviceGUID      string
-	Hostname        string
-	SiteID          int64
-	SiteName        string
-	DeviceType      string
-	OperatingSystem string
-	FilterIDs       []int64
-	ExclusionMode   string
-	Conflict        bool
+	DeviceGUID                string
+	Hostname                  string
+	SiteID                    int64
+	SiteName                  string
+	DeviceType                string
+	OperatingSystem           string
+	FilterIDs                 []int64
+	ExclusionMode             string
+	ExclusionPolicyID         int64
+	ExclusionOverridePolicyID int64
+	HierarchyPolicyIDs        []int64
+	Conflict                  bool
+}
+
+type patchPolicyDeviceResolution struct {
+	Raw      []patchPolicyDevice
+	Eligible []patchPolicyDevice
+}
+
+type patchPolicyEffectiveScope struct {
+	Policy        patchPolicyRow
+	Devices       []patchPolicyDevice
+	RulesByDevice map[string][]patchPolicyRule
 }
 
 func patchPoliciesRootHandler(auth *authService, fallback http.Handler) http.HandlerFunc {
@@ -363,7 +378,11 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 			continue
 		}
 		payload := patchPolicyPayload(row)
-		payload["target_count"] = patchPolicyCoveredCount(ctx, s, profile, row)
+		counts := patchPolicyCoveredCounts(ctx, s, profile, row)
+		payload["target_count"] = counts["eligible"]
+		payload["raw_target_count"] = counts["raw"]
+		payload["ignored_role_count"] = counts["ignored_role"]
+		payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
 		out = append(out, payload)
 	}
 	return out, nil
@@ -382,10 +401,10 @@ func (s *postgresOperatorStore) patchPolicyMetadata(ctx context.Context, profile
 		"sites":        sites,
 		"filters":      filters,
 		"policy_types": []string{patchPolicyTypeGlobal, patchPolicyTypeSite, patchPolicyTypeDeviceFilter},
-		"role_scopes":  []string{patchPolicyRoleServer, patchPolicyRoleWorkstation, patchPolicyRoleBoth},
+		"role_scopes":  []string{patchPolicyRoleServer, patchPolicyRoleWorkstation},
 		"rule_types":   []string{patchPolicyRuleApprove, patchPolicyRuleBlock},
 		"match_types":  []string{"severity", "classification", "category", "kb", "update_id", "patch_key"},
-		"exclusions":   []string{patchPolicyExclusionUnmanaged, patchPolicyExclusionFrozen},
+		"exclusions":   []string{patchPolicyExclusionUnmanaged, patchPolicyExclusionFrozen, patchPolicyExclusionOverride},
 		"defaults": map[string]any{
 			"approval_mode":           "conservative_msp",
 			"deferral_days":           14,
@@ -449,14 +468,10 @@ func (s *postgresOperatorStore) savePatchPolicy(ctx context.Context, profile ope
 		return map[string]any{"error": "invalid_policy", "message": errText}, http.StatusBadRequest, errors.New(errText)
 	}
 	if !policyIDValid(policyID) && values.PolicyType == patchPolicyTypeGlobal {
-		var existingGlobal int64
-		err := conn.QueryRowContext(ctx, "SELECT COALESCE(MIN(id), 0) FROM engine.patch_policies WHERE policy_type='global'").Scan(&existingGlobal)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		if existingGlobal > 0 {
-			return map[string]any{"error": "global_policy_exists", "message": "Global Patch Policy already exists."}, http.StatusConflict, errors.New("global policy exists")
-		}
+		return map[string]any{"error": "global_policy_locked", "message": "Global Patch Policies are seeded by Borealis and cannot be created manually."}, http.StatusConflict, errors.New("global policy locked")
+	}
+	if policyIDValid(policyID) && normalizePatchPolicyType(existing.PolicyType.String) == patchPolicyTypeGlobal && values.RoleScope != normalizePatchPolicyRoleScope(existing.RoleScope.String) {
+		return map[string]any{"error": "global_role_locked", "message": "Global Patch Policy role cannot be changed."}, http.StatusConflict, errors.New("global role locked")
 	}
 	conflicts, err := patchPolicySaveConflicts(ctx, conn, nullablePolicyID(policyID), values)
 	if err != nil {
@@ -465,7 +480,7 @@ func (s *postgresOperatorStore) savePatchPolicy(ctx context.Context, profile ope
 	if len(conflicts) > 0 {
 		return map[string]any{"error": "policy_conflict", "conflicts": conflicts}, http.StatusConflict, errors.New("policy conflict")
 	}
-	overrideWarnings, err := patchPolicyParentOverrideWarnings(ctx, conn, values.PolicyType, values.Rules)
+	overrideWarnings, err := patchPolicyParentOverrideWarnings(ctx, conn, values.PolicyType, values.RoleScope, values.Rules)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -634,15 +649,16 @@ func (s *postgresOperatorStore) previewPatchPolicy(ctx context.Context, profile 
 		}
 		row = values.toRow()
 	}
-	devices, err := s.resolvePatchPolicyDevices(ctx, profile, row)
+	resolution, err := s.resolvePatchPolicyDeviceResolution(ctx, profile, row, true)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	devices := resolution.Eligible
 	conflicts, err := patchPolicySaveConflicts(ctx, conn, nullablePolicyID(policyID), patchPolicySaveValuesFromRow(row))
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	warnings, err := patchPolicyParentOverrideWarnings(ctx, conn, normalizePatchPolicyType(row.PolicyType.String), row.Rules)
+	warnings, err := patchPolicyParentOverrideWarnings(ctx, conn, normalizePatchPolicyType(row.PolicyType.String), normalizePatchPolicyRoleScope(row.RoleScope.String), row.Rules)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -650,13 +666,26 @@ func (s *postgresOperatorStore) previewPatchPolicy(ctx context.Context, profile 
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	targetRows, err := s.patchPolicyPreviewTargetRows(ctx, profile, row)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	exclusionRows, err := s.patchPolicyPreviewExclusionRows(ctx, profile, row)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	return map[string]any{
-		"policy":            patchPolicyPayload(row),
-		"target_count":      len(devices),
-		"targets":           patchPolicyDevicePayloads(devices),
-		"conflicts":         conflicts,
-		"dynamic_conflicts": dynamicConflicts,
-		"warnings":          warnings,
+		"policy":             patchPolicyPayload(row),
+		"target_count":       len(devices),
+		"raw_target_count":   len(resolution.Raw),
+		"ignored_role_count": len(resolution.Raw) - len(resolution.Eligible),
+		"role_match_label":   patchPolicyRoleMatchLabel(map[string]int{"eligible": len(resolution.Eligible), "raw": len(resolution.Raw), "ignored_role": len(resolution.Raw) - len(resolution.Eligible)}),
+		"targets":            patchPolicyDevicePayloads(devices),
+		"target_rows":        targetRows,
+		"exclusion_rows":     exclusionRows,
+		"conflicts":          conflicts,
+		"dynamic_conflicts":  dynamicConflicts,
+		"warnings":           warnings,
 	}, http.StatusOK, nil
 }
 
@@ -677,38 +706,158 @@ func (s *postgresOperatorStore) effectivePatchPolicy(ctx context.Context, profil
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	matches := []patchPolicyRow{}
+	rowByID := map[int64]patchPolicyRow{}
 	for _, row := range rows {
-		if !boolInt64(row.Enabled) {
-			continue
+		if id := nullInt(row.ID); id > 0 {
+			rowByID[id] = row
 		}
-		devices, err := s.resolvePatchPolicyDevices(ctx, profile, row)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		for _, device := range devices {
+	}
+	scopes, err := s.patchPolicyEffectiveScopes(ctx, profile, rows)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	for policyID, scope := range scopes {
+		for _, device := range scope.Devices {
 			if strings.EqualFold(device.Hostname, hostname) {
-				matches = append(matches, row)
-				break
+				hierarchy := []patchPolicyRow{}
+				for _, id := range device.HierarchyPolicyIDs {
+					if row, ok := rowByID[id]; ok {
+						hierarchy = append(hierarchy, row)
+					}
+				}
+				policy := rowByID[policyID]
+				return map[string]any{
+					"hostname":                     hostname,
+					"policy":                       patchPolicyPayload(policy),
+					"hierarchy":                    patchPolicyPayloads(hierarchy),
+					"conflicted":                   device.Conflict,
+					"exclusion_mode":               device.ExclusionMode,
+					"exclusion_policy_id":          nullablePositiveInt64Any(device.ExclusionPolicyID),
+					"exclusion_override_policy_id": nullablePositiveInt64Any(device.ExclusionOverridePolicyID),
+				}, http.StatusOK, nil
 			}
 		}
 	}
-	sort.SliceStable(matches, func(i, j int) bool {
-		return patchPolicyDepth(matches[i]) > patchPolicyDepth(matches[j])
-	})
-	if len(matches) == 0 {
-		return map[string]any{"hostname": hostname, "policy": nil, "status": "uncovered"}, http.StatusOK, nil
+	return map[string]any{"hostname": hostname, "policy": nil, "status": "uncovered"}, http.StatusOK, nil
+}
+
+func (s *postgresOperatorStore) patchPolicyPreviewTargetRows(ctx context.Context, profile operatorProfile, row patchPolicyRow) ([]map[string]any, error) {
+	roleScope := normalizePatchPolicyRoleScope(row.RoleScope.String)
+	switch normalizePatchPolicyType(row.PolicyType.String) {
+	case patchPolicyTypeGlobal:
+		return nil, nil
+	case patchPolicyTypeSite:
+		rows := []map[string]any{}
+		for idx, site := range row.Sites {
+			siteID := coerceInt64(firstPresentAny(site["site_id"], site["id"]))
+			if siteID <= 0 {
+				continue
+			}
+			counts, err := s.patchPolicySiteTargetCounts(ctx, profile, roleScope, siteID)
+			if err != nil {
+				return nil, err
+			}
+			next := copyMap(site)
+			next["row_index"] = idx
+			next["target_type"] = "site"
+			next["site_id"] = siteID
+			patchPolicyAttachCountPayload(next, counts)
+			rows = append(rows, next)
+		}
+		return rows, nil
+	case patchPolicyTypeDeviceFilter:
+		rows := []map[string]any{}
+		for idx, target := range row.Targets {
+			counts, err := s.patchPolicyScheduledTargetCounts(ctx, profile, roleScope, patchPolicyScheduledTarget(target))
+			if err != nil {
+				return nil, err
+			}
+			next := copyMap(target)
+			next["row_index"] = idx
+			patchPolicyAttachCountPayload(next, counts)
+			rows = append(rows, next)
+		}
+		return rows, nil
+	default:
+		return nil, nil
 	}
-	conflicted := false
-	if len(matches) > 1 && patchPolicyDepth(matches[0]) == patchPolicyDepth(matches[1]) {
-		conflicted = true
+}
+
+func (s *postgresOperatorStore) patchPolicyPreviewExclusionRows(ctx context.Context, profile operatorProfile, row patchPolicyRow) ([]map[string]any, error) {
+	roleScope := normalizePatchPolicyRoleScope(row.RoleScope.String)
+	rows := []map[string]any{}
+	for idx, exclusion := range row.Exclusions {
+		counts, err := s.patchPolicyScheduledTargetCounts(ctx, profile, roleScope, patchPolicyScheduledTarget(exclusion))
+		if err != nil {
+			return nil, err
+		}
+		next := copyMap(exclusion)
+		next["row_index"] = idx
+		patchPolicyAttachCountPayload(next, counts)
+		rows = append(rows, next)
 	}
-	return map[string]any{
-		"hostname":   hostname,
-		"policy":     patchPolicyPayload(matches[0]),
-		"hierarchy":  patchPolicyPayloads(matches),
-		"conflicted": conflicted,
-	}, http.StatusOK, nil
+	return rows, nil
+}
+
+func (s *postgresOperatorStore) patchPolicySiteTargetCounts(ctx context.Context, profile operatorProfile, roleScope string, siteID int64) (map[string]int, error) {
+	devices, err := s.fetchFilterDevices(ctx, profile)
+	if err != nil {
+		return nil, err
+	}
+	raw := 0
+	eligible := 0
+	for _, device := range devices {
+		if coerceInt64(device["site_id"]) != siteID {
+			continue
+		}
+		osText := cleanText(firstPresentAny(device["operating_system"], nestedAny(device, "summary", "operating_system")))
+		if !patchPolicyWindowsOS(osText) {
+			continue
+		}
+		raw++
+		deviceType := cleanText(firstPresentAny(device["device_type"], nestedAny(device, "summary", "device_type")))
+		if patchPolicyRoleMatches(roleScope, deviceType) {
+			eligible++
+		}
+	}
+	return patchPolicyCountMap(raw, eligible), nil
+}
+
+func (s *postgresOperatorStore) patchPolicyScheduledTargetCounts(ctx context.Context, profile operatorProfile, roleScope string, target map[string]any) (map[string]int, error) {
+	resolution, err := s.resolveScheduledRerunTargets(ctx, profile, []any{target})
+	if err != nil {
+		return nil, err
+	}
+	raw := 0
+	eligible := 0
+	for _, target := range resolution.Targets {
+		if target == nil || !patchPolicyWindowsOS(target.OperatingSystem) {
+			continue
+		}
+		raw++
+		if patchPolicyRoleMatches(roleScope, target.DeviceType) {
+			eligible++
+		}
+	}
+	return patchPolicyCountMap(raw, eligible), nil
+}
+
+func patchPolicyCountMap(raw int, eligible int) map[string]int {
+	ignored := raw - eligible
+	if ignored < 0 {
+		ignored = 0
+	}
+	return map[string]int{"raw": raw, "eligible": eligible, "ignored_role": ignored}
+}
+
+func patchPolicyAttachCountPayload(payload map[string]any, counts map[string]int) {
+	if payload == nil {
+		return
+	}
+	payload["raw_target_count"] = counts["raw"]
+	payload["eligible_target_count"] = counts["eligible"]
+	payload["ignored_role_count"] = counts["ignored_role"]
+	payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
 }
 
 func (s *postgresOperatorStore) evaluatePatchPolicies(ctx context.Context, profile operatorProfile, body map[string]any) (map[string]any, int, error) {
@@ -1013,12 +1162,13 @@ func normalizePatchPolicySaveBody(body map[string]any, existing patchPolicyRow, 
 	if name == "" {
 		return patchPolicySaveValues{}, "Policy name is required."
 	}
+	roleScopeRaw := firstPresentAny(body["role_scope"], existing.RoleScope.String)
 	values := patchPolicySaveValues{
 		Name:                  name,
 		Description:           cleanText(firstPresentAny(body["description"], existing.Description.String)),
 		PolicyType:            policyType,
 		Enabled:               boolFromAny(firstPresentAny(body["enabled"], boolInt64(existing.Enabled), true)),
-		RoleScope:             normalizePatchPolicyRoleScope(firstPresentAny(body["role_scope"], existing.RoleScope.String)),
+		RoleScope:             normalizePatchPolicyRoleScope(roleScopeRaw),
 		ApprovalMode:          firstText(cleanText(firstPresentAny(body["approval_mode"], existing.ApprovalMode.String)), "conservative_msp"),
 		DeferralDays:          firstPositiveInt64(coerceInt64(firstPresentAny(body["deferral_days"], existing.DeferralDays.Int64)), 14),
 		ManagedUpdateMode:     boolFromAny(firstPresentAny(body["managed_update_mode"], boolInt64(existing.ManagedUpdateMode), true)),
@@ -1030,8 +1180,11 @@ func normalizePatchPolicySaveBody(body map[string]any, existing patchPolicyRow, 
 		RebootStartTS:         optionalPositiveInt64Ptr(firstPresentAny(body["reboot_start_ts"], nullableInt(existing.RebootStartTS))),
 		ForceRebootLoggedIn:   boolFromAny(firstPresentAny(body["force_reboot_logged_in"], boolInt64(existing.ForceRebootLoggedIn))),
 	}
-	if values.RoleScope == "" {
-		values.RoleScope = patchPolicyRoleBoth
+	if roleScopeRaw == nil {
+		return patchPolicySaveValues{}, "Patch policies require Server or Workstation role scope."
+	}
+	if !patchPolicyValidRoleDomain(values.RoleScope) {
+		return patchPolicySaveValues{}, "Patch policies require Server or Workstation role scope."
 	}
 	if values.InstallScheduleType == "" {
 		values.InstallScheduleType = "weekly"
@@ -1055,7 +1208,6 @@ func normalizePatchPolicySaveBody(body map[string]any, existing patchPolicyRow, 
 	if values.PolicyType == patchPolicyTypeGlobal {
 		values.SiteIDs = nil
 		values.Targets = nil
-		values.RoleScope = patchPolicyRoleBoth
 	}
 	return values, ""
 }
@@ -1163,14 +1315,14 @@ func patchPolicyDirectTargetConflicts(ctx context.Context, conn *sql.Conn, polic
 		return nil
 	}
 	rows, err := conn.QueryContext(ctx, `
-		SELECT p.id, p.name, t.target_type, t.device_guid, t.hostname, NULL::BIGINT AS site_id, t.filter_id
+		SELECT p.id, p.name, p.role_scope, t.target_type, t.device_guid, t.hostname, NULL::BIGINT AS site_id, t.filter_id
 		  FROM engine.patch_policies AS p
 		  JOIN engine.patch_policy_targets AS t ON t.policy_id=p.id
 		 WHERE p.policy_type='device_filter'
 		   AND p.enabled=1
 		   AND p.id<>$1
 		UNION ALL
-		SELECT p.id, p.name, e.target_type, e.device_guid, e.hostname, e.site_id, e.filter_id
+		SELECT p.id, p.name, p.role_scope, e.target_type, e.device_guid, e.hostname, e.site_id, e.filter_id
 		  FROM engine.patch_policies AS p
 		  JOIN engine.patch_policy_exclusions AS e ON e.policy_id=p.id
 		 WHERE p.policy_type='device_filter'
@@ -1184,9 +1336,12 @@ func patchPolicyDirectTargetConflicts(ctx context.Context, conn *sql.Conn, polic
 	conflicts := []map[string]any{}
 	for rows.Next() {
 		var id, siteID, filterID sql.NullInt64
-		var name, targetType, guid, hostname sql.NullString
-		if err := rows.Scan(&id, &name, &targetType, &guid, &hostname, &siteID, &filterID); err != nil {
+		var name, roleScope, targetType, guid, hostname sql.NullString
+		if err := rows.Scan(&id, &name, &roleScope, &targetType, &guid, &hostname, &siteID, &filterID); err != nil {
 			return []map[string]any{{"type": "target_conflict_check_failed", "message": err.Error()}}
+		}
+		if normalizePatchPolicyRoleScope(roleScope.String) != values.RoleScope {
+			continue
 		}
 		key, ok := patchPolicyTargetOverlapsKeys(keys, targetType.String, guid.String, hostname.String, nullInt(filterID), nullInt(siteID))
 		if !ok {
@@ -1197,7 +1352,7 @@ func patchPolicyDirectTargetConflicts(ctx context.Context, conn *sql.Conn, polic
 	return conflicts
 }
 
-func patchPolicyParentOverrideWarnings(ctx context.Context, conn *sql.Conn, policyType string, rules []patchPolicyRule) ([]map[string]any, error) {
+func patchPolicyParentOverrideWarnings(ctx context.Context, conn *sql.Conn, policyType string, roleScope string, rules []patchPolicyRule) ([]map[string]any, error) {
 	if policyType == patchPolicyTypeGlobal {
 		return nil, nil
 	}
@@ -1216,9 +1371,10 @@ func patchPolicyParentOverrideWarnings(ctx context.Context, conn *sql.Conn, poli
 		  FROM engine.patch_policies AS p
 		  JOIN engine.patch_policy_rules AS r ON r.policy_id=p.id
 		 WHERE p.enabled=1
+		   AND p.role_scope=$1
 		   AND p.policy_type IN ('global', 'site')
 		   AND r.rule_type='block'
-	`)
+	`, normalizePatchPolicyRoleScope(roleScope))
 	if err != nil {
 		return nil, err
 	}
@@ -1247,7 +1403,16 @@ func patchPolicyParentOverrideWarnings(ctx context.Context, conn *sql.Conn, poli
 }
 
 func (s *postgresOperatorStore) resolvePatchPolicyDevices(ctx context.Context, profile operatorProfile, row patchPolicyRow) ([]patchPolicyDevice, error) {
+	resolution, err := s.resolvePatchPolicyDeviceResolution(ctx, profile, row, true)
+	if err != nil {
+		return nil, err
+	}
+	return resolution.Eligible, nil
+}
+
+func (s *postgresOperatorStore) resolvePatchPolicyDeviceResolution(ctx context.Context, profile operatorProfile, row patchPolicyRow, applyExclusions bool) (patchPolicyDeviceResolution, error) {
 	policyType := normalizePatchPolicyType(row.PolicyType.String)
+	roleScope := normalizePatchPolicyRoleScope(row.RoleScope.String)
 	switch policyType {
 	case patchPolicyTypeDeviceFilter:
 		targets := []any{}
@@ -1256,31 +1421,44 @@ func (s *postgresOperatorStore) resolvePatchPolicyDevices(ctx context.Context, p
 		}
 		resolution, err := s.resolveScheduledRerunTargets(ctx, profile, targets)
 		if err != nil {
-			return nil, err
+			return patchPolicyDeviceResolution{}, err
 		}
-		devices := []patchPolicyDevice{}
+		raw := []patchPolicyDevice{}
+		eligible := []patchPolicyDevice{}
 		for _, target := range resolution.Targets {
 			if target == nil || !patchPolicyWindowsOS(target.OperatingSystem) {
 				continue
 			}
-			devices = append(devices, patchPolicyDevice{
+			device := patchPolicyDevice{
 				DeviceGUID:      strings.ToLower(normalizeCanonicalGUID(target.DeviceGUID)),
 				Hostname:        target.Hostname,
 				SiteID:          derefInt64(target.SiteID),
 				SiteName:        target.SiteName,
+				DeviceType:      target.DeviceType,
 				OperatingSystem: target.OperatingSystem,
 				FilterIDs:       uniquePositiveInt64s(target.FilterIDs),
-			})
+			}
+			raw = append(raw, device)
+			if patchPolicyRoleMatches(roleScope, device.DeviceType) {
+				eligible = append(eligible, device)
+			}
 		}
-		return applyPatchPolicyExclusions(ctx, s, profile, devices, row.Exclusions)
+		if applyExclusions {
+			var err error
+			eligible, err = applyPatchPolicyExclusions(ctx, s, profile, eligible, row.Exclusions)
+			if err != nil {
+				return patchPolicyDeviceResolution{}, err
+			}
+		}
+		return patchPolicyDeviceResolution{Raw: raw, Eligible: eligible}, nil
 	case patchPolicyTypeSite, patchPolicyTypeGlobal:
 		devices, err := s.fetchFilterDevices(ctx, profile)
 		if err != nil {
-			return nil, err
+			return patchPolicyDeviceResolution{}, err
 		}
 		siteSet := int64Set(patchPolicySiteIDs(row.Sites))
-		roleScope := normalizePatchPolicyRoleScope(row.RoleScope.String)
-		out := []patchPolicyDevice{}
+		raw := []patchPolicyDevice{}
+		eligible := []patchPolicyDevice{}
 		for _, device := range devices {
 			osText := cleanText(firstPresentAny(device["operating_system"], nestedAny(device, "summary", "operating_system")))
 			if !patchPolicyWindowsOS(osText) {
@@ -1292,21 +1470,29 @@ func (s *postgresOperatorStore) resolvePatchPolicyDevices(ctx context.Context, p
 				continue
 			}
 			deviceType := cleanText(firstPresentAny(device["device_type"], nestedAny(device, "summary", "device_type")))
-			if policyType == patchPolicyTypeSite && !patchPolicyRoleMatches(roleScope, deviceType) {
-				continue
-			}
-			out = append(out, patchPolicyDevice{
+			record := patchPolicyDevice{
 				DeviceGUID:      strings.ToLower(normalizeCanonicalGUID(firstPresentAny(device["device_guid"], device["guid"]))),
 				Hostname:        cleanText(device["hostname"]),
 				SiteID:          siteID,
 				SiteName:        cleanText(device["site_name"]),
 				DeviceType:      deviceType,
 				OperatingSystem: osText,
-			})
+			}
+			raw = append(raw, record)
+			if patchPolicyRoleMatches(roleScope, deviceType) {
+				eligible = append(eligible, record)
+			}
 		}
-		return applyPatchPolicyExclusions(ctx, s, profile, out, row.Exclusions)
+		if applyExclusions {
+			var err error
+			eligible, err = applyPatchPolicyExclusions(ctx, s, profile, eligible, row.Exclusions)
+			if err != nil {
+				return patchPolicyDeviceResolution{}, err
+			}
+		}
+		return patchPolicyDeviceResolution{Raw: raw, Eligible: eligible}, nil
 	default:
-		return []patchPolicyDevice{}, nil
+		return patchPolicyDeviceResolution{}, nil
 	}
 }
 
@@ -1316,6 +1502,7 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 	}
 	exclusionTargets := []any{}
 	exclusionModeByTarget := map[string]string{}
+	exclusionModeByFilterID := map[int64]string{}
 	for _, exclusion := range exclusions {
 		mode := normalizePatchPolicyExclusionType(exclusion["exclusion_type"])
 		if mode == "" {
@@ -1325,6 +1512,11 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 		exclusionTargets = append(exclusionTargets, target)
 		if key := patchPolicyTargetIdentityFromAny(target); key != "" {
 			exclusionModeByTarget[key] = mode
+		}
+		if normalizePatchPolicyTargetType(firstPresentAny(exclusion["target_type"], exclusion["kind"], exclusion["type"])) == "filter" || coerceInt64(exclusion["filter_id"]) > 0 {
+			if filterID := coerceInt64(exclusion["filter_id"]); filterID > 0 {
+				exclusionModeByFilterID[filterID] = mode
+			}
 		}
 	}
 	if len(exclusionTargets) == 0 {
@@ -1339,7 +1531,7 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 		if target == nil {
 			continue
 		}
-		mode := patchPolicyExclusionFrozen
+		mode := ""
 		siteID := derefInt64(target.SiteID)
 		for _, key := range []string{
 			patchPolicyTargetKeyWithSite("device", target.DeviceGUID, target.Hostname, 0, siteID),
@@ -1352,6 +1544,17 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 				break
 			}
 		}
+		if mode == "" {
+			for _, filterID := range uniquePositiveInt64s(target.FilterIDs) {
+				if v := exclusionModeByFilterID[filterID]; v != "" {
+					mode = v
+					break
+				}
+			}
+		}
+		if mode == "" {
+			continue
+		}
 		modeByDevice[patchPolicyDeviceIdentity(patchPolicyDevice{DeviceGUID: target.DeviceGUID, Hostname: target.Hostname, SiteID: siteID})] = mode
 	}
 	for idx := range devices {
@@ -1360,6 +1563,142 @@ func applyPatchPolicyExclusions(ctx context.Context, s *postgresOperatorStore, p
 		}
 	}
 	return devices, nil
+}
+
+type patchPolicyDeviceMatch struct {
+	Row       patchPolicyRow
+	Device    patchPolicyDevice
+	LocalMode string
+}
+
+func (s *postgresOperatorStore) patchPolicyEffectiveScopes(ctx context.Context, profile operatorProfile, rows []patchPolicyRow) (map[int64]*patchPolicyEffectiveScope, error) {
+	matchesByDevice := map[string][]patchPolicyDeviceMatch{}
+	for _, row := range rows {
+		if !boolInt64(row.Enabled) {
+			continue
+		}
+		resolution, err := s.resolvePatchPolicyDeviceResolution(ctx, profile, row, false)
+		if err != nil {
+			return nil, err
+		}
+		withLocalExclusions := append([]patchPolicyDevice(nil), resolution.Eligible...)
+		withLocalExclusions, err = applyPatchPolicyExclusions(ctx, s, profile, withLocalExclusions, row.Exclusions)
+		if err != nil {
+			return nil, err
+		}
+		localModeByDevice := map[string]string{}
+		for _, device := range withLocalExclusions {
+			if device.ExclusionMode == "" {
+				continue
+			}
+			if key := patchPolicyDeviceIdentity(device); key != "" {
+				localModeByDevice[key] = device.ExclusionMode
+			}
+		}
+		for _, device := range resolution.Eligible {
+			key := patchPolicyDeviceIdentity(device)
+			if key == "" {
+				continue
+			}
+			matchesByDevice[key] = append(matchesByDevice[key], patchPolicyDeviceMatch{Row: row, Device: device, LocalMode: localModeByDevice[key]})
+		}
+	}
+	scopes := map[int64]*patchPolicyEffectiveScope{}
+	for deviceKey, matches := range matchesByDevice {
+		sort.SliceStable(matches, func(i, j int) bool {
+			leftDepth := patchPolicyDepth(matches[i].Row)
+			rightDepth := patchPolicyDepth(matches[j].Row)
+			if leftDepth != rightDepth {
+				return leftDepth < rightDepth
+			}
+			return nullInt(matches[i].Row.ID) < nullInt(matches[j].Row.ID)
+		})
+		if len(matches) == 0 {
+			continue
+		}
+		deepestDepth := patchPolicyDepth(matches[len(matches)-1].Row)
+		deepestMatches := []patchPolicyDeviceMatch{}
+		for _, match := range matches {
+			if patchPolicyDepth(match.Row) == deepestDepth {
+				deepestMatches = append(deepestMatches, match)
+			}
+		}
+		addScopeDevice := func(match patchPolicyDeviceMatch, device patchPolicyDevice, hierarchy []patchPolicyRow) {
+			effectivePolicyID := nullInt(match.Row.ID)
+			if effectivePolicyID <= 0 {
+				return
+			}
+			scope := scopes[effectivePolicyID]
+			if scope == nil {
+				scope = &patchPolicyEffectiveScope{Policy: match.Row, RulesByDevice: map[string][]patchPolicyRule{}}
+				scopes[effectivePolicyID] = scope
+			}
+			scope.Devices = append(scope.Devices, device)
+			scope.RulesByDevice[deviceKey] = patchPolicyEffectiveRules(hierarchy)
+		}
+		if len(deepestMatches) > 1 {
+			for _, match := range deepestMatches {
+				device, hierarchy := patchPolicyDeviceWithHierarchy(matches, match)
+				device.Conflict = true
+				addScopeDevice(match, device, hierarchy)
+			}
+			continue
+		}
+		if len(deepestMatches) == 0 {
+			continue
+		}
+		effectiveMatch := deepestMatches[0]
+		device, hierarchy := patchPolicyDeviceWithHierarchy(matches, effectiveMatch)
+		addScopeDevice(effectiveMatch, device, hierarchy)
+	}
+	return scopes, nil
+}
+
+func patchPolicyDeviceWithHierarchy(matches []patchPolicyDeviceMatch, effectiveMatch patchPolicyDeviceMatch) (patchPolicyDevice, []patchPolicyRow) {
+	device := effectiveMatch.Device
+	hierarchy := make([]patchPolicyRow, 0, len(matches))
+	hierarchyIDs := make([]int64, 0, len(matches))
+	exclusionMode := ""
+	exclusionPolicyID := int64(0)
+	exclusionOverridePolicyID := int64(0)
+	for _, match := range matches {
+		hierarchy = append(hierarchy, match.Row)
+		if id := nullInt(match.Row.ID); id > 0 {
+			hierarchyIDs = append(hierarchyIDs, id)
+		}
+		switch match.LocalMode {
+		case patchPolicyExclusionOverride:
+			exclusionMode = ""
+			exclusionOverridePolicyID = nullInt(match.Row.ID)
+		case patchPolicyExclusionUnmanaged, patchPolicyExclusionFrozen:
+			exclusionMode = match.LocalMode
+			exclusionPolicyID = nullInt(match.Row.ID)
+		}
+	}
+	device.ExclusionMode = exclusionMode
+	device.ExclusionPolicyID = exclusionPolicyID
+	device.ExclusionOverridePolicyID = exclusionOverridePolicyID
+	device.HierarchyPolicyIDs = hierarchyIDs
+	return device, hierarchy
+}
+
+func patchPolicyEffectiveRules(hierarchy []patchPolicyRow) []patchPolicyRule {
+	if len(hierarchy) == 0 {
+		return nil
+	}
+	out := []patchPolicyRule{}
+	for idx, row := range hierarchy {
+		if idx == len(hierarchy)-1 {
+			out = append(out, row.Rules...)
+			continue
+		}
+		for _, rule := range row.Rules {
+			if rule.RuleType == patchPolicyRuleBlock {
+				out = append(out, rule)
+			}
+		}
+	}
+	return out
 }
 
 func (s *postgresOperatorStore) patchPolicyDynamicConflicts(ctx context.Context, profile operatorProfile, currentPolicyID int64, current patchPolicyRow) ([]map[string]any, error) {
@@ -1421,11 +1760,11 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAt(ctx context.Context, pro
 	if err := syncPatchCatalogFromInventory(ctx, conn, now); err != nil {
 		return nil, err
 	}
-	var policyIDPtr *int64
-	if onlyPolicyID > 0 {
-		policyIDPtr = &onlyPolicyID
+	rows, err := loadPatchPolicyRows(ctx, conn, "", nil)
+	if err != nil {
+		return nil, err
 	}
-	rows, err := loadPatchPolicyRows(ctx, conn, "", policyIDPtr)
+	effectiveScopes, err := s.patchPolicyEffectiveScopes(ctx, profile, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -1438,10 +1777,13 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAt(ctx context.Context, pro
 		if !boolInt64(row.Enabled) {
 			continue
 		}
+		if onlyPolicyID > 0 && nullInt(row.ID) != onlyPolicyID {
+			continue
+		}
 		if !manual && !patchPolicyDue(ctx, conn, row, scheduledTS) {
 			continue
 		}
-		summary, err := s.createPatchPolicyRunJobs(ctx, profile, conn, row, scheduledTS, now, activeJobs)
+		summary, err := s.createPatchPolicyRunJobs(ctx, profile, conn, row, effectiveScopes[nullInt(row.ID)], scheduledTS, now, activeJobs)
 		if err != nil {
 			return nil, err
 		}
@@ -1450,10 +1792,12 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAt(ctx context.Context, pro
 	return map[string]any{"status": "evaluated", "scheduled_ts": scheduledTS, "runs": summaries, "count": len(summaries)}, nil
 }
 
-func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, conn *sql.Conn, row patchPolicyRow, scheduledTS int64, now int64, activeJobs map[string]map[string]any) (map[string]any, error) {
-	devices, err := s.resolvePatchPolicyDevices(ctx, profile, row)
-	if err != nil {
-		return nil, err
+func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, conn *sql.Conn, row patchPolicyRow, scope *patchPolicyEffectiveScope, scheduledTS int64, now int64, activeJobs map[string]map[string]any) (map[string]any, error) {
+	devices := []patchPolicyDevice{}
+	rulesByDevice := map[string][]patchPolicyRule{}
+	if scope != nil {
+		devices = append(devices, scope.Devices...)
+		rulesByDevice = scope.RulesByDevice
 	}
 	conflictedKeys, err := s.patchPolicyConflictedDeviceKeys(ctx, profile, conn, row)
 	if err != nil {
@@ -1494,7 +1838,6 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 	if err != nil {
 		return nil, err
 	}
-	rules := row.Rules
 	groups := map[string][]patchInventoryRow{}
 	groupPatch := map[string]map[string]any{}
 	skipped := map[string]int{}
@@ -1502,6 +1845,12 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 		if !patchPolicyDeferralSatisfied(patchRow, firstPositiveInt64(nullInt(row.DeferralDays), 14), now) {
 			skipped["deferred"]++
 			continue
+		}
+		device := deviceByGUID[strings.ToLower(normalizeCanonicalGUID(patchRow.DeviceGUID.String))]
+		deviceKey := patchPolicyDeviceIdentity(device)
+		rules := rulesByDevice[deviceKey]
+		if len(rules) == 0 {
+			rules = row.Rules
 		}
 		decision := patchPolicyDecision(rules, patchInventoryPayload(patchRow))
 		if decision != patchPolicyRuleApprove {
@@ -1640,11 +1989,14 @@ func upsertPatchPolicyDeviceStates(ctx context.Context, conn *sql.Conn, row patc
 			mode = patchPolicyExclusionUnmanaged
 		}
 		metadata := map[string]any{
-			"policy_type":   policyType,
-			"policy_run_id": runID,
-			"site_id":       device.SiteID,
-			"site_name":     device.SiteName,
-			"conflicted":    conflicted,
+			"policy_type":                  policyType,
+			"policy_run_id":                runID,
+			"site_id":                      device.SiteID,
+			"site_name":                    device.SiteName,
+			"conflicted":                   conflicted,
+			"hierarchy_policy_ids":         device.HierarchyPolicyIDs,
+			"exclusion_policy_id":          nullablePositiveInt64Any(device.ExclusionPolicyID),
+			"exclusion_override_policy_id": nullablePositiveInt64Any(device.ExclusionOverridePolicyID),
 		}
 		metadataJSON, _ := json.Marshal(metadata)
 		if _, err := conn.ExecContext(ctx, `
@@ -1931,12 +2283,20 @@ func patchPolicyPrimaryIdentityKey(patch map[string]any) string {
 	return keys[0]
 }
 
-func patchPolicyCoveredCount(ctx context.Context, s *postgresOperatorStore, profile operatorProfile, row patchPolicyRow) int {
-	devices, err := s.resolvePatchPolicyDevices(ctx, profile, row)
+func patchPolicyCoveredCounts(ctx context.Context, s *postgresOperatorStore, profile operatorProfile, row patchPolicyRow) map[string]int {
+	resolution, err := s.resolvePatchPolicyDeviceResolution(ctx, profile, row, true)
 	if err != nil {
-		return 0
+		return map[string]int{"raw": 0, "eligible": 0, "ignored_role": 0}
 	}
-	return len(devices)
+	ignored := len(resolution.Raw) - len(resolution.Eligible)
+	if ignored < 0 {
+		ignored = 0
+	}
+	return map[string]int{"raw": len(resolution.Raw), "eligible": len(resolution.Eligible), "ignored_role": ignored}
+}
+
+func patchPolicyRoleMatchLabel(counts map[string]int) string {
+	return strconv.Itoa(counts["eligible"]) + " / " + strconv.Itoa(counts["raw"]) + " Devices Match Policy Type"
 }
 
 func patchPolicyVisible(row patchPolicyRow, allowedSiteIDs []int64) bool {
@@ -2230,17 +2590,23 @@ func patchPolicyRoleSet(scope string) map[string]bool {
 
 func patchPolicyRoleMatches(scope string, deviceType string) bool {
 	scope = normalizePatchPolicyRoleScope(scope)
-	if scope == patchPolicyRoleBoth {
-		return true
-	}
+	return patchPolicyValidRoleDomain(scope) && scope == patchPolicyDeviceRole(deviceType)
+}
+
+func patchPolicyDeviceRole(deviceType string) string {
 	deviceType = strings.ToLower(strings.TrimSpace(deviceType))
 	if deviceType == "" {
-		return scope == patchPolicyRoleWorkstation
+		return ""
 	}
-	if scope == patchPolicyRoleServer {
-		return strings.Contains(deviceType, "server")
+	if strings.Contains(deviceType, "server") {
+		return patchPolicyRoleServer
 	}
-	return !strings.Contains(deviceType, "server")
+	return patchPolicyRoleWorkstation
+}
+
+func patchPolicyValidRoleDomain(scope string) bool {
+	scope = normalizePatchPolicyRoleScope(scope)
+	return scope == patchPolicyRoleServer || scope == patchPolicyRoleWorkstation
 }
 
 func normalizePatchPolicyType(value any) string {
@@ -2312,6 +2678,8 @@ func normalizePatchPolicyExclusionType(value any) string {
 		return patchPolicyExclusionUnmanaged
 	case "frozen", "freeze":
 		return patchPolicyExclusionFrozen
+	case "managed_override", "override", "clear", "clear_inherited":
+		return patchPolicyExclusionOverride
 	default:
 		return ""
 	}

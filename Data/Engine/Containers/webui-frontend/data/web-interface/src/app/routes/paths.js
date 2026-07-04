@@ -17,10 +17,13 @@ export const APP_PATHS = {
   patchManagementWindows: "/patch-management/windows",
   patchManagementLinux: "/patch-management/linux",
   patchManagementMacOS: "/patch-management/macos",
+  patchManagementGlobalPolicies: "/patch-management/windows?tab=global_policies",
   patchManagementSitePolicies: "/patch-management/windows?tab=site_policies",
   patchManagementDeviceFilterPolicies: "/patch-management/windows?tab=device_filter_policies",
   patchPolicySiteNew: "/patch-management/policies/site/new",
   patchPolicyDeviceFilterNew: "/patch-management/policies/device-filter/new",
+  patchPolicyGlobal: (policyId) =>
+    `/patch-management/policies/global/${encodeURIComponent(normalizedString(policyId))}`,
   patchPolicySite: (policyId) =>
     `/patch-management/policies/site/${encodeURIComponent(normalizedString(policyId))}`,
   patchPolicyDeviceFilter: (policyId) =>

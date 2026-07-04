@@ -35,6 +35,7 @@ type scheduledResolvedTarget struct {
 	ConnectionType     string
 	ConnectionEndpoint string
 	OperatingSystem    string
+	DeviceType         string
 	FilterIDs          []int64
 }
 
@@ -467,6 +468,7 @@ func scheduledTargetFromDevice(device map[string]any, hostnameOverride string, s
 		ConnectionType:     cleanText(device["connection_type"]),
 		ConnectionEndpoint: cleanText(device["connection_endpoint"]),
 		OperatingSystem:    cleanText(device["operating_system"]),
+		DeviceType:         cleanText(device["device_type"]),
 		FilterIDs:          []int64{},
 	}
 }
@@ -513,6 +515,9 @@ func scheduledMergeTarget(existing *scheduledResolvedTarget, incoming scheduledR
 	}
 	if existing.OperatingSystem == "" {
 		existing.OperatingSystem = incoming.OperatingSystem
+	}
+	if existing.DeviceType == "" {
+		existing.DeviceType = incoming.DeviceType
 	}
 	existing.FilterIDs = uniquePositiveInt64s(append(existing.FilterIDs, incoming.FilterIDs...))
 }

@@ -33,7 +33,8 @@ func (s *postgresOperatorStore) ensurePatchPolicySchema(ctx context.Context) err
 func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 	now := time.Now()
 	nowTS := now.Unix()
-	installStart := patchPolicyDefaultStartTS(now, time.Wednesday, 2)
+	workstationInstallStart := patchPolicyDefaultStartTS(now, time.Tuesday, 2)
+	serverInstallStart := patchPolicyDefaultStartTS(now, time.Wednesday, 2)
 	rebootStart := patchPolicyDefaultStartTS(now, time.Saturday, 1)
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS engine.patch_catalog_entries (
@@ -189,19 +190,7 @@ func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 	if err := ensurePatchPolicyLegacyColumnDefaults(ctx, conn); err != nil {
 		return err
 	}
-	if _, err := conn.ExecContext(ctx, `
-		INSERT INTO engine.patch_policies(
-			name, description, policy_type, enabled, locked, role_scope, approval_mode,
-			deferral_days, managed_update_mode, install_schedule_type, install_start_ts,
-			reboot_after_install, reboot_schedule_enabled, reboot_schedule_type, reboot_start_ts,
-			force_reboot_logged_in, created_by, updated_by, created_at, updated_at
-		)
-		SELECT 'Global Patch Policy',
-		       'Default Borealis patch policy baseline. Locked from deletion and preserved across redeploys.',
-		       'global', 1, 1, 'Both', 'conservative_msp', 14, 1, 'weekly', $1,
-		       0, 0, 'weekly', $2, 0, 'system', 'system', $3, $3
-		 WHERE NOT EXISTS (SELECT 1 FROM engine.patch_policies WHERE policy_type='global')
-	`, installStart, rebootStart, nowTS); err != nil {
+	if err := ensureSplitGlobalPatchPolicies(ctx, conn, workstationInstallStart, serverInstallStart, rebootStart, nowTS); err != nil {
 		return err
 	}
 	_, err := conn.ExecContext(ctx, `
@@ -220,6 +209,87 @@ func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 		 WHERE p.policy_type='global'
 		   AND NOT EXISTS (SELECT 1 FROM engine.patch_policy_rules AS r WHERE r.policy_id=p.id)
 	`, nowTS)
+	return err
+}
+
+func ensureSplitGlobalPatchPolicies(ctx context.Context, conn *sql.Conn, workstationInstallStart int64, serverInstallStart int64, rebootStart int64, nowTS int64) error {
+	var splitGlobals int64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		  FROM engine.patch_policies
+		 WHERE policy_type='global'
+		   AND role_scope IN ('Server', 'Workstation')
+	`).Scan(&splitGlobals); err != nil {
+		return err
+	}
+	if splitGlobals == 0 {
+		for _, statement := range []string{
+			`DELETE FROM engine.patch_policy_device_state`,
+			`DELETE FROM engine.patch_policy_audit`,
+			`DELETE FROM engine.patch_policy_sites`,
+			`DELETE FROM engine.patch_policy_targets`,
+			`DELETE FROM engine.patch_policy_exclusions`,
+			`DELETE FROM engine.patch_policy_rules`,
+			`DELETE FROM engine.patch_policy_runs`,
+			`DELETE FROM engine.patch_policies`,
+		} {
+			if _, err := conn.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
+	} else {
+		if _, err := conn.ExecContext(ctx, `
+			DELETE FROM engine.patch_policies
+			 WHERE policy_type='global'
+			   AND role_scope NOT IN ('Server', 'Workstation')
+		`); err != nil {
+			return err
+		}
+	}
+	for _, seed := range []struct {
+		Name        string
+		Description string
+		Role        string
+		StartTS     int64
+	}{
+		{
+			Name:        "Global Workstation Policy",
+			Description: "Default Borealis workstation patch policy baseline. Locked from deletion and preserved across redeploys.",
+			Role:        "Workstation",
+			StartTS:     workstationInstallStart,
+		},
+		{
+			Name:        "Global Server Policy",
+			Description: "Default Borealis server patch policy baseline. Locked from deletion and preserved across redeploys.",
+			Role:        "Server",
+			StartTS:     serverInstallStart,
+		},
+	} {
+		if _, err := conn.ExecContext(ctx, `
+			INSERT INTO engine.patch_policies(
+				name, description, policy_type, enabled, locked, role_scope, approval_mode,
+				deferral_days, managed_update_mode, install_schedule_type, install_start_ts,
+				reboot_after_install, reboot_schedule_enabled, reboot_schedule_type, reboot_start_ts,
+				force_reboot_logged_in, created_by, updated_by, created_at, updated_at
+			)
+			SELECT $1, $2, 'global', 1, 1, $3, 'conservative_msp', 14, 1, 'weekly', $4,
+			       0, 0, 'weekly', $5, 0, 'system', 'system', $6, $6
+			 WHERE NOT EXISTS (
+				SELECT 1
+				  FROM engine.patch_policies
+				 WHERE policy_type='global'
+				   AND role_scope=$3
+			 )
+		`, seed.Name, seed.Description, seed.Role, seed.StartTS, rebootStart, nowTS); err != nil {
+			return err
+		}
+	}
+	_, err := conn.ExecContext(ctx, `
+		UPDATE engine.patch_policies
+		   SET locked=1
+		 WHERE policy_type='global'
+		   AND role_scope IN ('Server', 'Workstation')
+	`)
 	return err
 }
 

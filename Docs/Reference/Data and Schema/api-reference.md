@@ -98,16 +98,16 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded global uninstall blocklist rules for the selected software row.
     - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
     - `GET /api/patches/audit` (Token Authenticated) - list normalized patch inventory for all devices visible to the operator, including `active_install_job` when an enabled scheduled patch install already owns a matching KB, patch key, or title.
-    - `GET /api/patches/policies` (Token Authenticated) - list patch policies, optionally filtered by `type=site` or `type=device_filter`.
-    - `POST /api/patches/policies` (Admin) - create a patch policy. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
-    - `GET /api/patches/policies/metadata` (Token Authenticated) - policy editor metadata for sites, device filters, role scopes, rule types, match types, exclusions, and defaults.
+    - `GET /api/patches/policies` (Token Authenticated) - list patch policies, optionally filtered by `type=global`, `type=site`, or `type=device_filter`. Rows include `eligible / raw Devices Match Policy Type` count labels.
+    - `POST /api/patches/policies` (Admin) - create a site or device/filter patch policy. Windows policy `role_scope` must be `Server` or `Workstation`; global policies are seeded by Borealis and cannot be created manually. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
+    - `GET /api/patches/policies/metadata` (Token Authenticated) - policy editor metadata for sites, device filters, Windows role scopes, rule types, match types, exclusions, and defaults.
     - `POST /api/patches/policies/evaluate` (Admin) - manually evaluate all due policies or a single `policy_id`.
-    - `GET /api/patches/policies/effective?hostname=<hostname>` (Token Authenticated) - return effective policy hierarchy for one device.
-    - `POST /api/patches/policies/conflicts` (Token Authenticated) - preview policy coverage and conflict state for a draft policy payload.
+    - `GET /api/patches/policies/effective?hostname=<hostname>` (Token Authenticated) - return effective same-role policy hierarchy for one typed Windows device, including inherited exclusion source and override source metadata.
+    - `POST /api/patches/policies/conflicts` (Token Authenticated) - preview policy coverage, role-filtered target counts, and conflict state for a draft policy payload.
     - `GET /api/patches/policies/<policy_id>` (Token Authenticated) - get one visible patch policy.
-    - `PUT /api/patches/policies/<policy_id>` (Admin) - update a patch policy. Same-layer conflicts return `policy_conflict`; parent block overrides require confirmation. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
-    - `DELETE /api/patches/policies/<policy_id>` (Admin) - delete one unlocked patch policy. The Global Patch Policy is locked.
-    - `POST /api/patches/policies/<policy_id>/preview` (Token Authenticated) - preview targets, dynamic filter conflicts, and parent override warnings for a saved policy.
+    - `PUT /api/patches/policies/<policy_id>` (Admin) - update a patch policy. Same-layer conflicts return `policy_conflict`; parent block overrides require confirmation. Hostname-based device exclusions require `site_id` unless `device_guid` is present. Global policy role cannot be changed.
+    - `DELETE /api/patches/policies/<policy_id>` (Admin) - delete one unlocked patch policy. Global Patch Policies are locked.
+    - `POST /api/patches/policies/<policy_id>/preview` (Token Authenticated) - preview targets, role-filtered target/exclusion row counts, dynamic filter conflicts, and parent override warnings for a saved policy.
     - `GET /api/device/patches/<hostname>` (Token Authenticated) - list normalized patch inventory for one in-scope device.
     - `POST /api/device/patches/<hostname>/refresh` (Token Authenticated) - queue an immediate patch inventory refresh over the device SYSTEM socket.
     - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.

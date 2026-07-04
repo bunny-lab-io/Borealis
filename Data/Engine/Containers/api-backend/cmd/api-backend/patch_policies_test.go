@@ -60,6 +60,7 @@ func TestPatchPolicySaveBodyRequiresSitesForSitePolicy(t *testing.T) {
 	_, errText := normalizePatchPolicySaveBody(map[string]any{
 		"name":        "Servers",
 		"policy_type": "site",
+		"role_scope":  "Server",
 	}, patchPolicyRow{}, 1783000000, "operator")
 	if errText == "" {
 		t.Fatalf("expected site policy without sites to fail validation")
@@ -82,6 +83,7 @@ func TestPatchPolicyHostnameExclusionRequiresSite(t *testing.T) {
 	_, errText := normalizePatchPolicySaveBody(map[string]any{
 		"name":        "Scoped Device Policy",
 		"policy_type": "device_filter",
+		"role_scope":  "Workstation",
 		"targets":     []any{map[string]any{"target_type": "filter", "filter_id": float64(8)}},
 		"exclusions":  []any{map[string]any{"exclusion_type": "frozen", "target_type": "device", "hostname": "DUPLICATE-HOST"}},
 	}, patchPolicyRow{}, 1783000000, "operator")
@@ -92,6 +94,7 @@ func TestPatchPolicyHostnameExclusionRequiresSite(t *testing.T) {
 	values, errText := normalizePatchPolicySaveBody(map[string]any{
 		"name":        "Scoped Device Policy",
 		"policy_type": "device_filter",
+		"role_scope":  "Workstation",
 		"targets":     []any{map[string]any{"target_type": "filter", "filter_id": float64(8)}},
 		"exclusions":  []any{map[string]any{"exclusion_type": "frozen", "target_type": "device", "hostname": "DUPLICATE-HOST", "site_id": float64(7)}},
 	}, patchPolicyRow{}, 1783000000, "operator")
@@ -100,6 +103,33 @@ func TestPatchPolicyHostnameExclusionRequiresSite(t *testing.T) {
 	}
 	if len(values.Exclusions) != 1 || values.Exclusions[0].SiteID != 7 {
 		t.Fatalf("expected site-scoped exclusion, got %#v", values.Exclusions)
+	}
+}
+
+func TestPatchPolicySaveBodyRejectsBothRoleScope(t *testing.T) {
+	_, errText := normalizePatchPolicySaveBody(map[string]any{
+		"name":        "Mixed Role Policy",
+		"policy_type": "site",
+		"role_scope":  "Both",
+		"site_ids":    []any{float64(4)},
+	}, patchPolicyRow{}, 1783000000, "operator")
+	if errText != "Patch policies require Server or Workstation role scope." {
+		t.Fatalf("expected role validation error, got %q", errText)
+	}
+}
+
+func TestPatchPolicyRoleMatchingSkipsUntypedDevices(t *testing.T) {
+	if patchPolicyRoleMatches(patchPolicyRoleServer, "") {
+		t.Fatalf("untyped devices should not match server policy")
+	}
+	if patchPolicyRoleMatches(patchPolicyRoleWorkstation, "") {
+		t.Fatalf("untyped devices should not match workstation policy")
+	}
+	if !patchPolicyRoleMatches(patchPolicyRoleServer, "Domain Controller Server") {
+		t.Fatalf("server device_type should match server policy")
+	}
+	if !patchPolicyRoleMatches(patchPolicyRoleWorkstation, "Laptop") {
+		t.Fatalf("non-empty non-server device_type should match workstation policy")
 	}
 }
 

@@ -20,7 +20,7 @@ Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use th
 
 Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context. Patch Management opens this page on the `Schedule` tab with the selected KB, trigger type, targets, and return path already filled when operators schedule an ad-hoc Windows update install. Bulk patch installs use this page for shared timing, then create one scheduled job per selected patch.
 
-Patch policies also create scheduled jobs, but operators configure them from the Windows page under `Patch Management > Windows` by selecting the `Site Policies` or `Device / Filter Policies` tab. Each policy run creates one `Patch Management` job per approved KB/update identity so normal job history and per-device progress stay preserved.
+Patch policies also create scheduled jobs, but operators configure them from the Windows page under `Patch Management > Windows` by selecting `Global Policies`, `Site Policies`, or `Device / Filter Policies`. Each policy run creates one `Patch Management` job per approved KB/update identity so normal job history and per-device progress stay preserved.
 
 ## Choose Schedule
 

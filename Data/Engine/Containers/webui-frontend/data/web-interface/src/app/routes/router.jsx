@@ -246,8 +246,18 @@ export function buildAppRoutes() {
                   handle: {
                     title: "New Site Patch Policy",
                     breadcrumb: "New Site Policy",
-                    navKey: "patch-management-site-policies",
+                    navKey: "patch-management-windows",
                     pageKey: "patch-policy-site-new",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+                {
+                  path: "policies/global/:policyId",
+                  handle: {
+                    title: "Global Patch Policy",
+                    breadcrumb: "Global Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-global",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
                 },
@@ -256,7 +266,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "Site Patch Policy",
                     breadcrumb: "Site Policy",
-                    navKey: "patch-management-site-policies",
+                    navKey: "patch-management-windows",
                     pageKey: "patch-policy-site",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -266,7 +276,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "New Device / Filter Patch Policy",
                     breadcrumb: "New Device / Filter Policy",
-                    navKey: "patch-management-device-filter-policies",
+                    navKey: "patch-management-windows",
                     pageKey: "patch-policy-device-filter-new",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -276,7 +286,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "Device / Filter Patch Policy",
                     breadcrumb: "Device / Filter Policy",
-                    navKey: "patch-management-device-filter-policies",
+                    navKey: "patch-management-windows",
                     pageKey: "patch-policy-device-filter",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),

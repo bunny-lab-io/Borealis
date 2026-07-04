@@ -57,6 +57,7 @@ const SEVERITY_FILTER_OPTIONS = [
 
 export const PATCH_PAGE_TABS = [
   { key: "patch_list", label: "Patch List" },
+  { key: "global_policies", label: "Global Policies" },
   { key: "site_policies", label: "Site Policies" },
   { key: "device_filter_policies", label: "Device / Filter Policies" },
 ];
@@ -76,7 +77,6 @@ export const POLICY_RULE_TYPES = [
 ];
 
 export const POLICY_ROLE_SCOPES = [
-  { value: "Both", label: "Both" },
   { value: "Server", label: "Server" },
   { value: "Workstation", label: "Workstation" },
 ];
@@ -98,6 +98,7 @@ const POLICY_EDITOR_TABS = [
 export const POLICY_EXCLUSION_TYPES = [
   { value: "unmanaged", label: "Unmanaged" },
   { value: "frozen", label: "Frozen" },
+  { value: "managed_override", label: "Managed Override" },
 ];
 
 const FILTER_LABEL_SX = {
@@ -163,10 +164,12 @@ export function unixFromDatetimeLocal(value) {
 }
 
 export function policyTypeForTab(tabKey) {
+  if (tabKey === "global_policies") return "global";
   return tabKey === "device_filter_policies" ? "device_filter" : "site";
 }
 
 export function policyTypeLabel(policyType) {
+  if (policyType === "global") return "Global Policy";
   return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
 }
 
@@ -311,7 +314,7 @@ export function defaultPolicyDraft(policyType) {
     name: policyTypeLabel(policyType),
     description: "",
     enabled: true,
-    role_scope: "Both",
+    role_scope: "Workstation",
     deferral_days: 14,
     managed_update_mode: true,
     install_schedule_type: "weekly",
@@ -356,7 +359,7 @@ export function policySavePayload(draft = {}, policyType = "site") {
     description: text(draft.description),
     policy_type: policyType,
     enabled: Boolean(draft.enabled),
-    role_scope: text(draft.role_scope) || "Both",
+    role_scope: text(draft.role_scope) || "Workstation",
     deferral_days: Number(draft.deferral_days || 0) || 14,
     managed_update_mode: Boolean(draft.managed_update_mode),
     install_schedule_type: text(draft.install_schedule_type) || "weekly",
@@ -678,9 +681,9 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
             policyType === "site" ? (
             <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
               <TextField
-                label="Role Scope"
+                label="Policy Type"
                 select
-                value={draft.role_scope || "Both"}
+                value={draft.role_scope || "Workstation"}
                 onChange={(event) => setField("role_scope", event.target.value)}
                 size="small"
                 sx={{ minWidth: 180 }}
@@ -946,9 +949,11 @@ function PatchPolicyTab({ policyType }) {
   const openEdit = useCallback((policy) => {
     if (!policy?.id) return;
     const nextPath =
-      policyType === "device_filter"
-        ? APP_PATHS.patchPolicyDeviceFilter(policy.id)
-        : APP_PATHS.patchPolicySite(policy.id);
+      policyType === "global"
+        ? APP_PATHS.patchPolicyGlobal(policy.id)
+        : policyType === "device_filter"
+          ? APP_PATHS.patchPolicyDeviceFilter(policy.id)
+          : APP_PATHS.patchPolicySite(policy.id);
     navigate(nextPath);
   }, [navigate, policyType]);
 
@@ -992,7 +997,13 @@ function PatchPolicyTab({ policyType }) {
       { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
       { field: "enabled", headerName: "Enabled", width: 120, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
       { field: "role_scope", headerName: "Role", width: 135 },
-      { field: "target_count", headerName: "Covered", width: 120, valueFormatter: (params) => Number(params.value || 0).toLocaleString() },
+      {
+        field: "target_count",
+        headerName: "Covered",
+        width: 230,
+        valueFormatter: (params) =>
+          text(params.data?.role_match_label) || Number(params.value || 0).toLocaleString(),
+      },
       { field: "deferral_days", headerName: "Deferral", width: 120, valueFormatter: (params) => `${Number(params.value || 0)} days` },
       { field: "install_schedule_type", headerName: "Install", width: 130 },
       { field: "install_start_ts", headerName: "Start", width: 190, valueFormatter: (params) => formatTimestamp(params.value) },
@@ -1014,9 +1025,11 @@ function PatchPolicyTab({ policyType }) {
               <Button size="small" startIcon={<PlayArrowRoundedIcon />} disabled={busyId === `eval-${policy.id}`} onClick={() => evaluatePolicy(policy)}>
                 Evaluate
               </Button>
-              <Button size="small" startIcon={<DeleteRoundedIcon />} disabled={policy.locked || busyId === `delete-${policy.id}`} onClick={() => deletePolicy(policy)}>
-                Delete
-              </Button>
+              {policyType !== "global" ? (
+                <Button size="small" startIcon={<DeleteRoundedIcon />} disabled={policy.locked || busyId === `delete-${policy.id}`} onClick={() => deletePolicy(policy)}>
+                  Delete
+                </Button>
+              ) : null}
             </Stack>
           );
         },
@@ -1029,7 +1042,11 @@ function PatchPolicyTab({ policyType }) {
     <Stack spacing={1.6} sx={{ minHeight: 520, p: 1.2 }}>
       {loadError ? <Alert severity="error">{loadError}</Alert> : null}
       <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-        {policyType === "site" ? "Site Policies" : "Device / Filter Policies"}
+        {policyType === "global"
+          ? "Global Policies"
+          : policyType === "site"
+            ? "Site Policies"
+            : "Device / Filter Policies"}
       </Typography>
       <GridShell sx={{ flexGrow: 1, minHeight: 500, borderRadius: 0, border: "none" }}>
         <AgGridReact

@@ -183,6 +183,20 @@ const SELECT_MENU_PROPS = {
   },
 };
 
+const ROLE_MATCH_LABEL_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  minHeight: 38,
+  px: 1.2,
+  borderRadius: 999,
+  border: "1px solid rgba(125, 211, 252, 0.24)",
+  background: "rgba(8, 47, 73, 0.26)",
+  color: "rgba(191, 219, 254, 0.95)",
+  fontSize: "0.78rem",
+  fontWeight: 700,
+  whiteSpace: "nowrap",
+};
+
 const POLICY_EDITOR_TAB_URL_BY_KEY = Object.freeze({
   details: "policy_name",
   targets: "targets",
@@ -210,13 +224,13 @@ const POLICY_EDITOR_TABS = [
 ];
 
 function policyTypeFromPath(pathname = "") {
+  if (pathname.includes("/global/")) return "global";
   return pathname.includes("/device-filter/") ? "device_filter" : "site";
 }
 
 function returnPathForPolicyType(policyType) {
-  return policyType === "device_filter"
-    ? APP_PATHS.patchManagementDeviceFilterPolicies
-    : APP_PATHS.patchManagementSitePolicies;
+  if (policyType === "global") return APP_PATHS.patchManagementGlobalPolicies;
+  return policyType === "device_filter" ? APP_PATHS.patchManagementDeviceFilterPolicies : APP_PATHS.patchManagementSitePolicies;
 }
 
 function SectionHeader({ title, action, sx }) {
@@ -248,6 +262,15 @@ function SectionHeader({ title, action, sx }) {
   );
 }
 
+function RoleMatchLabel({ label }) {
+  if (!text(label)) return null;
+  return (
+    <Typography component="span" sx={ROLE_MATCH_LABEL_SX}>
+      {label}
+    </Typography>
+  );
+}
+
 export default function PatchPolicyEditor() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -261,6 +284,8 @@ export default function PatchPolicyEditor() {
   const [loadError, setLoadError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [warnings, setWarnings] = useState([]);
+  const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState("");
   const [saving, setSaving] = useState(false);
   const notifyOperator = useAppNotifications({
     title: "Patch Policy",
@@ -410,23 +435,69 @@ export default function PatchPolicyEditor() {
     });
   }, []);
 
+  const buildPolicyPayload = useCallback(
+    (confirmParentOverrides = false) => {
+      const draftType = text(draft.policy_type).toLowerCase();
+      const payloadBaseType = draftType === "global" ? "site" : policyType;
+      const payload = {
+        ...policySavePayload(draft, payloadBaseType),
+        policy_type: draftType === "global" ? "global" : policyType,
+        confirm_parent_overrides: confirmParentOverrides,
+      };
+      if (payload.policy_type === "global") {
+        delete payload.site_ids;
+        delete payload.targets;
+      }
+      return payload;
+    },
+    [draft, policyType]
+  );
+
+  useEffect(() => {
+    if (loading || !text(draft.name)) {
+      setPreview(null);
+      setPreviewError("");
+      return undefined;
+    }
+    let active = true;
+    const timer = window.setTimeout(async () => {
+      try {
+        const payload = buildPolicyPayload(false);
+        const url = editing
+          ? `/api/patches/policies/${encodeURIComponent(policyId)}/preview`
+          : "/api/patches/policies/conflicts";
+        const response = await fetch(url, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body?.message || body?.error || `HTTP ${response.status}`);
+        }
+        if (!active) return;
+        setPreview(body || null);
+        setPreviewError("");
+      } catch (error) {
+        if (!active) return;
+        setPreview(null);
+        setPreviewError(String(error?.message || error));
+      }
+    }, 350);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [buildPolicyPayload, draft.name, editing, loading, policyId]);
+
   const savePolicy = useCallback(
     async ({ confirmParentOverrides = false } = {}) => {
       setSaving(true);
       setSaveError("");
       setWarnings([]);
       try {
-        const draftType = text(draft.policy_type).toLowerCase();
-        const payloadBaseType = draftType === "global" ? "site" : policyType;
-        const payload = {
-          ...policySavePayload(draft, payloadBaseType),
-          policy_type: draftType === "global" ? "global" : policyType,
-          confirm_parent_overrides: confirmParentOverrides,
-        };
-        if (payload.policy_type === "global") {
-          delete payload.site_ids;
-          delete payload.targets;
-        }
+        const payload = buildPolicyPayload(confirmParentOverrides);
         const method = editing ? "PUT" : "POST";
         const url = editing ? `/api/patches/policies/${encodeURIComponent(policyId)}` : "/api/patches/policies";
         const response = await fetch(url, {
@@ -452,14 +523,16 @@ export default function PatchPolicyEditor() {
         setSaving(false);
       }
     },
-    [draft, editing, navigate, notifyOperator, policyId, policyType]
+    [buildPolicyPayload, editing, navigate, notifyOperator, policyId, policyType]
   );
 
   const draftPolicyType = text(draft.policy_type).toLowerCase();
   const displayPolicyTypeLabel = draftPolicyType === "global" ? "Global Patch Policy" : policyTypeLabel(policyType);
   const pageTitle = editing ? `Edit ${displayPolicyTypeLabel}` : `New ${policyTypeLabel(policyType)}`;
   const pageSubtitle =
-    policyType === "device_filter"
+    policyType === "global"
+      ? "Edit locked global patch baselines for Windows servers and workstations."
+      : policyType === "device_filter"
       ? "Create deepest patch overrides for explicit devices or dynamic device filters."
       : "Create site-scoped patch maintenance windows and approval rules.";
 
@@ -509,6 +582,14 @@ export default function PatchPolicyEditor() {
   const ruleRows = Array.isArray(draft.rules) ? draft.rules : [];
   const targetRows = Array.isArray(draft.targets) ? draft.targets : [];
   const exclusionRows = Array.isArray(draft.exclusions) ? draft.exclusions : [];
+  const targetPreviewByIndex = useMemo(() => {
+    const rows = Array.isArray(preview?.target_rows) ? preview.target_rows : [];
+    return new Map(rows.map((row) => [Number(row?.row_index || 0), row]));
+  }, [preview]);
+  const exclusionPreviewByIndex = useMemo(() => {
+    const rows = Array.isArray(preview?.exclusion_rows) ? preview.exclusion_rows : [];
+    return new Map(rows.map((row) => [Number(row?.row_index || 0), row]));
+  }, [preview]);
 
   const ruleColumnDefs = useMemo(
     () => [
@@ -667,6 +748,11 @@ export default function PatchPolicyEditor() {
             {saveError}
           </Alert>
         ) : null}
+        {previewError && ["targets", "exclusions"].includes(activeTabKey) ? (
+          <Alert severity="warning">
+            {previewError}
+          </Alert>
+        ) : null}
 
         {loading ? (
           <Box sx={{ ...TAB_SECTION_SX, color: MAGIC_UI.textMuted }}>
@@ -710,25 +796,44 @@ export default function PatchPolicyEditor() {
 
         {!loading && activeTabKey === "targets" ? (
           <Box sx={TAB_SECTION_SX}>
-            <SectionHeader title={policyType === "site" ? "Site Scope" : "Device / Filter Targets"} />
+            <SectionHeader
+              title={
+                policyType === "global"
+                  ? "Global Scope"
+                  : policyType === "site"
+                    ? "Site Scope"
+                    : "Device / Filter Targets"
+              }
+            />
             {draftPolicyType === "global" ? (
-              <Alert
-                severity="info"
-                sx={{
-                  background: "rgba(8, 47, 73, 0.48)",
-                  color: MAGIC_UI.textBright,
-                  border: "1px solid rgba(125, 211, 252, 0.28)",
-                  "& .MuiAlert-icon": { color: MAGIC_UI.accentA },
-                }}
-              >
-                Global Patch Policy applies to every managed Windows device unless a deeper site or device/filter policy overrides it.
-              </Alert>
+              <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "flex-start" }}>
+                <TextField
+                  label="Policy Type"
+                  value={draft.role_scope || "Workstation"}
+                  size="small"
+                  InputProps={{ readOnly: true }}
+                  sx={{ width: { xs: "100%", md: 220 }, ...INPUT_FIELD_SX }}
+                />
+                <RoleMatchLabel label={preview?.role_match_label} />
+                <Alert
+                  severity="info"
+                  sx={{
+                    flex: 1,
+                    background: "rgba(8, 47, 73, 0.48)",
+                    color: MAGIC_UI.textBright,
+                    border: "1px solid rgba(125, 211, 252, 0.28)",
+                    "& .MuiAlert-icon": { color: MAGIC_UI.accentA },
+                  }}
+                >
+                  Global Patch Policy applies to every typed Windows device in this policy type unless a deeper site or device/filter policy overrides it.
+                </Alert>
+              </Stack>
             ) : policyType === "site" ? (
               <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
                 <TextField
-                  label="Role Scope"
+                  label="Policy Type"
                   select
-                  value={draft.role_scope || "Both"}
+                  value={draft.role_scope || "Workstation"}
                   onChange={(event) => setField("role_scope", event.target.value)}
                   size="small"
                   sx={{ minWidth: 180, ...SELECT_FIELD_SX }}
@@ -751,10 +856,24 @@ export default function PatchPolicyEditor() {
                     <MenuItem key={site.id} value={Number(site.id)}>{site.name || `Site ${site.id}`}</MenuItem>
                   ))}
                 </TextField>
+                <RoleMatchLabel label={preview?.role_match_label} />
               </Stack>
             ) : (
               <Stack spacing={1.4}>
-                <Stack direction="row" spacing={1}>
+                <Stack direction={{ xs: "column", md: "row" }} spacing={1} alignItems={{ xs: "stretch", md: "center" }}>
+                  <TextField
+                    label="Policy Type"
+                    select
+                    value={draft.role_scope || "Workstation"}
+                    onChange={(event) => setField("role_scope", event.target.value)}
+                    size="small"
+                    sx={{ minWidth: 180, ...SELECT_FIELD_SX }}
+                    SelectProps={{ MenuProps: SELECT_MENU_PROPS }}
+                  >
+                    {POLICY_ROLE_SCOPES.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                    ))}
+                  </TextField>
                   <Button startIcon={<AddIcon />} onClick={addDeviceTarget} sx={PRIMARY_CTA_FLAT_SX}>Device Target</Button>
                   <Button startIcon={<AddIcon />} onClick={addFilterTarget} sx={OUTLINE_BUTTON_SX}>Filter Target</Button>
                 </Stack>
@@ -798,6 +917,7 @@ export default function PatchPolicyEditor() {
                     <Button startIcon={<DeleteIcon />} onClick={() => deleteTarget(index)} sx={OUTLINE_BUTTON_SX}>
                       Remove
                     </Button>
+                    <RoleMatchLabel label={targetPreviewByIndex.get(index)?.role_match_label} />
                   </Stack>
                 ))}
               </Stack>
@@ -904,6 +1024,7 @@ export default function PatchPolicyEditor() {
                 <Stack direction="row" spacing={1}>
                   <Button startIcon={<AddIcon />} onClick={() => addExclusion("unmanaged")} sx={PRIMARY_CTA_FLAT_SX}>Unmanaged</Button>
                   <Button startIcon={<AddIcon />} onClick={() => addExclusion("frozen")} sx={OUTLINE_BUTTON_SX}>Frozen</Button>
+                  <Button startIcon={<AddIcon />} onClick={() => addExclusion("managed_override")} sx={OUTLINE_BUTTON_SX}>Managed Override</Button>
                 </Stack>
               }
             />
@@ -981,6 +1102,7 @@ export default function PatchPolicyEditor() {
                     size="small"
                     sx={{ minWidth: 220, flex: 1, ...INPUT_FIELD_SX }}
                   />
+                  <RoleMatchLabel label={exclusionPreviewByIndex.get(index)?.role_match_label} />
                   <Button startIcon={<DeleteIcon />} onClick={() => deleteExclusion(index)} sx={OUTLINE_BUTTON_SX}>
                     Remove
                   </Button>

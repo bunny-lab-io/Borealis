@@ -2,9 +2,10 @@
 
 Patch Management groups OS-specific patch surfaces under one sidebar section. Windows patch inventory and policies are active today. Linux and MacOS pages are present for layout consistency and show `Coming Soon` until those patch backends exist.
 
-The Windows Patch Management page has three tabs:
+The Windows Patch Management page has four tabs:
 
 - `Patch List` shows available and installed Windows updates.
+- `Global Policies` shows the locked server and workstation baselines.
 - `Site Policies` controls site-scoped maintenance windows and role scope.
 - `Device / Filter Policies` applies deepest overrides for explicit devices or dynamic device filters.
 
@@ -25,24 +26,28 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 ## Configure Patch Policies
 
 1. Open `Patch Management > Windows`.
-2. Select `Site Policies` or `Device / Filter Policies`.
+2. Select `Global Policies`, `Site Policies`, or `Device / Filter Policies`.
 3. Use `New Policy` and choose `New Site Policy` or `New Device / Filter Policy`.
-4. Create a policy and choose its scope.
+4. Create a policy and choose its policy type: `Server` or `Workstation`.
 5. Choose the install schedule. Times use the Engine host timezone.
 6. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
 7. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
 8. Add allow or block rules for severity, classification, category, KB, update ID, or patch key.
 9. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
 
-The Global Patch Policy is created automatically during Engine database initialization. It is locked from deletion, enabled by default, uses Wednesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off.
+Two Global Patch Policies are created automatically during Engine database initialization. `Global Workstation Policy` is locked from deletion, enabled by default, uses Tuesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off. `Global Server Policy` uses the same defaults except its install window is Wednesday 2:00 AM Engine-local time.
 
-Site policies target one or more sites plus a role scope: `Server`, `Workstation`, or `Both`. One site and role combination can only be covered by one enabled site policy.
+Windows patch policies are single-domain. Site policies target one or more sites plus exactly one policy type: `Server` or `Workstation`. One site and policy type combination can only be covered by one enabled site policy.
 
-Device / Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win.
+Device / Filter policies also choose exactly one policy type. Borealis resolves direct devices and filters first, then strips devices that do not match the policy type. Devices with no declared `device_type` are ignored by Windows patch automation until typed. A `device_type` containing `server` is treated as `Server`; any other non-empty value is treated as `Workstation`.
+
+Policy target counts show `eligible / raw Devices Match Policy Type`. `eligible` is the number of typed Windows devices that match the policy type. `raw` is the Windows device count before server/workstation filtering.
+
+Device / Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
 
 ## Exclusions and Reboots
 
-Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Hostname exclusions require a site selection so duplicate hostnames in different sites stay distinct. Excluded devices still count as covered during conflict checks.
+Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Child policies can use `Managed Override` to explicitly clear inherited `Unmanaged` or `Frozen` coverage for matching devices or filters. Hostname exclusions require a site selection so duplicate hostnames in different sites stay distinct. Excluded devices still count as covered during conflict checks.
 
 Reboots are off by default. If enabled, reboot policy can use a separate schedule. Agents skip rebooting devices with a logged-in user unless the policy explicitly allows forced logged-in-user reboots.
 
@@ -77,14 +82,14 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `GET /api/patches/audit` - fleet patch inventory, scoped to operator site access. Rows include `active_install_job` when an enabled scheduled patch install already owns that patch.
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
-    - `GET /api/patches/policies` - list patch policies, optionally filtered by `type=site` or `type=device_filter`.
+    - `GET /api/patches/policies` - list patch policies, optionally filtered by `type=global`, `type=site`, or `type=device_filter`.
     - `POST /api/patches/policies` - create a patch policy.
-    - `GET /api/patches/policies/metadata` - load policy editor metadata for sites, filters, rule types, role scopes, and defaults.
+    - `GET /api/patches/policies/metadata` - load policy editor metadata for sites, filters, rule types, Windows role scopes, exclusion modes, and defaults.
     - `GET /api/patches/policies/<policy_id>` - load one policy.
     - `PUT /api/patches/policies/<policy_id>` - update one policy.
     - `DELETE /api/patches/policies/<policy_id>` - delete one unlocked policy. Global policy returns a locked-policy error.
-    - `POST /api/patches/policies/<policy_id>/preview` - resolve target coverage, conflicts, and parent-block override warnings.
-    - `GET /api/patches/policies/effective?hostname=<hostname>` - show effective hierarchy for one device.
+    - `POST /api/patches/policies/<policy_id>/preview` - resolve target coverage, role-filtered counts, conflicts, and parent-block override warnings.
+    - `GET /api/patches/policies/effective?hostname=<hostname>` - show effective same-role hierarchy, inherited exclusion source, and override source for one device.
     - `POST /api/patches/policies/evaluate` - manually evaluate due patches for one policy or all enabled policies.
     - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk and policy flows call this once per selected patch identity.
     - `POST /api/agent/patches/install-progress` - device-authenticated Agent progress update for scheduled patch installs. The Engine stores latest progress in scheduled activity metadata and emits `scheduled_job_patch_progress`.
@@ -125,9 +130,12 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Patch install drafts carry an internal `return_to` path so successful creation returns to the originating fleet or device Patch Management route.
     - KB cells link to `https://www.catalog.update.microsoft.com/Search.aspx?q=<KB>` in a new tab when the row has a normalized KB value.
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
-    - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and only runs when no `policy_type='global'` row exists. Redeploy does not overwrite operator changes.
-    - Policy hierarchy is Global -> Site -> Device/Filter. Device/filter policy is deepest. Same site+role overlaps block site policy save. Direct device/filter target overlap blocks device/filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
-    - Policy rules support `approve` and `block` against `severity`, `classification`, `category`, `kb`, `update_id`, and `patch_key`. Child approval of a parent block requires confirmation and stores `override_parent_block`.
+    - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and `ensureSplitGlobalPatchPolicies()`. When no split global policy exists, Borealis clears legacy patch policy definitions/history/state, preserves `patch_catalog_entries` and `device_patch_inventory`, then seeds `Global Workstation Policy` and `Global Server Policy`. Redeploy does not overwrite existing split global policies.
+    - Policy hierarchy is Global -> Site -> Device/Filter within the same policy type. Device/filter policy is deepest. Same site+role overlaps block site policy save. Direct device/filter target overlap blocks device/filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
+    - Windows patch policy role scopes are `Server` and `Workstation`. `Both` is retained only as a legacy overlap helper and is rejected by policy save validation. Empty `device_type` devices do not match either role. `device_type` strings containing `server` match `Server`; any other non-empty value matches `Workstation`.
+    - Effective policy resolution groups policies by device identity, selects the deepest same-role match, and assigns each device to only that effective policy. Parent policy runs therefore do not create duplicate KB jobs for devices covered by child policies.
+    - Policy rules support `approve` and `block` against `severity`, `classification`, `category`, `kb`, `update_id`, and `patch_key`. Parent approve rules do not flow into children. Parent block rules inherit downward; child approval of a parent block requires confirmation and stores `override_parent_block`.
+    - Device exclusions inherit downward. `managed_override` in `patch_policy_exclusions.exclusion_type` clears inherited `unmanaged` or `frozen` for matching devices or filters. Effective device-state metadata records `hierarchy_policy_ids`, `exclusion_policy_id`, and `exclusion_override_policy_id`.
     - Policy evaluation syncs `patch_catalog_entries` from current `device_patch_inventory`, resolves covered Windows devices, applies `Unmanaged`/`Frozen` exclusions, checks deferral, and groups approved pending inventory by KB/update identity.
     - Each policy run writes `patch_policy_runs`, then creates one enabled `job_kind=patch_install` scheduled job per KB/update identity. The scheduled job component carries `trigger=policy`, `policy_id`, and `policy_run_id`.
     - Active install lockout reuses the existing patch active-job identity map and skips policy-created duplicate KB/update deployments while another enabled patch install job owns the same identity.

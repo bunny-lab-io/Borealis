@@ -1243,52 +1243,104 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
             )
             """
         )
-        cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global' LIMIT 1")
-        if cur.fetchone() is None:
-            now = int(time.time())
-            install_start_ts = _patch_policy_default_start_ts(2, 2)
-            reboot_start_ts = _patch_policy_default_start_ts(5, 1)
+        now = int(time.time())
+        workstation_install_start_ts = _patch_policy_default_start_ts(1, 2)
+        server_install_start_ts = _patch_policy_default_start_ts(2, 2)
+        reboot_start_ts = _patch_policy_default_start_ts(5, 1)
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM patch_policies
+             WHERE policy_type = 'global'
+               AND role_scope IN ('Server', 'Workstation')
+            """
+        )
+        split_globals = int(cur.fetchone()[0] or 0)
+        if split_globals == 0:
+            cur.execute("DELETE FROM patch_policy_device_state")
+            cur.execute("DELETE FROM patch_policy_audit")
+            cur.execute("DELETE FROM patch_policy_sites")
+            cur.execute("DELETE FROM patch_policy_targets")
+            cur.execute("DELETE FROM patch_policy_exclusions")
+            cur.execute("DELETE FROM patch_policy_rules")
+            cur.execute("DELETE FROM patch_policy_runs")
+            cur.execute("DELETE FROM patch_policies")
+        else:
             cur.execute(
                 """
-                INSERT INTO patch_policies(
-                    name, description, policy_type, enabled, locked, role_scope,
-                    approval_mode, deferral_days, managed_update_mode,
-                    install_schedule_type, install_start_ts, reboot_after_install,
-                    reboot_schedule_enabled, reboot_schedule_type, reboot_start_ts,
-                    force_reboot_logged_in, created_by, updated_by, created_at, updated_at
-                ) VALUES (?, ?, 'global', 1, 1, 'Both', 'conservative_msp', 14, 1,
-                          'weekly', ?, 0, 0, 'weekly', ?, 0, 'engine-init', 'engine-init', ?, ?)
-                """,
-                (
-                    "Global Patch Policy",
-                    "Baseline patch policy applied to every managed Windows device unless a site or device/filter policy overrides it.",
-                    install_start_ts,
-                    reboot_start_ts,
-                    now,
-                    now,
-                ),
+                DELETE FROM patch_policies
+                 WHERE policy_type = 'global'
+                   AND role_scope NOT IN ('Server', 'Workstation')
+                """
             )
-            cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global' LIMIT 1")
-            seeded = cur.fetchone()
-            if seeded:
-                policy_id = seeded[0]
-                for rule_type, match_type, match_value in (
-                    ("approve", "severity", "Critical"),
-                    ("approve", "severity", "Important"),
-                    ("approve", "classification", "Security Updates"),
-                    ("approve", "classification", "Critical Updates"),
-                    ("block", "classification", "Drivers"),
-                    ("block", "classification", "Feature Packs"),
-                ):
-                    cur.execute(
-                        """
-                        INSERT INTO patch_policy_rules(
-                            policy_id, rule_type, match_type, match_value,
-                            override_parent_block, created_by, created_at
-                        ) VALUES (?, ?, ?, ?, 0, 'engine-init', ?)
-                        """,
-                        (policy_id, rule_type, match_type, match_value, now),
-                    )
+        for name, description, role_scope, install_start_ts in (
+            (
+                "Global Workstation Policy",
+                "Default Borealis workstation patch policy baseline. Locked from deletion and preserved across redeploys.",
+                "Workstation",
+                workstation_install_start_ts,
+            ),
+            (
+                "Global Server Policy",
+                "Default Borealis server patch policy baseline. Locked from deletion and preserved across redeploys.",
+                "Server",
+                server_install_start_ts,
+            ),
+        ):
+            cur.execute(
+                """
+                SELECT id
+                  FROM patch_policies
+                 WHERE policy_type = 'global'
+                   AND role_scope = ?
+                 LIMIT 1
+                """,
+                (role_scope,),
+            )
+            if cur.fetchone() is None:
+                cur.execute(
+                    """
+                    INSERT INTO patch_policies(
+                        name, description, policy_type, enabled, locked, role_scope,
+                        approval_mode, deferral_days, managed_update_mode,
+                        install_schedule_type, install_start_ts, reboot_after_install,
+                        reboot_schedule_enabled, reboot_schedule_type, reboot_start_ts,
+                        force_reboot_logged_in, created_by, updated_by, created_at, updated_at
+                    ) VALUES (?, ?, 'global', 1, 1, ?, 'conservative_msp', 14, 1,
+                              'weekly', ?, 0, 0, 'weekly', ?, 0, 'engine-init', 'engine-init', ?, ?)
+                    """,
+                    (name, description, role_scope, install_start_ts, reboot_start_ts, now, now),
+                )
+        cur.execute(
+            """
+            UPDATE patch_policies
+               SET locked = 1
+             WHERE policy_type = 'global'
+               AND role_scope IN ('Server', 'Workstation')
+            """
+        )
+        cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global'")
+        for (policy_id,) in cur.fetchall():
+            cur.execute("SELECT id FROM patch_policy_rules WHERE policy_id = ? LIMIT 1", (policy_id,))
+            if cur.fetchone() is not None:
+                continue
+            for rule_type, match_type, match_value in (
+                ("approve", "severity", "Critical"),
+                ("approve", "severity", "Important"),
+                ("approve", "classification", "Security Updates"),
+                ("approve", "classification", "Critical Updates"),
+                ("block", "classification", "Drivers"),
+                ("block", "classification", "Feature Packs"),
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO patch_policy_rules(
+                        policy_id, rule_type, match_type, match_value,
+                        override_parent_block, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 'engine-init', ?)
+                    """,
+                    (policy_id, rule_type, match_type, match_value, now),
+                )
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure patch policy tables: %s", exc, exc_info=True)

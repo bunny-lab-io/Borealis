@@ -746,10 +746,11 @@ finally:
     - Scheduler patch policy evaluation.
     - Backup/restore durable patch state.
     - Notes:
-    - Engine DB init seeds exactly one locked `policy_type='global'` policy when none exists. Existing Global Patch Policy rows are not overwritten on redeploy.
+    - Engine DB init seeds two locked `policy_type='global'` policies, one `Workstation` and one `Server`. When no split global exists, Borealis clears legacy patch policy definitions/history/state before seeding the two baselines, but preserves `patch_catalog_entries` and `device_patch_inventory`.
+    - Windows patch policies use `role_scope` as policy type. `Server` and `Workstation` are valid for save flows. `Both` may exist only as legacy helper semantics and is rejected by current policy validation.
     - Site policy scope is stored in `patch_policy_sites`; device/filter scope is stored in `patch_policy_targets`.
-    - `patch_policy_exclusions` stores `unmanaged` and `frozen` coverage. Device hostname exclusions include `site_id` when no device GUID is present so duplicate hostnames across sites remain distinct. Exclusions still count as covered for conflict detection.
-    - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation.
+    - `patch_policy_exclusions` stores `unmanaged`, `frozen`, and `managed_override` coverage. Device hostname exclusions include `site_id` when no device GUID is present so duplicate hostnames across sites remain distinct. Exclusions still count as covered for conflict detection.
+    - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation. Block rules inherit downward; approve rules are local to each policy.
 
     #### `patch_policy_runs`
     - Status: Active history.
@@ -761,6 +762,8 @@ finally:
     #### `patch_policy_device_state`
     - Status: Active transient state.
     - Purpose: Latest effective policy/enforcement state by device. Excluded from backup/restore.
+    - Notes:
+    - Effective state metadata records the same-role policy hierarchy, inherited exclusion source policy, and exclusion override source policy for audit/UI display.
 
     ### Scheduling and Automation
     #### `scheduled_jobs`
