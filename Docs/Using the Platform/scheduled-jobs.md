@@ -34,6 +34,8 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 - Ansible playbooks store per-target or shared recap output depending on execution mode.
 - Patch install jobs store per-device install result, timeout or failure state, WUA result codes, reboot-required flags, and available Windows Update stdout/stderr detail.
 
+The job list opens on the `Normal` filter so operator-created automation and onboarding jobs stay separate from internal maintenance and patch-install noise. Use `Maintenance` to audit internal Agent or Engine maintenance jobs, and use `Patch Management` to review Windows patch-install jobs created from Patch Management. `Immediate`, `Scheduled`, `Recurring`, and `Completed` narrow normal jobs only.
+
 ## Onboarding Jobs
 
 Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. They use discovery scope, exclusions, stored credentials, platform selection, install branch, remote ports, and concurrency limits. Successful install still requires Device Approval.
@@ -90,3 +92,4 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - Filter targets preserve allowed site scope from creation/edit time.
     - Remote SSH/WinRM Ansible requires active WireGuard peer IP and selected credential or service account path.
     - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.
+    - `Scheduled_Jobs_List.jsx` defaults to the `Normal` filter. Normal, Immediate, Scheduled, Recurring, and Completed exclude `agent_maintenance` and `patch_install` job kinds. `Maintenance` includes Agent maintenance and future job-kind names with a standalone `maintenance` token. `Patch Management` includes patch job-kind names such as `patch_install`.
