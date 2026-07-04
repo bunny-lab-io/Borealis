@@ -35,6 +35,14 @@ import {
   parseAssembliesCollectionPayload,
   resolveAssemblyForComponent
 } from "../Assemblies/assemblyUtils";
+import {
+  FILTER_OPTIONS,
+  buildScheduledJobCategoryFlags,
+  buildScheduledJobFilterCounts,
+  filterScheduledJobRows,
+  isMaintenanceJobKind,
+  isPatchManagementJobKind,
+} from "./scheduledJobFilters.js";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import {
   DIALOG_ACTIONS_SX,
@@ -86,13 +94,6 @@ const PAGE_TITLE = "Scheduled Jobs";
 const PAGE_SUBTITLE = "Monitor scheduled, recurring, and completed Borealis jobs with live status.";
 const PAGE_ICON = HeaderIcon;
 
-const FILTER_OPTIONS = [
-  { key: "all", label: "All" },
-  { key: "immediate", label: "Immediate" },
-  { key: "scheduled", label: "Scheduled" },
-  { key: "recurring", label: "Recurring" },
-  { key: "completed", label: "Completed" },
-];
 const AUTO_SIZE_COLUMNS = [
   "componentsMeta",
   "jobType",
@@ -194,7 +195,7 @@ export default function ScheduledJobsList({ refreshToken }) {
   const [error, setError] = useState("");
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
-  const [jobFilterMode, setJobFilterMode] = useState("all");
+  const [jobFilterMode, setJobFilterMode] = useState("normal");
   const [assembliesPayload, setAssembliesPayload] = useState({ items: [], queue: [] });
   const [assembliesLoading, setAssembliesLoading] = useState(false);
   const [assembliesError, setAssembliesError] = useState("");
@@ -338,8 +339,10 @@ export default function ScheduledJobsList({ refreshToken }) {
           }
         };
         const mappedRows = (data?.jobs || []).map((j) => {
-          const jobKind = String(j.job_kind || "automation").toLowerCase();
+          const jobKind = String(j.job_kind || "automation").trim().toLowerCase();
           const isOnboardingJob = jobKind === "onboarding";
+          const isMaintenanceJob = isMaintenanceJobKind(jobKind);
+          const isPatchManagementJob = isPatchManagementJobKind(jobKind);
           const components = Array.isArray(j.components) ? j.components : [];
           const normalizedComponents = components.map((component) => {
             const record = resolveAssemblyForComponent(assemblyIndex, component);
@@ -372,9 +375,14 @@ export default function ScheduledJobsList({ refreshToken }) {
             label: comp.name,
             domain: comp.domain
           }));
-          const displayComponentSummaries = isOnboardingJob
-            ? [{ key: `onboarding-${j.id || j.name}`, label: "Device Onboarding", domain: "system" }]
-            : componentSummaries;
+          let displayComponentSummaries = componentSummaries;
+          if (isOnboardingJob) {
+            displayComponentSummaries = [{ key: `onboarding-${j.id || j.name}`, label: "Device Onboarding", domain: "system" }];
+          } else if (isPatchManagementJob) {
+            displayComponentSummaries = [{ key: `patch-${j.id || j.name}`, label: "Patch Install", domain: "system" }];
+          } else if (isMaintenanceJob) {
+            displayComponentSummaries = [{ key: `maintenance-${j.id || j.name}`, label: "Maintenance Task", domain: "system" }];
+          }
           const hasWorkflowComponent = normalizedComponents.some((comp) => {
             const typeRaw = String(comp?.type || comp?.assembly_type || "").trim().toLowerCase();
             const subtypeRaw = String(comp?.assembly_subtype || "").trim().toLowerCase();
@@ -433,24 +441,25 @@ export default function ScheduledJobsList({ refreshToken }) {
           const jobExpiredFlag =
             expiredCount > 0 || String(j.last_status || "").toLowerCase() === "expired";
           const scheduleRaw = String(j.schedule_type || "").toLowerCase();
-          const isImmediateType = scheduleRaw === "immediately";
-          const isScheduledType = scheduleRaw === "once";
-          const showImmediate = isImmediateType && !allTargetsEvaluated;
-          const showScheduled = isScheduledType && !allTargetsEvaluated;
-          const canComplete = isImmediateType || isScheduledType;
-          const showCompleted = canComplete && (jobExpiredFlag || allTargetsEvaluated);
-          const categoryFlags = {
-            immediate: showImmediate,
-            scheduled: showScheduled,
-            recurring: !isImmediateType && !isScheduledType,
-            completed: showCompleted
-          };
+          const categoryFlags = buildScheduledJobCategoryFlags({
+            jobKind,
+            scheduleRaw,
+            allTargetsEvaluated,
+            jobExpiredFlag,
+          });
+          const jobType = isOnboardingJob
+            ? "Device Onboarding"
+            : isPatchManagementJob
+              ? "Patch Management"
+              : isMaintenanceJob
+                ? "Maintenance"
+                : "Automation";
           return {
             id: j.id,
             name: j.name,
             scriptWorkflow: compName,
             componentsMeta: displayComponentSummaries,
-            jobType: isOnboardingJob ? "Device Onboarding" : "Automation",
+            jobType,
             target: targetText,
             occurrence,
             lastRun: fmt(j.last_run_ts),
@@ -524,20 +533,10 @@ export default function ScheduledJobsList({ refreshToken }) {
     [autoSizeTrackedColumns]
   );
 
-  const filterCounts = useMemo(() => {
-    const totals = { all: rows.length, immediate: 0, scheduled: 0, recurring: 0, completed: 0 };
-    rows.forEach((row) => {
-      if (row?.categoryFlags?.immediate) totals.immediate += 1;
-      if (row?.categoryFlags?.scheduled) totals.scheduled += 1;
-      if (row?.categoryFlags?.recurring) totals.recurring += 1;
-      if (row?.categoryFlags?.completed) totals.completed += 1;
-    });
-    return totals;
-  }, [rows]);
+  const filterCounts = useMemo(() => buildScheduledJobFilterCounts(rows), [rows]);
 
   const filteredRows = useMemo(() => {
-    if (jobFilterMode === "all") return rows;
-    return rows.filter((row) => row?.categoryFlags?.[jobFilterMode]);
+    return filterScheduledJobRows(rows, jobFilterMode);
   }, [jobFilterMode, rows]);
   const activeFilterLabel = useMemo(() => {
     const match = FILTER_OPTIONS.find((option) => option.key === jobFilterMode);
@@ -1035,6 +1034,8 @@ export default function ScheduledJobsList({ refreshToken }) {
                   borderRadius: 999,
                   border: "1px solid rgba(148,163,184,0.35)",
                   boxShadow: "0 18px 48px rgba(2,8,23,0.45)",
+                  maxWidth: "100%",
+                  overflowX: "auto",
                   padding: "4px"
                 }}
               >
@@ -1060,6 +1061,7 @@ export default function ScheduledJobsList({ refreshToken }) {
                         display: "inline-flex",
                         alignItems: "center",
                         gap: 0.6,
+                        whiteSpace: "nowrap",
                         boxShadow: active ? "0 0 18px rgba(125,211,252,0.35)" : "none",
                         transition: "all 0.2s ease",
                       }}
@@ -1087,9 +1089,7 @@ export default function ScheduledJobsList({ refreshToken }) {
                 })}
               </Box>
               <Typography variant="body2" sx={{ color: AURORA_SHELL.subtext }}>
-                {jobFilterMode === "all"
-                  ? `Showing ${filterCounts.all || 0} Jobs`
-                  : `Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
+                {`Showing ${filterCounts[jobFilterMode] || 0} ${activeFilterLabel} job${(filterCounts[jobFilterMode] || 0) === 1 ? "" : "s"}`}
               </Typography>
             </Box>
             {credentialResetWarningCount ? (
