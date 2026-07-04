@@ -58,6 +58,8 @@ type patchInstallTarget struct {
 
 func registerPatchRoutes(mux *http.ServeMux, auth *authService, fallback http.Handler) {
 	mux.HandleFunc("GET /api/patches/audit", patchAuditHandler(auth))
+	mux.HandleFunc("/api/patches/policies", patchPoliciesRootHandler(auth, fallback))
+	mux.HandleFunc("/api/patches/policies/", patchPoliciesSubtreeHandler(auth, fallback))
 	mux.HandleFunc("GET /api/device/patches/{hostname}", devicePatchesHandler(auth))
 	mux.HandleFunc("POST /api/device/patches/{hostname}/refresh", patchRefreshHandler(auth))
 	mux.HandleFunc("/api/patches/", patchSubtreeHandler(fallback))

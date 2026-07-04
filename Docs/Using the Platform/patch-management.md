@@ -1,6 +1,12 @@
 # Patch Management
 
-Patch Management shows Windows patch inventory collected by Borealis agents. Operators can schedule one pending update on one device, or schedule one pending update across all visible devices that currently report it. Policies, approvals, maintenance windows, and reboot orchestration are not implemented yet.
+Patch Management shows Windows patch inventory collected by Borealis agents and controls policy-driven Windows update installs. Operators can still schedule ad-hoc installs, but recurring automation should use Patch Policies so Global, site, and device/filter overrides stay auditable.
+
+Patch Management has three tabs:
+
+- `Patch List` shows available and installed Windows updates.
+- `Site Policies` controls site-scoped maintenance windows and role scope.
+- `Device / Filter Policies` applies deepest overrides for explicit devices or dynamic device filters.
 
 ## Open Fleet Patch Audit
 
@@ -15,6 +21,29 @@ Patch Management shows Windows patch inventory collected by Borealis agents. Ope
 Scheduled patch-install jobs appear under the Scheduled Jobs `Patch Management` filter instead of the default `Normal` job list.
 
 Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` so operators with assigned sites only see patch inventory they can access.
+
+## Configure Patch Policies
+
+1. Open `Alerting & Reporting > Patch Management`.
+2. Select `Site Policies` or `Device / Filter Policies`.
+3. Create a policy and choose its scope.
+4. Choose the install schedule. Times use the Engine host timezone.
+5. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
+6. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
+7. Add allow or block rules for severity, classification, category, KB, update ID, or patch key.
+8. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
+
+The Global Patch Policy is created automatically during Engine database initialization. It is locked from deletion, enabled by default, uses Wednesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off.
+
+Site policies target one or more sites plus a role scope: `Server`, `Workstation`, or `Both`. One site and role combination can only be covered by one enabled site policy.
+
+Device / Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win.
+
+## Exclusions and Reboots
+
+Use `Unmanaged` when Borealis should do no patch installs and no Windows Update enforcement for a device. Use `Frozen` when Borealis should not install updates, but the Agent should still enforce Windows Update lock/freeze settings. Excluded devices still count as covered during conflict checks.
+
+Reboots are off by default. If enabled, reboot policy can use a separate schedule. Agents skip rebooting devices with a logged-in user unless the policy explicitly allows forced logged-in-user reboots.
 
 ## Read Device Patch Inventory
 
@@ -47,7 +76,16 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `GET /api/patches/audit` - fleet patch inventory, scoped to operator site access. Rows include `active_install_job` when an enabled scheduled patch install already owns that patch.
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
-    - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk flows call this once per selected patch.
+    - `GET /api/patches/policies` - list patch policies, optionally filtered by `type=site` or `type=device_filter`.
+    - `POST /api/patches/policies` - create a patch policy.
+    - `GET /api/patches/policies/metadata` - load policy editor metadata for sites, filters, rule types, role scopes, and defaults.
+    - `GET /api/patches/policies/<policy_id>` - load one policy.
+    - `PUT /api/patches/policies/<policy_id>` - update one policy.
+    - `DELETE /api/patches/policies/<policy_id>` - delete one unlocked policy. Global policy returns a locked-policy error.
+    - `POST /api/patches/policies/<policy_id>/preview` - resolve target coverage, conflicts, and parent-block override warnings.
+    - `GET /api/patches/policies/effective?hostname=<hostname>` - show effective hierarchy for one device.
+    - `POST /api/patches/policies/evaluate` - manually evaluate due patches for one policy or all enabled policies.
+    - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk and policy flows call this once per selected patch identity.
     - `POST /api/agent/patches/install-progress` - device-authenticated Agent progress update for scheduled patch installs. The Engine stores latest progress in scheduled activity metadata and emits `scheduled_job_patch_progress`.
     - `POST /api/agent/details` - accepts `details.patches` from the Agent `patch_management` role.
 
@@ -66,6 +104,8 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Engine API routes: `Data/Engine/Containers/api-backend/cmd/api-backend/patches.go`
     - Engine scheduler routes: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduled_jobs*.go`
     - Engine patch scheduler worker: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_install.go`
+    - Engine patch policy API and evaluator: `Data/Engine/Containers/api-backend/cmd/api-backend/patch_policies.go`
+    - Engine patch policy scheduler hook: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_policies.go`
     - Engine schema bootstrap: `Data/Engine/Containers/api-backend/data/database.py`
     - Job creation UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`
     - Fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management.jsx`
@@ -80,6 +120,14 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Patch install drafts carry an internal `return_to` path so successful creation returns to the originating fleet or device Patch Management route.
     - KB cells link to `https://www.catalog.update.microsoft.com/Search.aspx?q=<KB>` in a new tab when the row has a normalized KB value.
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
+    - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and only runs when no `policy_type='global'` row exists. Redeploy does not overwrite operator changes.
+    - Policy hierarchy is Global -> Site -> Device/Filter. Device/filter policy is deepest. Same site+role overlaps block site policy save. Direct device/filter target overlap blocks device/filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
+    - Policy rules support `approve` and `block` against `severity`, `classification`, `category`, `kb`, `update_id`, and `patch_key`. Child approval of a parent block requires confirmation and stores `override_parent_block`.
+    - Policy evaluation syncs `patch_catalog_entries` from current `device_patch_inventory`, resolves covered Windows devices, applies `Unmanaged`/`Frozen` exclusions, checks deferral, and groups approved pending inventory by KB/update identity.
+    - Each policy run writes `patch_policy_runs`, then creates one enabled `job_kind=patch_install` scheduled job per KB/update identity. The scheduled job component carries `trigger=policy`, `policy_id`, and `policy_run_id`.
+    - Active install lockout reuses the existing patch active-job identity map and skips policy-created duplicate KB/update deployments while another enabled patch install job owns the same identity.
+    - Agent `patch_policy_enforcement_request` applies Borealis-owned reversible Windows Update policy registry settings. Managed/frozen mode sets Windows Update policy values that prevent automatic installs while preserving the Borealis SYSTEM WUA scan/install path. Unmanaged mode restores Borealis-backed-up values.
+    - Agent `patch_reboot_request` schedules Windows reboot only when policy asks for it. It skips logged-in users unless `force_logged_in_user` is true.
     - Scheduled patch jobs use names like `[Ad-Hoc Install] KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Bulk scheduled patch jobs use names like `[Bulk Ad-Hoc Install] - KB5050533 - SQL Server 2017 RTM Azure Connect Pack KB5050533 - 5 Devices`.
     - Scheduler snapshots target membership into `scheduled_job_runs` and `scheduled_job_run_targets`, then queues `patch_install_run` work items on the scheduled-job lane.

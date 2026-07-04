@@ -570,3 +570,43 @@ func TestEngineBackupTrustSpecsExcludeApprovalsAndLimitActiveRows(t *testing.T) 
 		t.Fatalf("saved views should remain known so older backups validate")
 	}
 }
+
+func TestEngineBackupPatchPolicyTablesExportDurableStateOnly(t *testing.T) {
+	specs := map[string]engineBackupTableSpec{}
+	for _, spec := range engineBackupTableSpecs() {
+		specs[spec.Name] = spec
+	}
+	for _, table := range []string{
+		"engine.patch_catalog_entries",
+		"engine.patch_policies",
+		"engine.patch_policy_sites",
+		"engine.patch_policy_targets",
+		"engine.patch_policy_exclusions",
+		"engine.patch_policy_rules",
+		"engine.device_patch_inventory",
+	} {
+		spec, ok := specs[table]
+		if !ok {
+			t.Fatalf("backup spec missing %s", table)
+		}
+		if !spec.Export || !spec.Restore {
+			t.Fatalf("%s should export and restore durable patch policy state, got export=%v restore=%v", table, spec.Export, spec.Restore)
+		}
+	}
+	deleteSet := map[string]bool{}
+	for _, table := range engineBackupDeleteOrder() {
+		deleteSet[table] = true
+	}
+	for _, table := range []string{
+		"engine.patch_policy_runs",
+		"engine.patch_policy_device_state",
+		"engine.patch_policy_audit",
+	} {
+		if specs[table].Export || specs[table].Restore {
+			t.Fatalf("%s should stay out of export/restore specs", table)
+		}
+		if !deleteSet[table] {
+			t.Fatalf("%s should be cleared during restore", table)
+		}
+	}
+}

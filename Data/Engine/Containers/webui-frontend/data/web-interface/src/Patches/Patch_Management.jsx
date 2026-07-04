@@ -1,11 +1,34 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Checkbox, Tooltip, Typography } from "@mui/material";
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  MenuItem,
+  Stack,
+  Switch,
+  Tab,
+  Tabs,
+  TextField,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
+import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
+import PolicyRoundedIcon from "@mui/icons-material/PolicyRounded";
+import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
-import { BOREALIS_BLUE, CountSliderGroup } from "../Automation/Watchdogs/shared.jsx";
+import { BOREALIS_BLUE, CountSliderGroup, buildNavTabsSx } from "../Automation/Watchdogs/shared.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import {
@@ -31,6 +54,51 @@ const SEVERITY_FILTER_OPTIONS = [
   { key: "unspecified", label: "Unspecified" },
 ];
 
+const PATCH_PAGE_TABS = [
+  { key: "patch_list", label: "Patch List" },
+  { key: "site_policies", label: "Site Policies" },
+  { key: "device_filter_policies", label: "Device / Filter Policies" },
+];
+
+const POLICY_MATCH_TYPES = [
+  { value: "severity", label: "Severity" },
+  { value: "classification", label: "Classification" },
+  { value: "category", label: "Category" },
+  { value: "kb", label: "KB" },
+  { value: "update_id", label: "Update ID" },
+  { value: "patch_key", label: "Patch Key" },
+];
+
+const POLICY_RULE_TYPES = [
+  { value: "approve", label: "Approve" },
+  { value: "block", label: "Block" },
+];
+
+const POLICY_ROLE_SCOPES = [
+  { value: "Both", label: "Both" },
+  { value: "Server", label: "Server" },
+  { value: "Workstation", label: "Workstation" },
+];
+
+const POLICY_SCHEDULE_TYPES = [
+  { value: "weekly", label: "Weekly" },
+  { value: "daily", label: "Daily" },
+  { value: "once", label: "Once" },
+  { value: "immediately", label: "Immediate" },
+];
+
+const POLICY_EDITOR_TABS = [
+  { key: "details", label: "Details" },
+  { key: "schedule", label: "Schedule" },
+  { key: "rules", label: "Allow / Block" },
+  { key: "exclusions", label: "Exclusions" },
+];
+
+const POLICY_EXCLUSION_TYPES = [
+  { value: "unmanaged", label: "Unmanaged" },
+  { value: "frozen", label: "Frozen" },
+];
+
 const FILTER_LABEL_SX = {
   color: BOREALIS_BLUE,
   fontSize: 11,
@@ -41,6 +109,12 @@ const FILTER_LABEL_SX = {
 
 function text(value) {
   return String(value ?? "").trim();
+}
+
+function valueArray(value) {
+  if (Array.isArray(value)) return value;
+  const raw = text(value);
+  return raw ? raw.split(",") : [];
 }
 
 function normalizeSeverity(value) {
@@ -70,6 +144,29 @@ function formatTimestamp(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "";
   return new Date(numeric * 1000).toLocaleString();
+}
+
+function datetimeLocalFromUnix(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "";
+  const date = new Date(numeric * 1000);
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function unixFromDatetimeLocal(value) {
+  const raw = text(value);
+  if (!raw) return null;
+  const numeric = Math.floor(new Date(raw).getTime() / 1000);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+function policyTypeForTab(tabKey) {
+  return tabKey === "device_filter_policies" ? "device_filter" : "site";
+}
+
+function policyTypeLabel(policyType) {
+  return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
 }
 
 function microsoftUpdateCatalogURL(kb) {
@@ -207,6 +304,759 @@ function buildPatchFleetRows(rows = []) {
   });
 }
 
+function defaultPolicyDraft(policyType) {
+  return {
+    policy_type: policyType,
+    name: policyTypeLabel(policyType),
+    description: "",
+    enabled: true,
+    role_scope: "Both",
+    deferral_days: 14,
+    managed_update_mode: true,
+    install_schedule_type: "weekly",
+    install_start_ts: null,
+    reboot_after_install: false,
+    reboot_schedule_enabled: false,
+    reboot_schedule_type: "weekly",
+    reboot_start_ts: null,
+    force_reboot_logged_in: false,
+    site_ids: [],
+    targets: [],
+    exclusions: [],
+    rules: [
+      { rule_type: "approve", match_type: "severity", match_value: "Critical" },
+      { rule_type: "approve", match_type: "severity", match_value: "Important" },
+      { rule_type: "block", match_type: "classification", match_value: "Drivers" },
+    ],
+  };
+}
+
+function policyDraftFromRecord(policy = {}, policyType = "site") {
+  const source = policy && typeof policy === "object" ? policy : {};
+  return {
+    ...defaultPolicyDraft(policyType),
+    ...source,
+    policy_type: text(source.policy_type) || policyType,
+    enabled: source.enabled === undefined ? true : Boolean(source.enabled),
+    managed_update_mode: source.managed_update_mode === undefined ? true : Boolean(source.managed_update_mode),
+    reboot_after_install: Boolean(source.reboot_after_install),
+    reboot_schedule_enabled: Boolean(source.reboot_schedule_enabled),
+    force_reboot_logged_in: Boolean(source.force_reboot_logged_in),
+    site_ids: Array.isArray(source.site_ids) ? source.site_ids.map(Number).filter(Boolean) : [],
+    targets: Array.isArray(source.targets) ? source.targets : [],
+    exclusions: Array.isArray(source.exclusions) ? source.exclusions : [],
+    rules: Array.isArray(source.rules) ? source.rules : [],
+  };
+}
+
+function policySavePayload(draft = {}, policyType = "site") {
+  const payload = {
+    name: text(draft.name),
+    description: text(draft.description),
+    policy_type: policyType,
+    enabled: Boolean(draft.enabled),
+    role_scope: text(draft.role_scope) || "Both",
+    deferral_days: Number(draft.deferral_days || 0) || 14,
+    managed_update_mode: Boolean(draft.managed_update_mode),
+    install_schedule_type: text(draft.install_schedule_type) || "weekly",
+    install_start_ts: draft.install_start_ts || null,
+    reboot_after_install: Boolean(draft.reboot_after_install),
+    reboot_schedule_enabled: Boolean(draft.reboot_schedule_enabled),
+    reboot_schedule_type: text(draft.reboot_schedule_type) || "weekly",
+    reboot_start_ts: draft.reboot_start_ts || null,
+    force_reboot_logged_in: Boolean(draft.force_reboot_logged_in),
+    rules: (Array.isArray(draft.rules) ? draft.rules : [])
+      .map((rule) => ({
+        rule_type: text(rule.rule_type) || "approve",
+        match_type: text(rule.match_type) || "severity",
+        match_value: text(rule.match_value),
+        override_parent_block: Boolean(rule.override_parent_block),
+        notes: text(rule.notes),
+      }))
+      .filter((rule) => rule.match_value),
+    exclusions: (Array.isArray(draft.exclusions) ? draft.exclusions : [])
+      .map((item) => {
+        const targetType = text(item.target_type) || "device";
+        return {
+          exclusion_type: text(item.exclusion_type) || "unmanaged",
+          target_type: targetType,
+          hostname: targetType === "filter" ? "" : text(item.hostname),
+          device_guid: targetType === "filter" ? "" : text(item.device_guid),
+          filter_id: targetType === "filter" ? Number(item.filter_id || 0) || "" : "",
+          reason: text(item.reason),
+        };
+      })
+      .filter((item) => text(item.hostname || item.device_guid || item.filter_id)),
+  };
+  if (policyType === "site") {
+    payload.site_ids = (Array.isArray(draft.site_ids) ? draft.site_ids : []).map(Number).filter(Boolean);
+  } else {
+    payload.targets = (Array.isArray(draft.targets) ? draft.targets : [])
+      .map((item) => {
+        const targetType = text(item.target_type) || "device";
+        return {
+          target_type: targetType,
+          hostname: targetType === "filter" ? "" : text(item.hostname),
+          device_guid: targetType === "filter" ? "" : text(item.device_guid),
+          filter_id: targetType === "filter" ? Number(item.filter_id || 0) || "" : "",
+        };
+      })
+      .filter((item) => text(item.hostname || item.device_guid || item.filter_id));
+  }
+  return payload;
+}
+
+function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSaved }) {
+  const [draft, setDraft] = useState(() => policyDraftFromRecord(policy, policyType));
+  const [editorTab, setEditorTab] = useState("details");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [warnings, setWarnings] = useState([]);
+
+  useEffect(() => {
+    if (open) {
+      setDraft(policyDraftFromRecord(policy, policyType));
+      setEditorTab("details");
+      setSaveError("");
+      setWarnings([]);
+    }
+  }, [open, policy, policyType]);
+
+  const setField = useCallback((field, value) => {
+    setDraft((previous) => ({ ...previous, [field]: value }));
+  }, []);
+
+  const addRule = useCallback((ruleType) => {
+    setDraft((previous) => ({
+      ...previous,
+      rules: [
+        ...(Array.isArray(previous.rules) ? previous.rules : []),
+        { rule_type: ruleType, match_type: "kb", match_value: "", notes: "" },
+      ],
+    }));
+  }, []);
+
+  const updateRule = useCallback((index, field, value) => {
+    setDraft((previous) => {
+      const rules = [...(Array.isArray(previous.rules) ? previous.rules : [])];
+      rules[index] = { ...(rules[index] || {}), [field]: value };
+      return { ...previous, rules };
+    });
+  }, []);
+
+  const deleteRule = useCallback((index) => {
+    setDraft((previous) => {
+      const rules = [...(Array.isArray(previous.rules) ? previous.rules : [])];
+      rules.splice(index, 1);
+      return { ...previous, rules };
+    });
+  }, []);
+
+  const addDeviceTarget = useCallback(() => {
+    setDraft((previous) => ({
+      ...previous,
+      targets: [...(Array.isArray(previous.targets) ? previous.targets : []), { target_type: "device", hostname: "" }],
+    }));
+  }, []);
+
+  const addFilterTarget = useCallback(() => {
+    const firstFilter = Array.isArray(metadata?.filters) ? metadata.filters[0] : null;
+    setDraft((previous) => ({
+      ...previous,
+      targets: [
+        ...(Array.isArray(previous.targets) ? previous.targets : []),
+        { target_type: "filter", filter_id: Number(firstFilter?.id || 0) || "" },
+      ],
+    }));
+  }, [metadata]);
+
+  const updateTarget = useCallback((index, field, value) => {
+    setDraft((previous) => {
+      const targets = [...(Array.isArray(previous.targets) ? previous.targets : [])];
+      targets[index] = { ...(targets[index] || {}), [field]: value };
+      return { ...previous, targets };
+    });
+  }, []);
+
+  const deleteTarget = useCallback((index) => {
+    setDraft((previous) => {
+      const targets = [...(Array.isArray(previous.targets) ? previous.targets : [])];
+      targets.splice(index, 1);
+      return { ...previous, targets };
+    });
+  }, []);
+
+  const addExclusion = useCallback((exclusionType) => {
+    setDraft((previous) => ({
+      ...previous,
+      exclusions: [
+        ...(Array.isArray(previous.exclusions) ? previous.exclusions : []),
+        { exclusion_type: exclusionType, target_type: "device", hostname: "", reason: "" },
+      ],
+    }));
+  }, []);
+
+  const updateExclusion = useCallback((index, field, value) => {
+    setDraft((previous) => {
+      const exclusions = [...(Array.isArray(previous.exclusions) ? previous.exclusions : [])];
+      exclusions[index] = { ...(exclusions[index] || {}), [field]: value };
+      return { ...previous, exclusions };
+    });
+  }, []);
+
+  const deleteExclusion = useCallback((index) => {
+    setDraft((previous) => {
+      const exclusions = [...(Array.isArray(previous.exclusions) ? previous.exclusions : [])];
+      exclusions.splice(index, 1);
+      return { ...previous, exclusions };
+    });
+  }, []);
+
+  const savePolicy = useCallback(
+    async ({ confirmParentOverrides = false } = {}) => {
+      setSaving(true);
+      setSaveError("");
+      try {
+        const payload = {
+          ...policySavePayload(draft, policyType),
+          confirm_parent_overrides: confirmParentOverrides,
+        };
+        const method = draft.id ? "PUT" : "POST";
+        const url = draft.id ? `/api/patches/policies/${draft.id}` : "/api/patches/policies";
+        const response = await fetch(url, {
+          method,
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          if (body?.error === "parent_block_override_confirmation_required") {
+            setWarnings(Array.isArray(body?.warnings) ? body.warnings : []);
+            setSaveError("Parent block override confirmation required.");
+            return;
+          }
+          throw new Error(body?.message || body?.error || `HTTP ${response.status}`);
+        }
+        onSaved?.(body?.policy || payload);
+      } catch (error) {
+        setSaveError(String(error?.message || error));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [draft, onSaved, policyType]
+  );
+
+  const ruleRows = Array.isArray(draft.rules) ? draft.rules : [];
+  const targetRows = Array.isArray(draft.targets) ? draft.targets : [];
+  const exclusionRows = Array.isArray(draft.exclusions) ? draft.exclusions : [];
+  const siteOptions = Array.isArray(metadata?.sites) ? metadata.sites : [];
+  const filterOptions = Array.isArray(metadata?.filters) ? metadata.filters : [];
+
+  return (
+    <Dialog open={open} onClose={saving ? undefined : onClose} maxWidth="lg" fullWidth>
+      <DialogTitle sx={{ background: "#0b1120", color: MAGIC_UI.textBright, borderBottom: "1px solid rgba(148,163,184,0.18)" }}>
+        {draft.id ? `Edit ${policyTypeLabel(policyType)}` : `New ${policyTypeLabel(policyType)}`}
+      </DialogTitle>
+      <DialogContent sx={{ background: "#0b1120", color: MAGIC_UI.textBright, pt: 2.5 }}>
+        <Stack spacing={2.2}>
+          {saveError ? (
+            <Alert
+              severity={warnings.length ? "warning" : "error"}
+              action={
+                warnings.length ? (
+                  <Button color="inherit" size="small" onClick={() => savePolicy({ confirmParentOverrides: true })}>
+                    Confirm
+                  </Button>
+                ) : null
+              }
+            >
+              {saveError}
+            </Alert>
+          ) : null}
+          <Tabs
+            value={editorTab}
+            onChange={(_, value) => setEditorTab(value)}
+            sx={buildNavTabsSx()}
+            TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
+          >
+            {POLICY_EDITOR_TABS.map((tab) => (
+              <Tab key={tab.key} value={tab.key} label={tab.label} />
+            ))}
+          </Tabs>
+          {editorTab === "details" ? (
+            <>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <TextField
+              label="Name"
+              value={draft.name || ""}
+              onChange={(event) => setField("name", event.target.value)}
+              fullWidth
+              size="small"
+            />
+            <TextField
+              label="Deferral Days"
+              type="number"
+              value={draft.deferral_days || 14}
+              onChange={(event) => setField("deferral_days", event.target.value)}
+              size="small"
+              sx={{ width: { xs: "100%", md: 160 } }}
+            />
+          </Stack>
+          <TextField
+            label="Description"
+            value={draft.description || ""}
+            onChange={(event) => setField("description", event.target.value)}
+            fullWidth
+            size="small"
+          />
+            </>
+          ) : null}
+          {editorTab === "schedule" ? (
+            <>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <TextField
+              label="Install Schedule"
+              select
+              value={draft.install_schedule_type || "weekly"}
+              onChange={(event) => setField("install_schedule_type", event.target.value)}
+              size="small"
+              sx={{ minWidth: 180 }}
+            >
+              {POLICY_SCHEDULE_TYPES.map((option) => (
+                <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              label="Install Start"
+              type="datetime-local"
+              value={datetimeLocalFromUnix(draft.install_start_ts)}
+              onChange={(event) => setField("install_start_ts", unixFromDatetimeLocal(event.target.value))}
+              size="small"
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 230 }}
+            />
+            <FormControlLabel
+              control={<Switch checked={Boolean(draft.enabled)} onChange={(event) => setField("enabled", event.target.checked)} />}
+              label="Enabled"
+            />
+            <FormControlLabel
+              control={<Switch checked={Boolean(draft.managed_update_mode)} onChange={(event) => setField("managed_update_mode", event.target.checked)} />}
+              label="Managed Windows Update"
+            />
+          </Stack>
+          <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+            <FormControlLabel
+              control={<Switch checked={Boolean(draft.reboot_after_install)} onChange={(event) => setField("reboot_after_install", event.target.checked)} />}
+              label="Reboot after install"
+            />
+            <FormControlLabel
+              control={<Switch checked={Boolean(draft.reboot_schedule_enabled)} onChange={(event) => setField("reboot_schedule_enabled", event.target.checked)} />}
+              label="Separate reboot schedule"
+            />
+            <TextField
+              label="Reboot Start"
+              type="datetime-local"
+              value={datetimeLocalFromUnix(draft.reboot_start_ts)}
+              onChange={(event) => setField("reboot_start_ts", unixFromDatetimeLocal(event.target.value))}
+              size="small"
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 230 }}
+            />
+            <FormControlLabel
+              control={<Switch checked={Boolean(draft.force_reboot_logged_in)} onChange={(event) => setField("force_reboot_logged_in", event.target.checked)} />}
+              label="Force logged-in user"
+            />
+          </Stack>
+            </>
+          ) : null}
+          {editorTab === "details" ? (
+            policyType === "site" ? (
+            <Stack direction={{ xs: "column", md: "row" }} spacing={2}>
+              <TextField
+                label="Role Scope"
+                select
+                value={draft.role_scope || "Both"}
+                onChange={(event) => setField("role_scope", event.target.value)}
+                size="small"
+                sx={{ minWidth: 180 }}
+              >
+                {POLICY_ROLE_SCOPES.map((option) => (
+                  <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                ))}
+              </TextField>
+              <TextField
+                label="Sites"
+                select
+                SelectProps={{ multiple: true }}
+                value={Array.isArray(draft.site_ids) ? draft.site_ids : []}
+                onChange={(event) => setField("site_ids", valueArray(event.target.value).map(Number).filter(Boolean))}
+                size="small"
+                sx={{ minWidth: 320, flex: 1 }}
+              >
+                {siteOptions.map((site) => (
+                  <MenuItem key={site.id} value={Number(site.id)}>{site.name || `Site ${site.id}`}</MenuItem>
+                ))}
+              </TextField>
+            </Stack>
+          ) : (
+            <Stack spacing={1.1}>
+              <Stack direction="row" spacing={1}>
+                <Button size="small" startIcon={<AddRoundedIcon />} onClick={addDeviceTarget}>Device Target</Button>
+                <Button size="small" startIcon={<AddRoundedIcon />} onClick={addFilterTarget}>Filter Target</Button>
+              </Stack>
+              {targetRows.map((target, index) => (
+                <Stack key={`target-${index}`} direction={{ xs: "column", md: "row" }} spacing={1}>
+                  <TextField
+                    label="Target Type"
+                    select
+                    value={target.target_type || "device"}
+                    onChange={(event) => updateTarget(index, "target_type", event.target.value)}
+                    size="small"
+                    sx={{ minWidth: 150 }}
+                  >
+                    <MenuItem value="device">Device</MenuItem>
+                    <MenuItem value="filter">Filter</MenuItem>
+                  </TextField>
+                  {target.target_type === "filter" ? (
+                    <TextField
+                      label="Filter"
+                      select
+                      value={target.filter_id || ""}
+                      onChange={(event) => updateTarget(index, "filter_id", event.target.value)}
+                      size="small"
+                      sx={{ minWidth: 300, flex: 1 }}
+                    >
+                      {filterOptions.map((filter) => (
+                        <MenuItem key={filter.id} value={Number(filter.id)}>{filter.name || `Filter ${filter.id}`}</MenuItem>
+                      ))}
+                    </TextField>
+                  ) : (
+                    <TextField
+                      label="Hostname"
+                      value={target.hostname || ""}
+                      onChange={(event) => updateTarget(index, "hostname", event.target.value)}
+                      size="small"
+                      sx={{ flex: 1 }}
+                    />
+                  )}
+                  <Button size="small" startIcon={<DeleteRoundedIcon />} onClick={() => deleteTarget(index)}>
+                    Remove
+                  </Button>
+                </Stack>
+              ))}
+            </Stack>
+            )
+          ) : null}
+          {editorTab === "exclusions" ? (
+            <Stack spacing={1.1}>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Exclusions</Typography>
+                <Button size="small" startIcon={<AddRoundedIcon />} onClick={() => addExclusion("unmanaged")}>Unmanaged</Button>
+                <Button size="small" startIcon={<AddRoundedIcon />} onClick={() => addExclusion("frozen")}>Frozen</Button>
+              </Stack>
+              {exclusionRows.map((exclusion, index) => (
+                <Stack key={`exclusion-${index}`} direction={{ xs: "column", md: "row" }} spacing={1}>
+                  <TextField
+                    label="Mode"
+                    select
+                    value={exclusion.exclusion_type || "unmanaged"}
+                    onChange={(event) => updateExclusion(index, "exclusion_type", event.target.value)}
+                    size="small"
+                    sx={{ minWidth: 150 }}
+                  >
+                    {POLICY_EXCLUSION_TYPES.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Target Type"
+                    select
+                    value={exclusion.target_type || "device"}
+                    onChange={(event) => updateExclusion(index, "target_type", event.target.value)}
+                    size="small"
+                    sx={{ minWidth: 150 }}
+                  >
+                    <MenuItem value="device">Device</MenuItem>
+                    <MenuItem value="filter">Filter</MenuItem>
+                  </TextField>
+                  {exclusion.target_type === "filter" ? (
+                    <TextField
+                      label="Filter"
+                      select
+                      value={exclusion.filter_id || ""}
+                      onChange={(event) => updateExclusion(index, "filter_id", event.target.value)}
+                      size="small"
+                      sx={{ minWidth: 260, flex: 1 }}
+                    >
+                      {filterOptions.map((filter) => (
+                        <MenuItem key={filter.id} value={Number(filter.id)}>{filter.name || `Filter ${filter.id}`}</MenuItem>
+                      ))}
+                    </TextField>
+                  ) : (
+                    <TextField
+                      label="Hostname"
+                      value={exclusion.hostname || ""}
+                      onChange={(event) => updateExclusion(index, "hostname", event.target.value)}
+                      size="small"
+                      sx={{ minWidth: 220, flex: 1 }}
+                    />
+                  )}
+                  <TextField
+                    label="Reason"
+                    value={exclusion.reason || ""}
+                    onChange={(event) => updateExclusion(index, "reason", event.target.value)}
+                    size="small"
+                    sx={{ minWidth: 220, flex: 1 }}
+                  />
+                  <Button size="small" startIcon={<DeleteRoundedIcon />} onClick={() => deleteExclusion(index)}>
+                    Remove
+                  </Button>
+                </Stack>
+              ))}
+            </Stack>
+          ) : null}
+          {editorTab === "rules" ? (
+          <Stack spacing={1}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>Allow / Block Rules</Typography>
+              <Button size="small" startIcon={<AddRoundedIcon />} onClick={() => addRule("approve")}>Approve</Button>
+              <Button size="small" startIcon={<AddRoundedIcon />} onClick={() => addRule("block")}>Block</Button>
+            </Stack>
+            <GridShell sx={{ height: 280, borderRadius: 0 }}>
+              <AgGridReact
+                rowData={ruleRows}
+                columnDefs={[
+                  {
+                    field: "match_type",
+                    headerName: "Type",
+                    width: 150,
+                    cellRenderer: (params) => (
+                      <TextField select size="small" value={params.value || "severity"} onChange={(event) => updateRule(params.node.rowIndex, "match_type", event.target.value)} fullWidth>
+                        {POLICY_MATCH_TYPES.map((option) => (
+                          <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                        ))}
+                      </TextField>
+                    ),
+                  },
+                  { field: "match_value", headerName: "KB / Value", flex: 1, minWidth: 180, cellRenderer: (params) => (
+                    <TextField size="small" value={params.value || ""} onChange={(event) => updateRule(params.node.rowIndex, "match_value", event.target.value)} fullWidth />
+                  ) },
+                  { field: "classification", headerName: "Classification", width: 170, valueGetter: (params) => params.data?.match_type === "classification" ? params.data?.match_value : "" },
+                  { field: "severity", headerName: "Severity", width: 130, valueGetter: (params) => params.data?.match_type === "severity" ? params.data?.match_value : "" },
+                  {
+                    field: "rule_type",
+                    headerName: "Action",
+                    width: 145,
+                    cellRenderer: (params) => (
+                      <TextField select size="small" value={params.value || "approve"} onChange={(event) => updateRule(params.node.rowIndex, "rule_type", event.target.value)} fullWidth>
+                        {POLICY_RULE_TYPES.map((option) => (
+                          <MenuItem key={option.value} value={option.value}>{option.label}</MenuItem>
+                        ))}
+                      </TextField>
+                    ),
+                  },
+                  { field: "created_by", headerName: "Created By", width: 140 },
+                  { field: "created_at", headerName: "Created At", width: 180, valueFormatter: (params) => formatTimestamp(params.value) },
+                  {
+                    field: "override_parent_block",
+                    headerName: "Parent Override",
+                    width: 160,
+                    cellRenderer: (params) => (
+                      <Checkbox
+                        size="small"
+                        checked={Boolean(params.value)}
+                        onChange={(event) => updateRule(params.node.rowIndex, "override_parent_block", event.target.checked)}
+                        sx={{ color: BOREALIS_BLUE, "&.Mui-checked": { color: BOREALIS_BLUE } }}
+                      />
+                    ),
+                  },
+                  {
+                    colId: "delete",
+                    headerName: "",
+                    width: 110,
+                    cellRenderer: (params) => (
+                      <Button size="small" startIcon={<DeleteRoundedIcon />} onClick={() => deleteRule(params.node.rowIndex)}>
+                        Remove
+                      </Button>
+                    ),
+                  },
+                ]}
+                defaultColDef={DEFAULT_GRID_COL_DEF}
+                suppressCellFocus
+                getRowId={(params) => String(params.data?.id || `${params.data?.match_type}-${params.data?.match_value}-${params.rowIndex}`)}
+                theme={DEVICE_DETAILS_GRID_THEME}
+              />
+            </GridShell>
+          </Stack>
+          ) : null}
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ background: "#0b1120", borderTop: "1px solid rgba(148,163,184,0.18)", p: 2 }}>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button startIcon={<SaveRoundedIcon />} variant="contained" onClick={() => savePolicy()} disabled={saving || !text(draft.name)}>
+          Save Policy
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function PatchPolicyTab({ policyType }) {
+  const [policies, setPolicies] = useState([]);
+  const [metadata, setMetadata] = useState({});
+  const [loadError, setLoadError] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingPolicy, setEditingPolicy] = useState(null);
+  const [busyId, setBusyId] = useState("");
+
+  const loadPolicies = useCallback(async () => {
+    try {
+      const [policyResponse, metadataResponse] = await Promise.all([
+        fetch(`/api/patches/policies?type=${encodeURIComponent(policyType)}`, { credentials: "include", cache: "no-store" }),
+        fetch("/api/patches/policies/metadata", { credentials: "include", cache: "no-store" }),
+      ]);
+      const policyPayload = await policyResponse.json().catch(() => ({}));
+      const metadataPayload = await metadataResponse.json().catch(() => ({}));
+      if (!policyResponse.ok) throw new Error(policyPayload?.message || policyPayload?.error || `HTTP ${policyResponse.status}`);
+      if (!metadataResponse.ok) throw new Error(metadataPayload?.message || metadataPayload?.error || `HTTP ${metadataResponse.status}`);
+      setPolicies(Array.isArray(policyPayload?.policies) ? policyPayload.policies : []);
+      setMetadata(metadataPayload || {});
+      setLoadError("");
+    } catch (error) {
+      setLoadError(String(error?.message || error));
+    }
+  }, [policyType]);
+
+  useEffect(() => {
+    void loadPolicies();
+  }, [loadPolicies]);
+
+  const openCreate = useCallback(() => {
+    setEditingPolicy(defaultPolicyDraft(policyType));
+    setDialogOpen(true);
+  }, [policyType]);
+
+  const openEdit = useCallback((policy) => {
+    setEditingPolicy(policyDraftFromRecord(policy, policyType));
+    setDialogOpen(true);
+  }, [policyType]);
+
+  const deletePolicy = useCallback(async (policy = {}) => {
+    if (!policy?.id || policy.locked) return;
+    setBusyId(`delete-${policy.id}`);
+    try {
+      const response = await fetch(`/api/patches/policies/${policy.id}`, { method: "DELETE", credentials: "include" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      await loadPolicies();
+    } catch (error) {
+      setLoadError(String(error?.message || error));
+    } finally {
+      setBusyId("");
+    }
+  }, [loadPolicies]);
+
+  const evaluatePolicy = useCallback(async (policy = {}) => {
+    if (!policy?.id) return;
+    setBusyId(`eval-${policy.id}`);
+    try {
+      const response = await fetch("/api/patches/policies/evaluate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ policy_id: policy.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
+      await loadPolicies();
+    } catch (error) {
+      setLoadError(String(error?.message || error));
+    } finally {
+      setBusyId("");
+    }
+  }, [loadPolicies]);
+
+  const columnDefs = useMemo(
+    () => [
+      { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
+      { field: "enabled", headerName: "Enabled", width: 120, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
+      { field: "role_scope", headerName: "Role", width: 135 },
+      { field: "target_count", headerName: "Covered", width: 120, valueFormatter: (params) => Number(params.value || 0).toLocaleString() },
+      { field: "deferral_days", headerName: "Deferral", width: 120, valueFormatter: (params) => `${Number(params.value || 0)} days` },
+      { field: "install_schedule_type", headerName: "Install", width: 130 },
+      { field: "install_start_ts", headerName: "Start", width: 190, valueFormatter: (params) => formatTimestamp(params.value) },
+      { field: "managed_update_mode", headerName: "Managed WU", width: 135, valueFormatter: (params) => (params.value ? "On" : "Off") },
+      { field: "reboot_after_install", headerName: "Reboot", width: 120, valueFormatter: (params) => (params.value ? "Allowed" : "Off") },
+      {
+        colId: "actions",
+        headerName: "Actions",
+        width: 300,
+        sortable: false,
+        filter: false,
+        cellRenderer: (params) => {
+          const policy = params.data || {};
+          return (
+            <Stack direction="row" spacing={0.8} sx={{ alignItems: "center", height: "100%" }}>
+              <Button size="small" startIcon={<PolicyRoundedIcon />} onClick={() => openEdit(policy)}>
+                Edit
+              </Button>
+              <Button size="small" startIcon={<PlayArrowRoundedIcon />} disabled={busyId === `eval-${policy.id}`} onClick={() => evaluatePolicy(policy)}>
+                Evaluate
+              </Button>
+              <Button size="small" startIcon={<DeleteRoundedIcon />} disabled={policy.locked || busyId === `delete-${policy.id}`} onClick={() => deletePolicy(policy)}>
+                Delete
+              </Button>
+            </Stack>
+          );
+        },
+      },
+    ],
+    [busyId, deletePolicy, evaluatePolicy, openEdit]
+  );
+
+  return (
+    <Stack spacing={1.6} sx={{ minHeight: 520, p: 1.2 }}>
+      {loadError ? <Alert severity="error">{loadError}</Alert> : null}
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignItems: { xs: "stretch", sm: "center" }, justifyContent: "space-between" }}>
+        <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+          {policyType === "site" ? "Site Policies" : "Device / Filter Policies"}
+        </Typography>
+        <Button startIcon={<AddRoundedIcon />} variant="contained" onClick={openCreate}>
+          New {policyTypeLabel(policyType)}
+        </Button>
+      </Stack>
+      <GridShell sx={{ flexGrow: 1, minHeight: 500, borderRadius: 0, border: "none" }}>
+        <AgGridReact
+          rowData={policies}
+          columnDefs={columnDefs}
+          defaultColDef={DEFAULT_GRID_COL_DEF}
+          rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
+          suppressCellFocus
+          pagination
+          paginationPageSize={50}
+          paginationPageSizeSelector={[20, 50, 100]}
+          animateRows
+          getRowId={(params) => String(params.data?.id || params.rowIndex)}
+          theme={DEVICE_DETAILS_GRID_THEME}
+        />
+      </GridShell>
+      <PatchPolicyDialog
+        open={dialogOpen}
+        policyType={policyType}
+        metadata={metadata}
+        policy={editingPolicy}
+        onClose={() => setDialogOpen(false)}
+        onSaved={() => {
+          setDialogOpen(false);
+          void loadPolicies();
+        }}
+      />
+    </Stack>
+  );
+}
+
 export default function PatchManagement() {
   const gridRef = useRef(null);
   const patchRefreshTimersRef = useRef([]);
@@ -221,6 +1071,22 @@ export default function PatchManagement() {
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
+  );
+  const activeTab = useMemo(() => {
+    const requested = text(searchParams.get("tab")) || "patch_list";
+    return PATCH_PAGE_TABS.some((tab) => tab.key === requested) ? requested : "patch_list";
+  }, [searchParams]);
+  const setActiveTab = useCallback(
+    (nextTab) => {
+      const nextParams = new URLSearchParams(searchParams);
+      if (nextTab === "patch_list") {
+        nextParams.delete("tab");
+      } else {
+        nextParams.set("tab", nextTab);
+      }
+      setSearchParams(nextParams, { replace: true });
+    },
+    [searchParams, setSearchParams]
   );
 
   const loadPatchRows = useCallback(async () => {
@@ -458,11 +1324,11 @@ export default function PatchManagement() {
         label: "Bulk Install",
         icon: <SystemUpdateAltRoundedIcon />,
         tone: "primary",
-        disabled: selectedBulkPatchCount < 2,
+        disabled: activeTab !== "patch_list" || selectedBulkPatchCount < 2,
         onClick: handleBulkInstallFleet,
       },
     ],
-    [handleBulkInstallFleet, selectedBulkPatchCount]
+    [activeTab, handleBulkInstallFleet, selectedBulkPatchCount]
   );
 
   useRoutePageChrome({
@@ -678,95 +1544,115 @@ export default function PatchManagement() {
     <PageBodyFrame
       variant="grid_with_stack"
       stack={
-        <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
-          <FilterSliderBlock label="State">
-            <CountSliderGroup
-              options={STATE_FILTER_OPTIONS}
-              activeKey={stateFilter}
-              counts={stateCounts}
-              onChange={setStateFilter}
-            />
-          </FilterSliderBlock>
-          <FilterSliderBlock label="Severity">
-            <CountSliderGroup
-              options={SEVERITY_FILTER_OPTIONS}
-              activeKey={severityFilter}
-              counts={severityCounts}
-              onChange={setSeverityFilter}
-            />
-          </FilterSliderBlock>
-          {siteName ? (
-            <Box
-              sx={{
-                display: "inline-flex",
-                alignItems: "center",
-                alignSelf: "flex-end",
-                gap: 0.8,
-                borderRadius: 999,
-                border: "1px solid rgba(148,163,184,0.35)",
-                background: "rgba(8,12,24,0.78)",
-                px: 1.35,
-                py: 0.55,
-              }}
-            >
-              <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 600 }}>
-                {`Site: ${siteName}`}
-              </Typography>
-              <Button
-                size="small"
-                onClick={() => {
-                  const nextParams = new URLSearchParams(searchParams);
-                  nextParams.delete("site");
-                  setSearchParams(nextParams, { replace: true });
-                }}
-                sx={{
-                  minWidth: 0,
-                  px: 1,
-                  py: 0.15,
-                  borderRadius: 999,
-                  color: MAGIC_UI.textBright,
-                  textTransform: "none",
-                  fontSize: "0.76rem",
-                  border: "1px solid rgba(148,163,184,0.28)",
-                  "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
-                }}
-              >
-                Clear
-              </Button>
+        <Stack spacing={1.2}>
+          <Tabs
+            value={activeTab}
+            onChange={(_, value) => setActiveTab(value)}
+            sx={buildNavTabsSx()}
+            TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
+          >
+            {PATCH_PAGE_TABS.map((tab) => (
+              <Tab key={tab.key} value={tab.key} label={tab.label} />
+            ))}
+          </Tabs>
+          {activeTab === "patch_list" ? (
+            <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
+              <FilterSliderBlock label="State">
+                <CountSliderGroup
+                  options={STATE_FILTER_OPTIONS}
+                  activeKey={stateFilter}
+                  counts={stateCounts}
+                  onChange={setStateFilter}
+                />
+              </FilterSliderBlock>
+              <FilterSliderBlock label="Severity">
+                <CountSliderGroup
+                  options={SEVERITY_FILTER_OPTIONS}
+                  activeKey={severityFilter}
+                  counts={severityCounts}
+                  onChange={setSeverityFilter}
+                />
+              </FilterSliderBlock>
+              {siteName ? (
+                <Box
+                  sx={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    alignSelf: "flex-end",
+                    gap: 0.8,
+                    borderRadius: 999,
+                    border: "1px solid rgba(148,163,184,0.35)",
+                    background: "rgba(8,12,24,0.78)",
+                    px: 1.35,
+                    py: 0.55,
+                  }}
+                >
+                  <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 600 }}>
+                    {`Site: ${siteName}`}
+                  </Typography>
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      const nextParams = new URLSearchParams(searchParams);
+                      nextParams.delete("site");
+                      setSearchParams(nextParams, { replace: true });
+                    }}
+                    sx={{
+                      minWidth: 0,
+                      px: 1,
+                      py: 0.15,
+                      borderRadius: 999,
+                      color: MAGIC_UI.textBright,
+                      textTransform: "none",
+                      fontSize: "0.76rem",
+                      border: "1px solid rgba(148,163,184,0.28)",
+                      "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
+                    }}
+                  >
+                    Clear
+                  </Button>
+                </Box>
+              ) : null}
             </Box>
           ) : null}
-        </Box>
+        </Stack>
       }
     >
-      {loadError ? (
-        <Box sx={{ p: 2, color: "rgba(248,113,113,0.95)" }}>Failed to load patch audit: {loadError}</Box>
-      ) : null}
-      <GridShell
-        sx={{
-          flexGrow: 1,
-          minHeight: 520,
-          borderRadius: 0,
-          border: "none",
-          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-          "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-          "& .ag-row-hover": { backgroundColor: "rgba(73,156,196,0.2) !important" },
-        }}
-      >
-        <AgGridReact
-          ref={gridRef}
-          rowData={displayRows}
-          columnDefs={columnDefs}
-          defaultColDef={DEFAULT_GRID_COL_DEF}
-          rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
-          suppressCellFocus
-          pagination
-          paginationPageSize={100}
-          paginationPageSizeSelector={[20, 50, 100]}
-          animateRows
-          getRowId={(params) => String(params.data?.id || params.rowIndex)}
-          theme={DEVICE_DETAILS_GRID_THEME}
-        />
-      </GridShell>
+      {activeTab === "patch_list" ? (
+        <>
+          {loadError ? (
+            <Box sx={{ p: 2, color: "rgba(248,113,113,0.95)" }}>Failed to load patch audit: {loadError}</Box>
+          ) : null}
+          <GridShell
+            sx={{
+              flexGrow: 1,
+              minHeight: 520,
+              borderRadius: 0,
+              border: "none",
+              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+              "& .ag-row-hover": { backgroundColor: "rgba(73,156,196,0.2) !important" },
+            }}
+          >
+            <AgGridReact
+              ref={gridRef}
+              rowData={displayRows}
+              columnDefs={columnDefs}
+              defaultColDef={DEFAULT_GRID_COL_DEF}
+              rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
+              suppressCellFocus
+              pagination
+              paginationPageSize={100}
+              paginationPageSizeSelector={[20, 50, 100]}
+              animateRows
+              getRowId={(params) => String(params.data?.id || params.rowIndex)}
+              theme={DEVICE_DETAILS_GRID_THEME}
+            />
+          </GridShell>
+        </>
+      ) : (
+        <PatchPolicyTab policyType={policyTypeForTab(activeTab)} />
+      )}
     </PageBodyFrame>
   );
 }

@@ -27,6 +27,14 @@ scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
 activity_history.metadata_json.patch_progress stores latest scheduled Windows patch install progress.
 
+patch_policies (id) ----------< patch_policy_sites (policy_id)
+patch_policies (id) ----------< patch_policy_targets (policy_id)
+patch_policies (id) ----------< patch_policy_exclusions (policy_id)
+patch_policies (id) ----------< patch_policy_rules (policy_id)
+patch_policies (id) ----------< patch_policy_runs (policy_id, history)
+patch_policies (id) ----------< patch_policy_device_state (effective_policy_id, transient)
+patch_catalog_entries caches KB/update identity metadata for deferral fallback.
+
 watchdogs (id) ---------------< watchdog_sites (watchdog_id)
 watchdogs (id) ---------------< watchdog_targets (watchdog_id)
 watchdogs (id) ---------------< watchdog_device_overrides (watchdog_id)
@@ -720,6 +728,39 @@ finally:
     - Pending rows use `source=wua_pending`; installed rows use `source=wua_history` or `source=quick_fix_engineering`.
     - Pending metadata can include `is_downloaded`, `is_mandatory`, `requires_reboot`, `update_id`, and `revision_number`.
     - Ad-hoc install actions create scheduled jobs. Active enabled patch jobs are surfaced back onto patch rows as `active_install_job` to prevent duplicate deployment jobs for the same KB/patch identity.
+
+    #### `patch_catalog_entries`
+    - Status: Active.
+    - Purpose: KB/update identity cache used by patch policy deferral fallback and policy evaluation.
+    - Columns: `id`, `patch_key`, `kb`, `update_id`, `revision_number`, `title`, `classification`, `category`, `severity`, `published_at`, `first_seen_at`, `last_seen_at`, `metadata_json`.
+    - Used by:
+    - Patch policy evaluation before creating policy-driven patch install jobs.
+    - Backup/restore durable patch state.
+
+    #### `patch_policies`
+    - Status: Active.
+    - Purpose: Global, site, and device/filter patch policy definitions.
+    - Columns include: `id`, `name`, `policy_type`, `enabled`, `locked`, `role_scope`, `approval_mode`, `deferral_days`, `managed_update_mode`, install/reboot schedule fields, reboot force flag, and audit actor/timestamps.
+    - Used by:
+    - `/api/patches/policies*`.
+    - Scheduler patch policy evaluation.
+    - Backup/restore durable patch state.
+    - Notes:
+    - Engine DB init seeds exactly one locked `policy_type='global'` policy when none exists. Existing Global Patch Policy rows are not overwritten on redeploy.
+    - Site policy scope is stored in `patch_policy_sites`; device/filter scope is stored in `patch_policy_targets`.
+    - `patch_policy_exclusions` stores `unmanaged` and `frozen` coverage. Exclusions still count as covered for conflict detection.
+    - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation.
+
+    #### `patch_policy_runs`
+    - Status: Active history.
+    - Purpose: One row per policy evaluation occurrence. Excluded from backup/restore.
+    - Notes:
+    - Unique index on `(policy_id, scheduled_ts)` prevents duplicate policy runs per scheduler tick/occurrence.
+    - Policy runs create normal `scheduled_jobs` rows with `job_kind=patch_install` so history remains in scheduled-job tables.
+
+    #### `patch_policy_device_state`
+    - Status: Active transient state.
+    - Purpose: Latest effective policy/enforcement state by device. Excluded from backup/restore.
 
     ### Scheduling and Automation
     #### `scheduled_jobs`

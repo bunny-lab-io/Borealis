@@ -136,6 +136,54 @@ func TestPatchInstallRequestNormalizesIdentity(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyEnforcementUnsupportedOnNonWindows(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unsupported path only applies to non-Windows runtimes")
+	}
+	manager := New(nil, "linux-host", "system")
+	response, err := manager.HandlePolicyEnforcementRequest(context.Background(), map[string]any{
+		"hostname": "linux-host",
+		"mode":     "managed",
+	})
+	if err != nil {
+		t.Fatalf("unexpected handler error: %v", err)
+	}
+	payload, _ := response.(map[string]any)
+	if payload["error"] != "unsupported_platform" {
+		t.Fatalf("expected unsupported response, got %#v", payload)
+	}
+}
+
+func TestWindowsPatchPolicyEnforcementScriptIsReversible(t *testing.T) {
+	script := windowsPatchPolicyEnforcementScript("managed", "policy-1")
+	for _, expected := range []string{
+		"HKLM:\\SOFTWARE\\Borealis\\PatchManagement",
+		"Backup-Value $AUPath 'NoAutoUpdate' 'AU_NoAutoUpdate'",
+		"Restore-Value $AUPath 'NoAutoUpdate' 'AU_NoAutoUpdate'",
+		"New-ItemProperty -Path $AUPath -Name 'NoAutoUpdate' -Value 1",
+		"New-ItemProperty -Path $AUPath -Name 'AUOptions' -Value 2",
+		"ManagedBy' -Value 'Borealis'",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("policy enforcement script missing %q", expected)
+		}
+	}
+}
+
+func TestWindowsPatchRebootScriptSkipsLoggedInUserByDefault(t *testing.T) {
+	script := windowsPatchRebootScript("reboot-1", 60, false)
+	for _, expected := range []string{
+		"Win32_ComputerSystem",
+		"if ($LoggedInUser -and -not $Force)",
+		"skipped_logged_in_user",
+		"shutdown.exe /r /t $DelaySeconds",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("reboot script missing %q", expected)
+		}
+	}
+}
+
 func TestParsePatchInstallProgressJSONL(t *testing.T) {
 	line := `{"kind":"progress","request_id":"patch-job-1-run-2","phase":"install","percent":42,"current_update_index":0,"current_update_percent":42,"message":"Installing selected update.","captured_at":1783000999}`
 	progress := parsePatchInstallProgressLine(line)

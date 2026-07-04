@@ -13,9 +13,9 @@ Backups are encrypted JSON files. Borealis uses the Aegis Cipher as the backup m
 2. Select **Export**.
 3. Store the downloaded encrypted JSON file where operators with access understand that the Aegis Cipher is still required to decrypt it.
 
-The export contains Engine configuration, sites, agents, identities, LDAP/directory settings, credentials, Aegis state, saved automation content, scheduled job definitions, watchdog definitions, device filters, metadata definitions and values, and Engine trust/key material. Device trust exports include only the latest active device key and refresh token per agent.
+The export contains Engine configuration, sites, agents, identities, LDAP/directory settings, credentials, Aegis state, saved automation content, scheduled job definitions, watchdog definitions, device filters, patch policies, current patch inventory, patch catalog cache, metadata definitions and values, and Engine trust/key material. Device trust exports include only the latest active device key and refresh token per agent.
 
-It does not contain logs, saved views, pending device approvals, device activity history, scheduled job run history, workflow run history, watchdog incident history, scheduler queues, or worker runtime state.
+It does not contain logs, saved views, pending device approvals, device activity history, scheduled job run history, patch policy run history, patch policy enforcement state, workflow run history, watchdog incident history, scheduler queues, or worker runtime state.
 
 ## Restore During First Setup
 
@@ -72,7 +72,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.
     - Sites, enrollment codes, auto-approval settings, device-site assignments, and operator site assignments.
     - Agents, latest active device key per agent, latest active refresh token per agent, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, release/settings JSON, software override JSON, and software blocklist JSON.
-    - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, metadata definitions/values, and current software and patch inventory.
+    - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, patch policies, patch allow/block rules, patch targets/exclusions, patch catalog cache, metadata definitions/values, and current software and patch inventory.
 
     ### Excluded state
     - Engine logs and rotated logs.
@@ -81,6 +81,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - Pending device approvals.
     - Device activity history.
     - Scheduled job runs, run targets, onboarding run events, and run activity links.
+    - Patch policy runs, patch policy device enforcement state, and patch policy audit rows.
     - Workflow runs, node runs, and child job rows.
     - Watchdog runtime state and incident history.
     - Scheduler queues, worker rows, worker routes, and service snapshots.
