@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  Menu,
   MenuItem,
   Stack,
   Switch,
@@ -38,7 +39,7 @@ import {
   MAGIC_UI,
 } from "../Devices/Tabs/Shared.jsx";
 
-const PAGE_TITLE = "Patch Management";
+const PAGE_TITLE = "Windows Patch Management";
 const PAGE_SUBTITLE = "Windows patch inventory across deployed agents.";
 
 const STATE_FILTER_OPTIONS = [
@@ -54,13 +55,13 @@ const SEVERITY_FILTER_OPTIONS = [
   { key: "unspecified", label: "Unspecified" },
 ];
 
-const PATCH_PAGE_TABS = [
+export const PATCH_PAGE_TABS = [
   { key: "patch_list", label: "Patch List" },
   { key: "site_policies", label: "Site Policies" },
   { key: "device_filter_policies", label: "Device / Filter Policies" },
 ];
 
-const POLICY_MATCH_TYPES = [
+export const POLICY_MATCH_TYPES = [
   { value: "severity", label: "Severity" },
   { value: "classification", label: "Classification" },
   { value: "category", label: "Category" },
@@ -69,18 +70,18 @@ const POLICY_MATCH_TYPES = [
   { value: "patch_key", label: "Patch Key" },
 ];
 
-const POLICY_RULE_TYPES = [
+export const POLICY_RULE_TYPES = [
   { value: "approve", label: "Approve" },
   { value: "block", label: "Block" },
 ];
 
-const POLICY_ROLE_SCOPES = [
+export const POLICY_ROLE_SCOPES = [
   { value: "Both", label: "Both" },
   { value: "Server", label: "Server" },
   { value: "Workstation", label: "Workstation" },
 ];
 
-const POLICY_SCHEDULE_TYPES = [
+export const POLICY_SCHEDULE_TYPES = [
   { value: "weekly", label: "Weekly" },
   { value: "daily", label: "Daily" },
   { value: "once", label: "Once" },
@@ -94,7 +95,7 @@ const POLICY_EDITOR_TABS = [
   { key: "exclusions", label: "Exclusions" },
 ];
 
-const POLICY_EXCLUSION_TYPES = [
+export const POLICY_EXCLUSION_TYPES = [
   { value: "unmanaged", label: "Unmanaged" },
   { value: "frozen", label: "Frozen" },
 ];
@@ -107,11 +108,11 @@ const FILTER_LABEL_SX = {
   pl: 1,
 };
 
-function text(value) {
+export function text(value) {
   return String(value ?? "").trim();
 }
 
-function valueArray(value) {
+export function valueArray(value) {
   if (Array.isArray(value)) return value;
   const raw = text(value);
   return raw ? raw.split(",") : [];
@@ -140,13 +141,13 @@ function formatSource(value) {
   return text(value) || "Unknown";
 }
 
-function formatTimestamp(value) {
+export function formatTimestamp(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "";
   return new Date(numeric * 1000).toLocaleString();
 }
 
-function datetimeLocalFromUnix(value) {
+export function datetimeLocalFromUnix(value) {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric) || numeric <= 0) return "";
   const date = new Date(numeric * 1000);
@@ -154,18 +155,18 @@ function datetimeLocalFromUnix(value) {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-function unixFromDatetimeLocal(value) {
+export function unixFromDatetimeLocal(value) {
   const raw = text(value);
   if (!raw) return null;
   const numeric = Math.floor(new Date(raw).getTime() / 1000);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
-function policyTypeForTab(tabKey) {
+export function policyTypeForTab(tabKey) {
   return tabKey === "device_filter_policies" ? "device_filter" : "site";
 }
 
-function policyTypeLabel(policyType) {
+export function policyTypeLabel(policyType) {
   return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
 }
 
@@ -304,7 +305,7 @@ function buildPatchFleetRows(rows = []) {
   });
 }
 
-function defaultPolicyDraft(policyType) {
+export function defaultPolicyDraft(policyType) {
   return {
     policy_type: policyType,
     name: policyTypeLabel(policyType),
@@ -331,7 +332,7 @@ function defaultPolicyDraft(policyType) {
   };
 }
 
-function policyDraftFromRecord(policy = {}, policyType = "site") {
+export function policyDraftFromRecord(policy = {}, policyType = "site") {
   const source = policy && typeof policy === "object" ? policy : {};
   return {
     ...defaultPolicyDraft(policyType),
@@ -349,7 +350,7 @@ function policyDraftFromRecord(policy = {}, policyType = "site") {
   };
 }
 
-function policySavePayload(draft = {}, policyType = "site") {
+export function policySavePayload(draft = {}, policyType = "site") {
   const payload = {
     name: text(draft.name),
     description: text(draft.description),
@@ -904,25 +905,17 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
 }
 
 function PatchPolicyTab({ policyType }) {
+  const navigate = useNavigate();
   const [policies, setPolicies] = useState([]);
-  const [metadata, setMetadata] = useState({});
   const [loadError, setLoadError] = useState("");
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingPolicy, setEditingPolicy] = useState(null);
   const [busyId, setBusyId] = useState("");
 
   const loadPolicies = useCallback(async () => {
     try {
-      const [policyResponse, metadataResponse] = await Promise.all([
-        fetch(`/api/patches/policies?type=${encodeURIComponent(policyType)}`, { credentials: "include", cache: "no-store" }),
-        fetch("/api/patches/policies/metadata", { credentials: "include", cache: "no-store" }),
-      ]);
+      const policyResponse = await fetch(`/api/patches/policies?type=${encodeURIComponent(policyType)}`, { credentials: "include", cache: "no-store" });
       const policyPayload = await policyResponse.json().catch(() => ({}));
-      const metadataPayload = await metadataResponse.json().catch(() => ({}));
       if (!policyResponse.ok) throw new Error(policyPayload?.message || policyPayload?.error || `HTTP ${policyResponse.status}`);
-      if (!metadataResponse.ok) throw new Error(metadataPayload?.message || metadataPayload?.error || `HTTP ${metadataResponse.status}`);
       setPolicies(Array.isArray(policyPayload?.policies) ? policyPayload.policies : []);
-      setMetadata(metadataPayload || {});
       setLoadError("");
     } catch (error) {
       setLoadError(String(error?.message || error));
@@ -933,15 +926,14 @@ function PatchPolicyTab({ policyType }) {
     void loadPolicies();
   }, [loadPolicies]);
 
-  const openCreate = useCallback(() => {
-    setEditingPolicy(defaultPolicyDraft(policyType));
-    setDialogOpen(true);
-  }, [policyType]);
-
   const openEdit = useCallback((policy) => {
-    setEditingPolicy(policyDraftFromRecord(policy, policyType));
-    setDialogOpen(true);
-  }, [policyType]);
+    if (!policy?.id) return;
+    const nextPath =
+      policyType === "device_filter"
+        ? APP_PATHS.patchPolicyDeviceFilter(policy.id)
+        : APP_PATHS.patchPolicySite(policy.id);
+    navigate(nextPath);
+  }, [navigate, policyType]);
 
   const deletePolicy = useCallback(async (policy = {}) => {
     if (!policy?.id || policy.locked) return;
@@ -1019,14 +1011,9 @@ function PatchPolicyTab({ policyType }) {
   return (
     <Stack spacing={1.6} sx={{ minHeight: 520, p: 1.2 }}>
       {loadError ? <Alert severity="error">{loadError}</Alert> : null}
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ alignItems: { xs: "stretch", sm: "center" }, justifyContent: "space-between" }}>
-        <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-          {policyType === "site" ? "Site Policies" : "Device / Filter Policies"}
-        </Typography>
-        <Button startIcon={<AddRoundedIcon />} variant="contained" onClick={openCreate}>
-          New {policyTypeLabel(policyType)}
-        </Button>
-      </Stack>
+      <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
+        {policyType === "site" ? "Site Policies" : "Device / Filter Policies"}
+      </Typography>
       <GridShell sx={{ flexGrow: 1, minHeight: 500, borderRadius: 0, border: "none" }}>
         <AgGridReact
           rowData={policies}
@@ -1042,17 +1029,6 @@ function PatchPolicyTab({ policyType }) {
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>
-      <PatchPolicyDialog
-        open={dialogOpen}
-        policyType={policyType}
-        metadata={metadata}
-        policy={editingPolicy}
-        onClose={() => setDialogOpen(false)}
-        onSaved={() => {
-          setDialogOpen(false);
-          void loadPolicies();
-        }}
-      />
     </Stack>
   );
 }
@@ -1068,6 +1044,7 @@ export default function PatchManagement() {
   const [stateFilter, setStateFilter] = useState("pending");
   const [severityFilter, setSeverityFilter] = useState("");
   const [selectedPatchRows, setSelectedPatchRows] = useState({});
+  const [newPolicyMenuAnchor, setNewPolicyMenuAnchor] = useState(null);
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
@@ -1235,7 +1212,7 @@ export default function PatchManagement() {
     [selectedBulkRows]
   );
   const patchReturnTo = useMemo(
-    () => `${location.pathname || APP_PATHS.patchManagement}${location.search || ""}`,
+    () => `${location.pathname || APP_PATHS.patchManagementWindows}${location.search || ""}`,
     [location.pathname, location.search]
   );
 
@@ -1317,15 +1294,34 @@ export default function PatchManagement() {
     });
   }, [navigate, patchReturnTo, selectedBulkPatchCount, selectedBulkRows]);
 
+  const handleNewPolicyOption = useCallback(
+    (policyType) => {
+      setNewPolicyMenuAnchor(null);
+      navigate(
+        policyType === "device_filter"
+          ? APP_PATHS.patchPolicyDeviceFilterNew
+          : APP_PATHS.patchPolicySiteNew
+      );
+    },
+    [navigate]
+  );
+
   const pageHeaderActions = useMemo(
     () => [
       {
         id: "patch-management-bulk-install",
         label: "Bulk Install",
         icon: <SystemUpdateAltRoundedIcon />,
-        tone: "primary",
+        tone: "secondary",
         disabled: activeTab !== "patch_list" || selectedBulkPatchCount < 2,
         onClick: handleBulkInstallFleet,
+      },
+      {
+        id: "patch-management-new-policy",
+        label: "New Policy",
+        icon: <AddRoundedIcon />,
+        tone: "primary",
+        onClick: (event) => setNewPolicyMenuAnchor(event.currentTarget),
       },
     ],
     [activeTab, handleBulkInstallFleet, selectedBulkPatchCount]
@@ -1541,7 +1537,36 @@ export default function PatchManagement() {
   );
 
   return (
-    <PageBodyFrame
+    <>
+      <Menu
+        anchorEl={newPolicyMenuAnchor}
+        open={Boolean(newPolicyMenuAnchor)}
+        onClose={() => setNewPolicyMenuAnchor(null)}
+        PaperProps={{
+          sx: {
+            mt: 1,
+            borderRadius: 2,
+            border: `1px solid ${MAGIC_UI.panelBorder}`,
+            background: "rgba(8,13,30,0.98)",
+            color: MAGIC_UI.textBright,
+            boxShadow: "0 24px 60px rgba(2,8,23,0.7)",
+            "& .MuiMenuItem-root": {
+              fontSize: "0.88rem",
+              color: MAGIC_UI.textBright,
+              minHeight: 34,
+            },
+            "& .MuiMenuItem-root:hover": {
+              background: "rgba(125, 183, 255, 0.12)",
+            },
+          },
+        }}
+      >
+        <MenuItem onClick={() => handleNewPolicyOption("site")}>New Site Policy</MenuItem>
+        <MenuItem onClick={() => handleNewPolicyOption("device_filter")}>
+          New Device / Filter Policy
+        </MenuItem>
+      </Menu>
+      <PageBodyFrame
       variant="grid_with_stack"
       stack={
         <Stack spacing={1.2}>
@@ -1653,6 +1678,7 @@ export default function PatchManagement() {
       ) : (
         <PatchPolicyTab policyType={policyTypeForTab(activeTab)} />
       )}
-    </PageBodyFrame>
+      </PageBodyFrame>
+    </>
   );
 }

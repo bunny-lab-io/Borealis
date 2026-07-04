@@ -1,8 +1,8 @@
 # Patch Management
 
-Patch Management shows Windows patch inventory collected by Borealis agents and controls policy-driven Windows update installs. Operators can still schedule ad-hoc installs, but recurring automation should use Patch Policies so Global, site, and device/filter overrides stay auditable.
+Patch Management groups OS-specific patch surfaces under one sidebar section. Windows patch inventory and policies are active today. Linux and MacOS pages are present for layout consistency and show `Coming Soon` until those patch backends exist.
 
-Patch Management has three tabs:
+The Windows Patch Management page has three tabs:
 
 - `Patch List` shows available and installed Windows updates.
 - `Site Policies` controls site-scoped maintenance windows and role scope.
@@ -10,7 +10,7 @@ Patch Management has three tabs:
 
 ## Open Fleet Patch Audit
 
-1. Open `Alerting & Reporting > Patch Management`.
+1. Open `Patch Management > Windows`.
 2. Use `State` to switch between pending and installed inventory.
 3. Use `Severity` to narrow Windows Update Agent rows when severity is available.
 4. Select a blue KB number to open Microsoft Update Catalog search results in a new browser tab.
@@ -24,14 +24,15 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 
 ## Configure Patch Policies
 
-1. Open `Alerting & Reporting > Patch Management`.
+1. Open `Patch Management > Windows`.
 2. Select `Site Policies` or `Device / Filter Policies`.
-3. Create a policy and choose its scope.
-4. Choose the install schedule. Times use the Engine host timezone.
-5. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
-6. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
-7. Add allow or block rules for severity, classification, category, KB, update ID, or patch key.
-8. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
+3. Use `New Policy` and choose `New Site Policy` or `New Device / Filter Policy`.
+4. Create a policy and choose its scope.
+5. Choose the install schedule. Times use the Engine host timezone.
+6. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
+7. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
+8. Add allow or block rules for severity, classification, category, KB, update ID, or patch key.
+9. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
 
 The Global Patch Policy is created automatically during Engine database initialization. It is locked from deletion, enabled by default, uses Wednesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off.
 
@@ -108,7 +109,11 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Engine patch policy scheduler hook: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_policies.go`
     - Engine schema bootstrap: `Data/Engine/Containers/api-backend/data/database.py`
     - Job creation UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`
-    - Fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management.jsx`
+    - Windows fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Windows.jsx`
+    - Linux fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Linux.jsx`
+    - MacOS fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_MacOS.jsx`
+    - OS page shared UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Platform_Page.jsx`
+    - Policy editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Policy_Editor.jsx`
     - Device tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Patch_Management.jsx`
 
     ### Runtime behavior

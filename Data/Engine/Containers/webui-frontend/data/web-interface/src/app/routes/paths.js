@@ -14,6 +14,17 @@ export const APP_PATHS = {
   devices: "/devices",
   software: "/software",
   patchManagement: "/patch-management",
+  patchManagementWindows: "/patch-management/windows",
+  patchManagementLinux: "/patch-management/linux",
+  patchManagementMacOS: "/patch-management/macos",
+  patchManagementSitePolicies: "/patch-management/windows?tab=site_policies",
+  patchManagementDeviceFilterPolicies: "/patch-management/windows?tab=device_filter_policies",
+  patchPolicySiteNew: "/patch-management/policies/site/new",
+  patchPolicyDeviceFilterNew: "/patch-management/policies/device-filter/new",
+  patchPolicySite: (policyId) =>
+    `/patch-management/policies/site/${encodeURIComponent(normalizedString(policyId))}`,
+  patchPolicyDeviceFilter: (policyId) =>
+    `/patch-management/policies/device-filter/${encodeURIComponent(normalizedString(policyId))}`,
   deviceApprovals: "/devices/approvals",
   agentDevices: "/devices/agents",
   sshDevices: "/devices/ssh",

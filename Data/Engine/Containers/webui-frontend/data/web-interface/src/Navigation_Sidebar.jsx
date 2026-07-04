@@ -29,6 +29,9 @@ import {
   SettingsRounded as SettingsIcon,
   LocationCity as SitesIcon,
   Dns as ServerInfoIcon,
+  DesktopWindowsRounded as WindowsIcon,
+  TerminalRounded as LinuxIcon,
+  LaptopMacRounded as MacOSIcon,
   VpnKey as CredentialIcon,
   PersonOutline as UserIcon,
   AccountTree as DirectoryIcon,
@@ -60,7 +63,9 @@ const SITE_SCOPED_NAV_KEYS = new Set([
   "watchdogs",
   "jobs",
   "software",
-  "patch-management",
+  "patch-management-windows",
+  "patch-management-site-policies",
+  "patch-management-device-filter-policies",
 ]);
 
 function buildSiteScopedPath(path, siteId, extraParams = {}) {
@@ -172,11 +177,44 @@ const BASE_NAV_SECTIONS = Object.freeze([
         navKey: "software",
         to: APP_PATHS.software,
       },
+    ],
+  },
+  {
+    id: "patch-management",
+    title: "Patch Management",
+    items: [
+      {
+        icon: WindowsIcon,
+        label: "Windows",
+        navKey: "patch-management-windows",
+        to: APP_PATHS.patchManagementWindows,
+        patchTabKey: "patch_list",
+      },
+      {
+        icon: LinuxIcon,
+        label: "Linux",
+        navKey: "patch-management-linux",
+        to: APP_PATHS.patchManagementLinux,
+      },
+      {
+        icon: MacOSIcon,
+        label: "MacOS",
+        navKey: "patch-management-macos",
+        to: APP_PATHS.patchManagementMacOS,
+      },
       {
         icon: PatchIcon,
-        label: "Patch Management",
-        navKey: "patch-management",
-        to: APP_PATHS.patchManagement,
+        label: "Site Policies",
+        navKey: "patch-management-site-policies",
+        to: APP_PATHS.patchManagementSitePolicies,
+        patchTabKey: "site_policies",
+      },
+      {
+        icon: PatchIcon,
+        label: "Device / Filter Policies",
+        navKey: "patch-management-device-filter-policies",
+        to: APP_PATHS.patchManagementDeviceFilterPolicies,
+        patchTabKey: "device_filter_policies",
       },
     ],
   },
@@ -281,6 +319,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
     devices: true,
     automation: true,
     alerting: true,
+    "patch-management": true,
     filters: true,
     access: true,
     admin: true,
@@ -363,8 +402,8 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         {
           icon: PatchIcon,
           label: "Patch Management",
-          navKey: "patch-management",
-          to: buildSiteScopedPath(APP_PATHS.patchManagement, selectedSiteId),
+          navKey: "patch-management-windows",
+          to: buildSiteScopedPath(APP_PATHS.patchManagementWindows, selectedSiteId),
         },
         {
           icon: SettingsIcon,
@@ -579,11 +618,16 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                 );
               }
               const IconComponent = item.icon;
+              const currentPatchTab = new URLSearchParams(location.search || "").get("tab") || "patch_list";
+              const patchTabActive =
+                item.patchTabKey && location.pathname === APP_PATHS.patchManagementWindows
+                  ? currentPatchTab === item.patchTabKey
+                  : undefined;
               const activeOverride = section.siteScoped
                 ? activeNavKey === item.navKey
                 : selectedSiteId && SITE_SCOPED_NAV_KEYS.has(item.navKey)
                   ? false
-                  : undefined;
+                  : patchTabActive;
               return (
                 <NavItem
                   key={item.navKey}

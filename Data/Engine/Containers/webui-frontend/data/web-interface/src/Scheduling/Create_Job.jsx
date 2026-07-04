@@ -153,7 +153,7 @@ function normalizePatchJobReturnPath(value) {
 function patchJobSourceFallbackPath(value) {
   const source = String(value || "").trim().toLowerCase();
   if (source === "fleet" || source === "global" || source === "patch_management") {
-    return APP_PATHS.patchManagement;
+    return APP_PATHS.patchManagementWindows;
   }
   return "";
 }
@@ -4521,7 +4521,7 @@ export default function CreateJob() {
           createdCount += 1;
         }
         sendNotification(`${createdCount.toLocaleString()} Patch Install Jobs Created Successfully`);
-        navigate(resolvePatchJobReturnPath({ current: patchJobReturnPath, batch: patchJobBatch, draft: patchJobDraft }) || APP_PATHS.patchManagement);
+        navigate(resolvePatchJobReturnPath({ current: patchJobReturnPath, batch: patchJobBatch, draft: patchJobDraft }) || APP_PATHS.patchManagementWindows);
       } catch (err) {
         const prefix = createdCount > 0 ? `${createdCount.toLocaleString()} job(s) were created before failure. ` : "";
         alert(`${prefix}${String(err.message || err)}`);
@@ -4555,7 +4555,7 @@ export default function CreateJob() {
       }
       navigate(
         isPatchJob && !(initialJob && initialJob.id)
-          ? (resolvePatchJobReturnPath({ current: patchJobReturnPath, batch: patchJobBatch, draft: patchJobDraft }) || APP_PATHS.patchManagement)
+          ? (resolvePatchJobReturnPath({ current: patchJobReturnPath, batch: patchJobBatch, draft: patchJobDraft }) || APP_PATHS.patchManagementWindows)
           : APP_PATHS.jobs
       );
     } catch (err) {

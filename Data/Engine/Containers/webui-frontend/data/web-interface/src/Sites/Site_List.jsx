@@ -3192,7 +3192,7 @@ export default function SiteList() {
               if (name) {
                 sendNotification({
                   title: "Site Created",
-                  message: `Site ${name} Created Successfully. Configure patch coverage at <b>${APP_PATHS.patchManagement}?tab=site_policies</b>.`,
+                  message: `Site ${name} Created Successfully. Configure patch coverage at <b>${APP_PATHS.patchManagementSitePolicies}</b>.`,
                   icon: "success",
                   variant: "success",
                 });
