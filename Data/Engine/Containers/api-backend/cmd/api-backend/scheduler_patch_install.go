@@ -158,13 +158,24 @@ func schedulerPatchInstallOutput(requestID, hostname, componentName string, patc
 		lines = append(lines, "Agent response status="+status)
 	}
 	if code := firstText(cleanText(response["result_code"]), cleanText(result["result_code"])); code != "" {
-		lines = append(lines, "WUA result_code="+code)
+		codeName := firstText(cleanText(response["result_code_name"]), cleanText(result["result_code_name"]))
+		if codeName != "" {
+			lines = append(lines, "WUA result_code="+code+" ("+codeName+")")
+		} else {
+			lines = append(lines, "WUA result_code="+code)
+		}
 	}
 	if reboot := firstText(cleanText(response["reboot_required"]), cleanText(result["reboot_required"])); reboot != "" {
 		lines = append(lines, "Reboot required="+reboot)
 	}
+	if rebootBefore := firstText(cleanText(response["reboot_required_before_install"]), cleanText(result["reboot_required_before_install"])); rebootBefore != "" {
+		lines = append(lines, "Reboot required before install="+rebootBefore)
+	}
 	if count := firstText(cleanText(response["installed_count"]), cleanText(result["installed_count"])); count != "" {
 		lines = append(lines, "Installed update count="+count)
+	}
+	if alreadyInstalled := firstText(cleanText(response["already_installed"]), cleanText(result["already_installed"])); alreadyInstalled != "" {
+		lines = append(lines, "Already installed="+alreadyInstalled)
 	}
 	if raw, err := json.MarshalIndent(map[string]any{"patch": patch, "agent_response": response}, "", "  "); err == nil {
 		lines = append(lines, string(raw))

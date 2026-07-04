@@ -32,7 +32,7 @@ Scheduled wall-clock times use the Engine host timezone. If the Engine host is c
 - Historical Runs groups past occurrences.
 - Device rows show target status, output, errors, and skipped reasons.
 - Ansible playbooks store per-target or shared recap output depending on execution mode.
-- Patch install jobs store per-device install result, timeout or failure state, and available Windows Update stdout/stderr detail.
+- Patch install jobs store per-device install result, timeout or failure state, WUA result codes, reboot-required flags, and available Windows Update stdout/stderr detail.
 
 ## Onboarding Jobs
 

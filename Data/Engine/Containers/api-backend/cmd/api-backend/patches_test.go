@@ -234,6 +234,39 @@ func TestPatchActiveIdentityKeysIncludeWUAIdentityAndTitleKB(t *testing.T) {
 	}
 }
 
+func TestSchedulerPatchInstallOutputShowsWUAResultDetails(t *testing.T) {
+	stdout, stderr, errorText := schedulerPatchInstallOutput(
+		"patch-job-266-run-6925",
+		"LAB-CAMERA-01",
+		"KB5087051 - 2026-05 .NET Framework Security Update (KB5087051)",
+		map[string]any{"kb": "KB5087051", "patch_key": "kb:KB5087051:state:pending"},
+		map[string]any{
+			"ok":                             true,
+			"status":                         "completed",
+			"result_code":                    int64(2),
+			"result_code_name":               "Succeeded",
+			"reboot_required":                true,
+			"reboot_required_before_install": false,
+			"installed_count":                int64(1),
+			"already_installed":              true,
+		},
+	)
+	if stderr != "" || errorText != "" {
+		t.Fatalf("unexpected stderr=%q error=%q", stderr, errorText)
+	}
+	for _, want := range []string{
+		"WUA result_code=2 (Succeeded)",
+		"Reboot required=true",
+		"Reboot required before install=false",
+		"Installed update count=1",
+		"Already installed=true",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestPatchInstallProgressEndpointUsesDeviceAuth(t *testing.T) {
 	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
 	signer := testAgentJWTSigner(t)

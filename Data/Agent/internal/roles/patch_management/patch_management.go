@@ -25,6 +25,7 @@ const (
 	patchBoostWindow     = 45 * time.Second
 	patchCommandTimeout  = 3 * time.Minute
 	patchInstallTimeout  = 90 * time.Minute
+	patchInstallQueueMax = 2 * time.Hour
 )
 
 var kbPattern = regexp.MustCompile(`(?i)\bKB\d{4,9}\b`)
@@ -240,9 +241,6 @@ func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, e
 	if state := normalizePatchState(patch["state"]); state != "" && state != "pending" {
 		return errorResponse("patch_not_pending", "Only pending Windows updates can be installed."), nil
 	}
-	if !m.beginInstall() {
-		return errorResponse("install_in_progress", "Another patch install is already running on this device."), nil
-	}
 	requestID := cleanText(body["request_id"])
 	if requestID == "" {
 		requestID = fmt.Sprintf("patch-%d", time.Now().UnixNano())
@@ -368,15 +366,53 @@ func (m *Manager) collectPatches(ctx context.Context) ([]Patch, error) {
 	return parseWindowsPatchInventory(result.Stdout)
 }
 
-func (m *Manager) beginInstall() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.installRunning {
-		return false
+func (m *Manager) waitForInstallSlot(ctx context.Context, patch map[string]any) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	m.installRunning = true
-	m.lastInstallError = ""
-	return true
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, patchInstallQueueMax)
+		defer cancel()
+	}
+	waiting := false
+	lastProgressAt := time.Time{}
+	for {
+		m.mu.Lock()
+		if !m.installRunning {
+			m.installRunning = true
+			m.lastInstallError = ""
+			m.mu.Unlock()
+			if waiting {
+				m.queuePatchInstallProgress(patch, map[string]any{
+					"phase":       "prepare",
+					"percent":     int64(0),
+					"message":     "Starting queued patch install.",
+					"captured_at": time.Now().Unix(),
+				})
+			}
+			return nil
+		}
+		m.mu.Unlock()
+		now := time.Now()
+		if !waiting || now.Sub(lastProgressAt) >= 30*time.Second {
+			waiting = true
+			lastProgressAt = now
+			m.queuePatchInstallProgress(patch, map[string]any{
+				"phase":       "prepare",
+				"percent":     int64(0),
+				"message":     "Waiting for current patch install to finish before starting this update.",
+				"captured_at": now.Unix(),
+			})
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("timed out waiting for current patch install to finish: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (m *Manager) finishInstall(err error) {
@@ -392,12 +428,27 @@ func (m *Manager) finishInstall(err error) {
 }
 
 func (m *Manager) runInstall(ctx context.Context, patch map[string]any, requestID string) {
-	_, err := m.installPatch(ctx, patch)
-	m.finishInstall(err)
+	err := m.waitForInstallSlot(ctx, patch)
+	if err == nil {
+		_, err = m.installPatch(ctx, patch)
+		m.finishInstall(err)
+	}
 	m.RequestRefresh("patch_install_complete:" + fallbackText(requestID, "unknown"))
 }
 
 func (m *Manager) runInstallSync(ctx context.Context, patch map[string]any, requestID string) map[string]any {
+	if err := m.waitForInstallSlot(ctx, patch); err != nil {
+		return map[string]any{
+			"ok":         false,
+			"status":     "failed",
+			"error":      "install_wait_failed",
+			"message":    err.Error(),
+			"request_id": requestID,
+			"patch_key":  cleanText(patch["patch_key"]),
+			"kb":         cleanText(patch["kb"]),
+			"title":      cleanText(patch["title"]),
+		}
+	}
 	result, err := m.installPatch(ctx, patch)
 	m.finishInstall(err)
 	m.RequestRefresh("patch_install_complete:" + fallbackText(requestID, "unknown"))
@@ -414,7 +465,7 @@ func (m *Manager) runInstallSync(ctx context.Context, patch map[string]any, requ
 	}
 	if result.Parsed != nil {
 		response["result"] = result.Parsed
-		for _, key := range []string{"result_code", "reboot_required", "matched_count", "installed_count"} {
+		for _, key := range []string{"result_code", "result_code_name", "reboot_required", "reboot_required_before_install", "matched_count", "installed_count", "already_installed"} {
 			if value, ok := result.Parsed[key]; ok {
 				response[key] = value
 			}
@@ -1358,6 +1409,121 @@ function Test-BorealisPatchMatch {
   if ($requestedTitle -and $title.Equals($requestedTitle, [StringComparison]::OrdinalIgnoreCase)) { return $true }
   return $false
 }
+function Test-BorealisHistoryMatch {
+  param($Entry, $Request)
+  $title = "$($Entry.Title)".Trim()
+  $requestedUpdateId = "$($Request.update_id)".Trim()
+  $requestedRevision = "$($Request.revision_number)".Trim()
+  if ($requestedUpdateId) {
+    $candidateUpdateId = ''
+    $candidateRevision = ''
+    try { $candidateUpdateId = "$($Entry.UpdateIdentity.UpdateID)".Trim() } catch {}
+    try { $candidateRevision = "$($Entry.UpdateIdentity.RevisionNumber)".Trim() } catch {}
+    if ($candidateUpdateId -and $candidateUpdateId.Equals($requestedUpdateId, [StringComparison]::OrdinalIgnoreCase)) {
+      if (-not $requestedRevision -or $candidateRevision -eq $requestedRevision) { return $true }
+    }
+  }
+  $requestedTitle = "$($Request.title)".Trim()
+  if ($requestedTitle -and $title.Equals($requestedTitle, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  return $false
+}
+function Get-BorealisOperationResultName {
+  param($Code)
+  switch ([int]$Code) {
+    0 { return 'NotStarted' }
+    1 { return 'InProgress' }
+    2 { return 'Succeeded' }
+    3 { return 'SucceededWithErrors' }
+    4 { return 'Failed' }
+    5 { return 'Aborted' }
+    default { return 'Unknown' }
+  }
+}
+function Get-BorealisUpdateSummary {
+  param($Update)
+  $item = [ordered]@{}
+  try { $item['title'] = "$($Update.Title)".Trim() } catch {}
+  try {
+    $kb = Get-BorealisKB $Update.KBArticleIDs $item['title']
+    if ($kb) { $item['kb'] = $kb }
+  } catch {}
+  try { if ($Update.Identity.UpdateID) { $item['update_id'] = "$($Update.Identity.UpdateID)".Trim() } } catch {}
+  try { if ($null -ne $Update.Identity.RevisionNumber) { $item['revision_number'] = [int64]$Update.Identity.RevisionNumber } } catch {}
+  return $item
+}
+function Get-BorealisUpdateResultSummaries {
+  param($InstallResult, $UpdateCollection)
+  $items = @()
+  $successCount = 0
+  for ($index = 0; $index -lt [int]$UpdateCollection.Count; $index++) {
+    $update = $null
+    try { $update = $UpdateCollection.Item($index) } catch {}
+    $item = Get-BorealisUpdateSummary $update
+    $item['index'] = $index
+    try {
+      $updateResult = $InstallResult.GetUpdateResult($index)
+      $code = [int]$updateResult.ResultCode
+      $item['result_code'] = $code
+      $item['result_code_name'] = Get-BorealisOperationResultName $code
+      try {
+        $hresult = [int64]$updateResult.HResult
+        if ($hresult -ne 0) {
+          if ($hresult -lt 0) { $hresult = $hresult + 4294967296 }
+          $item['hresult'] = ('0x{0:X8}' -f $hresult)
+        }
+      } catch {}
+      try { $item['reboot_required'] = [bool]$updateResult.RebootRequired } catch {}
+      if ($code -eq 2 -or $code -eq 3) { $successCount += 1 }
+    } catch {}
+    $items += [pscustomobject]$item
+  }
+  return [pscustomobject]@{ items = $items; success_count = $successCount }
+}
+function Get-BorealisMatchingInstalledUpdates {
+  param($Searcher, $Request)
+  $matches = @()
+  try {
+    $installedResult = $Searcher.Search("IsInstalled=1")
+    foreach ($update in @($installedResult.Updates)) {
+      if (Test-BorealisPatchMatch $update $Request) { $matches += $update }
+    }
+  } catch {}
+  return $matches
+}
+function Get-BorealisMatchingInstalledHistory {
+  param($Searcher, $Request)
+  $matches = @()
+  try {
+    $totalHistory = [int]$Searcher.GetTotalHistoryCount()
+    $historyCount = [Math]::Min($totalHistory, 2000)
+    if ($historyCount -gt 0) {
+      $history = $Searcher.QueryHistory(0, $historyCount)
+      foreach ($entry in @($history)) {
+        if ([int]$entry.Operation -ne 1) { continue }
+        if ([int]$entry.ResultCode -ne 2 -and [int]$entry.ResultCode -ne 3) { continue }
+        if (Test-BorealisHistoryMatch $entry $Request) { $matches += $entry }
+      }
+    }
+  } catch {}
+  return $matches
+}
+function Wait-BorealisWUAIdle {
+  param($Installer, [string]$Phase)
+  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(30)
+  $lastProgress = [DateTimeOffset]::MinValue
+  while ($true) {
+    $busy = $false
+    try { $busy = [bool]$Installer.IsBusy } catch { return $true }
+    if (-not $busy) { return $true }
+    $now = [DateTimeOffset]::UtcNow
+    if ($now -gt $deadline) { return $false }
+    if (($now - $lastProgress).TotalSeconds -ge 30) {
+      $lastProgress = $now
+      Write-BorealisPatchProgress $Phase $null 'Waiting for Windows Update Agent to become available.' $true
+    }
+    Start-Sleep -Seconds 5
+  }
+}
 try {
   Write-BorealisPatchProgress 'prepare' $null 'Searching Windows Update Agent for matching update.' $true
   $script:BorealisPatchPhase = 'search'
@@ -1371,6 +1537,35 @@ try {
     }
   }
   if ($matches.Count -lt 1) {
+    $installedMatches = @(Get-BorealisMatchingInstalledUpdates $searcher $request)
+    $historyMatches = @(Get-BorealisMatchingInstalledHistory $searcher $request)
+    if ($installedMatches.Count -gt 0 -or $historyMatches.Count -gt 0) {
+      $titles = @()
+      foreach ($update in $installedMatches) {
+        try { $titles += "$($update.Title)".Trim() } catch {}
+      }
+      foreach ($entry in $historyMatches) {
+        try {
+          $entryTitle = "$($entry.Title)".Trim()
+          if ($entryTitle -and -not $titles.Contains($entryTitle)) { $titles += $entryTitle }
+        } catch {}
+      }
+      Write-BorealisPatchProgress 'finalize' $null 'Selected update is already installed or no longer applicable.' $true 100
+      Write-BorealisPatchResult @{
+        ok = $true
+        status = 'completed'
+        result_code = 2
+        result_code_name = (Get-BorealisOperationResultName 2)
+        reboot_required = $false
+        already_installed = $true
+        matched_count = 0
+        installed_count = 0
+        installed_match_count = [int]$installedMatches.Count
+        history_match_count = [int]$historyMatches.Count
+        titles = $titles
+      }
+      exit 0
+    }
     Write-BorealisPatchResult @{ ok = $false; error = 'update_not_found'; message = 'Matching Windows update was not found.' }
     exit 2
   }
@@ -1393,6 +1588,11 @@ try {
     $downloader = $session.CreateUpdateDownloader()
     $downloader.Updates = $collection
     $script:BorealisPatchPhase = 'download'
+    $busyProbe = $session.CreateUpdateInstaller()
+    if (-not (Wait-BorealisWUAIdle $busyProbe 'download')) {
+      Write-BorealisPatchResult @{ ok = $false; error = 'wua_busy_timeout'; phase = 'download'; message = 'Windows Update Agent stayed busy before download.' }
+      exit 6
+    }
     $downloadState = "$($request.request_id)".Trim()
     Write-BorealisPatchProgress 'download' $null 'Downloading selected update.' $true
     $downloadJob = $null
@@ -1440,6 +1640,12 @@ try {
   try { $installer.ForceQuiet = $true } catch {}
   try { $installer.AllowSourcePrompts = $false } catch {}
   $script:BorealisPatchPhase = 'install'
+  $rebootRequiredBeforeInstall = $false
+  try { $rebootRequiredBeforeInstall = [bool]$installer.RebootRequiredBeforeInstallation } catch {}
+  if (-not (Wait-BorealisWUAIdle $installer 'install')) {
+    Write-BorealisPatchResult @{ ok = $false; error = 'wua_busy_timeout'; phase = 'install'; message = 'Windows Update Agent stayed busy before install.' }
+    exit 6
+  }
   $installState = "$($request.request_id)".Trim()
   Write-BorealisPatchProgress 'install' $null 'Installing selected update.' $true
   $installJob = $null
@@ -1466,16 +1672,24 @@ try {
     try { if ($null -ne $installJob) { $installJob.CleanUp() } } catch {}
   }
   $resultCode = [int]$installResult.ResultCode
-  $ok = ($resultCode -eq 2 -or $resultCode -eq 3)
+  $updateResults = Get-BorealisUpdateResultSummaries $installResult $installCollection
+  $installedCount = [int]$updateResults.success_count
+  if ($installedCount -le 0 -and ($resultCode -eq 2 -or $resultCode -eq 3)) {
+    $installedCount = [int]$installCollection.Count
+  }
+  $ok = ($resultCode -eq 2 -or ($resultCode -eq 3 -and $installedCount -gt 0))
   $titles = @()
   foreach ($update in $matches) { $titles += "$($update.Title)".Trim() }
   Write-BorealisPatchResult @{
     ok = $ok
     status = $(if ($ok) { 'completed' } else { 'failed' })
     result_code = $resultCode
+    result_code_name = (Get-BorealisOperationResultName $resultCode)
     reboot_required = [bool]$installResult.RebootRequired
+    reboot_required_before_install = $rebootRequiredBeforeInstall
     matched_count = [int]$matches.Count
-    installed_count = [int]$installCollection.Count
+    installed_count = $installedCount
+    update_results = $updateResults.items
     titles = $titles
   }
   if (-not $ok) { exit 4 }

@@ -199,6 +199,32 @@ func TestWindowsPatchInstallScriptUsesWUAAsyncBeginEndContract(t *testing.T) {
 	}
 }
 
+func TestWindowsPatchInstallScriptHasRobustWUAInstallFallbacks(t *testing.T) {
+	script := windowsPatchInstallScript(map[string]any{
+		"request_id": "patch-job-266-run-6926",
+		"kb":         "KB5087051",
+		"title":      "2026-05 .NET Framework Security Update (KB5087051)",
+	})
+	for _, expected := range []string{
+		"function Get-BorealisMatchingInstalledUpdates",
+		"function Get-BorealisMatchingInstalledHistory",
+		"Selected update is already installed or no longer applicable.",
+		"already_installed = $true",
+		"function Wait-BorealisWUAIdle",
+		"Windows Update Agent stayed busy before download.",
+		"Windows Update Agent stayed busy before install.",
+		"function Get-BorealisUpdateResultSummaries",
+		"$item['result_code_name'] = Get-BorealisOperationResultName $code",
+		"update_results = $updateResults.items",
+		"result_code_name = (Get-BorealisOperationResultName $resultCode)",
+		"reboot_required_before_install = $rebootRequiredBeforeInstall",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("installer script missing robustness fragment %q", expected)
+		}
+	}
+}
+
 func TestPatchInstallProgressPayloadIncludesSchedulerContext(t *testing.T) {
 	payload := patchInstallProgressPayload("LAB-OPERATOR-01", map[string]any{
 		"request_id":           "patch-job-9-run-12",
@@ -303,5 +329,87 @@ func TestPatchInstallRequestWaitsForCompletion(t *testing.T) {
 	}
 	if manager.Health().Details["install_running"] != "false" {
 		t.Fatalf("install running flag was not cleared")
+	}
+}
+
+func TestPatchInstallRequestSerializesWhenInstallAlreadyRunning(t *testing.T) {
+	manager := New(nil, "LAB-OPERATOR-01", "system")
+	manager.supported = true
+	manager.unsupportedReason = ""
+	manager.publisher = func(context.Context, Snapshot) error { return nil }
+	manager.runner = func(_ context.Context, _ time.Duration, _ string, args ...string) (commandResult, error) {
+		return commandResult{Stdout: `[]`, ExitCode: 0}, nil
+	}
+	manager.mu.Lock()
+	manager.installRunning = true
+	manager.mu.Unlock()
+	started := make(chan struct{}, 1)
+	manager.installRunner = func(_ context.Context, _ time.Duration, _ map[string]any, _ func(map[string]any)) (patchInstallResult, error) {
+		started <- struct{}{}
+		return patchInstallResult{
+			Stdout:   `{"ok":true,"status":"completed","result_code":2,"installed_count":1}`,
+			ExitCode: 0,
+			Parsed:   map[string]any{"ok": true, "status": "completed", "result_code": float64(2), "installed_count": float64(1)},
+		}, nil
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		manager.finishInstall(nil)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := manager.HandleInstallRequest(ctx, map[string]any{
+		"hostname":            "LAB-OPERATOR-01",
+		"wait_for_completion": true,
+		"request_id":          "patch-job-2-run-3",
+		"patch": map[string]any{
+			"patch_key": "kb:KB5000002:state:pending",
+			"kb":        "KB5000002",
+			"title":     "Security Update",
+			"state":     "pending",
+		},
+	})
+	if err != nil {
+		t.Fatalf("install request failed: %v", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatalf("queued install did not start after previous install finished")
+	}
+	payload, _ := response.(map[string]any)
+	if payload["status"] != "completed" || payload["ok"] != true {
+		t.Fatalf("unexpected serialized install response %#v", payload)
+	}
+}
+
+func TestPatchInstallRequestWaitTimeout(t *testing.T) {
+	manager := New(nil, "LAB-OPERATOR-01", "system")
+	manager.supported = true
+	manager.unsupportedReason = ""
+	manager.mu.Lock()
+	manager.installRunning = true
+	manager.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	response, err := manager.HandleInstallRequest(ctx, map[string]any{
+		"hostname":            "LAB-OPERATOR-01",
+		"wait_for_completion": true,
+		"request_id":          "patch-job-timeout",
+		"patch": map[string]any{
+			"patch_key": "kb:KB5000003:state:pending",
+			"kb":        "KB5000003",
+			"title":     "Security Update",
+			"state":     "pending",
+		},
+	})
+	if err != nil {
+		t.Fatalf("install request failed: %v", err)
+	}
+	payload, _ := response.(map[string]any)
+	if payload["error"] != "install_wait_failed" || payload["ok"] != false {
+		t.Fatalf("unexpected timeout response %#v", payload)
 	}
 }
