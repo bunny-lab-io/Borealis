@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -181,6 +183,9 @@ func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 			return err
 		}
 	}
+	if err := ensurePatchPolicyLegacyColumnDefaults(ctx, conn); err != nil {
+		return err
+	}
 	if _, err := conn.ExecContext(ctx, `
 		INSERT INTO engine.patch_policies(
 			name, description, policy_type, enabled, locked, role_scope, approval_mode,
@@ -223,4 +228,84 @@ func patchPolicyDefaultStartTS(now time.Time, weekday time.Weekday, hour int) in
 		candidate = candidate.AddDate(0, 0, 7)
 	}
 	return candidate.Unix()
+}
+
+func ensurePatchPolicyLegacyColumnDefaults(ctx context.Context, conn *sql.Conn) error {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT column_name, data_type
+		  FROM information_schema.columns
+		 WHERE table_schema='engine'
+		   AND table_name='patch_policies'
+		   AND is_nullable='NO'
+		   AND column_default IS NULL
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type legacyColumn struct {
+		Name     string
+		DataType string
+	}
+	columns := []legacyColumn{}
+	for rows.Next() {
+		var column legacyColumn
+		if err := rows.Scan(&column.Name, &column.DataType); err != nil {
+			return err
+		}
+		columns = append(columns, column)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, column := range columns {
+		defaultExpr := patchPolicyLegacyDefaultExpression(column.Name, column.DataType)
+		if defaultExpr == "" {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, fmt.Sprintf(
+			"ALTER TABLE engine.patch_policies ALTER COLUMN %s SET DEFAULT %s",
+			quotePostgresIdentifier(column.Name),
+			defaultExpr,
+		)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func patchPolicyLegacyDefaultExpression(columnName string, dataType string) string {
+	name := strings.ToLower(strings.TrimSpace(columnName))
+	dataType = strings.ToLower(strings.TrimSpace(dataType))
+	switch {
+	case name == "id":
+		return ""
+	case strings.Contains(dataType, "jsonb"):
+		if strings.Contains(name, "list") || strings.Contains(name, "array") || strings.Contains(name, "rules") {
+			return "'[]'::jsonb"
+		}
+		return "'{}'::jsonb"
+	case dataType == "json":
+		if strings.Contains(name, "list") || strings.Contains(name, "array") || strings.Contains(name, "rules") {
+			return "'[]'::json"
+		}
+		return "'{}'::json"
+	case strings.HasSuffix(name, "_json"):
+		if strings.Contains(name, "list") || strings.Contains(name, "array") || strings.Contains(name, "rules") {
+			return "'[]'"
+		}
+		return "'{}'"
+	case strings.Contains(dataType, "int") || dataType == "numeric" || dataType == "double precision" || dataType == "real":
+		return "0"
+	case dataType == "boolean":
+		return "false"
+	case strings.Contains(dataType, "timestamp"):
+		return "NOW()"
+	default:
+		return "''"
+	}
+}
+
+func quotePostgresIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }
