@@ -50,6 +50,70 @@ type scheduledComponentBuckets struct {
 	Ansible  []map[string]any
 }
 
+func scheduledPatchInstallComponent(components []any) map[string]any {
+	for _, component := range components {
+		entry, ok := component.(map[string]any)
+		if !ok {
+			continue
+		}
+		if scheduledIsPatchInstallComponent(entry) {
+			return copyMap(entry)
+		}
+	}
+	return nil
+}
+
+func scheduledPatchInstallSpec(component map[string]any) map[string]any {
+	if component == nil {
+		return map[string]any{}
+	}
+	rawPatch := schedulerAnyMap(component["patch"])
+	metadata := schedulerAnyMap(firstPresentAny(rawPatch["metadata"], component["metadata"]))
+	out := map[string]any{}
+	for _, key := range []string{"patch_key", "kb", "title", "state", "source", "classification", "severity"} {
+		value := firstPresentAny(rawPatch[key], component[key])
+		if clean := cleanText(value); clean != "" {
+			out[key] = clean
+		}
+	}
+	updateID := cleanText(firstPresentAny(metadata["update_id"], metadata["updateID"], rawPatch["update_id"], rawPatch["updateID"], component["update_id"], component["updateID"]))
+	if updateID != "" {
+		out["update_id"] = updateID
+	}
+	revision := coerceInt64(firstPresentAny(metadata["revision_number"], metadata["revision"], rawPatch["revision_number"], rawPatch["revision"], component["revision_number"], component["revision"]))
+	if revision > 0 {
+		out["revision_number"] = revision
+	}
+	if kb := normalizePatchKB(out["kb"]); kb != "" {
+		out["kb"] = kb
+	}
+	if state := normalizePatchState(cleanText(out["state"])); state != "" {
+		out["state"] = state
+	} else {
+		out["state"] = "pending"
+	}
+	if len(metadata) > 0 {
+		out["metadata"] = metadata
+	}
+	return out
+}
+
+func scheduledPatchInstallDisplayName(component map[string]any) string {
+	patch := scheduledPatchInstallSpec(component)
+	kb := normalizePatchKB(patch["kb"])
+	title := cleanText(patch["title"])
+	switch {
+	case kb != "" && title != "":
+		return kb + " - " + title
+	case kb != "":
+		return kb
+	case title != "":
+		return title
+	default:
+		return "Patch Install"
+	}
+}
+
 func (s *postgresOperatorStore) rerunScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -91,6 +155,20 @@ func (s *postgresOperatorStore) rerunScheduledJob(ctx context.Context, profile o
 	jobKind := normalizeScheduledJobKind(nullString(job.JobKind))
 	if jobKind == scheduledJobKindOnboarding {
 		if err := s.recordScheduledOnboardingSnapshot(ctx, jobID, occurrence, now); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		return s.scheduledRerunResponse(ctx, job, jobID, occurrence)
+	}
+	if jobKind == scheduledJobKindPatchInstall {
+		component := scheduledPatchInstallComponent(components)
+		if component == nil {
+			return map[string]any{"error": "patch install component required"}, http.StatusBadRequest, nil
+		}
+		resolution, err := s.resolveScheduledRerunTargets(ctx, profile, rawTargets)
+		if err != nil {
+			resolution = scheduledTargetResolution{Hosts: []string{}, Targets: []*scheduledResolvedTarget{}, FilterMatches: map[int64][]string{}}
+		}
+		if err := s.recordScheduledPatchInstallSnapshot(ctx, jobID, occurrence, scheduledPatchInstallDisplayName(component), resolution.Targets, now); err != nil {
 			return nil, http.StatusInternalServerError, err
 		}
 		return s.scheduledRerunResponse(ctx, job, jobID, occurrence)
@@ -503,6 +581,52 @@ func (s *postgresOperatorStore) recordScheduledGeneralSnapshot(ctx context.Conte
 			for _, filterID := range filterIDs {
 				id := filterID
 				if err := insertScheduledRunTarget(ctx, tx, runID, *target, &id, "", "", "", createdAt); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (s *postgresOperatorStore) recordScheduledPatchInstallSnapshot(ctx context.Context, jobID, occurrence int64, componentName string, targets []*scheduledResolvedTarget, createdAt int64) error {
+	componentName = firstText(cleanText(componentName), "Patch Install")
+	return s.withScheduledSnapshotTx(ctx, jobID, occurrence, func(tx *sql.Tx) error {
+		if len(targets) == 0 {
+			_, err := insertScheduledRun(ctx, tx, scheduledRunInsert{
+				JobID:         jobID,
+				ScheduledTS:   occurrence,
+				Status:        scheduledStatusSkipped,
+				SkipReason:    scheduledSkipNoTargets,
+				CreatedAt:     createdAt,
+				ComponentKind: patchInstallComponentKind,
+				ComponentName: componentName,
+			})
+			return err
+		}
+		for _, target := range targets {
+			runID, err := insertScheduledRun(ctx, tx, scheduledRunInsert{
+				JobID:          jobID,
+				TargetHostname: target.Hostname,
+				ScheduledTS:    occurrence,
+				Status:         scheduledStatusPending,
+				CreatedAt:      createdAt,
+				ComponentKind:  patchInstallComponentKind,
+				ComponentName:  componentName,
+			})
+			if err != nil {
+				return err
+			}
+			filterIDs := uniquePositiveInt64s(target.FilterIDs)
+			if len(filterIDs) == 0 {
+				if err := insertScheduledRunTarget(ctx, tx, runID, *target, nil, "", "", scheduledResolutionPending, createdAt); err != nil {
+					return err
+				}
+				continue
+			}
+			for _, filterID := range filterIDs {
+				id := filterID
+				if err := insertScheduledRunTarget(ctx, tx, runID, *target, &id, "", "", scheduledResolutionPending, createdAt); err != nil {
 					return err
 				}
 			}

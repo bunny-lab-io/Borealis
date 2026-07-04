@@ -424,6 +424,24 @@ func TestSchedulerWorkItemPayloadsMatchPythonQueue(t *testing.T) {
 	if scope["site_id"] != int64(5) {
 		t.Fatalf("unexpected workflow payload %#v", item.Payload)
 	}
+
+	item, updateRun, err = schedulerWorkItemFromPayload(schedulerKindPatchInstallRun, map[string]any{
+		"job_id":          float64(14),
+		"run_id":          float64(15),
+		"scheduled_ts":    float64(1700000700),
+		"site_id":         float64(7),
+		"hostname":        "LAB-OPERATOR-01",
+		"patch_component": map[string]any{"kind": "patch_install", "patch": map[string]any{"patch_key": "kb:KB5050533:state:pending"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateRun || item.DedupeKey != "patch-install:15" || item.Kind != schedulerKindPatchInstallRun || item.Lane != schedulerLaneScheduledJob || item.Priority != 46 {
+		t.Fatalf("unexpected patch install item %#v update=%v", item, updateRun)
+	}
+	if item.Payload["hostname"] != "LAB-OPERATOR-01" || schedulerAnyMap(item.Payload["patch_component"])["kind"] != "patch_install" {
+		t.Fatalf("unexpected patch install payload %#v", item.Payload)
+	}
 }
 
 func TestSchedulerDecryptedCredentialPayload(t *testing.T) {

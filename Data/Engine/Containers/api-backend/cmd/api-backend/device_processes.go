@@ -318,13 +318,13 @@ func callWorkerHostServiceEvent(ctx context.Context, auth *authService, route *a
 
 func processErrorStatus(errorCode string) int {
 	switch strings.ToLower(strings.TrimSpace(errorCode)) {
-	case "invalid_action", "invalid_request", "pid_required", "path_required", "invalid_path", "invalid_hive", "invalid_name", "type_required", "confirmation_required", "invalid_value":
+	case "invalid_action", "invalid_request", "pid_required", "path_required", "invalid_path", "invalid_hive", "invalid_name", "type_required", "confirmation_required", "invalid_value", "patch_required":
 		return http.StatusBadRequest
-	case "process_not_found", "not_found", "path_not_found":
+	case "process_not_found", "not_found", "path_not_found", "update_not_found":
 		return http.StatusNotFound
 	case "access_denied", "permission_denied":
 		return http.StatusForbidden
-	case "protected_process", "termination_failed", "conflict", "key_has_children":
+	case "protected_process", "termination_failed", "conflict", "key_has_children", "patch_not_pending", "download_failed", "install_failed", "install_in_progress":
 		return http.StatusConflict
 	case "value_too_large":
 		return http.StatusRequestEntityTooLarge

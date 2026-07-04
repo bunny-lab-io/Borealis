@@ -68,6 +68,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/agent/files/transfers/<transfer_id>/status` (Device Authenticated) - fetch one File Management transfer control snapshot so the agent can honor cancellation while streaming or archiving.
     - `POST /api/agent/files/transfers/<transfer_id>/progress` (Device Authenticated) - update Engine-side File Management transfer progress.
     - `POST /api/agent/files/transfers/<transfer_id>/content` (Device Authenticated) - upload a completed File Management download artifact back to the Engine.
+    - `POST /api/agent/patches/install-progress` (Device Authenticated) - update latest scheduled Windows patch install progress for the authenticated device/run. Payloads include scheduled job/run IDs, KB/update identity, phase, percent, message, and captured timestamp.
     - `POST /api/agent/vpn/ensure` (Device Authenticated) - persistent WireGuard tunnel bootstrap.
     - `POST /api/agent/vpn/ready` (Device Authenticated) - report active WireGuard tunnel, local service, and firewall readiness for scheduled SSH/WinRM dispatch.
     - `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
@@ -96,6 +97,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device/software/<hostname>/uninstall-block` (Token Authenticated) - persist a hotloaded global uninstall blocklist rule for the selected software row.
     - `POST /api/device/software/<hostname>/uninstall-unblock` (Token Authenticated) - remove matching hotloaded global uninstall blocklist rules for the selected software row.
     - `POST /api/device/software/<hostname>/uninstall` (Token Authenticated) - queue a silent uninstall quick job for a supported installed-software row on an in-scope Windows device.
+    - `GET /api/patches/audit` (Token Authenticated) - list normalized patch inventory for all devices visible to the operator, including `active_install_job` when an enabled scheduled patch install already owns a matching KB, patch key, or title.
+    - `GET /api/device/patches/<hostname>` (Token Authenticated) - list normalized patch inventory for one in-scope device.
+    - `POST /api/device/patches/<hostname>/refresh` (Token Authenticated) - queue an immediate patch inventory refresh over the device SYSTEM socket.
     - `POST /api/device/update-agent/<hostname>` (Token Authenticated) - ask an in-scope device to start its local AutoUpdater task immediately.
     - `GET /api/device/files/<hostname>/roots` (Token Authenticated) - load the Device Summary `File Management` roots view for an in-scope device.
     - `GET /api/device/files/<hostname>/children?path=<absolute-path>` (Token Authenticated) - list one remote directory for an in-scope device.
@@ -202,9 +206,10 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/scheduled_jobs/<int:job_id>/rerun` (Token Authenticated) - queue a fresh immediate occurrence for an enabled scheduled job.
     - `DELETE /api/scheduled_jobs/<int:job_id>` (Token Authenticated) - delete scheduled job.
     - `GET /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - run history.
-    - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results.
+    - `GET /api/scheduled_jobs/<int:job_id>/devices` (Token Authenticated) - device results. Scheduled patch install rows include `patch_progress` and may include `display_status_label` while keeping canonical `job_status` unchanged.
     - `DELETE /api/scheduled_jobs/<int:job_id>/runs` (Token Authenticated) - clear run history.
     - `job_kind = onboarding` on scheduled-job create/update creates an automatic local-network onboarding job. Payloads use a `device_onboarding` component and an `onboarding_scope` target. The component accepts `agent_platform` (`linux` or `windows`), `install_branch`, `ssh_port`, `windows_port`, `winrm_port`, optional `onboarding_methods` (`smb_scm`, `scheduled_task`, `wmi_dcom`, `winrm`), and optional `onboarding_concurrency` (default `5`). The target accepts `entries` for discovery scope and optional `exclusions` for IP/FQDN/CIDR/range blacklist entries.
+    - `job_kind = patch_install` on scheduled-job create/update creates a Windows patch install job. Payloads use one `patch_install` component with `patch_key`, optional `kb`, `title`, `source`, `classification`, `severity`, and `metadata`; targets are normal scheduled-job device/filter targets scoped to the operator. Execution uses system context and stores per-device result/output in Scheduled Job history.
     - `POST /api/onboarding/jobs/<int:job_id>/redeploy` (Token Authenticated) - delete prior run history for one onboarding job and dispatch a fresh immediate onboarding occurrence.
     - `GET /api/onboarding/jobs/<int:job_id>/targets` (Token Authenticated) - per-target onboarding status, SSH port, approval reference, approval id, current approval status when available, and a persistent `timeline`/`events` array of sanitized task events with status, task, start/finish timestamps, and stdout/stderr snippets.
     - Internal job-scheduler endpoints under `/api/internal/job-scheduler/*` are HMAC-authenticated with the Engine secret and are not public operator APIs. They let workers fetch decrypted credentials at execution time, fetch the Engine public base URL, ask `api-backend` to emit host-service events over existing agent sockets, start workflow runs, and bridge WireGuard session lookup/preparation for scheduled Ansible dispatch.

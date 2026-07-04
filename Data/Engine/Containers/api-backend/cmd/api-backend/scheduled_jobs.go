@@ -27,6 +27,7 @@ const (
 	scheduledJobKindAutomation       = "automation"
 	scheduledJobKindOnboarding       = "onboarding"
 	scheduledJobKindAgentMaintenance = "agent_maintenance"
+	scheduledJobKindPatchInstall     = "patch_install"
 	scheduledSkipNoTargets           = "no_devices_targeted"
 	defaultOnboardingSSHPort         = 22
 	defaultScheduledRunHistoryDays   = 30
@@ -853,6 +854,7 @@ func (s *postgresOperatorStore) listScheduledJobDevices(ctx context.Context, pro
 	for _, rec := range aggregated {
 		hostKey := strings.ToLower(cleanText(rec["hostname"]))
 		acts := scheduledActivitiesForRuns(rec["run_ids"], activities)
+		progress := patchProgressFromActivities(acts)
 		devices = append(devices, map[string]any{
 			"hostname":            cleanText(rec["hostname"]),
 			"online":              online[hostKey],
@@ -866,15 +868,20 @@ func (s *postgresOperatorStore) listScheduledJobDevices(ctx context.Context, pro
 			"resolution_reason":   cleanText(rec["resolution_reason"]),
 			"ran_on":              firstPresentAny(rec["finished_ts"], rec["started_ts"]),
 			"job_status":          firstText(cleanText(rec["status"]), scheduledStatusPending),
+			"patch_progress":      progress,
 			"has_stdout":          scheduledActivitiesHave(acts, "has_stdout"),
 			"has_stderr":          scheduledActivitiesHave(acts, "has_stderr"),
 			"activities":          acts,
 		})
+		if progress != nil && strings.EqualFold(cleanText(rec["status"]), scheduledStatusRunning) {
+			devices[len(devices)-1]["display_status_label"] = cleanText(progress["display_label"])
+			devices[len(devices)-1]["status_tooltip"] = patchProgressTooltip(progress)
+		}
 	}
 	sort.SliceStable(devices, func(i, j int) bool {
 		return strings.ToLower(cleanText(devices[i]["hostname"])) < strings.ToLower(cleanText(devices[j]["hostname"]))
 	})
-	return map[string]any{"occurrence": occAny(occ), "devices": devices}, http.StatusOK, nil
+	return map[string]any{"occurrence": occAny(occ), "devices": devices, "job_kind": jobKind}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) listOnboardingJobTargets(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error) {
@@ -1293,11 +1300,11 @@ func loadScheduledRunActivities(ctx context.Context, conn *sql.Conn, runIDs []in
 		return result, nil
 	}
 	query, params := inClauseQuery(`
-		SELECT s.run_id, s.activity_id, s.component_kind, s.script_type, s.component_path, s.component_name,
-		       COALESCE(LENGTH(h.stdout), 0), COALESCE(LENGTH(h.stderr), 0)
-		  FROM engine.scheduled_job_run_activity AS s
-	 LEFT JOIN engine.activity_history AS h ON h.id=s.activity_id
-		 WHERE s.run_id IN (%s)
+			SELECT s.run_id, s.activity_id, s.component_kind, s.script_type, s.component_path, s.component_name,
+			       COALESCE(LENGTH(h.stdout), 0), COALESCE(LENGTH(h.stderr), 0), COALESCE(h.metadata_json, '{}')
+			  FROM engine.scheduled_job_run_activity AS s
+		 LEFT JOIN engine.activity_history AS h ON h.id=s.activity_id
+			 WHERE s.run_id IN (%s)
 	`, runIDs)
 	rows, err := conn.QueryContext(ctx, query, params...)
 	if err != nil {
@@ -1306,11 +1313,12 @@ func loadScheduledRunActivities(ctx context.Context, conn *sql.Conn, runIDs []in
 	defer rows.Close()
 	for rows.Next() {
 		var runID, activityID, stdoutLen, stderrLen sql.NullInt64
-		var kind, scriptType, path, name sql.NullString
-		if err := rows.Scan(&runID, &activityID, &kind, &scriptType, &path, &name, &stdoutLen, &stderrLen); err != nil {
+		var kind, scriptType, path, name, metadataJSON sql.NullString
+		if err := rows.Scan(&runID, &activityID, &kind, &scriptType, &path, &name, &stdoutLen, &stderrLen, &metadataJSON); err != nil {
 			return nil, err
 		}
 		rid := nullInt(runID)
+		metadata := agentDetailsMapFromAny(parseJSON(metadataJSON))
 		result[rid] = append(result[rid], map[string]any{
 			"activity_id":    nullInt(activityID),
 			"component_kind": nullString(kind),
@@ -1319,6 +1327,7 @@ func loadScheduledRunActivities(ctx context.Context, conn *sql.Conn, runIDs []in
 			"component_name": nullString(name),
 			"has_stdout":     nullInt(stdoutLen) > 0,
 			"has_stderr":     nullInt(stderrLen) > 0,
+			"patch_progress": agentDetailsMapFromAny(metadata["patch_progress"]),
 		})
 	}
 	return result, rows.Err()
@@ -1987,6 +1996,8 @@ func normalizeScheduledJobKind(value string) string {
 		return scheduledJobKindOnboarding
 	case "agent_maintenance", "agent_update", "agent_channel_switch":
 		return scheduledJobKindAgentMaintenance
+	case "patch_install", "patch_management", "patch_deployment", "ad_hoc_patch_install", "policy_patch_install":
+		return scheduledJobKindPatchInstall
 	default:
 		return scheduledJobKindAutomation
 	}

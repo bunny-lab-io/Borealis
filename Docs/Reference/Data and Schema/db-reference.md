@@ -25,6 +25,7 @@ scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
 scheduled_job_runs (id) ------< scheduled_job_run_activity (run_id)
 scheduled_job_runs (id) ------< scheduled_job_run_targets (run_id)
 activity_history (id) --------< scheduled_job_run_activity (activity_id, unique)
+activity_history.metadata_json.patch_progress stores latest scheduled Windows patch install progress.
 
 watchdogs (id) ---------------< watchdog_sites (watchdog_id)
 watchdogs (id) ---------------< watchdog_targets (watchdog_id)
@@ -698,6 +699,28 @@ finally:
     - Notes:
     - Raw software blobs still live on `devices.software` for UI detail display, but matching uses this normalized table first.
 
+    #### `device_patch_inventory`
+    - Status: Active.
+    - Purpose: Normalized Windows patch inventory for fleet audit and Device Summary patch views.
+    - Columns: `id`, `device_guid`, `patch_key`, `kb`, `title`, `state`, `source`, `classification`, `severity`, `installed_on`, `published_at`, `captured_at`, `metadata_json`.
+    - Constraints and indexes:
+    - `id` autoincrement primary key.
+    - `idx_device_patch_inventory_guid` on `device_guid`.
+    - `idx_device_patch_inventory_patch_key` on `patch_key`.
+    - `idx_device_patch_inventory_kb` on `kb`.
+    - `idx_device_patch_inventory_state` on `state`.
+    - `idx_device_patch_inventory_guid_state` on `(device_guid, state)`.
+    - Used by:
+    - `/api/agent/details` ingestion refresh when `details.patches` is present.
+    - `GET /api/patches/audit`.
+    - `GET /api/device/patches/<hostname>`.
+    - `job_kind=patch_install` scheduled-job target resolution.
+    - Notes:
+    - Non-patch `/api/agent/details` payloads preserve existing patch rows.
+    - Pending rows use `source=wua_pending`; installed rows use `source=wua_history` or `source=quick_fix_engineering`.
+    - Pending metadata can include `is_downloaded`, `is_mandatory`, `requires_reboot`, `update_id`, and `revision_number`.
+    - Ad-hoc install actions create scheduled jobs. Active enabled patch jobs are surfaced back onto patch rows as `active_install_job` to prevent duplicate deployment jobs for the same KB/patch identity.
+
     ### Scheduling and Automation
     #### `scheduled_jobs`
     - Status: Active.
@@ -710,7 +733,7 @@ finally:
     - Scheduler background loop.
     - Notes:
     - `credential_id` is logical linkage to `credentials.id`; no FK constraint in schema.
-    - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment. `job_kind = agent_maintenance` records on-demand Agent update and branch/channel switch requests.
+    - `job_kind = automation` is normal scheduled automation. `job_kind = onboarding` is automatic local-network device enrollment. `job_kind = agent_maintenance` records on-demand Agent update and branch/channel switch requests. `job_kind = patch_install` records ad-hoc Windows patch install jobs created from Patch Management.
     - Onboarding jobs store discovery entries and exclusion entries inside the JSON `targets_json` `onboarding_scope` record. Inline `#` comments remain in these saved JSON entries and are stripped only when runtime parsing expands the target list. New onboarding target rows preserve the raw matching scope entry in `target_input` so comments such as `10.0.0.56 # LAB-AIO-01` can help correlate pending approvals back to the summary row. Agent branch, target platform, remote ports, Windows fallback methods, and per-job onboarding concurrency live in the JSON `components_json` `device_onboarding` record. No remote machine credential material is copied into either JSON payload.
 
     #### `scheduled_job_runs`
@@ -728,6 +751,7 @@ finally:
     - Notes:
     - Zero-target occurrences are stored as `status = Skipped` with `skip_reason = no_devices_targeted`.
     - Shared Ansible rows leave `target_hostname` empty and use `shared_execution = 1`.
+    - Patch install rows use `component_kind = patch_install`, store the KB/title display name in `component_name`, and keep per-device state in normal run target/activity tables.
 
     #### `scheduled_job_run_activity`
     - Status: Active.
@@ -796,6 +820,7 @@ finally:
     - Notes:
     - Legacy rows may still repeat a host when more than one saved filter contributed to the same occurrence target.
     - Shared Ansible rows store the generated inventory alias and target-resolution outcome per device.
+    - Patch install rows store one frozen device target per endpoint so operators can see install success, failure, timeout, and skipped/offline state in Scheduled Job history.
 
     #### `job_scheduler_work_items`
     - Status: Active.
@@ -805,8 +830,8 @@ finally:
     - `job-scheduler` scheduled ticking and service-action dispatch.
     - Site-worker onboarding execution.
     - Notes:
-    - Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `service_action`.
-    - `scheduled_run`, `scheduled_workflow_run`, and `agent_maintenance_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
+    - Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, `patch_install_run`, and `service_action`.
+    - `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `patch_install_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
     - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
     - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
 

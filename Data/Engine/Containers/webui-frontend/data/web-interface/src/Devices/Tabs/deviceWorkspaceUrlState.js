@@ -10,7 +10,7 @@ export const WORKSPACE_VIEW_DEFAULTS = Object.freeze({
 
 export const WORKSPACE_VIEW_OPTIONS = Object.freeze({
   remote_ops: ["shell", "files", "registry", "processes", "services"],
-  inventory: ["summary", "software"],
+  inventory: ["summary", "software", "patches"],
   config: ["metadata"],
 });
 
@@ -23,6 +23,8 @@ export const LEGACY_TAB_TO_WORKSPACE = Object.freeze({
   registry_editor: { workspace: "remote_ops", view: "registry" },
   installed_software: { workspace: "inventory", view: "software" },
   software: { workspace: "inventory", view: "software" },
+  patch_management: { workspace: "inventory", view: "patches" },
+  patches: { workspace: "inventory", view: "patches" },
   metadata_fields: { workspace: "config", view: "metadata" },
   metadata: { workspace: "config", view: "metadata" },
   services: { workspace: "remote_ops", view: "services" },

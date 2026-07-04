@@ -497,6 +497,9 @@ func scheduledRunWorkPayload(row scheduledRunWorkRow) map[string]any {
 		kind = schedulerKindScheduledWorkflowRun
 	case "ansible":
 		taskType = "Playbook"
+	case patchInstallComponentKind:
+		taskType = "Patch Install"
+		kind = schedulerKindPatchInstallRun
 	}
 	return map[string]any{
 		"id":             "scheduled-run:" + strconv.FormatInt(runID, 10),

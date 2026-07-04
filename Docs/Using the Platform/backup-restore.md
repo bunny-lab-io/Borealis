@@ -72,7 +72,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.
     - Sites, enrollment codes, auto-approval settings, device-site assignments, and operator site assignments.
     - Agents, latest active device key per agent, latest active refresh token per agent, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, release/settings JSON, software override JSON, and software blocklist JSON.
-    - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, metadata definitions/values, and current software inventory.
+    - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, metadata definitions/values, and current software and patch inventory.
 
     ### Excluded state
     - Engine logs and rotated logs.

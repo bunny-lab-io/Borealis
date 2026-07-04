@@ -55,6 +55,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_filters(conn, logger=logger)
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
+        _ensure_device_patch_inventory(conn, logger=logger)
         _ensure_metadata_fields(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
@@ -892,6 +893,67 @@ def _ensure_device_software_inventory(conn: sqlite3.Connection, *, logger: Optio
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure device_software_inventory table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _ensure_device_patch_inventory(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_patch_inventory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_guid TEXT NOT NULL,
+                patch_key TEXT NOT NULL,
+                kb TEXT,
+                title TEXT NOT NULL,
+                state TEXT NOT NULL,
+                source TEXT NOT NULL,
+                classification TEXT,
+                severity TEXT,
+                installed_on INTEGER,
+                published_at INTEGER,
+                captured_at INTEGER NOT NULL,
+                metadata_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_inventory_guid
+                ON device_patch_inventory(device_guid)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_inventory_patch_key
+                ON device_patch_inventory(patch_key)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_inventory_kb
+                ON device_patch_inventory(kb)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_inventory_state
+                ON device_patch_inventory(state)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_patch_inventory_guid_state
+                ON device_patch_inventory(device_guid, state)
+            """
+        )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure device_patch_inventory table: %s", exc, exc_info=True)
         else:
             raise
     finally:

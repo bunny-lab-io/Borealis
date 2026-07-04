@@ -13,6 +13,7 @@ from ..job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token
 PENDING_HOST_SERVICE_EVENTS = {
     "agent_maintenance_request",
     "agent_update_request",
+    "patch_inventory_refresh_request",
     "quick_job_run",
     "software_inventory_refresh_request",
     "vpn_tunnel_start",

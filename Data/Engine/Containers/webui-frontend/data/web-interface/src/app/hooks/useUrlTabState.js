@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 function normalizeString(value) {
   return String(value || "").trim().toLowerCase();
@@ -13,6 +13,7 @@ export function useUrlTabState({
   urlByKey = {},
   replace = true,
 }) {
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const normalizedAllowedKeys = useMemo(
@@ -45,8 +46,8 @@ export function useUrlTabState({
 
     const nextParams = new URLSearchParams(searchParams);
     nextParams.set(param, serializedActiveKey);
-    setSearchParams(nextParams, { replace });
-  }, [param, replace, searchParams, serializedActiveKey, setSearchParams]);
+    setSearchParams(nextParams, { replace, state: location.state });
+  }, [location.state, param, replace, searchParams, serializedActiveKey, setSearchParams]);
 
   const setActiveKey = useCallback(
     (nextKey) => {
@@ -72,9 +73,9 @@ export function useUrlTabState({
 
       const nextParams = new URLSearchParams(searchParams);
       nextParams.set(param, serializedKey);
-      setSearchParams(nextParams, { replace });
+      setSearchParams(nextParams, { replace, state: location.state });
     },
-    [normalizedAllowedKeys, param, replace, searchParams, setSearchParams, urlByKey]
+    [location.state, normalizedAllowedKeys, param, replace, searchParams, setSearchParams, urlByKey]
   );
 
   return {
