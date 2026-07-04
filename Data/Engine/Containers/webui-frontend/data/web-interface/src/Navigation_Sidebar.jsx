@@ -64,8 +64,6 @@ const SITE_SCOPED_NAV_KEYS = new Set([
   "jobs",
   "software",
   "patch-management-windows",
-  "patch-management-site-policies",
-  "patch-management-device-filter-policies",
 ]);
 
 function buildSiteScopedPath(path, siteId, extraParams = {}) {
@@ -188,7 +186,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Windows",
         navKey: "patch-management-windows",
         to: APP_PATHS.patchManagementWindows,
-        patchTabKey: "patch_list",
       },
       {
         icon: LinuxIcon,
@@ -201,20 +198,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "MacOS",
         navKey: "patch-management-macos",
         to: APP_PATHS.patchManagementMacOS,
-      },
-      {
-        icon: PatchIcon,
-        label: "Site Policies",
-        navKey: "patch-management-site-policies",
-        to: APP_PATHS.patchManagementSitePolicies,
-        patchTabKey: "site_policies",
-      },
-      {
-        icon: PatchIcon,
-        label: "Device / Filter Policies",
-        navKey: "patch-management-device-filter-policies",
-        to: APP_PATHS.patchManagementDeviceFilterPolicies,
-        patchTabKey: "device_filter_policies",
       },
     ],
   },
@@ -618,16 +601,11 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                 );
               }
               const IconComponent = item.icon;
-              const currentPatchTab = new URLSearchParams(location.search || "").get("tab") || "patch_list";
-              const patchTabActive =
-                item.patchTabKey && location.pathname === APP_PATHS.patchManagementWindows
-                  ? currentPatchTab === item.patchTabKey
-                  : undefined;
               const activeOverride = section.siteScoped
                 ? activeNavKey === item.navKey
                 : selectedSiteId && SITE_SCOPED_NAV_KEYS.has(item.navKey)
                   ? false
-                  : patchTabActive;
+                  : undefined;
               return (
                 <NavItem
                   key={item.navKey}
