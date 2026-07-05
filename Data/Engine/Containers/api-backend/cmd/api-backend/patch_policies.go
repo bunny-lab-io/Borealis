@@ -18,6 +18,8 @@ const (
 	patchPolicyTypeSite         = "site"
 	patchPolicyTypeDeviceFilter = "device_filter"
 
+	patchPolicyEvaluateTimeout = 60 * time.Second
+
 	patchPolicyRoleServer      = "Server"
 	patchPolicyRoleWorkstation = "Workstation"
 	patchPolicyRoleBoth        = "Both"
@@ -346,7 +348,7 @@ func patchPolicyEvaluate(w http.ResponseWriter, r *http.Request, auth *authServi
 	if err != nil {
 		body = map[string]any{}
 	}
-	ctx, cancel := requestTimeout(r.Context(), auth)
+	ctx, cancel := patchPolicyEvaluateContext(r.Context(), auth)
 	defer cancel()
 	payload, status, err := store.evaluatePatchPolicies(ctx, profile, body)
 	if err != nil {
@@ -354,6 +356,14 @@ func patchPolicyEvaluate(w http.ResponseWriter, r *http.Request, auth *authServi
 		return
 	}
 	writeJSON(w, status, payload)
+}
+
+func patchPolicyEvaluateContext(ctx context.Context, auth *authService) (context.Context, context.CancelFunc) {
+	timeout := patchPolicyEvaluateTimeout
+	if auth != nil && auth.timeout > timeout {
+		timeout = auth.timeout
+	}
+	return context.WithTimeout(ctx, timeout)
 }
 
 func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile operatorProfile, policyType string) ([]map[string]any, error) {
@@ -1774,20 +1784,32 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAtOnce(ctx context.Context,
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 	if err := syncPatchCatalogFromInventory(ctx, conn, now); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	rows, err := loadPatchPolicyRows(ctx, conn, "", nil)
 	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.Close(); err != nil {
 		return nil, err
 	}
 	effectiveScopes, err := s.patchPolicyEffectiveScopes(ctx, profile, rows)
 	if err != nil {
 		return nil, err
 	}
+	conn, err = s.db.Conn(ctx)
+	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
 	activeJobs, err := loadActivePatchInstallJobs(ctx, conn, profile)
 	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	if err := conn.Close(); err != nil {
 		return nil, err
 	}
 	summaries := []map[string]any{}
@@ -1798,28 +1820,58 @@ func (s *postgresOperatorStore) evaluatePatchPoliciesAtOnce(ctx context.Context,
 		if onlyPolicyID > 0 && nullInt(row.ID) != onlyPolicyID {
 			continue
 		}
-		if !manual && !patchPolicyDue(ctx, conn, row, scheduledTS) {
-			continue
+		if !manual {
+			due, err := s.patchPolicyDueAt(ctx, row, scheduledTS)
+			if err != nil {
+				return nil, err
+			}
+			if !due {
+				continue
+			}
 		}
-		summary, err := s.createPatchPolicyRunJobs(ctx, profile, conn, row, effectiveScopes[nullInt(row.ID)], scheduledTS, now, activeJobs)
+		conflictedKeys, err := s.patchPolicyConflictedDeviceKeys(ctx, profile, row)
 		if err != nil {
 			return nil, err
+		}
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			return nil, errors.Join(errOperatorStoreDown, err)
+		}
+		summary, err := s.createPatchPolicyRunJobs(ctx, profile, conn, row, effectiveScopes[nullInt(row.ID)], scheduledTS, now, activeJobs, conflictedKeys)
+		closeErr := conn.Close()
+		if err != nil {
+			if closeErr != nil {
+				return nil, errors.Join(err, closeErr)
+			}
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
 		}
 		summaries = append(summaries, summary)
 	}
 	return map[string]any{"status": "evaluated", "scheduled_ts": scheduledTS, "runs": summaries, "count": len(summaries)}, nil
 }
 
-func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, conn *sql.Conn, row patchPolicyRow, scope *patchPolicyEffectiveScope, scheduledTS int64, now int64, activeJobs map[string]map[string]any) (map[string]any, error) {
+func (s *postgresOperatorStore) patchPolicyDueAt(ctx context.Context, row patchPolicyRow, scheduledTS int64) (bool, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return false, errors.Join(errOperatorStoreDown, err)
+	}
+	due := patchPolicyDue(ctx, conn, row, scheduledTS)
+	closeErr := conn.Close()
+	if closeErr != nil {
+		return false, closeErr
+	}
+	return due, nil
+}
+
+func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, profile operatorProfile, conn *sql.Conn, row patchPolicyRow, scope *patchPolicyEffectiveScope, scheduledTS int64, now int64, activeJobs map[string]map[string]any, conflictedKeys map[string]bool) (map[string]any, error) {
 	devices := []patchPolicyDevice{}
 	rulesByDevice := map[string][]patchPolicyRule{}
 	if scope != nil {
 		devices = append(devices, scope.Devices...)
 		rulesByDevice = scope.RulesByDevice
-	}
-	conflictedKeys, err := s.patchPolicyConflictedDeviceKeys(ctx, profile, conn, row)
-	if err != nil {
-		return nil, err
 	}
 	deviceByGUID := map[string]patchPolicyDevice{}
 	excludedDevices := 0
@@ -1949,13 +2001,24 @@ func (s *postgresOperatorStore) createPatchPolicyRunJobs(ctx context.Context, pr
 	return summary, nil
 }
 
-func (s *postgresOperatorStore) patchPolicyConflictedDeviceKeys(ctx context.Context, profile operatorProfile, conn *sql.Conn, current patchPolicyRow) (map[string]bool, error) {
+func (s *postgresOperatorStore) patchPolicyConflictedDeviceKeys(ctx context.Context, profile operatorProfile, current patchPolicyRow) (map[string]bool, error) {
 	if normalizePatchPolicyType(current.PolicyType.String) != patchPolicyTypeDeviceFilter {
 		return map[string]bool{}, nil
 	}
-	rows, err := loadPatchPolicyRows(ctx, conn, patchPolicyTypeDeviceFilter, nil)
+	conn, err := s.db.Conn(ctx)
 	if err != nil {
+		return nil, errors.Join(errOperatorStoreDown, err)
+	}
+	rows, err := loadPatchPolicyRows(ctx, conn, patchPolicyTypeDeviceFilter, nil)
+	closeErr := conn.Close()
+	if err != nil {
+		if closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	coverage := map[string]int{}
 	for _, row := range rows {
