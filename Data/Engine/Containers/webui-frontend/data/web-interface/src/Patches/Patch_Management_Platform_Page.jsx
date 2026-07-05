@@ -3,6 +3,7 @@ import {
   Alert,
   Box,
   Checkbox,
+  IconButton,
   Menu,
   MenuItem,
   Stack,
@@ -11,7 +12,9 @@ import {
   Typography,
 } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { BOREALIS_BLUE, CountSliderGroup, buildNavTabsSx } from "../Automation/Watchdogs/shared.jsx";
@@ -159,16 +162,42 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
     () => [
       { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
       { field: "enabled", headerName: "Enabled", width: 120 },
-      { field: "role_scope", headerName: "Role", width: 135 },
-      { field: "target_count", headerName: "Covered", width: 145 },
-      { field: "deferral_days", headerName: "Deferral", width: 120 },
-      { field: "install_schedule_type", headerName: "Install", width: 130 },
-      { field: "install_start_ts", headerName: "Start", width: 190 },
-      { field: "managed_update_mode", headerName: "Managed WU", width: 135 },
-      { field: "reboot_after_install", headerName: "Reboot", width: 120 },
-      { field: "actions", headerName: "Actions", width: 300, sortable: false, filter: false },
+      { field: "role_scope", headerName: "Scope", width: 135 },
+      { field: "target_count", headerName: "Targeted Devices", width: 175 },
+      { field: "deferral_days", headerName: "Update Deferral Period", width: 215 },
+      { field: "install_schedule_type", headerName: "Schedule", width: 130 },
+      { field: "install_start_ts", headerName: "First Run", width: 190 },
+      {
+        field: "managed_update_mode",
+        headerName: "Borealis Managed Updates",
+        headerTooltip: "When enabled, Borealis prevents automatic OS patch installs while preserving Borealis-controlled patch scans and installs.",
+        width: 235,
+      },
+      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190 },
+      {
+        field: "actions",
+        headerName: "Actions",
+        width: 95,
+        sortable: false,
+        filter: false,
+        resizable: false,
+        cellRenderer: () => (
+          <IconButton
+            size="small"
+            onClick={notifyNotImplemented}
+            sx={{
+              color: BOREALIS_BLUE,
+              width: 32,
+              height: 32,
+              "&:hover": { background: "rgba(125, 183, 255, 0.12)" },
+            }}
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+        ),
+      },
     ],
-    []
+    [notifyNotImplemented]
   );
 
   const activeColumnDefs = activeTab === "patch_list" ? patchColumnDefs : policyColumnDefs;
@@ -269,12 +298,13 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
               </FilterSliderBlock>
             </Box>
             <Alert
-              severity="info"
+              severity="warning"
+              icon={<WarningAmberRoundedIcon />}
               sx={{
-                background: "rgba(8, 47, 73, 0.48)",
+                background: "rgba(113, 63, 18, 0.42)",
                 color: MAGIC_UI.textBright,
-                border: "1px solid rgba(125, 211, 252, 0.28)",
-                "& .MuiAlert-icon": { color: BOREALIS_BLUE },
+                border: "1px solid rgba(245, 158, 11, 0.45)",
+                "& .MuiAlert-icon": { color: "#facc15" },
               }}
             >
               Coming Soon

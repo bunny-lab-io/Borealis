@@ -4,11 +4,15 @@ import {
   Box,
   Button,
   Checkbox,
+  Divider,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  IconButton,
+  ListItemIcon,
+  ListItemText,
   Menu,
   MenuItem,
   Stack,
@@ -22,6 +26,7 @@ import {
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
+import MoreVertIcon from "@mui/icons-material/MoreVert";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import PolicyRoundedIcon from "@mui/icons-material/PolicyRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
@@ -109,6 +114,42 @@ const FILTER_LABEL_SX = {
   pl: 1,
 };
 
+const POLICY_ACTION_MENU_PAPER_SX = {
+  mt: 0.75,
+  minWidth: 250,
+  borderRadius: 2,
+  border: `1px solid ${MAGIC_UI.panelBorder}`,
+  background: "rgba(8, 12, 24, 0.96)",
+  color: MAGIC_UI.textBright,
+  boxShadow: "0 24px 60px rgba(2, 8, 23, 0.72)",
+  backdropFilter: "blur(12px)",
+  "& .MuiMenu-list": {
+    p: 0.75,
+  },
+  "& .MuiMenuItem-root": {
+    minHeight: 38,
+    borderRadius: 1,
+    fontSize: "0.88rem",
+    color: MAGIC_UI.textBright,
+  },
+  "& .MuiMenuItem-root:hover": {
+    background: "rgba(125, 183, 255, 0.12)",
+  },
+  "& .MuiListItemIcon-root": {
+    minWidth: 32,
+    color: BOREALIS_BLUE,
+  },
+};
+
+const POLICY_ACTION_MENU_HEADER_SX = {
+  px: 1,
+  py: 0.75,
+  display: "flex",
+  alignItems: "center",
+  gap: 1,
+  minWidth: 0,
+};
+
 export function text(value) {
   return String(value ?? "").trim();
 }
@@ -177,6 +218,10 @@ export function policyTypeForTab(tabKey) {
 export function policyTypeLabel(policyType) {
   if (policyType === "global") return "Global Policy";
   return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
+}
+
+function policyRowTypeLabel(row = {}) {
+  return policyTypeLabel(text(row.policy_type) || "site");
 }
 
 function microsoftUpdateCatalogURL(kb) {
@@ -935,6 +980,9 @@ function PatchPolicyTab({ policyType }) {
   const [policies, setPolicies] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [busyId, setBusyId] = useState("");
+  const [actionMenuAnchor, setActionMenuAnchor] = useState(null);
+  const [actionMenuPosition, setActionMenuPosition] = useState(null);
+  const [actionMenuPolicy, setActionMenuPolicy] = useState(null);
 
   const loadPolicies = useCallback(async () => {
     try {
@@ -951,6 +999,39 @@ function PatchPolicyTab({ policyType }) {
   useEffect(() => {
     void loadPolicies();
   }, [loadPolicies]);
+
+  const closeActionMenu = useCallback(() => {
+    setActionMenuAnchor(null);
+    setActionMenuPosition(null);
+    setActionMenuPolicy(null);
+  }, []);
+
+  const openActionMenu = useCallback(
+    (event, policy) => {
+      if (!policy?.id) return;
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      setActionMenuAnchor(event?.currentTarget || null);
+      setActionMenuPosition(null);
+      setActionMenuPolicy(policy);
+    },
+    []
+  );
+
+  const openContextMenu = useCallback((event, policy, node) => {
+    if (!policy?.id) return;
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (node && !node.isSelected?.()) {
+      node.setSelected(true, true);
+    }
+    setActionMenuAnchor(null);
+    setActionMenuPosition({
+      top: event.clientY + 2,
+      left: event.clientX + 2,
+    });
+    setActionMenuPolicy(policy);
+  }, []);
 
   const openEdit = useCallback((policy) => {
     if (!policy?.id) return;
@@ -980,6 +1061,7 @@ function PatchPolicyTab({ policyType }) {
 
   const evaluatePolicy = useCallback(async (policy = {}) => {
     if (!policy?.id) return;
+    closeActionMenu();
     setBusyId(`eval-${policy.id}`);
     try {
       const response = await fetch("/api/patches/policies/evaluate", {
@@ -992,59 +1074,138 @@ function PatchPolicyTab({ policyType }) {
       if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       await loadPolicies();
     } catch (error) {
-      setLoadError(String(error?.message || error));
+      setLoadError(`Evaluate failed: ${String(error?.message || error)}`);
     } finally {
       setBusyId("");
     }
-  }, [loadPolicies]);
+  }, [closeActionMenu, loadPolicies]);
+
+  const actionMenuItems = useMemo(
+    () => [
+      {
+        id: "edit",
+        label: "Edit",
+        icon: <PolicyRoundedIcon fontSize="small" />,
+        disabled: false,
+        onClick: () => {
+          const policy = actionMenuPolicy;
+          closeActionMenu();
+          openEdit(policy);
+        },
+      },
+      {
+        id: "evaluate",
+        label: "Evaluate",
+        icon: <PlayArrowRoundedIcon fontSize="small" />,
+        disabled: !actionMenuPolicy?.id || busyId === `eval-${actionMenuPolicy?.id}`,
+        onClick: () => {
+          void evaluatePolicy(actionMenuPolicy);
+        },
+      },
+      {
+        id: "delete",
+        label: "Delete",
+        icon: <DeleteRoundedIcon fontSize="small" />,
+        disabled:
+          !actionMenuPolicy?.id ||
+          Boolean(actionMenuPolicy?.locked) ||
+          policyType === "global" ||
+          busyId === `delete-${actionMenuPolicy?.id}`,
+        onClick: () => {
+          const policy = actionMenuPolicy;
+          closeActionMenu();
+          void deletePolicy(policy);
+        },
+      },
+    ],
+    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, evaluatePolicy, openEdit, policyType]
+  );
+
+  const actionCellRenderer = useCallback(
+    (params) => {
+      const policy = params.data || {};
+      return (
+        <IconButton
+          size="small"
+          onClick={(event) => openActionMenu(event, policy)}
+          sx={{
+            color: BOREALIS_BLUE,
+            width: 32,
+            height: 32,
+            "&:hover": { background: "rgba(125, 183, 255, 0.12)" },
+          }}
+        >
+          <MoreVertIcon fontSize="small" />
+        </IconButton>
+      );
+    },
+    [openActionMenu]
+  );
 
   const columnDefs = useMemo(
     () => [
       { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
       { field: "enabled", headerName: "Enabled", width: 120, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
-      { field: "role_scope", headerName: "Role", width: 135 },
+      { field: "role_scope", headerName: "Scope", width: 135 },
       {
         field: "target_count",
-        headerName: "Covered",
-        width: 145,
+        headerName: "Targeted Devices",
+        width: 175,
         valueFormatter: (params) => formatDeviceCount(params.value),
       },
-      { field: "deferral_days", headerName: "Deferral", width: 120, valueFormatter: (params) => `${Number(params.value || 0)} days` },
-      { field: "install_schedule_type", headerName: "Install", width: 130 },
-      { field: "install_start_ts", headerName: "Start", width: 190, valueFormatter: (params) => formatTimestamp(params.value) },
-      { field: "managed_update_mode", headerName: "Managed WU", width: 135, valueFormatter: (params) => (params.value ? "On" : "Off") },
-      { field: "reboot_after_install", headerName: "Reboot", width: 120, valueFormatter: (params) => (params.value ? "Allowed" : "Off") },
+      { field: "deferral_days", headerName: "Update Deferral Period", width: 215, valueFormatter: (params) => `${Number(params.value || 0)} days` },
+      { field: "install_schedule_type", headerName: "Schedule", width: 130 },
+      { field: "install_start_ts", headerName: "First Run", width: 190, valueFormatter: (params) => formatTimestamp(params.value) },
+      {
+        field: "managed_update_mode",
+        headerName: "Borealis Managed Updates",
+        headerTooltip: "When enabled, Borealis asks the Agent to prevent automatic Windows Update installs while preserving Borealis-controlled patch scans and installs.",
+        width: 235,
+        valueFormatter: (params) => (params.value ? "Managed by Borealis" : "Not enforced"),
+      },
+      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
       {
         colId: "actions",
         headerName: "Actions",
-        width: 300,
+        width: 95,
         sortable: false,
         filter: false,
-        cellRenderer: (params) => {
-          const policy = params.data || {};
-          return (
-            <Stack direction="row" spacing={0.8} sx={{ alignItems: "center", height: "100%" }}>
-              <Button size="small" startIcon={<PolicyRoundedIcon />} onClick={() => openEdit(policy)}>
-                Edit
-              </Button>
-              <Button size="small" startIcon={<PlayArrowRoundedIcon />} disabled={busyId === `eval-${policy.id}`} onClick={() => evaluatePolicy(policy)}>
-                Evaluate
-              </Button>
-              {policyType !== "global" ? (
-                <Button size="small" startIcon={<DeleteRoundedIcon />} disabled={policy.locked || busyId === `delete-${policy.id}`} onClick={() => deletePolicy(policy)}>
-                  Delete
-                </Button>
-              ) : null}
-            </Stack>
-          );
-        },
+        resizable: false,
+        cellRenderer: actionCellRenderer,
       },
     ],
-    [busyId, deletePolicy, evaluatePolicy, openEdit]
+    [actionCellRenderer]
   );
 
   return (
     <>
+      <Menu
+        anchorEl={actionMenuAnchor}
+        anchorReference={actionMenuPosition ? "anchorPosition" : "anchorEl"}
+        anchorPosition={actionMenuPosition || undefined}
+        open={Boolean(actionMenuPolicy)}
+        onClose={closeActionMenu}
+        PaperProps={{ sx: POLICY_ACTION_MENU_PAPER_SX }}
+      >
+        <Box sx={POLICY_ACTION_MENU_HEADER_SX}>
+          <PolicyRoundedIcon sx={{ color: BOREALIS_BLUE, fontSize: 20, flexShrink: 0 }} />
+          <Box sx={{ minWidth: 0 }}>
+            <Typography noWrap sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 700 }}>
+              {text(actionMenuPolicy?.name) || "Patch Policy"}
+            </Typography>
+            <Typography noWrap sx={{ color: MAGIC_UI.textMuted, fontSize: "0.76rem" }}>
+              {policyRowTypeLabel(actionMenuPolicy)}
+            </Typography>
+          </Box>
+        </Box>
+        <Divider sx={{ borderColor: "rgba(148,163,184,0.18)", my: 0.5 }} />
+        {actionMenuItems.map((item) => (
+          <MenuItem key={item.id} disabled={item.disabled} onClick={item.onClick}>
+            <ListItemIcon>{item.icon}</ListItemIcon>
+            <ListItemText primary={item.label} />
+          </MenuItem>
+        ))}
+      </Menu>
       {loadError ? <Box sx={{ p: 2 }}><Alert severity="error">{loadError}</Alert></Box> : null}
       <GridShell
         sx={{
@@ -1066,6 +1227,8 @@ function PatchPolicyTab({ policyType }) {
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
           getRowId={(params) => String(params.data?.id || params.rowIndex)}
+          onCellContextMenu={(params) => openContextMenu(params.event, params.data, params.node)}
+          suppressContextMenu
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>

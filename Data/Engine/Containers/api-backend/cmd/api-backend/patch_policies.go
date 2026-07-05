@@ -865,7 +865,7 @@ func (s *postgresOperatorStore) evaluatePatchPolicies(ctx context.Context, profi
 	now := time.Now().Unix()
 	result, err := s.evaluatePatchPoliciesAt(ctx, profile, policyID, schedulerFloorMinute(now), now, true)
 	if err != nil {
-		return nil, http.StatusInternalServerError, err
+		return map[string]any{"error": "policy_evaluate_failed", "message": err.Error()}, http.StatusInternalServerError, err
 	}
 	return result, http.StatusOK, nil
 }
