@@ -63,6 +63,9 @@ const VNC_STAGE_BACKGROUND = "#0b1325";
 const VNC_CANVAS_BOX_SHADOW =
   "0 0 0 1px rgba(125, 183, 255, 0.18), 0 18px 42px rgba(2, 6, 23, 0.4)";
 const VNC_OPERATOR_CURSOR = "default";
+const VIEWFINDER_DEFAULT_WIDTH = 202;
+const VIEWFINDER_DEFAULT_HEIGHT = 106;
+const VIEWFINDER_MIN_MEASURED_SIZE = 24;
 
 const SIDEBAR_THEME = {
   panel:
@@ -1113,7 +1116,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [displayVirtualBounds, setDisplayVirtualBounds] = useState(null);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
-  const [viewfinderSize, setViewfinderSize] = useState({ width: 0, height: 126 });
+  const [viewfinderSize, setViewfinderSize] = useState({
+    width: VIEWFINDER_DEFAULT_WIDTH,
+    height: VIEWFINDER_DEFAULT_HEIGHT,
+  });
   const [viewportPreview, setViewportPreview] = useState({
     left: 0,
     top: 0,
@@ -1251,8 +1257,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const displayLayoutGeometry = useMemo(
     () =>
       buildDisplayLayoutGeometry(viewfinderTopology, {
-        frameWidth: Math.max(1, Math.round(viewfinderSize.width || 1)),
-        frameHeight: Math.max(1, Math.round(viewfinderSize.height || 126)),
+        frameWidth: Math.max(1, Math.round(viewfinderSize.width || VIEWFINDER_DEFAULT_WIDTH)),
+        frameHeight: Math.max(1, Math.round(viewfinderSize.height || VIEWFINDER_DEFAULT_HEIGHT)),
         padding: 8,
       }),
     [viewfinderSize.height, viewfinderSize.width, viewfinderTopology]
@@ -2671,13 +2677,21 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const hostHeight = Number(host?.clientHeight || 0);
       const shellWidth = Number(shell?.clientWidth || 0);
       const shellHeight = Number(shell?.clientHeight || 0);
-      const nextWidth = Math.max(1, Math.round(hostWidth || Math.max(0, shellWidth - 20)));
-      const nextHeight = Math.max(1, Math.round(hostHeight || Math.max(0, shellHeight - 20)));
+      const measuredWidth = Math.round(hostWidth || Math.max(0, shellWidth - 20));
+      const measuredHeight = Math.round(hostHeight || Math.max(0, shellHeight - 20));
       setViewfinderSize((previous) => {
+        if (
+          measuredWidth < VIEWFINDER_MIN_MEASURED_SIZE ||
+          measuredHeight < VIEWFINDER_MIN_MEASURED_SIZE
+        ) {
+          return previous;
+        }
+        const nextWidth = Math.max(1, measuredWidth);
+        const nextHeight = Math.max(1, measuredHeight);
         if (previous.width === nextWidth && previous.height === nextHeight) {
           return previous;
         }
-        return { width: nextWidth, height: nextHeight || previous.height || 126 };
+        return { width: nextWidth, height: nextHeight };
       });
     };
     syncSize();
