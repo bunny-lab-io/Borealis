@@ -775,6 +775,13 @@ function patchPolicySourceText(row = {}) {
   return groups.map((group) => group.policy_name).join(", ");
 }
 
+function patchPolicyActionLabel(value) {
+  const normalized = text(value).toLowerCase();
+  if (normalized === "approve" || normalized === "allow") return "allow";
+  if (normalized === "block" || normalized === "deny") return "block";
+  return normalized;
+}
+
 function PatchPolicySourceCell({ row = {} }) {
   const groups = patchPolicySourceGroups(row);
   if (!groups.length) {
@@ -787,14 +794,30 @@ function PatchPolicySourceCell({ row = {} }) {
   const tooltip = (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
       {groups.map((group) => {
-        const ruleText = group.rule_types.length ? ` (${group.rule_types.join(" / ")})` : "";
         return (
           <Typography
             key={`${group.policy_type}-${group.policy_id || group.policy_name}-tooltip`}
             component="span"
             sx={{ color: "inherit", fontSize: 12, lineHeight: 1.35, whiteSpace: "nowrap" }}
           >
-            {`${group.label}: ${group.policy_name}${ruleText}`}
+            <Box component="span" sx={{ fontWeight: 800 }}>
+              {group.label}
+            </Box>
+            {`: ${group.policy_name}`}
+            {group.rule_types.length ? (
+              <Box component="span">
+                {" ("}
+                {group.rule_types.map((ruleType, index) => (
+                  <React.Fragment key={`${group.policy_type}-${group.policy_id || group.policy_name}-${ruleType}`}>
+                    {index > 0 ? " / " : ""}
+                    <Box component="span" sx={{ color: BOREALIS_BLUE, fontWeight: 800 }}>
+                      {patchPolicyActionLabel(ruleType)}
+                    </Box>
+                  </React.Fragment>
+                ))}
+                {")"}
+              </Box>
+            ) : null}
           </Typography>
         );
       })}
