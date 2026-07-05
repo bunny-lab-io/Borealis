@@ -1905,17 +1905,26 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Con
 		if !rowResult.InstallCandidate {
 			continue
 		}
-		for _, policyID := range assignment.HierarchyPolicyIDs {
-			if policyID <= 0 {
-				continue
-			}
-			if index.BreakdownByPolicyID[policyID] == nil {
-				index.BreakdownByPolicyID[policyID] = map[string]int{}
-			}
-			index.BreakdownByPolicyID[policyID][assignment.EffectivePolicyType]++
-		}
+		patchPolicyAddPendingBreakdownCount(&index, assignment)
 	}
 	return index, nil
+}
+
+func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment) {
+	if index == nil || assignment.EffectivePolicyID <= 0 {
+		return
+	}
+	policyType := normalizePatchPolicyType(assignment.EffectivePolicyType)
+	if policyType == "" {
+		return
+	}
+	if index.BreakdownByPolicyID == nil {
+		index.BreakdownByPolicyID = map[int64]map[string]int{}
+	}
+	if index.BreakdownByPolicyID[assignment.EffectivePolicyID] == nil {
+		index.BreakdownByPolicyID[assignment.EffectivePolicyID] = map[string]int{}
+	}
+	index.BreakdownByPolicyID[assignment.EffectivePolicyID][policyType]++
 }
 
 func firstPatchPolicyRow(left patchPolicyRow, right patchPolicyRow) patchPolicyRow {

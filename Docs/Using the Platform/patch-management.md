@@ -47,7 +47,7 @@ The policy list `Targeted Devices` column shows eligible typed Windows devices. 
 
 Device Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
 
-The `Pending Updates` policy column shows approved, deferral-ready pending update instances that would create policy-driven install jobs. Counts are split by the effective policy layer, such as `2 Global / 15 Site-Level Override / 10 Device Filter`. Select a blue count to open `Patch List` filtered to the matching policy hierarchy and layer. The Patch List `Policy Source` column shows which policy layer and policy name would install each grouped update.
+The `Pending Updates` policy column shows approved, deferral-ready pending update instances that would create policy-driven install jobs. Parent rows show only updates owned by that policy. Child rows show lineage counts from parent policies plus the current policy, such as `Global: 15 / Site-Level Override: 1`. Select a blue count to open `Patch List` filtered to that source policy and layer. The Patch List `Policy Source` column shows which policy layer and policy name would install each grouped update.
 
 ## Exclusions and Reboots
 

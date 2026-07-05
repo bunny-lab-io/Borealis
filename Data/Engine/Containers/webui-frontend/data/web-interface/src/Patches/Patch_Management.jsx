@@ -493,16 +493,54 @@ function buildPatchFleetRows(rows = []) {
   });
 }
 
-function pendingUpdateBreakdown(policy = {}) {
+function ownPendingUpdateBreakdown(policy = {}) {
   const raw = Array.isArray(policy?.pending_update_breakdown) ? policy.pending_update_breakdown : [];
   return raw
     .map((item) => ({
       policy_type: normalizePolicyTypeValue({ policy_type: item?.policy_type }),
       label: text(item?.label) || policyTableTypeLabel(item?.policy_type),
       count: Number(item?.count || 0) || 0,
+      source_policy_id: Number(item?.policy_id || policy?.id || 0) || 0,
+      source_policy_name: text(item?.policy_name) || text(policy?.name),
     }))
     .filter((item) => item.count > 0)
     .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
+}
+
+function pendingUpdateBreakdown(policy = {}) {
+  const source = Array.isArray(policy?.__pendingUpdateBreakdown)
+    ? policy.__pendingUpdateBreakdown
+    : ownPendingUpdateBreakdown(policy);
+  return source
+    .map((item) => ({
+      policy_type: normalizePolicyTypeValue({ policy_type: item?.policy_type }),
+      label: text(item?.label) || policyTableTypeLabel(item?.policy_type),
+      count: Number(item?.count || 0) || 0,
+      source_policy_id: Number(item?.source_policy_id || item?.policy_id || policy?.id || 0) || 0,
+      source_policy_name: text(item?.source_policy_name || item?.policy_name) || text(policy?.name),
+    }))
+    .filter((item) => item.count > 0)
+    .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
+}
+
+function mergePendingUpdateBreakdowns(policies = []) {
+  const merged = new Map();
+  policies.forEach((policy) => {
+    ownPendingUpdateBreakdown(policy).forEach((item) => {
+      const current = merged.get(item.policy_type) || {
+        policy_type: item.policy_type,
+        label: item.label,
+        count: 0,
+        source_policy_id: item.source_policy_id,
+        source_policy_name: item.source_policy_name,
+      };
+      current.count += item.count;
+      if (!current.source_policy_id && item.source_policy_id) current.source_policy_id = item.source_policy_id;
+      if (!current.source_policy_name && item.source_policy_name) current.source_policy_name = item.source_policy_name;
+      merged.set(item.policy_type, current);
+    });
+  });
+  return Array.from(merged.values()).sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
 }
 
 function policyLayerSortIndex(policyType) {
@@ -516,7 +554,7 @@ function policyLayerSortIndex(policyType) {
 function pendingUpdateBreakdownText(policy = {}) {
   const breakdown = pendingUpdateBreakdown(policy);
   if (!breakdown.length) return "0 Updates";
-  return breakdown.map((item) => `${item.count.toLocaleString()} ${item.label}`).join(" / ");
+  return breakdown.map((item) => `${item.label}: ${item.count.toLocaleString()}`).join(" / ");
 }
 
 function PendingUpdatesCell({ policy = {}, onSelect }) {
@@ -543,26 +581,36 @@ function PendingUpdatesCell({ policy = {}, onSelect }) {
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                onSelect?.(policy, item.policy_type, item.label);
+                onSelect?.(policy, item);
               }}
               sx={{
                 p: 0,
                 border: "none",
                 background: "transparent",
-                color: BOREALIS_BLUE,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.35,
+                color: "inherit",
                 cursor: "pointer",
                 font: "inherit",
                 fontSize: 13,
-                fontWeight: 800,
+                fontWeight: 700,
                 whiteSpace: "nowrap",
                 textDecoration: "none",
                 "&:hover": {
-                  color: "#93c5fd",
                   textDecoration: "none",
+                  "& .patch-pending-count": {
+                    color: "#93c5fd",
+                  },
                 },
               }}
             >
-              {`${item.count.toLocaleString()} ${item.label}`}
+              <Box component="span" sx={{ color: "rgba(148,163,184,0.82)" }}>
+                {item.label}:
+              </Box>
+              <Box component="span" className="patch-pending-count" sx={{ color: BOREALIS_BLUE, fontWeight: 800 }}>
+                {item.count.toLocaleString()}
+              </Box>
             </Typography>
           </Tooltip>
         </React.Fragment>
@@ -725,7 +773,7 @@ function policyRowDepth(policy = {}) {
   return Number.isFinite(depth) && depth > 0 ? depth : 0;
 }
 
-function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null) {
+function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null, lineagePolicies = []) {
   const sourcePolicy = policy && typeof policy === "object" ? policy : {};
   const targetSites = normalizeTargetSites(sourcePolicy);
   const branchSiteName = text(branchSite?.name);
@@ -739,6 +787,7 @@ function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSi
     __policyTypeLabel: policyTableTypeLabel(normalizePolicyTypeValue(sourcePolicy)),
     __targetSites: targetSites,
     __targetSitesText: targetSites.map((site) => text(site.name)).filter(Boolean).join(", "),
+    __pendingUpdateBreakdown: mergePendingUpdateBreakdowns([...(Array.isArray(lineagePolicies) ? lineagePolicies : []), sourcePolicy]),
   };
 }
 
@@ -782,7 +831,7 @@ function buildPatchPolicyHierarchyRows(policies = []) {
           const key = policySiteKey(site);
           if (key) coveredSiteKeys.add(key);
         });
-        rows.push(makePolicyHierarchyRow(sitePolicy, 1, globalKey));
+        rows.push(makePolicyHierarchyRow(sitePolicy, 1, globalKey, null, [globalPolicy]));
         const siteKeySet = new Set(siteTargets.map(policySiteKey).filter(Boolean));
         devicePolicies
           .filter((policy) => policy.role_scope === role)
@@ -790,7 +839,7 @@ function buildPatchPolicyHierarchyRows(policies = []) {
             const deviceSites = normalizeTargetSites(devicePolicy);
             const matchedSites = deviceSites.filter((site) => siteKeySet.has(policySiteKey(site)));
             matchedSites.forEach((site) => {
-              rows.push(makePolicyHierarchyRow(devicePolicy, 2, `${sitePolicyKey}:${policySiteKey(site)}`, site));
+              rows.push(makePolicyHierarchyRow(devicePolicy, 2, `${sitePolicyKey}:${policySiteKey(site)}`, site, [globalPolicy, sitePolicy]));
             });
           });
       });
@@ -803,11 +852,11 @@ function buildPatchPolicyHierarchyRows(policies = []) {
             return !key || !coveredSiteKeys.has(key);
           });
           if (!deviceSites.length || !uncoveredSites.length && !roleSitePolicies.length) {
-            rows.push(makePolicyHierarchyRow(devicePolicy, 1, globalKey));
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, globalKey, null, [globalPolicy]));
             return;
           }
           uncoveredSites.forEach((site) => {
-            rows.push(makePolicyHierarchyRow(devicePolicy, 1, `${globalKey}:${policySiteKey(site)}`, site));
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, `${globalKey}:${policySiteKey(site)}`, site, [globalPolicy]));
           });
         });
     });
@@ -1810,7 +1859,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         cellRenderer: (params) => (
           <PendingUpdatesCell
             policy={params.data || {}}
-            onSelect={(policy, policyType, label) => onPendingUpdatesClick?.({ policy, policyType, label })}
+            onSelect={(policy, item) => onPendingUpdatesClick?.({ policy, item })}
           />
         ),
       },
@@ -2083,15 +2132,18 @@ export default function PatchManagement() {
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, setSearchParams]);
   const applyPolicyPendingFilter = useCallback(
-    ({ policy = {}, policyType = "", label = "" } = {}) => {
-      const policyID = Number(policy?.id || 0) || 0;
-      if (!policyID || !policyType) return;
+    ({ policy = {}, item = {}, policyType = "", label = "" } = {}) => {
+      const selectedPolicyType = normalizePolicyTypeValue({ policy_type: item?.policy_type || policyType });
+      const selectedLabel = text(item?.label || label) || policyTableTypeLabel(selectedPolicyType);
+      const selectedPolicyID = Number(item?.source_policy_id || policy?.id || 0) || 0;
+      const selectedPolicyName = text(item?.source_policy_name) || text(policy?.name) || "Patch Policy";
+      if (!selectedPolicyID || !selectedPolicyType) return;
       const nextParams = new URLSearchParams(searchParams);
       nextParams.set("tab", "patch_list");
-      nextParams.set("policy_scope", String(policyID));
-      nextParams.set("policy_layer", policyType);
-      nextParams.set("policy_scope_name", text(policy?.name) || "Patch Policy");
-      nextParams.set("policy_layer_label", text(label) || policyTableTypeLabel(policyType));
+      nextParams.set("policy_scope", String(selectedPolicyID));
+      nextParams.set("policy_layer", selectedPolicyType);
+      nextParams.set("policy_scope_name", selectedPolicyName);
+      nextParams.set("policy_layer_label", selectedLabel);
       setStateFilter("pending");
       setSeverityFilter("");
       setSearchParams(nextParams, { replace: false });

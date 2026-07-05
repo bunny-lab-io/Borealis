@@ -162,6 +162,22 @@ func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
+	index := patchPolicyPendingInventoryIndex{}
+	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
+		EffectivePolicyID:   22,
+		EffectivePolicyType: patchPolicyTypeSite,
+		HierarchyPolicyIDs:  []int64{11, 22},
+	})
+
+	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
+		t.Fatalf("parent policy received child pending count=%d want 0", got)
+	}
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("effective policy pending count=%d want 1", got)
+	}
+}
+
 func TestPatchPolicyHostnameExclusionKeysAreSiteAware(t *testing.T) {
 	siteSevenKeys := patchPolicyCoverageKeys(nil, []patchPolicyExclusionRef{{
 		ExclusionType: patchPolicyExclusionFrozen,
