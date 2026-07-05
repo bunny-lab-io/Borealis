@@ -313,24 +313,6 @@ const PERFORMANCE_PREFERENCE_MAX = 2;
 const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
 const DISPLAY_INFERENCE_MIN_WIDTH = 640;
 const DISPLAY_INFERENCE_HORIZONTAL_RATIO = 3.15;
-const COMMON_DISPLAY_SIZES = Object.freeze([
-  { width: 5760, height: 1440 },
-  { width: 5120, height: 1440 },
-  { width: 3840, height: 2160 },
-  { width: 3840, height: 1600 },
-  { width: 3840, height: 1080 },
-  { width: 3440, height: 1440 },
-  { width: 2560, height: 1440 },
-  { width: 2560, height: 1080 },
-  { width: 1920, height: 1080 },
-  { width: 1920, height: 1200 },
-  { width: 1680, height: 1050 },
-  { width: 1600, height: 900 },
-  { width: 1440, height: 900 },
-  { width: 1366, height: 768 },
-  { width: 1280, height: 1024 },
-  { width: 1280, height: 720 },
-]);
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
@@ -585,34 +567,6 @@ function closeDisplaySize(value, target, tolerance) {
   return Math.abs(Number(value || 0) - Number(target || 0)) <= tolerance;
 }
 
-function commonHorizontalDisplaySplit(remoteWidth, remoteHeight) {
-  const widthTolerance = Math.max(24, Math.round(remoteWidth * 0.012));
-  const heightTolerance = Math.max(48, Math.round(remoteHeight * 0.08));
-  let best = null;
-  COMMON_DISPLAY_SIZES.forEach((leftSize, leftIndex) => {
-    COMMON_DISPLAY_SIZES.forEach((rightSize, rightIndex) => {
-      const widthError = Math.abs(leftSize.width + rightSize.width - remoteWidth);
-      const heightError = Math.abs(Math.max(leftSize.height, rightSize.height) - remoteHeight);
-      if (widthError > widthTolerance || heightError > heightTolerance) return;
-      const score =
-        widthError * 4 +
-        heightError * 4 +
-        leftIndex * 0.01 +
-        rightIndex * 0.01;
-      if (!best || score < best.score) {
-        best = {
-          leftWidth: leftSize.width,
-          leftHeight: Math.min(remoteHeight, leftSize.height),
-          rightWidth: Math.max(DISPLAY_INFERENCE_MIN_WIDTH, remoteWidth - leftSize.width),
-          rightHeight: Math.min(remoteHeight, rightSize.height),
-          score,
-        };
-      }
-    });
-  });
-  return best;
-}
-
 function inferredDisplayLabel(displayIndex) {
   return String(Math.max(1, Number(displayIndex || 1)));
 }
@@ -672,11 +626,20 @@ function buildInferredHorizontalTopology(remoteWidth, remoteHeight, split) {
   ];
 }
 
-function commonDisplaySizeForWidth(width, maxHeight) {
-  const widthTolerance = Math.max(24, Math.round(width * 0.02));
-  return COMMON_DISPLAY_SIZES.find(
-    (item) => Math.abs(item.width - width) <= widthTolerance && item.height <= maxHeight
-  );
+function boundedDisplayLeft(display, remoteWidth, displayWidth) {
+  const explicitLeft = Number(display?.left);
+  if (Number.isFinite(explicitLeft) && explicitLeft >= 0 && explicitLeft <= remoteWidth - displayWidth) {
+    return explicitLeft;
+  }
+  const explicitRight = Number(display?.right);
+  if (
+    Number.isFinite(explicitRight) &&
+    explicitRight > 0 &&
+    explicitRight <= remoteWidth
+  ) {
+    return Math.max(0, explicitRight - displayWidth);
+  }
+  return null;
 }
 
 function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
@@ -693,7 +656,6 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
     Number(display?.displayIndex || display?.display_index || display?.id || 1)
   );
   const reportedIsPrimary = Boolean(display?.primary) || reportedDisplayIndex === 1;
-  const commonSplit = commonHorizontalDisplaySplit(remoteWidth, remoteHeight);
   const heightTolerance = Math.max(120, Math.round(remoteHeight * 0.28));
   if (
     reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH &&
@@ -701,18 +663,19 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
     closeDisplaySize(reportedHeight, remoteHeight, heightTolerance)
   ) {
     const gapDisplayIndex = reportedDisplayIndex === 1 ? 2 : 1;
-    const gapSize = commonDisplaySizeForWidth(widthGap, remoteHeight);
-    const gapHeight = gapSize?.height || remoteHeight;
-    if (reportedIsPrimary) {
+    const reportedLeft = boundedDisplayLeft(display, remoteWidth, reportedWidth);
+    const resolvedReportedLeft =
+      reportedLeft == null && reportedIsPrimary ? remoteWidth - reportedWidth : reportedLeft;
+    if (resolvedReportedLeft != null && resolvedReportedLeft > 0) {
       return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
-        leftWidth: widthGap,
-        leftHeight: gapHeight,
+        leftWidth: resolvedReportedLeft,
+        leftHeight: remoteHeight,
         leftDisplayIndex: gapDisplayIndex,
         leftPrimary: false,
         rightWidth: reportedWidth,
         rightHeight: reportedHeight,
         rightDisplayIndex: reportedDisplayIndex,
-        rightPrimary: true,
+        rightPrimary: reportedIsPrimary,
         rightDeviceName: display?.deviceName || display?.device_name || "",
       });
     }
@@ -720,29 +683,13 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
       leftWidth: reportedWidth,
       leftHeight: reportedHeight,
       leftDisplayIndex: reportedDisplayIndex,
-      leftPrimary: false,
+      leftPrimary: reportedIsPrimary,
       leftDeviceName: display?.deviceName || display?.device_name || "",
       rightWidth: widthGap,
-      rightHeight: gapHeight,
+      rightHeight: remoteHeight,
       rightDisplayIndex: gapDisplayIndex,
       rightPrimary: false,
     });
-  }
-  const commonSplitMatchesReported =
-    !reportedWidth ||
-    closeDisplaySize(
-      commonSplit?.leftWidth,
-      reportedWidth,
-      Math.max(96, remoteWidth * 0.04)
-    );
-  if (
-    commonSplit &&
-    commonSplitMatchesReported
-  ) {
-    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
-  }
-  if (commonSplit) {
-    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
   }
   if (remoteWidth / remoteHeight >= DISPLAY_INFERENCE_HORIZONTAL_RATIO) {
     return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
@@ -750,6 +697,8 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
       leftHeight: remoteHeight,
       rightWidth: Math.round(remoteWidth / 2),
       rightHeight: remoteHeight,
+      leftDisplayIndex: 1,
+      rightDisplayIndex: 2,
     });
   }
   return [];
