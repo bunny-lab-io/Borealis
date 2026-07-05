@@ -26,9 +26,12 @@ import {
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
+import FilterAltIcon from "@mui/icons-material/FilterAlt";
+import LocationCityIcon from "@mui/icons-material/LocationCity";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
 import PolicyRoundedIcon from "@mui/icons-material/PolicyRounded";
+import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import { AgGridReact } from "ag-grid-react";
@@ -249,6 +252,13 @@ function policyTableTypeLabel(policyType) {
   if (normalized === "global") return "Global";
   if (normalized === "device_filter") return "Device / Filter Policies";
   return "Site-Level Override";
+}
+
+function policyIconForType(policyType) {
+  const normalized = text(policyType).toLowerCase();
+  if (normalized === "global") return PublicRoundedIcon;
+  if (normalized === "device_filter") return FilterAltIcon;
+  return LocationCityIcon;
 }
 
 function policyRowTypeLabel(row = {}) {
@@ -1332,6 +1342,7 @@ function PatchPolicyTab() {
     const depth = policyRowDepth(row);
     const policyName = text(row.name) || "Patch Policy";
     const editPath = policyEditPath(row);
+    const PolicyTypeIcon = policyIconForType(normalizePolicyTypeValue(row));
     const handleClick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1363,7 +1374,7 @@ function PatchPolicyTab() {
             }}
           />
         ) : null}
-        <PolicyRoundedIcon
+        <PolicyTypeIcon
           sx={{
             fontSize: 18,
             color: BOREALIS_BLUE,
@@ -1538,6 +1549,8 @@ function PatchPolicyTab() {
     [actionCellRenderer, policyNameCellRenderer, targetSitesCellRenderer]
   );
 
+  const ActionMenuPolicyIcon = policyIconForType(normalizePolicyTypeValue(actionMenuPolicy));
+
   return (
     <>
       <Menu
@@ -1549,7 +1562,7 @@ function PatchPolicyTab() {
         PaperProps={{ sx: POLICY_ACTION_MENU_PAPER_SX }}
       >
         <Box sx={POLICY_ACTION_MENU_HEADER_SX}>
-          <PolicyRoundedIcon sx={{ color: BOREALIS_BLUE, fontSize: 20, flexShrink: 0 }} />
+          <ActionMenuPolicyIcon sx={{ color: BOREALIS_BLUE, fontSize: 20, flexShrink: 0 }} />
           <Box sx={{ minWidth: 0 }}>
             <Typography noWrap sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 700 }}>
               {text(actionMenuPolicy?.name) || "Patch Policy"}
