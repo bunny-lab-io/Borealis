@@ -1385,7 +1385,7 @@ function PatchPolicyTab() {
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             "&:hover": {
-              textDecoration: "underline",
+              textDecoration: "none",
             },
           }}
         >
