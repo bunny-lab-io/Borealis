@@ -39,6 +39,24 @@ func TestPatchPolicyDecisionRequiresOverrideForParentBlock(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyDecisionMatchesTitleContains(t *testing.T) {
+	rules := []patchPolicyRule{
+		{RuleType: patchPolicyRuleApprove, MatchType: patchPolicyMatchTitleContains, MatchValue: "Security Intelligence Update"},
+		{RuleType: patchPolicyRuleBlock, MatchType: patchPolicyMatchTitleContains, MatchValue: "Preview"},
+	}
+	defenderPatch := map[string]any{"title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602", "state": "pending"}
+	if got := patchPolicyDecision(rules, defenderPatch); got != patchPolicyRuleApprove {
+		t.Fatalf("expected title_contains defender approval, got %q", got)
+	}
+	previewPatch := map[string]any{"title": "2022-02 Cumulative Update Preview for .NET Framework", "state": "pending"}
+	if got := patchPolicyDecision(rules, previewPatch); got != patchPolicyRuleBlock {
+		t.Fatalf("expected title_contains preview block, got %q", got)
+	}
+	if got := normalizePatchPolicyMatchType("Title Contains"); got != patchPolicyMatchTitleContains {
+		t.Fatalf("normalized title contains=%q want %q", got, patchPolicyMatchTitleContains)
+	}
+}
+
 func TestPatchPolicyEffectiveRulesInheritParentApprovalWithSource(t *testing.T) {
 	global := patchPolicyRow{
 		ID:         sql.NullInt64{Int64: 11, Valid: true},

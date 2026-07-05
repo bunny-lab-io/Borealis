@@ -1329,9 +1329,40 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
                 ("approve", "severity", "Important"),
                 ("approve", "classification", "Security Updates"),
                 ("approve", "classification", "Critical Updates"),
+                ("approve", "title_contains", "Security Intelligence Update"),
                 ("block", "classification", "Drivers"),
                 ("block", "classification", "Feature Packs"),
+                ("block", "title_contains", "Preview"),
             ):
+                cur.execute(
+                    """
+                    INSERT INTO patch_policy_rules(
+                        policy_id, rule_type, match_type, match_value,
+                        override_parent_block, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 'engine-init', ?)
+                    """,
+                    (policy_id, rule_type, match_type, match_value, now),
+                )
+        cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global'")
+        for (policy_id,) in cur.fetchall():
+            for rule_type, match_type, match_value in (
+                ("approve", "title_contains", "Security Intelligence Update"),
+                ("block", "title_contains", "Preview"),
+            ):
+                cur.execute(
+                    """
+                    SELECT id
+                      FROM patch_policy_rules
+                     WHERE policy_id = ?
+                       AND rule_type = ?
+                       AND match_type = ?
+                       AND LOWER(TRIM(match_value)) = LOWER(TRIM(?))
+                     LIMIT 1
+                    """,
+                    (policy_id, rule_type, match_type, match_value),
+                )
+                if cur.fetchone() is not None:
+                    continue
                 cur.execute(
                     """
                     INSERT INTO patch_policy_rules(

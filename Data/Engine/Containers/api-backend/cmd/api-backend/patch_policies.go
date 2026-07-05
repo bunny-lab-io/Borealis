@@ -27,6 +27,8 @@ const (
 	patchPolicyRuleApprove = "approve"
 	patchPolicyRuleBlock   = "block"
 
+	patchPolicyMatchTitleContains = "title_contains"
+
 	patchPolicyExclusionUnmanaged = "unmanaged"
 	patchPolicyExclusionFrozen    = "frozen"
 	patchPolicyExclusionOverride  = "managed_override"
@@ -466,7 +468,7 @@ func (s *postgresOperatorStore) patchPolicyMetadata(ctx context.Context, profile
 		"policy_types": []string{patchPolicyTypeGlobal, patchPolicyTypeSite, patchPolicyTypeDeviceFilter},
 		"role_scopes":  []string{patchPolicyRoleServer, patchPolicyRoleWorkstation},
 		"rule_types":   []string{patchPolicyRuleApprove, patchPolicyRuleBlock},
-		"match_types":  []string{"severity", "classification", "category", "kb", "update_id", "patch_key"},
+		"match_types":  []string{"severity", "classification", "category", "kb", "update_id", "patch_key", patchPolicyMatchTitleContains},
 		"exclusions":   []string{patchPolicyExclusionUnmanaged, patchPolicyExclusionFrozen, patchPolicyExclusionOverride},
 		"defaults": map[string]any{
 			"approval_mode":           "conservative_msp",
@@ -2965,6 +2967,8 @@ func patchPolicyRuleMatches(rule patchPolicyRule, patch map[string]any) bool {
 		return strings.EqualFold(cleanText(firstPresentAny(patch["update_id"], metadata["update_id"], metadata["updateID"])), rule.MatchValue)
 	case "patch_key":
 		return strings.EqualFold(cleanText(patch["patch_key"]), rule.MatchValue)
+	case patchPolicyMatchTitleContains:
+		return strings.Contains(strings.ToLower(cleanText(patch["title"])), target)
 	default:
 		return false
 	}
@@ -3520,6 +3524,8 @@ func normalizePatchPolicyMatchType(value any) string {
 		return "update_id"
 	case "patch_key", "identity":
 		return "patch_key"
+	case "title_contains", "title contains", "title", "title_contains_text":
+		return patchPolicyMatchTitleContains
 	default:
 		return ""
 	}

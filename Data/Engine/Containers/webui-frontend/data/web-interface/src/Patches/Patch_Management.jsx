@@ -111,6 +111,7 @@ export const POLICY_MATCH_TYPES = [
   { value: "kb", label: "KB" },
   { value: "update_id", label: "Update ID" },
   { value: "patch_key", label: "Patch Key" },
+  { value: "title_contains", label: "Title Contains" },
 ];
 
 export const POLICY_RULE_TYPES = [
@@ -380,6 +381,9 @@ const POLICY_PENDING_LAYERS = Object.freeze([
   { policy_type: "site", label: "Site" },
   { policy_type: "device_filter", label: "Filter" },
 ]);
+
+const POLICY_TREE_LEVEL_WIDTH = 32;
+const POLICY_TREE_ANCHOR_X = 10;
 
 function pendingLayerTypesForPolicy(policy = {}) {
   const policyType = normalizePolicyTypeValue(policy);
@@ -716,7 +720,7 @@ function patchPolicySourceGroups(row = {}) {
 
 function patchPolicySourceText(row = {}) {
   const groups = patchPolicySourceGroups(row);
-  if (!groups.length) return text(row.state).toLowerCase() === "pending" ? "No policy install candidate" : "";
+  if (!groups.length) return text(row.state).toLowerCase() === "pending" ? "No linked policy" : "";
   return groups.map((group) => `${group.label}: ${group.policy_name} (${group.count})`).join(", ");
 }
 
@@ -725,7 +729,7 @@ function PatchPolicySourceCell({ row = {} }) {
   if (!groups.length) {
     return (
       <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12.5 }}>
-        {text(row.state).toLowerCase() === "pending" ? "No policy install" : ""}
+        {text(row.state).toLowerCase() === "pending" ? "No linked policy" : ""}
       </Typography>
     );
   }
@@ -1685,7 +1689,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
   const policyNameCellRenderer = useCallback((params) => {
     const row = params.data || {};
     const depth = policyRowDepth(row);
-    const treeGutterWidth = depth > 0 ? depth * 24 : row.__treeHasChild ? 16 : 0;
+    const treeGutterWidth = depth > 0 ? depth * POLICY_TREE_LEVEL_WIDTH : row.__treeHasChild ? 20 : 0;
     const policyName = text(row.name) || "Patch Policy";
     const editPath = policyEditPath(row);
     const PolicyTypeIcon = policyIconForType(normalizePolicyTypeValue(row));
@@ -1721,18 +1725,18 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
                 <Box
                   sx={{
                     position: "absolute",
-                    left: 8,
+                    left: POLICY_TREE_ANCHOR_X,
                     top: "50%",
-                    bottom: 0,
+                    bottom: -2,
                     borderLeft: "1px solid rgba(88,166,255,0.42)",
                   }}
                 />
                 <Box
                   sx={{
                     position: "absolute",
-                    left: 8,
+                    left: POLICY_TREE_ANCHOR_X,
                     top: "50%",
-                    width: 16,
+                    width: 18,
                     borderTop: "1px solid rgba(88,166,255,0.42)",
                   }}
                 />
@@ -1741,7 +1745,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
             {Array.from({ length: depth }, (_, index) => {
               const level = index + 1;
               const isCurrentLevel = level === depth;
-              const left = index * 24 + 8;
+              const left = index * POLICY_TREE_LEVEL_WIDTH + POLICY_TREE_ANCHOR_X;
               const continues = Boolean(row.__treeContinues?.[level] || (isCurrentLevel && row.__treeHasChild));
               return (
                 <React.Fragment key={level}>
@@ -1749,8 +1753,8 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
                     sx={{
                       position: "absolute",
                       left,
-                      top: 0,
-                      bottom: continues ? 0 : "50%",
+                      top: -2,
+                      bottom: continues ? -2 : "50%",
                       borderLeft: "1px solid rgba(88,166,255,0.42)",
                     }}
                   />
@@ -2575,7 +2579,7 @@ export default function PatchManagement() {
       },
       {
         colId: "policy_source",
-        headerName: "Policy Source",
+        headerName: "Linked Policy(s)",
         width: 260,
         minWidth: 230,
         cellClass: "patch-chip-cell",

@@ -203,11 +203,35 @@ func ensurePatchPolicySchemaOnConn(ctx context.Context, conn *sql.Conn) error {
 				('approve', 'severity', 'Important'),
 				('approve', 'classification', 'Security Updates'),
 				('approve', 'classification', 'Critical Updates'),
+				('approve', 'title_contains', 'Security Intelligence Update'),
 				('block', 'classification', 'Drivers'),
-				('block', 'classification', 'Feature Packs')
+				('block', 'classification', 'Feature Packs'),
+				('block', 'title_contains', 'Preview')
 		 ) AS v(rule_type, match_type, match_value)
 		 WHERE p.policy_type='global'
 		   AND NOT EXISTS (SELECT 1 FROM engine.patch_policy_rules AS r WHERE r.policy_id=p.id)
+	`, nowTS)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `
+		INSERT INTO engine.patch_policy_rules(policy_id, rule_type, match_type, match_value, override_parent_block, notes, created_by, created_at)
+		SELECT p.id, v.rule_type, v.match_type, v.match_value, 0, NULL, 'system', $1
+		  FROM engine.patch_policies AS p
+		 CROSS JOIN (
+			VALUES
+				('approve', 'title_contains', 'Security Intelligence Update'),
+				('block', 'title_contains', 'Preview')
+		 ) AS v(rule_type, match_type, match_value)
+		 WHERE p.policy_type='global'
+		   AND NOT EXISTS (
+				SELECT 1
+				  FROM engine.patch_policy_rules AS r
+				 WHERE r.policy_id=p.id
+				   AND r.rule_type=v.rule_type
+				   AND r.match_type=v.match_type
+				   AND LOWER(TRIM(r.match_value))=LOWER(TRIM(v.match_value))
+		   )
 	`, nowTS)
 	return err
 }
