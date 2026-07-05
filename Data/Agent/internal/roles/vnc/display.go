@@ -82,6 +82,26 @@ func sortDisplayTopology(topology []map[string]any) []map[string]any {
 	return topology
 }
 
+func selectDisplayTopology(primary []map[string]any, fallback []map[string]any) []map[string]any {
+	if len(primary) == 0 {
+		return sortDisplayTopology(fallback)
+	}
+	if len(fallback) == 0 {
+		return sortDisplayTopology(primary)
+	}
+	if len(fallback) > len(primary) {
+		return sortDisplayTopology(fallback)
+	}
+	primaryBounds := displayVirtualBounds(primary)
+	fallbackBounds := displayVirtualBounds(fallback)
+	primaryArea := displayInt(primaryBounds["width"], 0) * displayInt(primaryBounds["height"], 0)
+	fallbackArea := displayInt(fallbackBounds["width"], 0) * displayInt(fallbackBounds["height"], 0)
+	if len(fallback) >= len(primary) && fallbackArea >= primaryArea {
+		return sortDisplayTopology(fallback)
+	}
+	return sortDisplayTopology(primary)
+}
+
 func displayIndexFromDeviceName(deviceName string, fallback int) int {
 	upper := strings.ToUpper(strings.TrimSpace(deviceName))
 	index := strings.LastIndex(upper, "DISPLAY")

@@ -88,10 +88,10 @@ type monitorInfoExW struct {
 }
 
 func collectDisplayTopology() []map[string]any {
-	if topology := collectWindowsDisplayTopologyViaDisplaySettings(); len(topology) > 0 {
-		return topology
-	}
-	return collectWindowsDisplayTopologyViaMonitors()
+	return selectDisplayTopology(
+		collectWindowsDisplayTopologyViaDisplaySettings(),
+		collectWindowsDisplayTopologyViaMonitors(),
+	)
 }
 
 func collectWindowsDisplayTopologyViaDisplaySettings() []map[string]any {

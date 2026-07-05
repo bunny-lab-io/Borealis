@@ -312,7 +312,6 @@ const PERFORMANCE_PREFERENCE_MIN = -2;
 const PERFORMANCE_PREFERENCE_MAX = 2;
 const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
 const DISPLAY_INFERENCE_MIN_WIDTH = 640;
-const DISPLAY_INFERENCE_HORIZONTAL_RATIO = 3.15;
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
@@ -447,6 +446,36 @@ function displayTopologyBounds(topology) {
   };
 }
 
+function normalizeDisplayBounds(value) {
+  if (typeof value === "string") {
+    try {
+      return normalizeDisplayBounds(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== "object") return null;
+  const left = coerceInteger(value.left, 0);
+  const top = coerceInteger(value.top, 0);
+  const width = Math.max(0, coerceInteger(value.width, 0));
+  const height = Math.max(0, coerceInteger(value.height, 0));
+  const right = coerceInteger(value.right, left + width);
+  const bottom = coerceInteger(value.bottom, top + height);
+  const resolvedRight = right > left ? right : left + width;
+  const resolvedBottom = bottom > top ? bottom : top + height;
+  const resolvedWidth = Math.max(width, resolvedRight - left);
+  const resolvedHeight = Math.max(height, resolvedBottom - top);
+  if (resolvedWidth <= 0 || resolvedHeight <= 0) return null;
+  return {
+    left,
+    top,
+    right: left + resolvedWidth,
+    bottom: top + resolvedHeight,
+    width: resolvedWidth,
+    height: resolvedHeight,
+  };
+}
+
 function topologyMatchesFramebuffer(topologyBounds, framebufferSize) {
   if (!topologyBounds || !framebufferSize?.width || !framebufferSize?.height) return true;
   const widthTolerance = Math.max(96, Math.round(framebufferSize.width * 0.18));
@@ -454,6 +483,18 @@ function topologyMatchesFramebuffer(topologyBounds, framebufferSize) {
   return (
     Math.abs(topologyBounds.width - framebufferSize.width) <= widthTolerance &&
     Math.abs(topologyBounds.height - framebufferSize.height) <= heightTolerance
+  );
+}
+
+function equalDisplayBounds(left, right) {
+  if (!left || !right) return left === right;
+  return (
+    left.left === right.left &&
+    left.top === right.top &&
+    left.right === right.right &&
+    left.bottom === right.bottom &&
+    left.width === right.width &&
+    left.height === right.height
   );
 }
 
@@ -626,26 +667,83 @@ function buildInferredHorizontalTopology(remoteWidth, remoteHeight, split) {
   ];
 }
 
-function boundedDisplayLeft(display, remoteWidth, displayWidth) {
-  const explicitLeft = Number(display?.left);
-  if (Number.isFinite(explicitLeft) && explicitLeft >= 0 && explicitLeft <= remoteWidth - displayWidth) {
-    return explicitLeft;
-  }
-  const explicitRight = Number(display?.right);
+function inferHorizontalDisplaysFromVirtualBounds(display, virtualBounds, framebufferSize) {
+  const remoteWidth = Math.max(0, Number(framebufferSize?.width || 0));
+  const remoteHeight = Math.max(0, Number(framebufferSize?.height || 0));
   if (
-    Number.isFinite(explicitRight) &&
-    explicitRight > 0 &&
-    explicitRight <= remoteWidth
+    !display ||
+    !virtualBounds?.width ||
+    !virtualBounds?.height ||
+    remoteWidth < DISPLAY_INFERENCE_MIN_WIDTH * 2 ||
+    remoteHeight < DISPLAY_INFERENCE_MIN_WIDTH
   ) {
-    return Math.max(0, explicitRight - displayWidth);
+    return [];
   }
-  return null;
+  const scaleX = remoteWidth / virtualBounds.width;
+  const scaleY = remoteHeight / virtualBounds.height;
+  const reportedWidth = Math.max(0, Number(display.width || 0) * scaleX);
+  const reportedHeight = Math.max(0, Number(display.height || 0) * scaleY);
+  const reportedLeft = (Number(display.left || 0) - virtualBounds.left) * scaleX;
+  const reportedTop = (Number(display.top || 0) - virtualBounds.top) * scaleY;
+  const leftGap = clampNumber(reportedLeft, 0, remoteWidth);
+  const rightGap = clampNumber(remoteWidth - (reportedLeft + reportedWidth), 0, remoteWidth);
+  const reportedDisplayIndex = Math.max(
+    1,
+    Number(display?.displayIndex || display?.display_index || display?.id || 1)
+  );
+  const reportedIsPrimary = Boolean(display?.primary) || reportedDisplayIndex === 1;
+  const gapDisplayIndex = reportedDisplayIndex === 1 ? 2 : 1;
+  if (reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH && leftGap >= DISPLAY_INFERENCE_MIN_WIDTH) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+      leftWidth: leftGap,
+      leftHeight: remoteHeight,
+      leftDisplayIndex: gapDisplayIndex,
+      leftPrimary: false,
+      rightWidth: reportedWidth,
+      rightHeight: reportedHeight,
+      rightDisplayIndex: reportedDisplayIndex,
+      rightPrimary: reportedIsPrimary,
+      rightDeviceName: display?.deviceName || display?.device_name || "",
+    });
+  }
+  if (reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH && rightGap >= DISPLAY_INFERENCE_MIN_WIDTH) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+      leftWidth: reportedWidth,
+      leftHeight: reportedHeight,
+      leftDisplayIndex: reportedDisplayIndex,
+      leftPrimary: reportedIsPrimary,
+      leftDeviceName: display?.deviceName || display?.device_name || "",
+      rightWidth: rightGap,
+      rightHeight: remoteHeight,
+      rightDisplayIndex: gapDisplayIndex,
+      rightPrimary: false,
+    });
+  }
+  if (reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH && !closeDisplaySize(reportedTop, 0, 1)) {
+    return [
+      {
+        ...display,
+        left: reportedLeft,
+        top: reportedTop,
+        right: reportedLeft + reportedWidth,
+        bottom: reportedTop + reportedHeight,
+        width: reportedWidth,
+        height: reportedHeight,
+        synthetic: true,
+      },
+    ];
+  }
+  return [];
 }
 
 function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
   const remoteWidth = Math.max(0, Number(framebufferSize?.width || 0));
   const remoteHeight = Math.max(0, Number(framebufferSize?.height || 0));
-  if (remoteWidth < DISPLAY_INFERENCE_MIN_WIDTH * 2 || remoteHeight < DISPLAY_INFERENCE_MIN_WIDTH) {
+  if (
+    !display ||
+    remoteWidth < DISPLAY_INFERENCE_MIN_WIDTH * 2 ||
+    remoteHeight < DISPLAY_INFERENCE_MIN_WIDTH
+  ) {
     return [];
   }
   const reportedWidth = Math.max(0, Number(display?.width || 0));
@@ -657,54 +755,36 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
   );
   const reportedIsPrimary = Boolean(display?.primary) || reportedDisplayIndex === 1;
   const heightTolerance = Math.max(120, Math.round(remoteHeight * 0.28));
+  const explicitLeft = Number(display?.left);
+  const reportedLeft =
+    Number.isFinite(explicitLeft) && explicitLeft > 0 && explicitLeft < remoteWidth
+      ? explicitLeft
+      : null;
   if (
     reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH &&
     widthGap >= DISPLAY_INFERENCE_MIN_WIDTH &&
+    reportedLeft != null &&
     closeDisplaySize(reportedHeight, remoteHeight, heightTolerance)
   ) {
     const gapDisplayIndex = reportedDisplayIndex === 1 ? 2 : 1;
-    const reportedLeft = boundedDisplayLeft(display, remoteWidth, reportedWidth);
-    const resolvedReportedLeft =
-      reportedLeft == null && reportedIsPrimary ? remoteWidth - reportedWidth : reportedLeft;
-    if (resolvedReportedLeft != null && resolvedReportedLeft > 0) {
+    if (reportedLeft >= DISPLAY_INFERENCE_MIN_WIDTH) {
       return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
-        leftWidth: resolvedReportedLeft,
+        leftWidth: reportedLeft,
         leftHeight: remoteHeight,
         leftDisplayIndex: gapDisplayIndex,
         leftPrimary: false,
         rightWidth: reportedWidth,
         rightHeight: reportedHeight,
         rightDisplayIndex: reportedDisplayIndex,
-        rightPrimary: reportedIsPrimary,
+        rightPrimary: true,
         rightDeviceName: display?.deviceName || display?.device_name || "",
       });
     }
-    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
-      leftWidth: reportedWidth,
-      leftHeight: reportedHeight,
-      leftDisplayIndex: reportedDisplayIndex,
-      leftPrimary: reportedIsPrimary,
-      leftDeviceName: display?.deviceName || display?.device_name || "",
-      rightWidth: widthGap,
-      rightHeight: remoteHeight,
-      rightDisplayIndex: gapDisplayIndex,
-      rightPrimary: false,
-    });
-  }
-  if (remoteWidth / remoteHeight >= DISPLAY_INFERENCE_HORIZONTAL_RATIO) {
-    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
-      leftWidth: Math.round(remoteWidth / 2),
-      leftHeight: remoteHeight,
-      rightWidth: Math.round(remoteWidth / 2),
-      rightHeight: remoteHeight,
-      leftDisplayIndex: 1,
-      rightDisplayIndex: 2,
-    });
   }
   return [];
 }
 
-function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
+function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize, virtualBounds) {
   const authoritativeFramebufferSize =
     framebufferSize?.width && framebufferSize?.height
       ? framebufferSize
@@ -723,12 +803,20 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
         !topologyMatchesFramebuffer(bounds, framebufferSize) ||
         !aspectRatioMatches(display, authoritativeFramebufferSize);
       if (shouldUsePreferredSize) {
-        const inferredTopology = inferHorizontalDisplaysFromFramebuffer(
+        const boundsInferredTopology = inferHorizontalDisplaysFromVirtualBounds(
+          display,
+          virtualBounds,
+          authoritativeFramebufferSize
+        );
+        if (boundsInferredTopology.length > 1) {
+          return boundsInferredTopology;
+        }
+        const framebufferInferredTopology = inferHorizontalDisplaysFromFramebuffer(
           display,
           authoritativeFramebufferSize
         );
-        if (inferredTopology.length > 1) {
-          return inferredTopology;
+        if (framebufferInferredTopology.length > 1) {
+          return framebufferInferredTopology;
         }
         return [
           {
@@ -755,10 +843,6 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
         : null;
   if (!fallbackSize?.width || !fallbackSize?.height) {
     return [];
-  }
-  const inferredTopology = inferHorizontalDisplaysFromFramebuffer(null, fallbackSize);
-  if (inferredTopology.length > 1) {
-    return inferredTopology;
   }
   return [
     {
@@ -898,6 +982,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   });
   const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
   const [displayTopology, setDisplayTopology] = useState([]);
+  const [displayVirtualBounds, setDisplayVirtualBounds] = useState(null);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
   const [viewfinderSize, setViewfinderSize] = useState({ width: 0, height: 126 });
@@ -993,8 +1078,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     return topologyMatchesFramebuffer(topologyBounds, framebufferSize);
   }, [framebufferSize, normalizedDisplayTopology, topologyBounds]);
   const diagramTopology = useMemo(
-    () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
-    [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
+    () =>
+      displayDiagramTopology(
+        normalizedDisplayTopology,
+        framebufferSize,
+        renderedCanvasSize,
+        displayVirtualBounds
+      ),
+    [displayVirtualBounds, framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
   const inferredDisplayTopology = useMemo(
     () => diagramTopology.some((item) => item?.inferred),
@@ -1093,10 +1184,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const nextDisplayTopology = normalizeDisplayTopology(
       data?.display_topology || nextSession?.display_topology
     );
+    const nextDisplayVirtualBounds = normalizeDisplayBounds(
+      data?.display_virtual_bounds || nextSession?.display_virtual_bounds
+    );
     setSessionId(nextSessionId);
     setParticipantId(nextParticipantId);
     setDisplayTopology((previous) =>
       equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
+    );
+    setDisplayVirtualBounds((previous) =>
+      equalDisplayBounds(previous, nextDisplayVirtualBounds) ? previous : nextDisplayVirtualBounds
     );
   }, []);
 
@@ -1248,6 +1345,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     forcedViewportKeyRef.current = "";
     viewportFocusRef.current = null;
     setDisplayTopology([]);
+    setDisplayVirtualBounds(null);
     setSelectedDisplayId(ALL_DISPLAYS_ID);
     setDisplayMode("fit");
     setViewportPreview({
@@ -2075,6 +2173,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           equalDisplayTopology(previous, nextDisplayTopology) ? previous : nextDisplayTopology
         );
       }
+      const nextDisplayVirtualBounds = normalizeDisplayBounds(nextSession.display_virtual_bounds);
+      setDisplayVirtualBounds((previous) =>
+        equalDisplayBounds(previous, nextDisplayVirtualBounds) ? previous : nextDisplayVirtualBounds
+      );
       setParticipantId((previous) => normalizeText(nextSession.current_participant_id) || previous);
     } catch {
       // ignore background session refresh failures

@@ -91,6 +91,123 @@ func TestDisplayVirtualBoundsIncludesNegativeOrigins(t *testing.T) {
 	}
 }
 
+func TestSelectDisplayTopologyPrefersRicherFallback(t *testing.T) {
+	primaryOnly := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryOnly, sampleDisplayTopology())
+
+	if len(selected) != 2 {
+		t.Fatalf("expected richer fallback topology, got %#v", selected)
+	}
+	if selected[0]["display_index"] != 1 || selected[1]["display_index"] != 2 {
+		t.Fatalf("expected display-index sorting, got %#v", selected)
+	}
+}
+
+func TestSelectDisplayTopologyPrefersLargerFallbackBounds(t *testing.T) {
+	primaryOnly := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         1920,
+			"bottom":        1080,
+			"width":         1920,
+			"height":        1080,
+			"primary":       true,
+		},
+	}
+	fallback := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryOnly, fallback)
+
+	if len(selected) != 1 || selected[0]["width"] != 5760 {
+		t.Fatalf("expected larger fallback bounds, got %#v", selected)
+	}
+}
+
+func TestSelectDisplayTopologyPrefersFallbackWhenGeometryDiffers(t *testing.T) {
+	primaryWrong := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+		{
+			"id":            "2",
+			"display_index": 2,
+			"left":          5760,
+			"top":           360,
+			"right":         7680,
+			"bottom":        1440,
+			"width":         1920,
+			"height":        1080,
+			"primary":       false,
+		},
+	}
+	fallbackCorrect := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+		{
+			"id":            "2",
+			"display_index": 2,
+			"left":          -1920,
+			"top":           360,
+			"right":         0,
+			"bottom":        1440,
+			"width":         1920,
+			"height":        1080,
+			"primary":       false,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryWrong, fallbackCorrect)
+
+	if len(selected) != 2 || selected[1]["left"] != -1920 {
+		t.Fatalf("expected monitor-info fallback geometry, got %#v", selected)
+	}
+}
+
 func TestEnsureRequestPayloadIncludesDisplayTopology(t *testing.T) {
 	manager := &Manager{
 		authClient:       fakeVNCAuthClient{agentID: "agent-1"},
