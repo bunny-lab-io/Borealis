@@ -26,7 +26,7 @@ If another operator already has the device open, Borealis joins the same shared 
 - Reconnect if the browser stream drops after it was already ready.
 - Adjust speed/quality preference when bandwidth is constrained.
 - Use the always-open display selector or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
-- After a display is selected, Borealis switches the viewer to `Fit` and previews that display region by itself so the monitor span does not squeeze into the sidebar.
+- After a display is selected, Borealis switches the viewer to `Fit` and previews that display region by itself. The viewfinder center-fits multi-display layouts so wide monitor spans stay inside the sidebar preview.
 - Use `Fit` or `Scaled` when `Display: All` is selected. Single-display focus uses `Fit` only.
 - Use Ctrl+Alt+Del from session controls when Windows secure desktop needs it.
 - Disconnect when finished. Closing the browser leaves a short reconnect window.

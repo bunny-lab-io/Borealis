@@ -546,11 +546,13 @@ function buildDisplayLayoutGeometry(
   const innerWidth = Math.max(1, frameWidth - insetPadding * 2);
   const innerHeight = Math.max(1, frameHeight - insetPadding * 2);
   const fitScale = Math.min(innerWidth / bounds.width, innerHeight / bounds.height);
-  const scale = Math.max(0.001, fitScale * 0.94);
+  const scale = Math.max(0.001, fitScale * 0.88);
   const layoutWidth = bounds.width * scale;
   const layoutHeight = bounds.height * scale;
   const offsetX = (frameWidth - layoutWidth) / 2;
   const offsetY = (frameHeight - layoutHeight) / 2;
+  const maxRight = frameWidth - insetPadding;
+  const maxBottom = frameHeight - insetPadding;
   return {
     bounds,
     frameWidth,
@@ -563,12 +565,14 @@ function buildDisplayLayoutGeometry(
     frames: topology.map((item) => {
       const rawX = offsetX + (item.left - bounds.left) * scale;
       const rawY = offsetY + (item.top - bounds.top) * scale;
-      const widthPx = Math.max(2, item.width * scale);
-      const heightPx = Math.max(2, item.height * scale);
+      const x = clampNumber(rawX, insetPadding, Math.max(insetPadding, maxRight - 2));
+      const y = clampNumber(rawY, insetPadding, Math.max(insetPadding, maxBottom - 2));
+      const widthPx = Math.max(2, Math.min(item.width * scale, Math.max(2, maxRight - x)));
+      const heightPx = Math.max(2, Math.min(item.height * scale, Math.max(2, maxBottom - y)));
       return {
         ...item,
-        x: rawX,
-        y: rawY,
+        x,
+        y,
         widthPx,
         heightPx,
       };
@@ -1126,6 +1130,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const containerRef = useRef(null);
   const displayScrollRef = useRef(null);
   const displayRef = useRef(null);
+  const viewfinderShellRef = useRef(null);
   const viewfinderRef = useRef(null);
   const remoteClientRef = useRef(null);
   const viewfinderCanvasRefs = useRef(new Map());
@@ -1246,8 +1251,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const displayLayoutGeometry = useMemo(
     () =>
       buildDisplayLayoutGeometry(viewfinderTopology, {
-        frameWidth: Math.max(1, Math.round(viewfinderSize.width || 256)),
+        frameWidth: Math.max(1, Math.round(viewfinderSize.width || 1)),
         frameHeight: Math.max(1, Math.round(viewfinderSize.height || 126)),
+        padding: 8,
       }),
     [viewfinderSize.height, viewfinderSize.width, viewfinderTopology]
   );
@@ -2657,11 +2663,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     if (typeof ResizeObserver === "undefined") return undefined;
     const host = viewfinderRef.current;
-    if (!host) return undefined;
+    const shell = viewfinderShellRef.current;
+    if (!host && !shell) return undefined;
     let frameId = 0;
     const syncSize = () => {
-      const nextWidth = Math.max(0, Math.round(Number(host.clientWidth || 0)));
-      const nextHeight = Math.max(0, Math.round(Number(host.clientHeight || 0)));
+      const hostWidth = Number(host?.clientWidth || 0);
+      const hostHeight = Number(host?.clientHeight || 0);
+      const shellWidth = Number(shell?.clientWidth || 0);
+      const shellHeight = Number(shell?.clientHeight || 0);
+      const nextWidth = Math.max(1, Math.round(hostWidth || Math.max(0, shellWidth - 20)));
+      const nextHeight = Math.max(1, Math.round(hostHeight || Math.max(0, shellHeight - 20)));
       setViewfinderSize((previous) => {
         if (previous.width === nextWidth && previous.height === nextHeight) {
           return previous;
@@ -2676,7 +2687,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       frameId = window.requestAnimationFrame(syncSize);
     });
-    observer.observe(host);
+    if (host) observer.observe(host);
+    if (shell && shell !== host) observer.observe(shell);
     return () => {
       if (frameId) {
         window.cancelAnimationFrame(frameId);
@@ -3075,6 +3087,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   Viewfinder
                 </Typography>
                 <Box
+                  ref={viewfinderShellRef}
                   sx={{
                     position: "relative",
                     height: 126,
@@ -3224,6 +3237,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                                 top: item.y,
                                 width: item.widthPx,
                                 height: item.heightPx,
+                                maxWidth: "100%",
+                                maxHeight: "100%",
                                 borderRadius: 1.5,
                                 overflow: "hidden",
                                 display: "flex",
