@@ -191,6 +191,34 @@ const POLICY_ACTION_MENU_HEADER_SX = {
   minWidth: 0,
 };
 
+const PATCH_CHIP_TOKEN_SX = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  height: 20,
+  minHeight: 20,
+  maxWidth: "100%",
+  borderRadius: 999,
+  boxSizing: "border-box",
+  whiteSpace: "nowrap",
+  verticalAlign: "middle",
+  fontSize: 11.5,
+  fontWeight: 700,
+  lineHeight: 1,
+  px: 0.85,
+  py: 0,
+  minWidth: 0,
+  overflow: "hidden",
+  "& .patch-chip-label": {
+    display: "block",
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    lineHeight: 1,
+  },
+};
+
 export const PATCH_GRID_SX = {
   "--ag-background-color": "#070b1a",
   "--ag-foreground-color": "#f4f7ff",
@@ -208,6 +236,31 @@ export const PATCH_GRID_SX = {
   "& .ag-row-selected": {
     backgroundColor: "rgba(125,211,252,0.2) !important",
     boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+  },
+  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    paddingTop: 0,
+    paddingBottom: 0,
+    minWidth: 0,
+  },
+  "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
+    width: "100%",
+    height: "100%",
+    display: "flex",
+    alignItems: "center",
+    minWidth: 0,
+  },
+  "& .patch-chip-cell .ag-cell-wrapper, & .patch-chip-cell .ag-cell-value": {
+    alignItems: "center",
   },
 };
 
@@ -576,32 +629,27 @@ function PatchPolicySourceCell({ row = {} }) {
   const tooltip = groups.map((group) => `${group.label}: ${group.policy_name} (${group.count.toLocaleString()} update${group.count === 1 ? "" : "s"})`).join(", ");
   return (
     <Tooltip title={tooltip}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, overflow: "hidden", minWidth: 0 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, overflow: "hidden", minWidth: 0, width: "100%", height: "100%" }}>
         {groups.slice(0, 3).map((group) => (
           <Box
             key={`${group.policy_type}-${group.policy_name}`}
             component="span"
             sx={{
+              ...PATCH_CHIP_TOKEN_SX,
               maxWidth: 145,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              borderRadius: 999,
-              px: 0.85,
-              py: 0.18,
               color: BOREALIS_BLUE,
               background: "rgba(88,166,255,0.12)",
               border: "1px solid rgba(88,166,255,0.28)",
-              fontSize: 11.5,
               fontWeight: 800,
-              lineHeight: 1.45,
             }}
           >
-            {`${group.label} ${group.count.toLocaleString()}`}
+            <Box component="span" className="patch-chip-label">
+              {`${group.label} ${group.count.toLocaleString()}`}
+            </Box>
           </Box>
         ))}
         {groups.length > 3 ? (
-          <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12, fontWeight: 700 }}>
+          <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12, fontWeight: 700, lineHeight: 1 }}>
             +{groups.length - 3}
           </Typography>
         ) : null}
@@ -1634,19 +1682,21 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
           <Box
             component="span"
             sx={{
-              borderRadius: 999,
+              ...PATCH_CHIP_TOKEN_SX,
+              height: 18,
+              minHeight: 18,
               px: 0.7,
-              py: 0.12,
               color: "#d4b5ff",
               border: "1px solid rgba(180,137,255,0.35)",
               background: "rgba(180,137,255,0.14)",
               fontSize: 11,
               fontWeight: 600,
-              lineHeight: 1.2,
               flexShrink: 0,
             }}
           >
-            Linked
+            <Box component="span" className="patch-chip-label">
+              Linked
+            </Box>
           </Box>
         ) : null}
       </Box>
@@ -1675,47 +1725,36 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
             key={`${site.site_id || site.id || 0}-${site.name}`}
             component="span"
             sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
+              ...PATCH_CHIP_TOKEN_SX,
               maxWidth: 145,
-              height: 20,
-              borderRadius: 999,
               px: 0.8,
               color: "#89c2ff",
               border: "1px solid rgba(88,166,255,0.42)",
               backgroundColor: "rgba(88,166,255,0.14)",
-              fontSize: 11.5,
               fontWeight: 600,
-              lineHeight: 1,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
             }}
           >
-            {text(site.name)}
+            <Box component="span" className="patch-chip-label">
+              {text(site.name)}
+            </Box>
           </Box>
           ))}
           {hiddenCount > 0 ? (
           <Box
             component="span"
             sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: 999,
-              height: 20,
+              ...PATCH_CHIP_TOKEN_SX,
               px: 0.75,
               color: "#cbd5e1",
               border: "1px solid rgba(148,163,184,0.34)",
               backgroundColor: "rgba(15,23,42,0.62)",
-              fontSize: 11.5,
               fontWeight: 600,
-              lineHeight: 1,
               flexShrink: 0,
             }}
           >
-            +{hiddenCount}
+            <Box component="span" className="patch-chip-label">
+              +{hiddenCount}
+            </Box>
           </Box>
           ) : null}
         </Box>
@@ -1750,6 +1789,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         width: 255,
         minWidth: 220,
         flex: 0,
+        cellClass: "patch-chip-cell",
         valueGetter: (params) => params.data?.__targetSitesText || policyTargetSiteText(params.data || {}),
         cellRenderer: targetSitesCellRenderer,
       },
@@ -2417,6 +2457,7 @@ export default function PatchManagement() {
         headerName: "Policy Source",
         width: 260,
         minWidth: 230,
+        cellClass: "patch-chip-cell",
         valueGetter: (params) => patchPolicySourceText(params.data || {}),
         cellRenderer: (params) => <PatchPolicySourceCell row={params.data || {}} />,
       },
