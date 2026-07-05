@@ -314,6 +314,7 @@ const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
 const DISPLAY_INFERENCE_MIN_WIDTH = 640;
 const DISPLAY_INFERENCE_HORIZONTAL_RATIO = 3.15;
 const COMMON_DISPLAY_SIZES = Object.freeze([
+  { width: 5760, height: 1440 },
   { width: 5120, height: 1440 },
   { width: 3840, height: 2160 },
   { width: 3840, height: 1600 },
@@ -321,8 +322,8 @@ const COMMON_DISPLAY_SIZES = Object.freeze([
   { width: 3440, height: 1440 },
   { width: 2560, height: 1440 },
   { width: 2560, height: 1080 },
-  { width: 1920, height: 1200 },
   { width: 1920, height: 1080 },
+  { width: 1920, height: 1200 },
   { width: 1680, height: 1050 },
   { width: 1600, height: 900 },
   { width: 1440, height: 900 },
@@ -588,16 +589,16 @@ function commonHorizontalDisplaySplit(remoteWidth, remoteHeight) {
   const widthTolerance = Math.max(24, Math.round(remoteWidth * 0.012));
   const heightTolerance = Math.max(48, Math.round(remoteHeight * 0.08));
   let best = null;
-  COMMON_DISPLAY_SIZES.forEach((leftSize) => {
-    COMMON_DISPLAY_SIZES.forEach((rightSize) => {
+  COMMON_DISPLAY_SIZES.forEach((leftSize, leftIndex) => {
+    COMMON_DISPLAY_SIZES.forEach((rightSize, rightIndex) => {
       const widthError = Math.abs(leftSize.width + rightSize.width - remoteWidth);
       const heightError = Math.abs(Math.max(leftSize.height, rightSize.height) - remoteHeight);
       if (widthError > widthTolerance || heightError > heightTolerance) return;
       const score =
         widthError * 4 +
-        heightError * 2 +
-        Math.abs(leftSize.height - remoteHeight) +
-        Math.abs(rightSize.height - remoteHeight) * 0.25;
+        heightError * 4 +
+        leftIndex * 0.01 +
+        rightIndex * 0.01;
       if (!best || score < best.score) {
         best = {
           leftWidth: leftSize.width,
@@ -610,6 +611,10 @@ function commonHorizontalDisplaySplit(remoteWidth, remoteHeight) {
     });
   });
   return best;
+}
+
+function inferredDisplayLabel(displayIndex) {
+  return String(Math.max(1, Number(displayIndex || 1)));
 }
 
 function buildInferredHorizontalTopology(remoteWidth, remoteHeight, split) {
@@ -629,38 +634,49 @@ function buildInferredHorizontalTopology(remoteWidth, remoteHeight, split) {
     DISPLAY_INFERENCE_MIN_WIDTH,
     remoteHeight
   );
+  const leftDisplayIndex = Math.max(1, Number(split.leftDisplayIndex || 1));
+  const rightDisplayIndex = Math.max(1, Number(split.rightDisplayIndex || 2));
+  const leftLabel = inferredDisplayLabel(leftDisplayIndex);
+  const rightLabel = inferredDisplayLabel(rightDisplayIndex);
   return [
     {
-      id: "1",
-      displayIndex: 1,
-      label: "1",
-      deviceName: "Inferred Display 1",
+      id: leftLabel,
+      displayIndex: leftDisplayIndex,
+      label: leftLabel,
+      deviceName: split.leftDeviceName || `Inferred Display ${leftLabel}`,
       left: 0,
       top: 0,
       right: leftWidth,
       bottom: leftHeight,
       width: leftWidth,
       height: leftHeight,
-      primary: true,
+      primary: Boolean(split.leftPrimary),
       synthetic: true,
       inferred: true,
     },
     {
-      id: "2",
-      displayIndex: 2,
-      label: "2",
-      deviceName: "Inferred Display 2",
+      id: rightLabel,
+      displayIndex: rightDisplayIndex,
+      label: rightLabel,
+      deviceName: split.rightDeviceName || `Inferred Display ${rightLabel}`,
       left: leftWidth,
       top: 0,
       right: leftWidth + rightWidth,
       bottom: rightHeight,
       width: rightWidth,
       height: rightHeight,
-      primary: false,
+      primary: Boolean(split.rightPrimary),
       synthetic: true,
       inferred: true,
     },
   ];
+}
+
+function commonDisplaySizeForWidth(width, maxHeight) {
+  const widthTolerance = Math.max(24, Math.round(width * 0.02));
+  return COMMON_DISPLAY_SIZES.find(
+    (item) => Math.abs(item.width - width) <= widthTolerance && item.height <= maxHeight
+  );
 }
 
 function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
@@ -672,7 +688,46 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
   const reportedWidth = Math.max(0, Number(display?.width || 0));
   const reportedHeight = Math.max(0, Number(display?.height || 0));
   const widthGap = remoteWidth - reportedWidth;
+  const reportedDisplayIndex = Math.max(
+    1,
+    Number(display?.displayIndex || display?.display_index || display?.id || 1)
+  );
+  const reportedIsPrimary = Boolean(display?.primary) || reportedDisplayIndex === 1;
   const commonSplit = commonHorizontalDisplaySplit(remoteWidth, remoteHeight);
+  const heightTolerance = Math.max(120, Math.round(remoteHeight * 0.28));
+  if (
+    reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH &&
+    widthGap >= DISPLAY_INFERENCE_MIN_WIDTH &&
+    closeDisplaySize(reportedHeight, remoteHeight, heightTolerance)
+  ) {
+    const gapDisplayIndex = reportedDisplayIndex === 1 ? 2 : 1;
+    const gapSize = commonDisplaySizeForWidth(widthGap, remoteHeight);
+    const gapHeight = gapSize?.height || remoteHeight;
+    if (reportedIsPrimary) {
+      return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+        leftWidth: widthGap,
+        leftHeight: gapHeight,
+        leftDisplayIndex: gapDisplayIndex,
+        leftPrimary: false,
+        rightWidth: reportedWidth,
+        rightHeight: reportedHeight,
+        rightDisplayIndex: reportedDisplayIndex,
+        rightPrimary: true,
+        rightDeviceName: display?.deviceName || display?.device_name || "",
+      });
+    }
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+      leftWidth: reportedWidth,
+      leftHeight: reportedHeight,
+      leftDisplayIndex: reportedDisplayIndex,
+      leftPrimary: false,
+      leftDeviceName: display?.deviceName || display?.device_name || "",
+      rightWidth: widthGap,
+      rightHeight: gapHeight,
+      rightDisplayIndex: gapDisplayIndex,
+      rightPrimary: false,
+    });
+  }
   const commonSplitMatchesReported =
     !reportedWidth ||
     closeDisplaySize(
@@ -685,19 +740,6 @@ function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
     commonSplitMatchesReported
   ) {
     return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
-  }
-  const heightTolerance = Math.max(120, Math.round(remoteHeight * 0.28));
-  if (
-    reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH &&
-    widthGap >= DISPLAY_INFERENCE_MIN_WIDTH &&
-    closeDisplaySize(reportedHeight, remoteHeight, heightTolerance)
-  ) {
-    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
-      leftWidth: reportedWidth,
-      leftHeight: reportedHeight,
-      rightWidth: widthGap,
-      rightHeight: remoteHeight,
-    });
   }
   if (commonSplit) {
     return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
@@ -1016,11 +1058,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const displaySelectorOptions = useMemo(
     () => [
       { id: ALL_DISPLAYS_ID, label: "All", shortLabel: "All" },
-      ...diagramTopology.map((item) => ({
-        id: monitorSelectionId(item),
-        label: `Display ${item.label}`,
-        shortLabel: item.label,
-      })),
+      ...diagramTopology
+        .slice()
+        .sort((left, right) => {
+          if (left.displayIndex !== right.displayIndex) return left.displayIndex - right.displayIndex;
+          return monitorSelectionId(left).localeCompare(monitorSelectionId(right));
+        })
+        .map((item) => ({
+          id: monitorSelectionId(item),
+          label: `Display ${item.label}`,
+          shortLabel: item.label,
+        })),
     ],
     [diagramTopology]
   );
@@ -1035,7 +1083,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const selectedOption = displaySelectorOptions.find((item) => item.id === selectedDisplayId);
     return `Display: ${selectedOption?.shortLabel || "All"}`;
   }, [displaySelectorOptions, selectedDisplayId]);
-  const viewfinderTopology = diagramTopology;
+  const viewfinderTopology = useMemo(() => {
+    if (selectedDisplayId === ALL_DISPLAYS_ID) return diagramTopology;
+    const selected = diagramTopology.filter(
+      (item) => monitorSelectionId(item) === selectedDisplayId
+    );
+    return selected.length ? selected : diagramTopology;
+  }, [diagramTopology, selectedDisplayId]);
   const displayLayoutGeometry = useMemo(
     () =>
       buildDisplayLayoutGeometry(viewfinderTopology, {
@@ -2163,6 +2217,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const navigateViewfinderPoint = useCallback(
     (localX, localY) => {
       if (!displayLayoutGeometry.bounds || !displayLayoutGeometry.scale || !displayViewportTarget) return;
+      const sourceBounds = diagramBounds || displayLayoutGeometry.bounds;
+      if (!sourceBounds?.width || !sourceBounds?.height) return;
       const remoteWidth = Math.max(1, Number(displayViewportTarget.remoteWidth || 0));
       const remoteHeight = Math.max(1, Number(displayViewportTarget.remoteHeight || 0));
       const diagramX =
@@ -2171,15 +2227,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const diagramY =
         displayLayoutGeometry.bounds.top +
         (localY - displayLayoutGeometry.offsetY) / displayLayoutGeometry.scale;
-      const scaleX = remoteWidth / Math.max(1, displayLayoutGeometry.bounds.width);
-      const scaleY = remoteHeight / Math.max(1, displayLayoutGeometry.bounds.height);
+      const scaleX = remoteWidth / Math.max(1, sourceBounds.width);
+      const scaleY = remoteHeight / Math.max(1, sourceBounds.height);
       const remoteX = clampNumber(
-        (diagramX - displayLayoutGeometry.bounds.left) * scaleX,
+        (diagramX - sourceBounds.left) * scaleX,
         displayViewportTarget.left,
         displayViewportTarget.left + displayViewportTarget.width
       );
       const remoteY = clampNumber(
-        (diagramY - displayLayoutGeometry.bounds.top) * scaleY,
+        (diagramY - sourceBounds.top) * scaleY,
         displayViewportTarget.top,
         displayViewportTarget.top + displayViewportTarget.height
       );
@@ -2192,6 +2248,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     },
     [
       configureDisplaySurface,
+      diagramBounds,
       displayLayoutGeometry,
       displayMode,
       displayViewportTarget,
