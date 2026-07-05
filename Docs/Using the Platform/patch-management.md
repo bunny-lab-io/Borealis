@@ -2,12 +2,10 @@
 
 Patch Management groups OS-specific patch surfaces under one sidebar section. Windows patch inventory and policies are active today. Linux and MacOS pages are present for layout consistency and show `Coming Soon` until those patch backends exist.
 
-The Windows Patch Management page has four tabs:
+The Windows Patch Management page has two tabs:
 
 - `Patch List` shows available and installed Windows updates.
-- `Global Policies` shows the locked server and workstation baselines.
-- `Site Policies` controls site-scoped maintenance windows and role scope.
-- `Device / Filter Policies` applies deepest overrides for explicit devices or dynamic device filters.
+- `Patch Management Policies` shows global baselines, site-level overrides, and device/filter policies in one hierarchy table.
 
 ## Open Fleet Patch Audit
 
@@ -26,7 +24,7 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 ## Configure Patch Policies
 
 1. Open `Patch Management > Windows`.
-2. Select `Global Policies`, `Site Policies`, or `Device / Filter Policies`.
+2. Select `Patch Management Policies`.
 3. Use `New Policy` and choose `New Site Policy` or `New Device / Filter Policy`.
 4. Create a policy and choose its policy type: `Server` or `Workstation`.
 5. Choose the install schedule. Times use the Engine host timezone.
@@ -36,6 +34,8 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 9. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
 
 Two Global Patch Policies are created automatically during Engine database initialization. `Global Workstation Policy` is locked from deletion, enabled by default, uses Tuesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off. `Global Server Policy` uses the same defaults except its install window is Wednesday 2:00 AM Engine-local time.
+
+The policy table nests site-level overrides under the matching `Server` or `Workstation` global policy. Device / Filter policies appear under matching site-level overrides when their eligible devices belong to those targeted sites. If a Device / Filter policy targets devices in multiple sites, Borealis can show linked references to the same policy in multiple hierarchy positions. If no matching site-level override exists for a targeted site, the Device / Filter policy appears directly under the matching global policy. The `Targeted Sites` column shows searchable site bubbles so operators can inspect policy reach without opening the editor.
 
 Windows patch policies are single-domain. Site policies target one or more sites plus exactly one policy type: `Server` or `Workstation`. One site and policy type combination can only be covered by one enabled site policy.
 
@@ -82,7 +82,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `GET /api/patches/audit` - fleet patch inventory, scoped to operator site access. Rows include `active_install_job` when an enabled scheduled patch install already owns that patch.
     - `GET /api/device/patches/<hostname>` - device patch inventory, scoped to operator site access.
     - `POST /api/device/patches/<hostname>/refresh` - queue `patch_inventory_refresh_request` over the device SYSTEM socket.
-    - `GET /api/patches/policies` - list patch policies, optionally filtered by `type=global`, `type=site`, or `type=device_filter`.
+    - `GET /api/patches/policies` - list patch policies, optionally filtered by `type=global`, `type=site`, or `type=device_filter`. Unfiltered Windows UI calls return all policy types with target counts and targeted-site summaries for the hierarchy table.
     - `POST /api/patches/policies` - create a patch policy.
     - `GET /api/patches/policies/metadata` - load policy editor metadata for sites, filters, rule types, Windows role scopes, exclusion modes, and defaults.
     - `GET /api/patches/policies/<policy_id>` - load one policy.
@@ -132,6 +132,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
     - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and `ensureSplitGlobalPatchPolicies()`. When no split global policy exists, Borealis clears legacy patch policy definitions/history/state, preserves `patch_catalog_entries` and `device_patch_inventory`, then seeds `Global Workstation Policy` and `Global Server Policy`. Redeploy does not overwrite existing split global policies.
     - Policy hierarchy is Global -> Site -> Device/Filter within the same policy type. Device/filter policy is deepest. Same site+role overlaps block site policy save. Direct device/filter target overlap blocks device/filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
+    - Windows fleet UI renders one converged `Patch Management Policies` table. The API includes `target_sites`, `target_site_ids`, and `target_site_names`; device/filter target sites come from eligible resolved devices, so linked policy references disappear from a site branch when that policy no longer targets eligible devices in that site.
     - Windows patch policy role scopes are `Server` and `Workstation`. `Both` is retained only as a legacy overlap helper and is rejected by policy save validation. Empty `device_type` devices do not match either role. `device_type` strings containing `server` match `Server`; any other non-empty value matches `Workstation`.
     - Effective policy resolution groups policies by device identity, selects the deepest same-role match, and assigns each device to only that effective policy. Parent policy runs therefore do not create duplicate KB jobs for devices covered by child policies.
     - Policy rules support `approve` and `block` against `severity`, `classification`, `category`, `kb`, `update_id`, and `patch_key`. Parent approve rules do not flow into children. Parent block rules inherit downward; child approval of a parent block requires confirmation and stores `override_parent_block`.

@@ -367,10 +367,16 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 	rows, err := loadPatchPolicyRows(ctx, conn, policyType, nil)
+	closeErr := conn.Close()
 	if err != nil {
+		if closeErr != nil {
+			return nil, errors.Join(err, closeErr)
+		}
 		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
 	}
 	out := []map[string]any{}
 	for _, row := range rows {
@@ -378,11 +384,14 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 			continue
 		}
 		payload := patchPolicyPayload(row)
-		counts := patchPolicyCoveredCounts(ctx, s, profile, row)
+		counts, targetSites := patchPolicyCoverageListSummary(ctx, s, profile, row)
 		payload["target_count"] = counts["eligible"]
 		payload["raw_target_count"] = counts["raw"]
 		payload["ignored_role_count"] = counts["ignored_role"]
 		payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
+		payload["target_sites"] = targetSites
+		payload["target_site_ids"] = patchPolicyTargetSiteIDs(targetSites)
+		payload["target_site_names"] = patchPolicyTargetSiteNames(targetSites)
 		out = append(out, payload)
 	}
 	return out, nil
@@ -2288,11 +2297,131 @@ func patchPolicyCoveredCounts(ctx context.Context, s *postgresOperatorStore, pro
 	if err != nil {
 		return map[string]int{"raw": 0, "eligible": 0, "ignored_role": 0}
 	}
+	return patchPolicyResolutionCounts(resolution)
+}
+
+func patchPolicyCoverageListSummary(ctx context.Context, s *postgresOperatorStore, profile operatorProfile, row patchPolicyRow) (map[string]int, []map[string]any) {
+	resolution, err := s.resolvePatchPolicyDeviceResolution(ctx, profile, row, true)
+	if err != nil {
+		return map[string]int{"raw": 0, "eligible": 0, "ignored_role": 0}, patchPolicyTargetSitesForRow(row, patchPolicyDeviceResolution{})
+	}
+	return patchPolicyResolutionCounts(resolution), patchPolicyTargetSitesForRow(row, resolution)
+}
+
+func patchPolicyResolutionCounts(resolution patchPolicyDeviceResolution) map[string]int {
 	ignored := len(resolution.Raw) - len(resolution.Eligible)
 	if ignored < 0 {
 		ignored = 0
 	}
 	return map[string]int{"raw": len(resolution.Raw), "eligible": len(resolution.Eligible), "ignored_role": ignored}
+}
+
+func patchPolicyTargetSitesForRow(row patchPolicyRow, resolution patchPolicyDeviceResolution) []map[string]any {
+	switch normalizePatchPolicyType(row.PolicyType.String) {
+	case patchPolicyTypeGlobal:
+		return []map[string]any{{"id": int64(0), "site_id": int64(0), "name": "All Sites", "scope": "all"}}
+	case patchPolicyTypeSite:
+		return patchPolicyConfiguredTargetSites(row.Sites)
+	case patchPolicyTypeDeviceFilter:
+		return patchPolicyDeviceTargetSites(resolution.Eligible)
+	default:
+		return []map[string]any{}
+	}
+}
+
+func patchPolicyConfiguredTargetSites(sites []map[string]any) []map[string]any {
+	out := []map[string]any{}
+	for _, site := range sites {
+		siteID := coerceInt64(firstPresentAny(site["site_id"], site["id"]))
+		name := cleanText(site["name"])
+		if siteID <= 0 && name == "" {
+			continue
+		}
+		out = append(out, map[string]any{"id": siteID, "site_id": siteID, "name": firstText(name, "Site "+strconv.FormatInt(siteID, 10))})
+	}
+	return patchPolicyNormalizeTargetSites(out)
+}
+
+func patchPolicyDeviceTargetSites(devices []patchPolicyDevice) []map[string]any {
+	out := []map[string]any{}
+	for _, device := range devices {
+		siteID := device.SiteID
+		name := cleanText(device.SiteName)
+		if siteID <= 0 && name == "" {
+			name = "Unassigned"
+		}
+		out = append(out, map[string]any{"id": siteID, "site_id": siteID, "name": firstText(name, "Site "+strconv.FormatInt(siteID, 10))})
+	}
+	return patchPolicyNormalizeTargetSites(out)
+}
+
+func patchPolicyNormalizeTargetSites(sites []map[string]any) []map[string]any {
+	seen := map[string]map[string]any{}
+	keys := []string{}
+	for _, site := range sites {
+		siteID := coerceInt64(firstPresentAny(site["site_id"], site["id"]))
+		name := cleanText(site["name"])
+		key := ""
+		if siteID > 0 {
+			key = "id:" + strconv.FormatInt(siteID, 10)
+		} else if name != "" {
+			key = "name:" + strings.ToLower(name)
+		}
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = map[string]any{"id": siteID, "site_id": siteID, "name": name}
+		keys = append(keys, key)
+	}
+	sort.SliceStable(keys, func(i, j int) bool {
+		left := seen[keys[i]]
+		right := seen[keys[j]]
+		leftName := strings.ToLower(cleanText(left["name"]))
+		rightName := strings.ToLower(cleanText(right["name"]))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return coerceInt64(left["site_id"]) < coerceInt64(right["site_id"])
+	})
+	out := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, seen[key])
+	}
+	return out
+}
+
+func patchPolicyTargetSiteIDs(sites []map[string]any) []int64 {
+	out := []int64{}
+	for _, site := range sites {
+		if id := coerceInt64(firstPresentAny(site["site_id"], site["id"])); id > 0 {
+			out = append(out, id)
+		}
+	}
+	return uniquePositiveInt64s(out)
+}
+
+func patchPolicyTargetSiteNames(sites []map[string]any) []string {
+	names := []string{}
+	seen := map[string]struct{}{}
+	for _, site := range sites {
+		name := cleanText(site["name"])
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		names = append(names, name)
+	}
+	sort.SliceStable(names, func(i, j int) bool {
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
+	return names
 }
 
 func patchPolicyRoleMatchLabel(counts map[string]int) string {

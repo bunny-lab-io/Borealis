@@ -62,9 +62,7 @@ const SEVERITY_FILTER_OPTIONS = [
 
 export const PATCH_PAGE_TABS = [
   { key: "patch_list", label: "Patch List" },
-  { key: "global_policies", label: "Global Policies" },
-  { key: "site_policies", label: "Site Policies" },
-  { key: "device_filter_policies", label: "Device / Filter Policies" },
+  { key: "policies", label: "Patch Management Policies" },
 ];
 
 export const POLICY_MATCH_TYPES = [
@@ -210,18 +208,19 @@ function formatDeviceCount(value) {
   return `${safeCount.toLocaleString()} ${safeCount === 1 ? "Device" : "Devices"}`;
 }
 
-export function policyTypeForTab(tabKey) {
-  if (tabKey === "global_policies") return "global";
-  return tabKey === "device_filter_policies" ? "device_filter" : "site";
-}
-
 export function policyTypeLabel(policyType) {
   if (policyType === "global") return "Global Policy";
   return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
 }
 
+function policyTableTypeLabel(policyType) {
+  if (policyType === "global") return "Global";
+  if (policyType === "device_filter") return "Device / Filter Policies";
+  return "Site-Level Override";
+}
+
 function policyRowTypeLabel(row = {}) {
-  return policyTypeLabel(text(row.policy_type) || "site");
+  return policyTableTypeLabel(text(row.policy_type) || "site");
 }
 
 function microsoftUpdateCatalogURL(kb) {
@@ -357,6 +356,148 @@ function buildPatchFleetRows(rows = []) {
       sensitivity: "base",
     });
   });
+}
+
+function normalizePolicyTypeValue(policy = {}) {
+  const normalized = text(policy.policy_type).toLowerCase();
+  if (normalized === "global" || normalized === "device_filter") return normalized;
+  return "site";
+}
+
+function normalizePolicyRoleValue(policy = {}) {
+  const role = text(policy.role_scope);
+  return role.toLowerCase() === "server" ? "Server" : "Workstation";
+}
+
+function normalizeTargetSites(policy = {}) {
+  const policyType = normalizePolicyTypeValue(policy);
+  const source =
+    Array.isArray(policy.target_sites) && policy.target_sites.length
+      ? policy.target_sites
+      : policyType === "site" && Array.isArray(policy.sites)
+        ? policy.sites
+        : policyType === "global"
+          ? [{ id: 0, site_id: 0, name: "All Sites", scope: "all" }]
+          : [];
+  const seen = new Map();
+  source.forEach((site) => {
+    const siteID = Number(site?.site_id ?? site?.id ?? 0) || 0;
+    const name = text(site?.name) || (siteID > 0 ? `Site ${siteID}` : "");
+    if (!name && siteID <= 0) return;
+    const key = siteID > 0 ? `id:${siteID}` : `name:${name.toLowerCase()}`;
+    if (seen.has(key)) return;
+    seen.set(key, { id: siteID, site_id: siteID, name, scope: text(site?.scope) });
+  });
+  return Array.from(seen.values()).sort((left, right) =>
+    text(left.name).localeCompare(text(right.name), undefined, { sensitivity: "base", numeric: true })
+  );
+}
+
+function policySiteKey(site = {}) {
+  const siteID = Number(site?.site_id ?? site?.id ?? 0) || 0;
+  if (siteID > 0) return `id:${siteID}`;
+  const name = text(site?.name).toLowerCase();
+  return name ? `name:${name}` : "";
+}
+
+function policyTargetSiteText(policy = {}) {
+  return normalizeTargetSites(policy).map((site) => text(site.name)).filter(Boolean).join(", ");
+}
+
+function policySortLabel(policy = {}) {
+  return `${normalizePolicyRoleValue(policy)}|${policyTargetSiteText(policy)}|${text(policy.name)}`.toLowerCase();
+}
+
+function policyRowDepth(policy = {}) {
+  const depth = Number(policy.__depth ?? 0);
+  return Number.isFinite(depth) && depth > 0 ? depth : 0;
+}
+
+function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null) {
+  const targetSites = normalizeTargetSites(policy);
+  const branchSiteName = text(branchSite?.name);
+  return {
+    ...policy,
+    __hierarchyKey: `${normalizePolicyTypeValue(policy)}:${policy.id || text(policy.name)}:${parentKey || "root"}:${branchSiteName || "all"}`,
+    __depth: depth,
+    __parentKey: parentKey,
+    __branchSite: branchSite,
+    __isReference: normalizePolicyTypeValue(policy) === "device_filter" && Boolean(parentKey),
+    __policyTypeLabel: policyTableTypeLabel(normalizePolicyTypeValue(policy)),
+    __targetSites: targetSites,
+    __targetSitesText: targetSites.map((site) => text(site.name)).filter(Boolean).join(", "),
+  };
+}
+
+function buildPatchPolicyHierarchyRows(policies = []) {
+  const normalized = policies.map((policy) => ({
+    ...policy,
+    policy_type: normalizePolicyTypeValue(policy),
+    role_scope: normalizePolicyRoleValue(policy),
+  }));
+  const globalPolicies = normalized
+    .filter((policy) => policy.policy_type === "global")
+    .sort((left, right) => policySortLabel(left).localeCompare(policySortLabel(right)));
+  const sitePolicies = normalized
+    .filter((policy) => policy.policy_type === "site")
+    .sort((left, right) => policySortLabel(left).localeCompare(policySortLabel(right)));
+  const devicePolicies = normalized
+    .filter((policy) => policy.policy_type === "device_filter")
+    .sort((left, right) => policySortLabel(left).localeCompare(policySortLabel(right)));
+  const roles = Array.from(
+    new Set([
+      ...globalPolicies.map((policy) => policy.role_scope),
+      ...sitePolicies.map((policy) => policy.role_scope),
+      ...devicePolicies.map((policy) => policy.role_scope),
+    ])
+  ).sort((left, right) => left.localeCompare(right));
+  const rows = [];
+  roles.forEach((role) => {
+    const roleGlobals = globalPolicies.filter((policy) => policy.role_scope === role);
+    const roots = roleGlobals.length ? roleGlobals : [{ id: `missing-${role}`, name: `${role} Global Policy`, policy_type: "global", role_scope: role, locked: true }];
+    roots.forEach((globalPolicy) => {
+      const globalKey = `global:${globalPolicy.id || role}`;
+      rows.push(makePolicyHierarchyRow(globalPolicy, 0, ""));
+      const roleSitePolicies = sitePolicies.filter((policy) => policy.role_scope === role);
+      const coveredSiteKeys = new Set();
+      roleSitePolicies.forEach((sitePolicy) => {
+        const sitePolicyKey = `site:${sitePolicy.id}`;
+        const siteTargets = normalizeTargetSites(sitePolicy);
+        siteTargets.forEach((site) => {
+          const key = policySiteKey(site);
+          if (key) coveredSiteKeys.add(key);
+        });
+        rows.push(makePolicyHierarchyRow(sitePolicy, 1, globalKey));
+        const siteKeySet = new Set(siteTargets.map(policySiteKey).filter(Boolean));
+        devicePolicies
+          .filter((policy) => policy.role_scope === role)
+          .forEach((devicePolicy) => {
+            const deviceSites = normalizeTargetSites(devicePolicy);
+            const matchedSites = deviceSites.filter((site) => siteKeySet.has(policySiteKey(site)));
+            matchedSites.forEach((site) => {
+              rows.push(makePolicyHierarchyRow(devicePolicy, 2, `${sitePolicyKey}:${policySiteKey(site)}`, site));
+            });
+          });
+      });
+      devicePolicies
+        .filter((policy) => policy.role_scope === role)
+        .forEach((devicePolicy) => {
+          const deviceSites = normalizeTargetSites(devicePolicy);
+          const uncoveredSites = deviceSites.filter((site) => {
+            const key = policySiteKey(site);
+            return !key || !coveredSiteKeys.has(key);
+          });
+          if (!deviceSites.length || !uncoveredSites.length && !roleSitePolicies.length) {
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, globalKey));
+            return;
+          }
+          uncoveredSites.forEach((site) => {
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, `${globalKey}:${policySiteKey(site)}`, site));
+          });
+        });
+    });
+  });
+  return rows;
 }
 
 export function defaultPolicyDraft(policyType) {
@@ -975,7 +1116,7 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
   );
 }
 
-function PatchPolicyTab({ policyType }) {
+function PatchPolicyTab() {
   const navigate = useNavigate();
   const [policies, setPolicies] = useState([]);
   const [loadError, setLoadError] = useState("");
@@ -986,7 +1127,7 @@ function PatchPolicyTab({ policyType }) {
 
   const loadPolicies = useCallback(async () => {
     try {
-      const policyResponse = await fetch(`/api/patches/policies?type=${encodeURIComponent(policyType)}`, { credentials: "include", cache: "no-store" });
+      const policyResponse = await fetch("/api/patches/policies", { credentials: "include", cache: "no-store" });
       const policyPayload = await policyResponse.json().catch(() => ({}));
       if (!policyResponse.ok) throw new Error(policyPayload?.message || policyPayload?.error || `HTTP ${policyResponse.status}`);
       setPolicies(Array.isArray(policyPayload?.policies) ? policyPayload.policies : []);
@@ -994,7 +1135,7 @@ function PatchPolicyTab({ policyType }) {
     } catch (error) {
       setLoadError(String(error?.message || error));
     }
-  }, [policyType]);
+  }, []);
 
   useEffect(() => {
     void loadPolicies();
@@ -1035,6 +1176,7 @@ function PatchPolicyTab({ policyType }) {
 
   const openEdit = useCallback((policy) => {
     if (!policy?.id) return;
+    const policyType = normalizePolicyTypeValue(policy);
     const nextPath =
       policyType === "global"
         ? APP_PATHS.patchPolicyGlobal(policy.id)
@@ -1042,7 +1184,7 @@ function PatchPolicyTab({ policyType }) {
           ? APP_PATHS.patchPolicyDeviceFilter(policy.id)
           : APP_PATHS.patchPolicySite(policy.id);
     navigate(nextPath);
-  }, [navigate, policyType]);
+  }, [navigate]);
 
   const deletePolicy = useCallback(async (policy = {}) => {
     if (!policy?.id || policy.locked) return;
@@ -1109,7 +1251,7 @@ function PatchPolicyTab({ policyType }) {
         disabled:
           !actionMenuPolicy?.id ||
           Boolean(actionMenuPolicy?.locked) ||
-          policyType === "global" ||
+          normalizePolicyTypeValue(actionMenuPolicy) === "global" ||
           busyId === `delete-${actionMenuPolicy?.id}`,
         onClick: () => {
           const policy = actionMenuPolicy;
@@ -1118,7 +1260,7 @@ function PatchPolicyTab({ policyType }) {
         },
       },
     ],
-    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, evaluatePolicy, openEdit, policyType]
+    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, evaluatePolicy, openEdit]
   );
 
   const actionCellRenderer = useCallback(
@@ -1142,11 +1284,163 @@ function PatchPolicyTab({ policyType }) {
     [openActionMenu]
   );
 
+  const hierarchyRows = useMemo(() => buildPatchPolicyHierarchyRows(policies), [policies]);
+
+  const policyNameCellRenderer = useCallback((params) => {
+    const row = params.data || {};
+    const depth = policyRowDepth(row);
+    const policyName = text(row.name) || "Patch Policy";
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.8,
+          height: "100%",
+          minWidth: 0,
+          width: "100%",
+          pl: `${depth * 18}px`,
+        }}
+      >
+        {depth > 0 ? (
+          <Box
+            aria-hidden="true"
+            sx={{
+              width: 13,
+              height: 18,
+              flexShrink: 0,
+              borderLeft: "1px solid rgba(125,183,255,0.34)",
+              borderBottom: "1px solid rgba(125,183,255,0.34)",
+              borderBottomLeftRadius: 5,
+            }}
+          />
+        ) : null}
+        <PolicyRoundedIcon
+          sx={{
+            fontSize: 18,
+            color: normalizePolicyTypeValue(row) === "global" ? "#f8d47a" : BOREALIS_BLUE,
+            flexShrink: 0,
+          }}
+        />
+        <Typography
+          component="span"
+          noWrap
+          sx={{
+            color: normalizePolicyTypeValue(row) === "global" ? MAGIC_UI.textBright : BOREALIS_BLUE,
+            fontSize: 13,
+            fontWeight: 700,
+            minWidth: 0,
+          }}
+        >
+          {policyName}
+        </Typography>
+        {row.__isReference ? (
+          <Box
+            component="span"
+            sx={{
+              borderRadius: 999,
+              px: 0.7,
+              py: 0.12,
+              color: "#d4b5ff",
+              border: "1px solid rgba(180,137,255,0.35)",
+              background: "rgba(180,137,255,0.14)",
+              fontSize: 11,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              flexShrink: 0,
+            }}
+          >
+            Linked
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }, []);
+
+  const targetSitesCellRenderer = useCallback((params) => {
+    const sites = Array.isArray(params.data?.__targetSites) ? params.data.__targetSites : normalizeTargetSites(params.data || {});
+    if (!sites.length) {
+      return <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12 }}>No Site Targets</Typography>;
+    }
+    const visibleSites = sites.slice(0, 3);
+    const hiddenCount = sites.length - visibleSites.length;
+    return (
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, minWidth: 0, overflow: "hidden" }}>
+        {visibleSites.map((site) => (
+          <Box
+            key={`${site.site_id || site.id || 0}-${site.name}`}
+            component="span"
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              maxWidth: 145,
+              borderRadius: 999,
+              px: 0.8,
+              py: 0.2,
+              color: "#89c2ff",
+              border: "1px solid rgba(88,166,255,0.42)",
+              backgroundColor: "rgba(88,166,255,0.14)",
+              fontSize: 11.5,
+              fontWeight: 600,
+              lineHeight: 1.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {text(site.name)}
+          </Box>
+        ))}
+        {hiddenCount > 0 ? (
+          <Box
+            component="span"
+            sx={{
+              borderRadius: 999,
+              px: 0.75,
+              py: 0.2,
+              color: "#cbd5e1",
+              border: "1px solid rgba(148,163,184,0.34)",
+              backgroundColor: "rgba(15,23,42,0.62)",
+              fontSize: 11.5,
+              fontWeight: 600,
+              lineHeight: 1.25,
+              flexShrink: 0,
+            }}
+          >
+            +{hiddenCount}
+          </Box>
+        ) : null}
+      </Box>
+    );
+  }, []);
+
   const columnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
+      {
+        field: "name",
+        headerName: "Policy",
+        flex: 1.35,
+        minWidth: 260,
+        valueGetter: (params) => text(params.data?.name),
+        cellRenderer: policyNameCellRenderer,
+      },
+      {
+        field: "policy_type",
+        headerName: "Policy Type",
+        width: 190,
+        minWidth: 175,
+        valueGetter: (params) => params.data?.__policyTypeLabel || policyTableTypeLabel(normalizePolicyTypeValue(params.data || {})),
+      },
       { field: "enabled", headerName: "Enabled", width: 120, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
       { field: "role_scope", headerName: "Scope", width: 135 },
+      {
+        colId: "targeted_sites",
+        headerName: "Targeted Sites",
+        width: 255,
+        minWidth: 220,
+        valueGetter: (params) => params.data?.__targetSitesText || policyTargetSiteText(params.data || {}),
+        cellRenderer: targetSitesCellRenderer,
+      },
       {
         field: "target_count",
         headerName: "Targeted Devices",
@@ -1174,7 +1468,7 @@ function PatchPolicyTab({ policyType }) {
         cellRenderer: actionCellRenderer,
       },
     ],
-    [actionCellRenderer]
+    [actionCellRenderer, policyNameCellRenderer, targetSitesCellRenderer]
   );
 
   return (
@@ -1214,10 +1508,13 @@ function PatchPolicyTab({ policyType }) {
           height: "100%",
           borderRadius: 0,
           border: "none",
+          "& .patch-policy-linked-reference .ag-cell": {
+            backgroundColor: "rgba(180,137,255,0.035)",
+          },
         }}
       >
         <AgGridReact
-          rowData={policies}
+          rowData={hierarchyRows}
           columnDefs={columnDefs}
           defaultColDef={DEFAULT_GRID_COL_DEF}
           rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
@@ -1226,7 +1523,10 @@ function PatchPolicyTab({ policyType }) {
           paginationPageSize={50}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
-          getRowId={(params) => String(params.data?.id || params.rowIndex)}
+          getRowId={(params) => String(params.data?.__hierarchyKey || params.data?.id || params.rowIndex)}
+          rowClassRules={{
+            "patch-policy-linked-reference": (params) => Boolean(params.data?.__isReference),
+          }}
           onCellContextMenu={(params) => openContextMenu(params.event, params.data, params.node)}
           suppressContextMenu
           theme={DEVICE_DETAILS_GRID_THEME}
@@ -1879,7 +2179,7 @@ export default function PatchManagement() {
           </GridShell>
         </>
       ) : (
-        <PatchPolicyTab policyType={policyTypeForTab(activeTab)} />
+        <PatchPolicyTab />
       )}
       </PageBodyFrame>
     </>

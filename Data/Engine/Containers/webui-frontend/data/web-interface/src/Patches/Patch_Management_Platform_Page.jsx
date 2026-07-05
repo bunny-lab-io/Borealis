@@ -161,8 +161,10 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
   const policyColumnDefs = useMemo(
     () => [
       { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
+      { field: "policy_type", headerName: "Policy Type", width: 190, minWidth: 175 },
       { field: "enabled", headerName: "Enabled", width: 120 },
       { field: "role_scope", headerName: "Scope", width: 135 },
+      { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220 },
       { field: "target_count", headerName: "Targeted Devices", width: 175 },
       { field: "deferral_days", headerName: "Update Deferral Period", width: 215 },
       { field: "install_schedule_type", headerName: "Schedule", width: 130 },
@@ -330,6 +332,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
             pagination
             paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
+            animateRows
             overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
             theme={DEVICE_DETAILS_GRID_THEME}
           />
