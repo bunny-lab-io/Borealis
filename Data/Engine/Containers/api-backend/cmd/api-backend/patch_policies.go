@@ -2076,9 +2076,15 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		return index, nil
 	}
 	policyByID := map[int64]patchPolicyRow{}
+	globalDirectRules := []patchPolicyRule{}
 	for _, row := range rows {
 		if id := nullInt(row.ID); id > 0 {
 			policyByID[id] = row
+		}
+		if boolInt64(row.Enabled) && normalizePatchPolicyType(row.PolicyType.String) == patchPolicyTypeGlobal {
+			for _, rule := range row.Rules {
+				globalDirectRules = append(globalDirectRules, patchPolicyRuleWithSource(row, rule))
+			}
 		}
 	}
 	if resolver == nil {
@@ -2165,7 +2171,9 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		}
 		rowResult := patchPolicyPendingInventoryRow{patchPolicyInventoryAssignment: assignment, InstallCandidate: true}
 		patch := patchInventoryPayload(pendingRow)
-		rowResult.LinkedPolicies = patchPolicyLinkedPoliciesForPatch(assignment.Rules, patch)
+		linkedRules := append([]patchPolicyRule{}, assignment.Rules...)
+		linkedRules = append(linkedRules, globalDirectRules...)
+		rowResult.LinkedPolicies = patchPolicyLinkedPoliciesForPatch(linkedRules, patch)
 		if !patchPolicyDeferralSatisfied(pendingRow, assignment.DeferralDays, time.Now().Unix()) {
 			rowResult.InstallCandidate = false
 			rowResult.SkipReason = "deferred"

@@ -59,28 +59,34 @@ func TestPatchPolicyDecisionMatchesTitleContains(t *testing.T) {
 
 func TestPatchPolicyLinkedPoliciesIncludeTitleApprovesAndBlocks(t *testing.T) {
 	rules := []patchPolicyRule{
+		{PolicyID: 10, PolicyName: "Global Server Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleApprove, MatchType: patchPolicyMatchTitleContains, MatchValue: "Security Intelligence Update"},
+		{PolicyID: 10, PolicyName: "Global Server Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleBlock, MatchType: patchPolicyMatchTitleContains, MatchValue: "Preview"},
 		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleApprove, MatchType: patchPolicyMatchTitleContains, MatchValue: "Security Intelligence Update"},
 		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleBlock, MatchType: patchPolicyMatchTitleContains, MatchValue: "Preview"},
 		{PolicyID: 22, PolicyName: "Site Workstation Policy", PolicyType: patchPolicyTypeSite, RuleType: patchPolicyRuleApprove, MatchType: "classification", MatchValue: "Drivers"},
 	}
 
 	defender := patchPolicyLinkedPoliciesForPatch(rules, map[string]any{"title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602"})
-	if len(defender) != 1 {
-		t.Fatalf("expected one defender linked policy, got %#v", defender)
+	if len(defender) != 2 {
+		t.Fatalf("expected two defender linked policies, got %#v", defender)
 	}
-	if defender[0].PolicyID != 11 || defender[0].PolicyType != patchPolicyTypeGlobal || defender[0].PolicyName != "Global Workstation Policy" {
-		t.Fatalf("unexpected defender linked policy %#v", defender[0])
-	}
-	if len(defender[0].RuleTypes) != 1 || defender[0].RuleTypes[0] != patchPolicyRuleApprove {
-		t.Fatalf("expected defender approve rule source, got %#v", defender[0].RuleTypes)
+	for _, linked := range defender {
+		if linked.PolicyType != patchPolicyTypeGlobal || len(linked.RuleTypes) != 1 || linked.RuleTypes[0] != patchPolicyRuleApprove {
+			t.Fatalf("unexpected defender linked policy %#v", linked)
+		}
 	}
 
 	preview := patchPolicyLinkedPoliciesForPatch(rules, map[string]any{"title": "2026-07 Cumulative Update Preview for Windows 11"})
-	if len(preview) != 1 {
-		t.Fatalf("expected one preview linked policy, got %#v", preview)
+	if len(preview) != 2 {
+		t.Fatalf("expected two preview linked policies, got %#v", preview)
 	}
-	if preview[0].PolicyID != 11 || len(preview[0].RuleTypes) != 1 || preview[0].RuleTypes[0] != patchPolicyRuleBlock {
-		t.Fatalf("expected preview block source from global policy, got %#v", preview[0])
+	if preview[0].PolicyName != "Global Server Policy" || preview[1].PolicyName != "Global Workstation Policy" {
+		t.Fatalf("expected both split global policies, got %#v", preview)
+	}
+	for _, linked := range preview {
+		if linked.PolicyType != patchPolicyTypeGlobal || len(linked.RuleTypes) != 1 || linked.RuleTypes[0] != patchPolicyRuleBlock {
+			t.Fatalf("expected preview block source from global policy, got %#v", linked)
+		}
 	}
 }
 
