@@ -214,13 +214,15 @@ export function policyTypeLabel(policyType) {
 }
 
 function policyTableTypeLabel(policyType) {
-  if (policyType === "global") return "Global";
-  if (policyType === "device_filter") return "Device / Filter Policies";
+  const normalized = text(policyType).toLowerCase();
+  if (normalized === "global") return "Global";
+  if (normalized === "device_filter") return "Device / Filter Policies";
   return "Site-Level Override";
 }
 
 function policyRowTypeLabel(row = {}) {
-  return policyTableTypeLabel(text(row.policy_type) || "site");
+  const source = row && typeof row === "object" ? row : {};
+  return policyTableTypeLabel(text(source.policy_type) || "site");
 }
 
 function microsoftUpdateCatalogURL(kb) {
@@ -359,23 +361,26 @@ function buildPatchFleetRows(rows = []) {
 }
 
 function normalizePolicyTypeValue(policy = {}) {
-  const normalized = text(policy.policy_type).toLowerCase();
+  const source = policy && typeof policy === "object" ? policy : {};
+  const normalized = text(source.policy_type).toLowerCase();
   if (normalized === "global" || normalized === "device_filter") return normalized;
   return "site";
 }
 
 function normalizePolicyRoleValue(policy = {}) {
-  const role = text(policy.role_scope);
+  const source = policy && typeof policy === "object" ? policy : {};
+  const role = text(source.role_scope);
   return role.toLowerCase() === "server" ? "Server" : "Workstation";
 }
 
 function normalizeTargetSites(policy = {}) {
-  const policyType = normalizePolicyTypeValue(policy);
+  const sourcePolicy = policy && typeof policy === "object" ? policy : {};
+  const policyType = normalizePolicyTypeValue(sourcePolicy);
   const source =
-    Array.isArray(policy.target_sites) && policy.target_sites.length
-      ? policy.target_sites
-      : policyType === "site" && Array.isArray(policy.sites)
-        ? policy.sites
+    Array.isArray(sourcePolicy.target_sites) && sourcePolicy.target_sites.length
+      ? sourcePolicy.target_sites
+      : policyType === "site" && Array.isArray(sourcePolicy.sites)
+        ? sourcePolicy.sites
         : policyType === "global"
           ? [{ id: 0, site_id: 0, name: "All Sites", scope: "all" }]
           : [];
@@ -414,27 +419,30 @@ function policyRowDepth(policy = {}) {
 }
 
 function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null) {
-  const targetSites = normalizeTargetSites(policy);
+  const sourcePolicy = policy && typeof policy === "object" ? policy : {};
+  const targetSites = normalizeTargetSites(sourcePolicy);
   const branchSiteName = text(branchSite?.name);
   return {
-    ...policy,
-    __hierarchyKey: `${normalizePolicyTypeValue(policy)}:${policy.id || text(policy.name)}:${parentKey || "root"}:${branchSiteName || "all"}`,
+    ...sourcePolicy,
+    __hierarchyKey: `${normalizePolicyTypeValue(sourcePolicy)}:${sourcePolicy.id || text(sourcePolicy.name)}:${parentKey || "root"}:${branchSiteName || "all"}`,
     __depth: depth,
     __parentKey: parentKey,
     __branchSite: branchSite,
-    __isReference: normalizePolicyTypeValue(policy) === "device_filter" && Boolean(parentKey),
-    __policyTypeLabel: policyTableTypeLabel(normalizePolicyTypeValue(policy)),
+    __isReference: normalizePolicyTypeValue(sourcePolicy) === "device_filter" && Boolean(parentKey),
+    __policyTypeLabel: policyTableTypeLabel(normalizePolicyTypeValue(sourcePolicy)),
     __targetSites: targetSites,
     __targetSitesText: targetSites.map((site) => text(site.name)).filter(Boolean).join(", "),
   };
 }
 
 function buildPatchPolicyHierarchyRows(policies = []) {
-  const normalized = policies.map((policy) => ({
-    ...policy,
-    policy_type: normalizePolicyTypeValue(policy),
-    role_scope: normalizePolicyRoleValue(policy),
-  }));
+  const normalized = (Array.isArray(policies) ? policies : [])
+    .filter((policy) => policy && typeof policy === "object")
+    .map((policy) => ({
+      ...policy,
+      policy_type: normalizePolicyTypeValue(policy),
+      role_scope: normalizePolicyRoleValue(policy),
+    }));
   const globalPolicies = normalized
     .filter((policy) => policy.policy_type === "global")
     .sort((left, right) => policySortLabel(left).localeCompare(policySortLabel(right)));
