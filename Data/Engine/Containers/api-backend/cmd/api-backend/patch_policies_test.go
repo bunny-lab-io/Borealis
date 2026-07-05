@@ -222,21 +222,24 @@ func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
 	}
 }
 
-func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
+func TestPatchPolicyPendingBreakdownCountsEffectiveAndSourcePolicy(t *testing.T) {
 	index := patchPolicyPendingInventoryIndex{}
 	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, patchPolicyPendingInventoryRow{SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111")
 	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, patchPolicyPendingInventoryRow{SourcePolicyType: patchPolicyTypeSite}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyID: 22, SourcePolicyType: patchPolicyTypeSite}, "11111111-1111-1111-1111-111111111111")
 
 	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
 		t.Fatalf("parent policy received child pending count=%d want 0", got)
+	}
+	if got := index.BreakdownByPolicyID[11][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("source policy global-source count=%d want 1", got)
 	}
 	if got := index.BreakdownByPolicyID[22][patchPolicyTypeGlobal]; got != 1 {
 		t.Fatalf("effective policy global-source count=%d want 1", got)
@@ -252,6 +255,9 @@ func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
 	}
 	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeSite]; got != 1 {
 		t.Fatalf("effective policy site-source pending device count=%d want 1", got)
+	}
+	if got := index.DeviceCountByPolicyIDAndType[11][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("source policy global-source pending device count=%d want 1", got)
 	}
 }
 

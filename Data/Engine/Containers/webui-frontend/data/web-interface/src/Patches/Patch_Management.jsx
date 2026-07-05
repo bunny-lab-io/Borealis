@@ -409,6 +409,11 @@ function pendingLayerTypesForPolicy(policy = {}) {
   return POLICY_PENDING_LAYERS.slice(0, Math.min(maxIndex + 1, POLICY_PENDING_LAYERS.length));
 }
 
+function pendingLayerLabel(policyType) {
+  const normalized = normalizePolicyTypeValue({ policy_type: policyType });
+  return POLICY_PENDING_LAYERS.find((layer) => layer.policy_type === normalized)?.label || policyTableTypeLabel(policyType);
+}
+
 function policyIconForType(policyType) {
   const normalized = text(policyType).toLowerCase();
   if (normalized === "global") return PublicRoundedIcon;
@@ -590,7 +595,8 @@ function pendingUpdateBreakdown(policy = {}) {
       source_policy_id: Number(item?.source_policy_id || item?.policy_id || policy?.id || 0) || 0,
       source_policy_name: text(item?.source_policy_name || item?.policy_name) || text(policy?.name),
     }))
-    .filter((item) => item.policy_type)
+    .filter((item) => item.policy_type && item.count > 0)
+    .map((item) => ({ ...item, label: pendingLayerLabel(item.policy_type) }))
     .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
 }
 
@@ -604,7 +610,7 @@ function policyLayerSortIndex(policyType) {
 
 function pendingUpdateBreakdownText(policy = {}) {
   const breakdown = pendingUpdateBreakdown(policy);
-  if (!breakdown.length) return "0 Updates";
+  if (!breakdown.length) return "";
   return breakdown
     .map((item) => `${item.label}: ${item.count.toLocaleString()} ${Number(item.count || 0) === 1 ? "Update" : "Updates"} (${Number(item.device_count || 0).toLocaleString()} ${Number(item.device_count || 0) === 1 ? "Device" : "Devices"})`)
     .join(" / ");
@@ -613,11 +619,7 @@ function pendingUpdateBreakdownText(policy = {}) {
 function PendingUpdatesCell({ policy = {}, onSelect }) {
   const breakdown = pendingUpdateBreakdown(policy);
   if (!breakdown.length) {
-    return (
-      <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 13 }}>
-        0 Updates
-      </Typography>
-    );
+    return null;
   }
   return (
     <Box

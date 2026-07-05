@@ -2191,13 +2191,24 @@ func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex
 	if policyType == "" {
 		policyType = patchPolicyTypeSite
 	}
+	patchPolicyIncrementPendingBreakdown(index, assignment.EffectivePolicyID, policyType, deviceGUID)
+	sourcePolicyID := firstPositiveInt64(row.SourcePolicyID, assignment.EffectivePolicyID)
+	if sourcePolicyID > 0 && sourcePolicyID != assignment.EffectivePolicyID {
+		patchPolicyIncrementPendingBreakdown(index, sourcePolicyID, policyType, deviceGUID)
+	}
+}
+
+func patchPolicyIncrementPendingBreakdown(index *patchPolicyPendingInventoryIndex, policyID int64, policyType string, deviceGUID string) {
+	if index == nil || policyID <= 0 {
+		return
+	}
 	if index.BreakdownByPolicyID == nil {
 		index.BreakdownByPolicyID = map[int64]map[string]int{}
 	}
-	if index.BreakdownByPolicyID[assignment.EffectivePolicyID] == nil {
-		index.BreakdownByPolicyID[assignment.EffectivePolicyID] = map[string]int{}
+	if index.BreakdownByPolicyID[policyID] == nil {
+		index.BreakdownByPolicyID[policyID] = map[string]int{}
 	}
-	index.BreakdownByPolicyID[assignment.EffectivePolicyID][policyType]++
+	index.BreakdownByPolicyID[policyID][policyType]++
 	deviceGUID = strings.ToLower(normalizeCanonicalGUID(deviceGUID))
 	if deviceGUID == "" {
 		return
@@ -2205,31 +2216,31 @@ func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex
 	if index.deviceGUIDsByPolicyID == nil {
 		index.deviceGUIDsByPolicyID = map[int64]map[string]struct{}{}
 	}
-	if index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID] == nil {
-		index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID] = map[string]struct{}{}
+	if index.deviceGUIDsByPolicyID[policyID] == nil {
+		index.deviceGUIDsByPolicyID[policyID] = map[string]struct{}{}
 	}
-	index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID][deviceGUID] = struct{}{}
+	index.deviceGUIDsByPolicyID[policyID][deviceGUID] = struct{}{}
 	if index.DeviceCountByPolicyID == nil {
 		index.DeviceCountByPolicyID = map[int64]int{}
 	}
-	index.DeviceCountByPolicyID[assignment.EffectivePolicyID] = len(index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID])
+	index.DeviceCountByPolicyID[policyID] = len(index.deviceGUIDsByPolicyID[policyID])
 	if index.deviceGUIDsByPolicyIDAndType == nil {
 		index.deviceGUIDsByPolicyIDAndType = map[int64]map[string]map[string]struct{}{}
 	}
-	if index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID] == nil {
-		index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID] = map[string]map[string]struct{}{}
+	if index.deviceGUIDsByPolicyIDAndType[policyID] == nil {
+		index.deviceGUIDsByPolicyIDAndType[policyID] = map[string]map[string]struct{}{}
 	}
-	if index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType] == nil {
-		index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType] = map[string]struct{}{}
+	if index.deviceGUIDsByPolicyIDAndType[policyID][policyType] == nil {
+		index.deviceGUIDsByPolicyIDAndType[policyID][policyType] = map[string]struct{}{}
 	}
-	index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType][deviceGUID] = struct{}{}
+	index.deviceGUIDsByPolicyIDAndType[policyID][policyType][deviceGUID] = struct{}{}
 	if index.DeviceCountByPolicyIDAndType == nil {
 		index.DeviceCountByPolicyIDAndType = map[int64]map[string]int{}
 	}
-	if index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID] == nil {
-		index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID] = map[string]int{}
+	if index.DeviceCountByPolicyIDAndType[policyID] == nil {
+		index.DeviceCountByPolicyIDAndType[policyID] = map[string]int{}
 	}
-	index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID][policyType] = len(index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType])
+	index.DeviceCountByPolicyIDAndType[policyID][policyType] = len(index.deviceGUIDsByPolicyIDAndType[policyID][policyType])
 }
 
 func firstPatchPolicyRow(left patchPolicyRow, right patchPolicyRow) patchPolicyRow {
