@@ -57,6 +57,85 @@ func TestPatchPolicyDecisionMatchesTitleContains(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyLinkedPoliciesIncludeTitleApprovesAndBlocks(t *testing.T) {
+	rules := []patchPolicyRule{
+		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleApprove, MatchType: patchPolicyMatchTitleContains, MatchValue: "Security Intelligence Update"},
+		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleBlock, MatchType: patchPolicyMatchTitleContains, MatchValue: "Preview"},
+		{PolicyID: 22, PolicyName: "Site Workstation Policy", PolicyType: patchPolicyTypeSite, RuleType: patchPolicyRuleApprove, MatchType: "classification", MatchValue: "Drivers"},
+	}
+
+	defender := patchPolicyLinkedPoliciesForPatch(rules, map[string]any{"title": "Security Intelligence Update for Microsoft Defender Antivirus - KB2267602"})
+	if len(defender) != 1 {
+		t.Fatalf("expected one defender linked policy, got %#v", defender)
+	}
+	if defender[0].PolicyID != 11 || defender[0].PolicyType != patchPolicyTypeGlobal || defender[0].PolicyName != "Global Workstation Policy" {
+		t.Fatalf("unexpected defender linked policy %#v", defender[0])
+	}
+	if len(defender[0].RuleTypes) != 1 || defender[0].RuleTypes[0] != patchPolicyRuleApprove {
+		t.Fatalf("expected defender approve rule source, got %#v", defender[0].RuleTypes)
+	}
+
+	preview := patchPolicyLinkedPoliciesForPatch(rules, map[string]any{"title": "2026-07 Cumulative Update Preview for Windows 11"})
+	if len(preview) != 1 {
+		t.Fatalf("expected one preview linked policy, got %#v", preview)
+	}
+	if preview[0].PolicyID != 11 || len(preview[0].RuleTypes) != 1 || preview[0].RuleTypes[0] != patchPolicyRuleBlock {
+		t.Fatalf("expected preview block source from global policy, got %#v", preview[0])
+	}
+}
+
+func TestPatchPolicyLinkedPoliciesDedupesSamePolicyMatches(t *testing.T) {
+	rules := []patchPolicyRule{
+		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleApprove, MatchType: patchPolicyMatchTitleContains, MatchValue: "Security Intelligence Update"},
+		{PolicyID: 11, PolicyName: "Global Workstation Policy", PolicyType: patchPolicyTypeGlobal, RuleType: patchPolicyRuleBlock, MatchType: patchPolicyMatchTitleContains, MatchValue: "Preview"},
+	}
+	linked := patchPolicyLinkedPoliciesForPatch(rules, map[string]any{"title": "Security Intelligence Update Preview for Microsoft Defender Antivirus"})
+	if len(linked) != 1 {
+		t.Fatalf("expected same policy to collapse into one linked policy, got %#v", linked)
+	}
+	if len(linked[0].RuleTypes) != 2 || linked[0].RuleTypes[0] != patchPolicyRuleApprove || linked[0].RuleTypes[1] != patchPolicyRuleBlock {
+		t.Fatalf("expected approve and block rule types, got %#v", linked[0].RuleTypes)
+	}
+}
+
+func TestAttachPatchPolicyInventoryPayloadIncludesLinkedPoliciesWhenNotInstallCandidate(t *testing.T) {
+	payload := map[string]any{"inventory_id": int64(42), "state": "pending"}
+	index := patchPolicyPendingInventoryIndex{RowsByInventoryID: map[int64]patchPolicyPendingInventoryRow{
+		42: {
+			patchPolicyInventoryAssignment: patchPolicyInventoryAssignment{
+				EffectivePolicyID:    22,
+				EffectivePolicyName:  "Site Workstation Policy",
+				EffectivePolicyType:  patchPolicyTypeSite,
+				EffectiveRoleScope:   patchPolicyRoleWorkstation,
+				HierarchyPolicyIDs:   []int64{11, 22},
+				HierarchyPolicyNames: []string{"Global Workstation Policy", "Site Workstation Policy"},
+			},
+			InstallCandidate: false,
+			SkipReason:       "not_approved",
+			LinkedPolicies: []patchPolicyLinkedPolicy{{
+				PolicyID:    11,
+				PolicyName:  "Global Workstation Policy",
+				PolicyType:  patchPolicyTypeGlobal,
+				RuleTypes:   []string{patchPolicyRuleBlock},
+				MatchTypes:  []string{patchPolicyMatchTitleContains},
+				MatchValues: []string{"Preview"},
+			}},
+		},
+	}}
+
+	attachPatchPolicyInventoryPayload(payload, index)
+	if payload["patch_policy_install_candidate"] != false || payload["patch_policy_skip_reason"] != "not_approved" {
+		t.Fatalf("unexpected install candidate metadata %#v", payload)
+	}
+	linked, ok := payload["patch_policy_linked_policies"].([]map[string]any)
+	if !ok || len(linked) != 1 {
+		t.Fatalf("expected one linked policy payload, got %#v", payload["patch_policy_linked_policies"])
+	}
+	if linked[0]["policy_name"] != "Global Workstation Policy" || linked[0]["policy_type"] != patchPolicyTypeGlobal {
+		t.Fatalf("unexpected linked policy payload %#v", linked[0])
+	}
+}
+
 func TestPatchPolicyEffectiveRulesInheritParentApprovalWithSource(t *testing.T) {
 	global := patchPolicyRow{
 		ID:         sql.NullInt64{Int64: 11, Valid: true},

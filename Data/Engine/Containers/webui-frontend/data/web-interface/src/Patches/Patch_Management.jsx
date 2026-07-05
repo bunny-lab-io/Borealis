@@ -714,24 +714,55 @@ function patchRowMatchesPolicyPendingFilter(row = {}, filter = {}) {
 function patchPolicySourceGroups(row = {}) {
   const children = Array.isArray(row?.childRows) ? row.childRows : [row];
   const groups = new Map();
-  children.forEach((child) => {
-    if (!child?.patch_policy_install_candidate) return;
+  const addPolicy = (policy = {}, fallback = {}) => {
     const policyType = normalizePolicyTypeValue({
-      policy_type: child.patch_policy_source_policy_type || child.patch_policy_effective_policy_type,
+      policy_type: policy.policy_type || policy.patch_policy_source_policy_type || fallback.patch_policy_source_policy_type || fallback.patch_policy_effective_policy_type,
     });
-    const policyID = Number(child.patch_policy_source_policy_id || child.patch_policy_effective_policy_id || 0) || 0;
-    const policyName = text(child.patch_policy_source_policy_name || child.patch_policy_effective_policy_name) || policyTableTypeLabel(policyType);
-    const key = `${policyType}:${policyID || policyName}`;
+    const policyID = Number(policy.policy_id || policy.patch_policy_source_policy_id || fallback.patch_policy_source_policy_id || fallback.patch_policy_effective_policy_id || 0) || 0;
+    const policyName =
+      text(policy.policy_name || policy.name || policy.patch_policy_source_policy_name || fallback.patch_policy_source_policy_name || fallback.patch_policy_effective_policy_name) ||
+      policyTableTypeLabel(policyType);
+    const key = `${policyType}:${policyID || policyName.toLowerCase()}`;
     const current = groups.get(key) || {
+      policy_id: policyID,
       policy_type: policyType,
       label: policyTableTypeLabel(policyType),
       policy_name: policyName,
-      count: 0,
+      rule_types: new Set(),
+      match_types: new Set(),
+      match_values: new Set(),
     };
-    current.count += 1;
+    const ruleTypes = Array.isArray(policy.rule_types) ? policy.rule_types : [];
+    const matchTypes = Array.isArray(policy.match_types) ? policy.match_types : [];
+    const matchValues = Array.isArray(policy.match_values) ? policy.match_values : [];
+    ruleTypes.forEach((value) => {
+      const normalized = text(value);
+      if (normalized) current.rule_types.add(normalized);
+    });
+    matchTypes.forEach((value) => {
+      const normalized = text(value);
+      if (normalized) current.match_types.add(normalized);
+    });
+    matchValues.forEach((value) => {
+      const normalized = text(value);
+      if (normalized) current.match_values.add(normalized);
+    });
     groups.set(key, current);
+  };
+  children.forEach((child) => {
+    const linkedPolicies = Array.isArray(child?.patch_policy_linked_policies) ? child.patch_policy_linked_policies : [];
+    if (linkedPolicies.length) {
+      linkedPolicies.forEach((policy) => addPolicy(policy, child));
+      return;
+    }
+    if (child?.patch_policy_install_candidate) addPolicy(child, child);
   });
-  return Array.from(groups.values()).sort((left, right) => {
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    rule_types: Array.from(group.rule_types),
+    match_types: Array.from(group.match_types),
+    match_values: Array.from(group.match_values),
+  })).sort((left, right) => {
     const layerDelta = policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type);
     if (layerDelta !== 0) return layerDelta;
     return text(left.policy_name).localeCompare(text(right.policy_name));
@@ -741,7 +772,7 @@ function patchPolicySourceGroups(row = {}) {
 function patchPolicySourceText(row = {}) {
   const groups = patchPolicySourceGroups(row);
   if (!groups.length) return text(row.state).toLowerCase() === "pending" ? "No linked policy" : "";
-  return groups.map((group) => `${group.label}: ${group.policy_name} (${group.count})`).join(", ");
+  return groups.map((group) => group.policy_name).join(", ");
 }
 
 function PatchPolicySourceCell({ row = {} }) {
@@ -753,17 +784,20 @@ function PatchPolicySourceCell({ row = {} }) {
       </Typography>
     );
   }
-  const tooltip = groups.map((group) => `${group.label}: ${group.policy_name} (${group.count.toLocaleString()} update${group.count === 1 ? "" : "s"})`).join(", ");
+  const tooltip = groups.map((group) => {
+    const ruleText = group.rule_types.length ? ` (${group.rule_types.join(", ")})` : "";
+    return `${group.label}: ${group.policy_name}${ruleText}`;
+  }).join(", ");
   return (
     <Tooltip title={tooltip}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, overflow: "hidden", minWidth: 0, width: "100%", height: "100%" }}>
         {groups.slice(0, 3).map((group) => (
           <Box
-            key={`${group.policy_type}-${group.policy_name}`}
+            key={`${group.policy_type}-${group.policy_id || group.policy_name}`}
             component="span"
             sx={{
               ...PATCH_CHIP_TOKEN_SX,
-              maxWidth: 145,
+              maxWidth: 170,
               color: BOREALIS_BLUE,
               background: "rgba(88,166,255,0.12)",
               border: "1px solid rgba(88,166,255,0.28)",
@@ -771,7 +805,7 @@ function PatchPolicySourceCell({ row = {} }) {
             }}
           >
             <Box component="span" className="patch-chip-label">
-              {`${group.label} ${group.count.toLocaleString()}`}
+              {group.policy_name}
             </Box>
           </Box>
         ))}
