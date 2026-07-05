@@ -1995,6 +1995,7 @@ type patchPolicyPendingInventoryIndex struct {
 	DeviceCountByPolicyIDAndType map[int64]map[string]int
 	deviceGUIDsByPolicyID        map[int64]map[string]struct{}
 	deviceGUIDsByPolicyIDAndType map[int64]map[string]map[string]struct{}
+	updateKeysByPolicyIDAndType  map[int64]map[string]map[string]struct{}
 	RowsByInventoryID            map[int64]patchPolicyPendingInventoryRow
 }
 
@@ -2037,6 +2038,7 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		DeviceCountByPolicyIDAndType: map[int64]map[string]int{},
 		deviceGUIDsByPolicyID:        map[int64]map[string]struct{}{},
 		deviceGUIDsByPolicyIDAndType: map[int64]map[string]map[string]struct{}{},
+		updateKeysByPolicyIDAndType:  map[int64]map[string]map[string]struct{}{},
 		RowsByInventoryID:            map[int64]patchPolicyPendingInventoryRow{},
 	}
 	if rows == nil {
@@ -2175,12 +2177,12 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		if !rowResult.InstallCandidate {
 			continue
 		}
-		patchPolicyAddPendingBreakdownCount(&index, assignment, rowResult, guid)
+		patchPolicyAddPendingBreakdownCount(&index, assignment, rowResult, guid, patchPolicyPendingUpdateIdentity(pendingRow, patch))
 	}
 	return index, nil
 }
 
-func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment, row patchPolicyPendingInventoryRow, deviceGUID string) {
+func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment, row patchPolicyPendingInventoryRow, deviceGUID string, updateKey string) {
 	if index == nil || assignment.EffectivePolicyID <= 0 {
 		return
 	}
@@ -2191,24 +2193,92 @@ func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex
 	if policyType == "" {
 		policyType = patchPolicyTypeSite
 	}
-	patchPolicyIncrementPendingBreakdown(index, assignment.EffectivePolicyID, policyType, deviceGUID)
-	sourcePolicyID := firstPositiveInt64(row.SourcePolicyID, assignment.EffectivePolicyID)
-	if sourcePolicyID > 0 && sourcePolicyID != assignment.EffectivePolicyID {
-		patchPolicyIncrementPendingBreakdown(index, sourcePolicyID, policyType, deviceGUID)
+	for _, policyID := range patchPolicyPendingBreakdownPolicyIDs(assignment, row) {
+		patchPolicyIncrementPendingBreakdown(index, policyID, policyType, updateKey, deviceGUID)
 	}
 }
 
-func patchPolicyIncrementPendingBreakdown(index *patchPolicyPendingInventoryIndex, policyID int64, policyType string, deviceGUID string) {
+func patchPolicyPendingBreakdownPolicyIDs(assignment patchPolicyInventoryAssignment, row patchPolicyPendingInventoryRow) []int64 {
+	sourcePolicyID := firstPositiveInt64(row.SourcePolicyID, assignment.EffectivePolicyID)
+	effectivePolicyID := assignment.EffectivePolicyID
+	hierarchy := uniquePositiveInt64s(assignment.HierarchyPolicyIDs)
+	if len(hierarchy) == 0 {
+		return uniquePositiveInt64s([]int64{sourcePolicyID, effectivePolicyID})
+	}
+	start := -1
+	if sourcePolicyID > 0 {
+		for idx, policyID := range hierarchy {
+			if policyID == sourcePolicyID {
+				start = idx
+				break
+			}
+		}
+	}
+	if start < 0 {
+		out := []int64{}
+		if sourcePolicyID > 0 {
+			out = append(out, sourcePolicyID)
+		}
+		out = append(out, hierarchy...)
+		return uniquePositiveInt64s(out)
+	}
+	out := append([]int64(nil), hierarchy[start:]...)
+	if effectivePolicyID > 0 && !int64SliceContains(out, effectivePolicyID) {
+		out = append(out, effectivePolicyID)
+	}
+	return uniquePositiveInt64s(out)
+}
+
+func patchPolicyPendingUpdateIdentity(row patchInventoryRow, patch map[string]any) string {
+	if kb := normalizePatchKB(firstPresentAny(nullString(row.KB), patch["kb"], patch["title"])); kb != "" {
+		return "kb:" + strings.ToUpper(kb)
+	}
+	metadata := schedulerAnyMap(firstPresentAny(patch["metadata"], parseJSON(row.MetadataJSON)))
+	updateID := cleanText(firstPresentAny(metadata["update_id"], metadata["updateID"], patch["update_id"], patch["updateID"]))
+	if updateID != "" {
+		updateKey := "update:" + strings.ToLower(updateID)
+		if revision := coerceInt64(firstPresentAny(metadata["revision_number"], metadata["revision"], patch["revision_number"], patch["revision"])); revision > 0 {
+			return updateKey + ":" + strconv.FormatInt(revision, 10)
+		}
+		return updateKey
+	}
+	if patchKey := cleanText(firstPresentAny(nullString(row.PatchKey), patch["patch_key"])); patchKey != "" {
+		return "patch:" + strings.ToLower(patchKey)
+	}
+	if title := cleanText(firstPresentAny(nullString(row.Title), patch["title"])); title != "" {
+		return "title:" + strings.ToLower(title)
+	}
+	if id := nullInt(row.ID); id > 0 {
+		return "inventory:" + strconv.FormatInt(id, 10)
+	}
+	return ""
+}
+
+func patchPolicyIncrementPendingBreakdown(index *patchPolicyPendingInventoryIndex, policyID int64, policyType string, updateKey string, deviceGUID string) {
 	if index == nil || policyID <= 0 {
 		return
 	}
+	updateKey = strings.ToLower(strings.TrimSpace(updateKey))
+	if updateKey == "" {
+		updateKey = "unknown"
+	}
+	if index.updateKeysByPolicyIDAndType == nil {
+		index.updateKeysByPolicyIDAndType = map[int64]map[string]map[string]struct{}{}
+	}
+	if index.updateKeysByPolicyIDAndType[policyID] == nil {
+		index.updateKeysByPolicyIDAndType[policyID] = map[string]map[string]struct{}{}
+	}
+	if index.updateKeysByPolicyIDAndType[policyID][policyType] == nil {
+		index.updateKeysByPolicyIDAndType[policyID][policyType] = map[string]struct{}{}
+	}
+	index.updateKeysByPolicyIDAndType[policyID][policyType][updateKey] = struct{}{}
 	if index.BreakdownByPolicyID == nil {
 		index.BreakdownByPolicyID = map[int64]map[string]int{}
 	}
 	if index.BreakdownByPolicyID[policyID] == nil {
 		index.BreakdownByPolicyID[policyID] = map[string]int{}
 	}
-	index.BreakdownByPolicyID[policyID][policyType]++
+	index.BreakdownByPolicyID[policyID][policyType] = len(index.updateKeysByPolicyIDAndType[policyID][policyType])
 	deviceGUID = strings.ToLower(normalizeCanonicalGUID(deviceGUID))
 	if deviceGUID == "" {
 		return
@@ -2308,7 +2378,7 @@ func patchPolicyTypeDisplayLabel(policyType string) string {
 	case patchPolicyTypeDeviceFilter:
 		return "Device Filter"
 	default:
-		return "Site-Level Override"
+		return "Site"
 	}
 }
 

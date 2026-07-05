@@ -212,7 +212,7 @@ func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
 		devices    int
 	}{
 		{patchPolicyTypeGlobal, "Global", 2, 1},
-		{patchPolicyTypeSite, "Site-Level Override", 15, 3},
+		{patchPolicyTypeSite, "Site", 15, 3},
 		{patchPolicyTypeDeviceFilter, "Device Filter", 10, 4},
 	}
 	for idx, want := range expected {
@@ -228,12 +228,17 @@ func TestPatchPolicyPendingBreakdownCountsEffectiveAndSourcePolicy(t *testing.T)
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111", "kb:KB5000001")
 	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, patchPolicyPendingInventoryRow{SourcePolicyID: 22, SourcePolicyType: patchPolicyTypeSite}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "22222222-2222-2222-2222-222222222222", "kb:KB5000001")
+	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
+		EffectivePolicyID:   22,
+		EffectivePolicyType: patchPolicyTypeSite,
+		HierarchyPolicyIDs:  []int64{11, 22},
+	}, patchPolicyPendingInventoryRow{SourcePolicyID: 22, SourcePolicyType: patchPolicyTypeSite}, "11111111-1111-1111-1111-111111111111", "kb:KB5000002")
 
 	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
 		t.Fatalf("parent policy received child pending count=%d want 0", got)
@@ -247,17 +252,54 @@ func TestPatchPolicyPendingBreakdownCountsEffectiveAndSourcePolicy(t *testing.T)
 	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 1 {
 		t.Fatalf("effective policy site-source count=%d want 1", got)
 	}
-	if got := index.DeviceCountByPolicyID[22]; got != 1 {
-		t.Fatalf("effective policy pending device count=%d want 1", got)
+	if got := index.DeviceCountByPolicyID[22]; got != 2 {
+		t.Fatalf("effective policy pending device count=%d want 2", got)
 	}
-	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeGlobal]; got != 1 {
-		t.Fatalf("effective policy global-source pending device count=%d want 1", got)
+	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeGlobal]; got != 2 {
+		t.Fatalf("effective policy global-source pending device count=%d want 2", got)
 	}
 	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeSite]; got != 1 {
 		t.Fatalf("effective policy site-source pending device count=%d want 1", got)
 	}
-	if got := index.DeviceCountByPolicyIDAndType[11][patchPolicyTypeGlobal]; got != 1 {
-		t.Fatalf("source policy global-source pending device count=%d want 1", got)
+	if got := index.DeviceCountByPolicyIDAndType[11][patchPolicyTypeGlobal]; got != 2 {
+		t.Fatalf("source policy global-source pending device count=%d want 2", got)
+	}
+}
+
+func TestPatchPolicyPendingBreakdownPropagatesSourceToEffectiveHierarchy(t *testing.T) {
+	index := patchPolicyPendingInventoryIndex{}
+	assignment := patchPolicyInventoryAssignment{
+		EffectivePolicyID:   33,
+		EffectivePolicyType: patchPolicyTypeDeviceFilter,
+		HierarchyPolicyIDs:  []int64{11, 22, 33},
+	}
+	patchPolicyAddPendingBreakdownCount(&index, assignment, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111", "kb:KB5000001")
+	patchPolicyAddPendingBreakdownCount(&index, assignment, patchPolicyPendingInventoryRow{SourcePolicyID: 11, SourcePolicyType: patchPolicyTypeGlobal}, "22222222-2222-2222-2222-222222222222", "kb:KB5000001")
+	patchPolicyAddPendingBreakdownCount(&index, assignment, patchPolicyPendingInventoryRow{SourcePolicyID: 22, SourcePolicyType: patchPolicyTypeSite}, "22222222-2222-2222-2222-222222222222", "kb:KB5000002")
+
+	if got := index.BreakdownByPolicyID[11][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("global policy unique global updates=%d want 1", got)
+	}
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("site policy inherited global updates=%d want 1", got)
+	}
+	if got := index.BreakdownByPolicyID[33][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("filter policy inherited global updates=%d want 1", got)
+	}
+	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
+		t.Fatalf("global policy child site updates=%d want 0", got)
+	}
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("site policy own updates=%d want 1", got)
+	}
+	if got := index.BreakdownByPolicyID[33][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("filter policy inherited site updates=%d want 1", got)
+	}
+	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeGlobal]; got != 2 {
+		t.Fatalf("site policy inherited global devices=%d want 2", got)
+	}
+	if got := index.DeviceCountByPolicyIDAndType[33][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("filter policy inherited site devices=%d want 1", got)
 	}
 }
 
