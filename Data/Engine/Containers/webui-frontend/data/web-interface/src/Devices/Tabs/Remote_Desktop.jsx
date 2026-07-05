@@ -25,13 +25,9 @@ import {
   StopRounded as StopIcon,
   KeyboardRounded as KeyboardIcon,
   ContentPasteRounded as ClipboardIcon,
-  PowerSettingsNewRounded as PowerIcon,
   ExpandMore as ExpandMoreIcon,
   FitScreenRounded as FitScreenIcon,
-  CropFreeRounded as CropFreeIcon,
   SwapHorizRounded as SwapHorizIcon,
-  RestartAltRounded as RestartAltIcon,
-  ReplayRounded as ReplayIcon,
   KeyboardCommandKeyRounded as KeyboardCommandKeyIcon,
   ChevronLeft as ChevronLeftIcon,
   CheckCircleRounded as StageCompleteIcon,
@@ -549,24 +545,12 @@ function buildDisplayLayoutGeometry(
   const insetPadding = padding + edgeInset;
   const innerWidth = Math.max(1, frameWidth - insetPadding * 2);
   const innerHeight = Math.max(1, frameHeight - insetPadding * 2);
-  const aspectRatio = bounds.width / bounds.height;
-  const horizontalUtilization =
-    aspectRatio >= 3
-      ? 0.78
-      : aspectRatio >= 2
-        ? 0.84
-        : 0.9;
-  const verticalUtilization = 0.9;
-  const scale = Math.min(
-    (innerWidth * horizontalUtilization) / bounds.width,
-    (innerHeight * verticalUtilization) / bounds.height
-  );
+  const fitScale = Math.min(innerWidth / bounds.width, innerHeight / bounds.height);
+  const scale = Math.max(0.001, fitScale * 0.94);
   const layoutWidth = bounds.width * scale;
   const layoutHeight = bounds.height * scale;
-  const offsetX = insetPadding + (innerWidth - layoutWidth) / 2;
-  const offsetY = insetPadding + (innerHeight - layoutHeight) / 2;
-  const maxRight = frameWidth - insetPadding;
-  const maxBottom = frameHeight - insetPadding;
+  const offsetX = (frameWidth - layoutWidth) / 2;
+  const offsetY = (frameHeight - layoutHeight) / 2;
   return {
     bounds,
     frameWidth,
@@ -579,14 +563,14 @@ function buildDisplayLayoutGeometry(
     frames: topology.map((item) => {
       const rawX = offsetX + (item.left - bounds.left) * scale;
       const rawY = offsetY + (item.top - bounds.top) * scale;
-      const x = clampNumber(rawX, insetPadding, maxRight);
-      const y = clampNumber(rawY, insetPadding, maxBottom);
+      const widthPx = Math.max(2, item.width * scale);
+      const heightPx = Math.max(2, item.height * scale);
       return {
         ...item,
-        x,
-        y,
-        widthPx: Math.max(2, Math.min(item.width * scale, maxRight - x)),
-        heightPx: Math.max(2, Math.min(item.height * scale, maxBottom - y)),
+        x: rawX,
+        y: rawY,
+        widthPx,
+        heightPx,
       };
     }),
   };
@@ -1118,7 +1102,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [expandedSidebarSections, setExpandedSidebarSections] = useState({
     display: true,
     clipboard: true,
-    power: true,
     session: true,
   });
   const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
@@ -1209,15 +1192,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     () => normalizeDisplayTopology(displayTopology),
     [displayTopology]
   );
-  const topologyBounds = useMemo(
-    () => displayTopologyBounds(normalizedDisplayTopology),
-    [normalizedDisplayTopology]
-  );
-  const topologyTrusted = useMemo(() => {
-    if (!normalizedDisplayTopology.length) return false;
-    if (normalizedDisplayTopology.length <= 1) return false;
-    return topologyMatchesFramebuffer(topologyBounds, framebufferSize);
-  }, [framebufferSize, normalizedDisplayTopology, topologyBounds]);
   const diagramTopology = useMemo(
     () =>
       displayDiagramTopology(
@@ -1227,10 +1201,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         displayVirtualBounds
       ),
     [displayVirtualBounds, framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
-  );
-  const inferredDisplayTopology = useMemo(
-    () => diagramTopology.some((item) => item?.inferred),
-    [diagramTopology]
   );
   const diagramBounds = useMemo(
     () => displayTopologyBounds(diagramTopology),
@@ -1264,6 +1234,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const selectedOption = displaySelectorOptions.find((item) => item.id === selectedDisplayId);
     return `Display: ${selectedOption?.shortLabel || "All"}`;
   }, [displaySelectorOptions, selectedDisplayId]);
+  const allDisplaysSelected = selectedDisplayId === ALL_DISPLAYS_ID;
+  const singleDisplaySelected = !allDisplaysSelected;
   const viewfinderTopology = useMemo(() => {
     if (selectedDisplayId === ALL_DISPLAYS_ID) return diagramTopology;
     const selected = diagramTopology.filter(
@@ -1401,6 +1373,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     sessionStateRef.current = sessionState;
   }, [sessionState]);
+
+  useEffect(() => {
+    if (displayMode === "actual" || (singleDisplaySelected && displayMode !== "fit")) {
+      setDisplayMode("fit");
+    }
+  }, [displayMode, singleDisplaySelected]);
 
   const cancelPendingConnect = useCallback(() => {
     connectAttemptRef.current += 1;
@@ -2383,10 +2361,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
   }, [queueDisplayFocus]);
 
-  const handlePowerAction = useCallback((_action) => {
-    setStatusMessage("Power controls are unavailable through Apache Guacamole VNC.");
-  }, []);
-
   const syncViewportSelection = useCallback((_selectionIds, options = {}) => {
     if (options.forceReset) {
       viewportFocusRef.current = null;
@@ -2600,6 +2574,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const selectDisplay = useCallback(
     (displayId) => {
       const nextDisplayId = normalizeText(displayId) || ALL_DISPLAYS_ID;
+      if (nextDisplayId !== ALL_DISPLAYS_ID) {
+        setDisplayMode("fit");
+      }
       if (nextDisplayId !== selectedDisplayId) {
         viewportFocusRef.current = null;
       }
@@ -2796,9 +2773,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     };
   }, []);
 
-  const shutdownSupported = false;
-  const rebootSupported = false;
-  const resetSupported = false;
   const viewfinderViewportRect = useMemo(() => {
     if (!isConnected || !displayLayoutGeometry.bounds || viewportPreview.width <= 0 || viewportPreview.height <= 0) {
       return null;
@@ -2901,13 +2875,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportPreview.width,
     singleViewfinderFrameRect,
   ]);
-  const viewfinderHelperText = previewNavigationEnabled
-    ? viewportPreview.interactive
-      ? "Drag the viewport or tap anywhere on the preview to recenter."
-      : displayViewportTarget?.focused
-        ? "Selected display already fits inside the current viewport."
-        : "The full desktop already fits inside the current viewport."
-    : "";
   const highlightedMonitorIds =
     selectedDisplayId === ALL_DISPLAYS_ID ? [] : effectiveSelectedMonitorIds;
   const showViewportIndicator = Boolean(
@@ -2919,7 +2886,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const focusedViewfinderSelected =
     Boolean(focusedViewfinderMonitorId) &&
     highlightedMonitorIds.includes(focusedViewfinderMonitorId);
-  const showViewfinderHelper = Boolean(viewfinderHelperText);
   const SidebarSection = ({ sectionId, title, children }) => (
     <Accordion
       expanded={expandedSidebarSections[sectionId]}
@@ -3038,7 +3004,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   }, [isConnected, sessionId, vncStage]);
 
   const showClipboardActions = isConnected;
-  const showPowerButtons = isConnected;
   const displaySettingsEnabled = isConnected;
   const showLaunchButton = !loading;
   const showConnectingStatus =
@@ -3330,26 +3295,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     ) : null}
                   </Box>
                 </Box>
-                {showViewfinderHelper ? (
-                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                    {viewfinderHelperText}
-                  </Typography>
-                ) : null}
-                {!previewNavigationEnabled && !topologyTrusted && normalizedDisplayTopology.length > 1 ? (
-                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                    Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
-                  </Typography>
-                ) : null}
-                {inferredDisplayTopology ? (
-                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                    Display regions inferred from the live framebuffer.
-                  </Typography>
-                ) : null}
-                {!inferredDisplayTopology && !normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
-                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                    Showing the live framebuffer as a single display map.
-                  </Typography>
-                ) : null}
                 </Box>
                 <Divider sx={{ borderColor: NAV_COLORS.line, mx: 2 }} />
                 <SidebarNavRow
@@ -3360,18 +3305,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   onClick={() => setDisplayMode("fit")}
                 />
                 <SidebarNavRow
-                  icon={<CropFreeIcon fontSize="small" />}
-                  label="Actual"
-                  active={displaySettingsEnabled && displayMode === "actual"}
-                  disabled={!displaySettingsEnabled}
-                  onClick={() => setDisplayMode("actual")}
-                />
-                <SidebarNavRow
                   icon={<SwapHorizIcon fontSize="small" />}
                   label="Scaled"
-                  active={displaySettingsEnabled && displayMode === "scaled"}
-                  disabled={!displaySettingsEnabled}
-                  onClick={() => setDisplayMode("scaled")}
+                  active={displaySettingsEnabled && allDisplaysSelected && displayMode === "scaled"}
+                  disabled={!displaySettingsEnabled || singleDisplaySelected}
+                  onClick={() => {
+                    if (allDisplaysSelected) {
+                      setDisplayMode("scaled");
+                    }
+                  }}
                 />
                 <SidebarNavRow
                   icon={<DesktopIcon fontSize="small" />}
@@ -3444,32 +3386,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 label="Send Ctrl+Alt+Del"
                 disabled={!showClipboardActions}
                 onClick={handleCtrlAltDel}
-              />
-              </>
-            </SidebarSection>
-
-            <SidebarSection
-              sectionId="power"
-              title="Power"
-            >
-              <>
-              <SidebarNavRow
-                icon={<PowerIcon fontSize="small" />}
-                label="Shutdown"
-                disabled={!showPowerButtons || !shutdownSupported}
-                onClick={() => handlePowerAction("shutdown")}
-              />
-              <SidebarNavRow
-                icon={<RestartAltIcon fontSize="small" />}
-                label="Restart"
-                disabled={!showPowerButtons || !rebootSupported}
-                onClick={() => handlePowerAction("reboot")}
-              />
-              <SidebarNavRow
-                icon={<ReplayIcon fontSize="small" />}
-                label="Reset"
-                disabled={!showPowerButtons || !resetSupported}
-                onClick={() => handlePowerAction("reset")}
               />
               </>
             </SidebarSection>

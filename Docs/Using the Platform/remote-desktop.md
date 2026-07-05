@@ -26,8 +26,8 @@ If another operator already has the device open, Borealis joins the same shared 
 - Reconnect if the browser stream drops after it was already ready.
 - Adjust speed/quality preference when bandwidth is constrained.
 - Use the always-open display selector or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
-- After a display is selected, the viewfinder previews that display region by itself so the viewport can be panned without squeezing the whole monitor span into the sidebar.
-- In `Actual` or `Scaled` mode, drag or click the viewfinder to reposition the focused viewport.
+- After a display is selected, Borealis switches the viewer to `Fit` and previews that display region by itself so the monitor span does not squeeze into the sidebar.
+- Use `Fit` or `Scaled` when `Display: All` is selected. Single-display focus uses `Fit` only.
 - Use Ctrl+Alt+Del from session controls when Windows secure desktop needs it.
 - Disconnect when finished. Closing the browser leaves a short reconnect window.
 
@@ -84,7 +84,7 @@ If another operator already has the device open, Borealis joins the same shared 
     - Site-worker emits `first_frame` events after Guacamole sees the first display instruction, and the Engine records `first_frame_at` on the shared VNC session snapshot.
     - Guacamole startup treats post-ready backend status `519` as retryable, opens a fresh `guacd` session, and keeps `participant_id` plus token hints in VNC proxy logs for browser-to-Engine correlation.
     - Remote Desktop speed/quality preferences flow from WebUI through the Go VNC broker into the site-worker Guacamole session as `-2` through `2`; the default favors speed for lower-end endpoints.
-    - WebUI display focus is client-side only: Guacamole keeps one full-framebuffer VNC session, while `Remote_Desktop.jsx` positions and scales the Guacamole display element to crop one monitor or pan inside `Actual` / `Scaled` view modes.
+    - WebUI display focus is client-side only: Guacamole keeps one full-framebuffer VNC session, while `Remote_Desktop.jsx` positions and scales the Guacamole display element to crop one monitor. `Display: All` supports `Fit` and `Scaled`; single-display focus forces `Fit`.
     - Windows Agent display topology prefers active monitor geometry from `EnumDisplayMonitors` when that data is at least as complete as `EnumDisplaySettingsEx`. This preserves physical positions such as secondary monitors to the left of the primary monitor instead of trusting a stale or flattened display-settings layout.
     - When live Agent topology only reports one display but the Guacamole framebuffer is clearly wider, WebUI uses `display_virtual_bounds` first to project the reported monitor into framebuffer coordinates, then uses reported framebuffer gaps when one monitor size is known. If Windows collapses the whole desktop into one very-wide display, WebUI uses aspect-ratio priors to expose best-effort display rows without hardcoding pixel resolutions.
     - Agent VNC readiness serializes local service checks, gives pending services time to settle, force-kills stuck `STOP_PENDING` UltraVNC processes after grace time, and waits for the listener before reporting ready.
