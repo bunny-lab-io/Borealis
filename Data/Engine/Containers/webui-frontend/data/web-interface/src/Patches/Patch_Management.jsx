@@ -784,10 +784,22 @@ function PatchPolicySourceCell({ row = {} }) {
       </Typography>
     );
   }
-  const tooltip = groups.map((group) => {
-    const ruleText = group.rule_types.length ? ` (${group.rule_types.join(", ")})` : "";
-    return `${group.label}: ${group.policy_name}${ruleText}`;
-  }).join(", ");
+  const tooltip = (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.35 }}>
+      {groups.map((group) => {
+        const ruleText = group.rule_types.length ? ` (${group.rule_types.join(" / ")})` : "";
+        return (
+          <Typography
+            key={`${group.policy_type}-${group.policy_id || group.policy_name}-tooltip`}
+            component="span"
+            sx={{ color: "inherit", fontSize: 12, lineHeight: 1.35, whiteSpace: "nowrap" }}
+          >
+            {`${group.label}: ${group.policy_name}${ruleText}`}
+          </Typography>
+        );
+      })}
+    </Box>
+  );
   return (
     <Tooltip title={tooltip}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, overflow: "hidden", minWidth: 0, width: "100%", height: "100%" }}>
