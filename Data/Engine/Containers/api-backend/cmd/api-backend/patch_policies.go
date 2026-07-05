@@ -432,15 +432,17 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 			continue
 		}
 		payload := patchPolicyPayload(row)
-		pendingCounts := pendingIndex.BreakdownByPolicyID[nullInt(row.ID)]
+		policyID := nullInt(row.ID)
+		pendingCounts := pendingIndex.BreakdownByPolicyID[policyID]
+		pendingDeviceCounts := pendingIndex.DeviceCountByPolicyIDAndType[policyID]
 		counts, targetSites := patchPolicyCoverageListSummaryWithResolver(ctx, resolver, row)
 		payload["target_count"] = counts["eligible"]
 		payload["raw_target_count"] = counts["raw"]
 		payload["ignored_role_count"] = counts["ignored_role"]
 		payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
 		payload["pending_update_count"] = patchPolicyPendingTotal(pendingCounts)
-		payload["pending_update_breakdown"] = patchPolicyPendingBreakdownPayload(pendingCounts)
-		payload["pending_update_device_count"] = pendingIndex.DeviceCountByPolicyID[nullInt(row.ID)]
+		payload["pending_update_breakdown"] = patchPolicyPendingBreakdownPayload(pendingCounts, pendingDeviceCounts)
+		payload["pending_update_device_count"] = pendingIndex.DeviceCountByPolicyID[policyID]
 		payload["target_sites"] = targetSites
 		payload["target_site_ids"] = patchPolicyTargetSiteIDs(targetSites)
 		payload["target_site_names"] = patchPolicyTargetSiteNames(targetSites)
@@ -1986,10 +1988,12 @@ func patchPolicyRuleWithSource(row patchPolicyRow, rule patchPolicyRule) patchPo
 }
 
 type patchPolicyPendingInventoryIndex struct {
-	BreakdownByPolicyID   map[int64]map[string]int
-	DeviceCountByPolicyID map[int64]int
-	deviceGUIDsByPolicyID map[int64]map[string]struct{}
-	RowsByInventoryID     map[int64]patchPolicyPendingInventoryRow
+	BreakdownByPolicyID          map[int64]map[string]int
+	DeviceCountByPolicyID        map[int64]int
+	DeviceCountByPolicyIDAndType map[int64]map[string]int
+	deviceGUIDsByPolicyID        map[int64]map[string]struct{}
+	deviceGUIDsByPolicyIDAndType map[int64]map[string]map[string]struct{}
+	RowsByInventoryID            map[int64]patchPolicyPendingInventoryRow
 }
 
 type patchPolicyInventoryAssignment struct {
@@ -2026,10 +2030,12 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Con
 
 func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx context.Context, profile operatorProfile, rows []patchPolicyRow, activeJobs map[string]map[string]any, resolver *patchPolicyResolutionCache) (patchPolicyPendingInventoryIndex, error) {
 	index := patchPolicyPendingInventoryIndex{
-		BreakdownByPolicyID:   map[int64]map[string]int{},
-		DeviceCountByPolicyID: map[int64]int{},
-		deviceGUIDsByPolicyID: map[int64]map[string]struct{}{},
-		RowsByInventoryID:     map[int64]patchPolicyPendingInventoryRow{},
+		BreakdownByPolicyID:          map[int64]map[string]int{},
+		DeviceCountByPolicyID:        map[int64]int{},
+		DeviceCountByPolicyIDAndType: map[int64]map[string]int{},
+		deviceGUIDsByPolicyID:        map[int64]map[string]struct{}{},
+		deviceGUIDsByPolicyIDAndType: map[int64]map[string]map[string]struct{}{},
+		RowsByInventoryID:            map[int64]patchPolicyPendingInventoryRow{},
 	}
 	if rows == nil {
 		if err := s.ensurePatchPolicySchema(ctx); err != nil {
@@ -2205,6 +2211,23 @@ func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex
 		index.DeviceCountByPolicyID = map[int64]int{}
 	}
 	index.DeviceCountByPolicyID[assignment.EffectivePolicyID] = len(index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID])
+	if index.deviceGUIDsByPolicyIDAndType == nil {
+		index.deviceGUIDsByPolicyIDAndType = map[int64]map[string]map[string]struct{}{}
+	}
+	if index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID] == nil {
+		index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID] = map[string]map[string]struct{}{}
+	}
+	if index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType] == nil {
+		index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType] = map[string]struct{}{}
+	}
+	index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType][deviceGUID] = struct{}{}
+	if index.DeviceCountByPolicyIDAndType == nil {
+		index.DeviceCountByPolicyIDAndType = map[int64]map[string]int{}
+	}
+	if index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID] == nil {
+		index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID] = map[string]int{}
+	}
+	index.DeviceCountByPolicyIDAndType[assignment.EffectivePolicyID][policyType] = len(index.deviceGUIDsByPolicyIDAndType[assignment.EffectivePolicyID][policyType])
 }
 
 func firstPatchPolicyRow(left patchPolicyRow, right patchPolicyRow) patchPolicyRow {
@@ -2248,7 +2271,7 @@ func patchPolicyPendingTotal(counts map[string]int) int {
 	return total
 }
 
-func patchPolicyPendingBreakdownPayload(counts map[string]int) []map[string]any {
+func patchPolicyPendingBreakdownPayload(counts map[string]int, deviceCounts map[string]int) []map[string]any {
 	out := []map[string]any{}
 	for _, policyType := range []string{patchPolicyTypeGlobal, patchPolicyTypeSite, patchPolicyTypeDeviceFilter} {
 		count := counts[policyType]
@@ -2256,9 +2279,10 @@ func patchPolicyPendingBreakdownPayload(counts map[string]int) []map[string]any 
 			continue
 		}
 		out = append(out, map[string]any{
-			"policy_type": policyType,
-			"label":       patchPolicyTypeDisplayLabel(policyType),
-			"count":       count,
+			"policy_type":  policyType,
+			"label":        patchPolicyTypeDisplayLabel(policyType),
+			"count":        count,
+			"device_count": deviceCounts[policyType],
 		})
 	}
 	return out

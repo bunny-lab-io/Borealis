@@ -175,10 +175,15 @@ func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
 		patchPolicyTypeGlobal:       2,
 		patchPolicyTypeSite:         15,
 	}
+	deviceCounts := map[string]int{
+		patchPolicyTypeDeviceFilter: 4,
+		patchPolicyTypeGlobal:       1,
+		patchPolicyTypeSite:         3,
+	}
 	if got := patchPolicyPendingTotal(counts); got != 27 {
 		t.Fatalf("pending total=%d want 27", got)
 	}
-	payload := patchPolicyPendingBreakdownPayload(counts)
+	payload := patchPolicyPendingBreakdownPayload(counts, deviceCounts)
 	if len(payload) != 3 {
 		t.Fatalf("expected three payload entries, got %#v", payload)
 	}
@@ -186,14 +191,15 @@ func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
 		policyType string
 		label      string
 		count      int
+		devices    int
 	}{
-		{patchPolicyTypeGlobal, "Global", 2},
-		{patchPolicyTypeSite, "Site-Level Override", 15},
-		{patchPolicyTypeDeviceFilter, "Device Filter", 10},
+		{patchPolicyTypeGlobal, "Global", 2, 1},
+		{patchPolicyTypeSite, "Site-Level Override", 15, 3},
+		{patchPolicyTypeDeviceFilter, "Device Filter", 10, 4},
 	}
 	for idx, want := range expected {
-		if payload[idx]["policy_type"] != want.policyType || payload[idx]["label"] != want.label || payload[idx]["count"] != want.count {
-			t.Fatalf("payload[%d]=%#v want type=%q label=%q count=%d", idx, payload[idx], want.policyType, want.label, want.count)
+		if payload[idx]["policy_type"] != want.policyType || payload[idx]["label"] != want.label || payload[idx]["count"] != want.count || payload[idx]["device_count"] != want.devices {
+			t.Fatalf("payload[%d]=%#v want type=%q label=%q count=%d devices=%d", idx, payload[idx], want.policyType, want.label, want.count, want.devices)
 		}
 	}
 }
@@ -222,6 +228,12 @@ func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
 	}
 	if got := index.DeviceCountByPolicyID[22]; got != 1 {
 		t.Fatalf("effective policy pending device count=%d want 1", got)
+	}
+	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("effective policy global-source pending device count=%d want 1", got)
+	}
+	if got := index.DeviceCountByPolicyIDAndType[22][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("effective policy site-source pending device count=%d want 1", got)
 	}
 }
 

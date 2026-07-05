@@ -174,8 +174,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
       { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, flex: 0 },
       { field: "role_scope", headerName: "Scope", width: 135, flex: 0 },
       { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220, flex: 0 },
-      { field: "pending_update_device_count", headerName: "Devices with Pending Updates", width: 235, minWidth: 210, flex: 0 },
-      { field: "pending_updates", headerName: "Pending Updates", width: 295, minWidth: 260, flex: 0 },
+      { field: "pending_updates", headerName: "Pending Updates", width: 390, minWidth: 340, flex: 0 },
       { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0 },
       { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
       { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0 },
@@ -338,7 +337,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
             paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
-            rowHeight={44}
+            rowHeight={activeTab === "policies" ? 78 : 44}
             headerHeight={44}
             overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
             theme={DEVICE_DETAILS_GRID_THEME}

@@ -306,6 +306,18 @@ function policyTableTypeLabel(policyType) {
   return "Site-Level Override";
 }
 
+const POLICY_PENDING_LAYERS = Object.freeze([
+  { policy_type: "global", label: "Global" },
+  { policy_type: "site", label: "Site-Level Override" },
+  { policy_type: "device_filter", label: "Device Filter" },
+]);
+
+function pendingLayerTypesForPolicy(policy = {}) {
+  const policyType = normalizePolicyTypeValue(policy);
+  const maxIndex = Math.max(0, policyLayerSortIndex(policyType));
+  return POLICY_PENDING_LAYERS.slice(0, Math.min(maxIndex + 1, POLICY_PENDING_LAYERS.length));
+}
+
 function policyIconForType(policyType) {
   const normalized = text(policyType).toLowerCase();
   if (normalized === "global") return PublicRoundedIcon;
@@ -455,16 +467,23 @@ function buildPatchFleetRows(rows = []) {
 
 function ownPendingUpdateBreakdown(policy = {}) {
   const raw = Array.isArray(policy?.pending_update_breakdown) ? policy.pending_update_breakdown : [];
-  return raw
-    .map((item) => ({
-      policy_type: normalizePolicyTypeValue({ policy_type: item?.policy_type }),
-      label: text(item?.label) || policyTableTypeLabel(item?.policy_type),
+  const byType = new Map();
+  raw.forEach((item) => {
+    const policyType = normalizePolicyTypeValue({ policy_type: item?.policy_type });
+    if (!policyType) return;
+    byType.set(policyType, item);
+  });
+  return pendingLayerTypesForPolicy(policy).map((layer) => {
+    const item = byType.get(layer.policy_type) || {};
+    return {
+      policy_type: layer.policy_type,
+      label: text(item?.label) || layer.label,
       count: Number(item?.count || 0) || 0,
-      source_policy_id: Number(item?.policy_id || policy?.id || 0) || 0,
-      source_policy_name: text(item?.policy_name) || text(policy?.name),
-    }))
-    .filter((item) => item.count > 0)
-    .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
+      device_count: Number(item?.device_count || item?.deviceCount || 0) || 0,
+      source_policy_id: Number(policy?.id || 0) || 0,
+      source_policy_name: text(policy?.name),
+    };
+  });
 }
 
 function pendingUpdateBreakdown(policy = {}) {
@@ -476,10 +495,11 @@ function pendingUpdateBreakdown(policy = {}) {
       policy_type: normalizePolicyTypeValue({ policy_type: item?.policy_type }),
       label: text(item?.label) || policyTableTypeLabel(item?.policy_type),
       count: Number(item?.count || 0) || 0,
+      device_count: Number(item?.device_count || item?.deviceCount || 0) || 0,
       source_policy_id: Number(item?.source_policy_id || item?.policy_id || policy?.id || 0) || 0,
       source_policy_name: text(item?.source_policy_name || item?.policy_name) || text(policy?.name),
     }))
-    .filter((item) => item.count > 0)
+    .filter((item) => item.policy_type)
     .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
 }
 
@@ -494,7 +514,9 @@ function policyLayerSortIndex(policyType) {
 function pendingUpdateBreakdownText(policy = {}) {
   const breakdown = pendingUpdateBreakdown(policy);
   if (!breakdown.length) return "0 Updates";
-  return breakdown.map((item) => `${item.label}: ${item.count.toLocaleString()}`).join(" / ");
+  return breakdown
+    .map((item) => `${item.label}: ${item.count.toLocaleString()} spanning ${Number(item.device_count || 0).toLocaleString()} ${Number(item.device_count || 0) === 1 ? "device" : "devices"}`)
+    .join(" | ");
 }
 
 function PendingUpdatesCell({ policy = {}, onSelect }) {
@@ -507,53 +529,76 @@ function PendingUpdatesCell({ policy = {}, onSelect }) {
     );
   }
   return (
-    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, overflow: "hidden" }}>
-      {breakdown.map((item, index) => (
-        <React.Fragment key={`${item.policy_type}-${index}`}>
-          {index > 0 ? (
-            <Typography component="span" sx={{ color: "rgba(148,163,184,0.62)", mx: 0.55, fontSize: 12 }}>
-              /
-            </Typography>
-          ) : null}
-          <Tooltip title={`Show ${item.count.toLocaleString()} pending ${item.label} update${item.count === 1 ? "" : "s"} in Patch List`}>
-            <Typography
-              component="button"
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                onSelect?.(policy, item);
-              }}
-              sx={{
-                p: 0,
-                border: "none",
-                background: "transparent",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 0.35,
-                color: "inherit",
-                cursor: "pointer",
-                font: "inherit",
-                fontSize: 13,
-                fontWeight: 700,
-                whiteSpace: "nowrap",
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "flex-start",
+        gap: 0.22,
+        minWidth: 0,
+        width: "100%",
+        height: "100%",
+        overflow: "hidden",
+      }}
+    >
+      {breakdown.map((item) => (
+        <Tooltip
+          key={item.policy_type}
+          title={`Show ${item.count.toLocaleString()} pending ${item.label} update${item.count === 1 ? "" : "s"} spanning ${Number(item.device_count || 0).toLocaleString()} ${Number(item.device_count || 0) === 1 ? "device" : "devices"} in Patch List`}
+        >
+          <Typography
+            component="button"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect?.(policy, item);
+            }}
+            sx={{
+              p: 0,
+              border: "none",
+              background: "transparent",
+              display: "flex",
+              alignItems: "baseline",
+              gap: 0.45,
+              color: "inherit",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 12.5,
+              fontWeight: 700,
+              lineHeight: 1.25,
+              whiteSpace: "nowrap",
+              maxWidth: "100%",
+              overflow: "hidden",
+              textDecoration: "none",
+              "&:hover": {
                 textDecoration: "none",
-                "&:hover": {
-                  textDecoration: "none",
-                  "& .patch-pending-count": {
-                    color: "#93c5fd",
-                  },
+                "& .patch-pending-count": {
+                  color: "#93c5fd",
                 },
+              },
+            }}
+          >
+            <Box component="span" sx={{ color: MAGIC_UI.textBright, flexShrink: 0 }}>
+              {item.label}:
+            </Box>
+            <Box component="span" className="patch-pending-count" sx={{ color: BOREALIS_BLUE, fontWeight: 800, flexShrink: 0 }}>
+              {item.count.toLocaleString()}
+            </Box>
+            <Box
+              component="span"
+              sx={{
+                color: "rgba(148,163,184,0.72)",
+                fontSize: 11,
+                fontWeight: 600,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
               }}
             >
-              <Box component="span" sx={{ color: "rgba(148,163,184,0.82)" }}>
-                {item.label}:
-              </Box>
-              <Box component="span" className="patch-pending-count" sx={{ color: BOREALIS_BLUE, fontWeight: 800 }}>
-                {item.count.toLocaleString()}
-              </Box>
-            </Typography>
-          </Tooltip>
-        </React.Fragment>
+              {`(Spanning ${Number(item.device_count || 0).toLocaleString()} ${Number(item.device_count || 0) === 1 ? "Device" : "Devices"})`}
+            </Box>
+          </Typography>
+        </Tooltip>
       ))}
     </Box>
   );
@@ -1755,18 +1800,10 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         cellRenderer: targetSitesCellRenderer,
       },
       {
-        field: "pending_update_device_count",
-        headerName: "Devices with Pending Updates",
-        width: 235,
-        minWidth: 210,
-        flex: 0,
-        valueFormatter: (params) => formatDeviceCount(params.value),
-      },
-      {
         colId: "pending_updates",
         headerName: "Pending Updates",
-        width: 295,
-        minWidth: 260,
+        width: 390,
+        minWidth: 340,
         flex: 0,
         valueGetter: (params) => pendingUpdateBreakdownText(params.data || {}),
         cellRenderer: (params) => (
@@ -1949,7 +1986,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
           paginationPageSize={50}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
-          rowHeight={44}
+          rowHeight={78}
           headerHeight={44}
           getRowId={(params) => String(params.data?.__hierarchyKey || params.data?.id || params.rowIndex)}
           rowClassRules={{

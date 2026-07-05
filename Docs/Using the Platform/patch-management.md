@@ -43,11 +43,11 @@ Windows patch policies are single-domain. Site policies target one or more sites
 
 Device Filter policies also choose exactly one policy type. Borealis resolves direct devices and filters first, then strips devices that do not match the policy type. Devices with no declared `device_type` are ignored by Windows patch automation until typed. A Windows Server `operating_system` or `device_type` containing `server` is treated as `Server`; any other non-empty `device_type` is treated as `Workstation`.
 
-The policy list `Devices with Pending Updates` column shows unique devices with approved, deferral-ready pending install candidates owned by that policy row. Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
+Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
 
 Device Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
 
-The `Pending Updates` policy column shows approved, deferral-ready pending update instances that would create policy-driven install jobs. Each row is scoped to devices where that row is the effective deepest policy. Child rows break those install candidates down by the rule source, such as `Global: 15 / Site-Level Override: 1`. Select a blue count to open `Patch List` filtered to that row scope and source layer. The Patch List `Policy Source` column shows which policy layer and policy name would approve each grouped update.
+The `Pending Updates` policy column shows approved, deferral-ready pending update instances that would create policy-driven install jobs, plus how many unique devices those updates span. Each row is scoped to devices where that row is the effective deepest policy. Global rows show `Global`; site rows show `Global` and `Site-Level Override`; Device Filter rows show `Global`, `Site-Level Override`, and `Device Filter`, including zero-count layers. Select a blue count to open `Patch List` filtered to that row scope and source layer. The Patch List `Policy Source` column shows which policy layer and policy name would approve each grouped update.
 
 ## Exclusions and Reboots
 
