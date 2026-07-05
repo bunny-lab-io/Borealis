@@ -2037,16 +2037,26 @@ func syncPatchCatalogFromInventory(ctx context.Context, conn *sql.Conn, now int6
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	type catalogRow struct {
 		PatchKey, KB, Title, Classification, Severity, Metadata sql.NullString
 		PublishedAt, FirstSeen, LastSeen                        sql.NullInt64
 	}
+	catalogRows := []catalogRow{}
 	for rows.Next() {
 		var row catalogRow
 		if err := rows.Scan(&row.PatchKey, &row.KB, &row.Title, &row.Classification, &row.Severity, &row.PublishedAt, &row.FirstSeen, &row.LastSeen, &row.Metadata); err != nil {
+			_ = rows.Close()
 			return err
 		}
+		catalogRows = append(catalogRows, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, row := range catalogRows {
 		metadata := agentDetailsMapFromAny(parseJSON(row.Metadata))
 		updateID := cleanText(firstPresentAny(metadata["update_id"], metadata["updateID"]))
 		revision := coerceInt64(firstPresentAny(metadata["revision_number"], metadata["revision"]))
@@ -2085,7 +2095,7 @@ func syncPatchCatalogFromInventory(ctx context.Context, conn *sql.Conn, now int6
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 func loadPendingPolicyPatchRows(ctx context.Context, conn *sql.Conn, devices map[string]patchPolicyDevice) ([]patchInventoryRow, error) {
