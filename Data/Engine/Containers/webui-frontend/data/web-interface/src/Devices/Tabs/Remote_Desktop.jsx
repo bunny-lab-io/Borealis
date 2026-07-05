@@ -617,6 +617,69 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
   ];
 }
 
+function buildDisplayViewportTarget(selectedDisplayId, topology, bounds, framebufferSize) {
+  const remoteWidth = Math.max(0, Number(framebufferSize?.width || bounds?.width || 0));
+  const remoteHeight = Math.max(0, Number(framebufferSize?.height || bounds?.height || 0));
+  if (!remoteWidth || !remoteHeight) return null;
+  const allTarget = {
+    id: ALL_DISPLAYS_ID,
+    label: "All",
+    left: 0,
+    top: 0,
+    width: remoteWidth,
+    height: remoteHeight,
+    remoteWidth,
+    remoteHeight,
+    focused: false,
+  };
+  if (
+    selectedDisplayId === ALL_DISPLAYS_ID ||
+    !Array.isArray(topology) ||
+    !topology.length ||
+    !bounds?.width ||
+    !bounds?.height
+  ) {
+    return allTarget;
+  }
+  const monitor = topology.find((item) => monitorSelectionId(item) === selectedDisplayId);
+  if (!monitor) return allTarget;
+  const scaleX = remoteWidth / bounds.width;
+  const scaleY = remoteHeight / bounds.height;
+  const left = clampNumber((monitor.left - bounds.left) * scaleX, 0, remoteWidth);
+  const top = clampNumber((monitor.top - bounds.top) * scaleY, 0, remoteHeight);
+  const right = clampNumber(left + monitor.width * scaleX, left, remoteWidth);
+  const bottom = clampNumber(top + monitor.height * scaleY, top, remoteHeight);
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  return {
+    id: monitorSelectionId(monitor),
+    label: `Display ${monitor.label}`,
+    left,
+    top,
+    width,
+    height,
+    remoteWidth,
+    remoteHeight,
+    focused: true,
+  };
+}
+
+function sameViewportPreview(left, right) {
+  if (!left || !right) return false;
+  return (
+    Math.abs(Number(left.left || 0) - Number(right.left || 0)) < 0.5 &&
+    Math.abs(Number(left.top || 0) - Number(right.top || 0)) < 0.5 &&
+    Math.abs(Number(left.width || 0) - Number(right.width || 0)) < 0.5 &&
+    Math.abs(Number(left.height || 0) - Number(right.height || 0)) < 0.5 &&
+    Math.abs(Number(left.targetLeft || 0) - Number(right.targetLeft || 0)) < 0.5 &&
+    Math.abs(Number(left.targetTop || 0) - Number(right.targetTop || 0)) < 0.5 &&
+    Math.abs(Number(left.targetWidth || 0) - Number(right.targetWidth || 0)) < 0.5 &&
+    Math.abs(Number(left.targetHeight || 0) - Number(right.targetHeight || 0)) < 0.5 &&
+    Boolean(left.interactive) === Boolean(right.interactive) &&
+    left.mode === right.mode
+  );
+}
+
 export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -674,7 +737,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   });
   const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
   const [displaySelectorExpanded, setDisplaySelectorExpanded] = useState(false);
-  const [viewportHint, setViewportHint] = useState("");
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
@@ -716,6 +778,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const idleDisconnectInFlightRef = useRef(false);
   const tunnelWarningShownRef = useRef(false);
   const forcedViewportKeyRef = useRef("");
+  const viewportFocusRef = useRef(null);
   const viewfinderDragRef = useRef({
     active: false,
     pointerId: null,
@@ -799,13 +862,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const selectedOption = displaySelectorOptions.find((item) => item.id === selectedDisplayId);
     return `Display: ${selectedOption?.shortLabel || "All"}`;
   }, [displaySelectorOptions, selectedDisplayId]);
-  const viewfinderTopology = useMemo(() => {
-    if (selectedDisplayId === ALL_DISPLAYS_ID) return diagramTopology;
-    const filtered = diagramTopology.filter(
-      (item) => monitorSelectionId(item) === selectedDisplayId
-    );
-    return filtered.length ? filtered : diagramTopology;
-  }, [diagramTopology, selectedDisplayId]);
+  const viewfinderTopology = diagramTopology;
   const displayLayoutGeometry = useMemo(
     () =>
       buildDisplayLayoutGeometry(viewfinderTopology, {
@@ -833,6 +890,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       y,
     };
   }, [displayLayoutFrames, viewfinderSize.height, viewfinderSize.width]);
+  const displayViewportTarget = useMemo(
+    () =>
+      buildDisplayViewportTarget(
+        selectedDisplayId,
+        diagramTopology,
+        diagramBounds,
+        framebufferSize
+      ),
+    [diagramBounds, diagramTopology, framebufferSize, selectedDisplayId]
+  );
 
   const registerViewfinderCanvas = useCallback((frameId, node) => {
     if (!frameId) return;
@@ -1003,11 +1070,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const resetDisconnectedViewState = useCallback(() => {
     forcedViewportKeyRef.current = "";
+    viewportFocusRef.current = null;
     setDisplayTopology([]);
     setSelectedDisplayId(ALL_DISPLAYS_ID);
     setDisplaySelectorExpanded(false);
     setDisplayMode("fit");
-    setViewportHint("");
     setViewportPreview({
       left: 0,
       top: 0,
@@ -1046,6 +1113,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       host.innerHTML = "";
     }
     forcedViewportKeyRef.current = "";
+    viewportFocusRef.current = null;
     setFramebufferSize({ width: 0, height: 0 });
     setRenderedCanvasSize({ width: 0, height: 0 });
     setViewportPreview({
@@ -1068,24 +1136,113 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     const element = display?.getElement?.() || host?.firstElementChild || null;
     const width = Number(display?.getWidth?.() || 0);
     const height = Number(display?.getHeight?.() || 0);
+    const hostWidth = Math.max(1, Number(host?.clientWidth || 0));
+    const hostHeight = Math.max(1, Number(host?.clientHeight || 0));
+    const targetScaleX =
+      displayViewportTarget?.remoteWidth > 0 && width > 0
+        ? width / displayViewportTarget.remoteWidth
+        : 1;
+    const targetScaleY =
+      displayViewportTarget?.remoteHeight > 0 && height > 0
+        ? height / displayViewportTarget.remoteHeight
+        : 1;
+    const targetLeft = clampNumber(
+      Number(displayViewportTarget?.left || 0) * targetScaleX,
+      0,
+      Math.max(0, width)
+    );
+    const targetTop = clampNumber(
+      Number(displayViewportTarget?.top || 0) * targetScaleY,
+      0,
+      Math.max(0, height)
+    );
+    const targetWidth = Math.max(
+      1,
+      Math.min(
+        Math.max(1, width - targetLeft),
+        Number(displayViewportTarget?.width || width || 1) * targetScaleX
+      )
+    );
+    const targetHeight = Math.max(
+      1,
+      Math.min(
+        Math.max(1, height - targetTop),
+        Number(displayViewportTarget?.height || height || 1) * targetScaleY
+      )
+    );
     if (element?.style) {
       element.style.display = "block";
-      element.style.margin = "auto";
+      element.style.margin = "0";
+      element.style.position = "absolute";
       element.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
       element.style.transformOrigin = "top left";
     }
     if (display && typeof display.scale === "function") {
-      const hostWidth = Math.max(1, Number(host?.clientWidth || 0));
-      const hostHeight = Math.max(1, Number(host?.clientHeight || 0));
       let scale = 1;
-      if (mode === "fit" && width > 0 && height > 0) {
-        scale = Math.min(hostWidth / width, hostHeight / height);
-      } else if (mode === "scaled" && height > 0) {
-        scale = hostHeight / height;
+      if (mode === "fit" && targetWidth > 0 && targetHeight > 0) {
+        scale = Math.min(hostWidth / targetWidth, hostHeight / targetHeight);
+      } else if (mode === "scaled" && targetHeight > 0) {
+        scale = hostHeight / targetHeight;
       }
-      display.scale(Number.isFinite(scale) && scale > 0 ? scale : 1);
+      const nextScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+      display.scale(nextScale);
+      const visibleWidth = hostWidth / nextScale;
+      const visibleHeight = hostHeight / nextScale;
+      const targetRight = targetLeft + targetWidth;
+      const targetBottom = targetTop + targetHeight;
+      const focus = viewportFocusRef.current;
+      const focusX =
+        focus &&
+        focus.x >= targetLeft &&
+        focus.x <= targetRight &&
+        focus.y >= targetTop &&
+        focus.y <= targetBottom
+          ? focus.x
+          : targetLeft + targetWidth / 2;
+      const focusY =
+        focus &&
+        focus.x >= targetLeft &&
+        focus.x <= targetRight &&
+        focus.y >= targetTop &&
+        focus.y <= targetBottom
+          ? focus.y
+          : targetTop + targetHeight / 2;
+      const visibleLeft =
+        visibleWidth >= targetWidth
+          ? targetLeft - (visibleWidth - targetWidth) / 2
+          : clampNumber(focusX - visibleWidth / 2, targetLeft, targetRight - visibleWidth);
+      const visibleTop =
+        visibleHeight >= targetHeight
+          ? targetTop - (visibleHeight - targetHeight) / 2
+          : clampNumber(focusY - visibleHeight / 2, targetTop, targetBottom - visibleHeight);
+      if (element?.style) {
+        element.style.left = `${Math.round(-visibleLeft * nextScale * 100) / 100}px`;
+        element.style.top = `${Math.round(-visibleTop * nextScale * 100) / 100}px`;
+      }
+      const previewLeft = clampNumber(visibleLeft, targetLeft, targetRight);
+      const previewTop = clampNumber(visibleTop, targetTop, targetBottom);
+      const previewRight = clampNumber(visibleLeft + visibleWidth, targetLeft, targetRight);
+      const previewBottom = clampNumber(visibleTop + visibleHeight, targetTop, targetBottom);
+      const nextPreview = {
+        left: previewLeft,
+        top: previewTop,
+        width: Math.max(0, previewRight - previewLeft),
+        height: Math.max(0, previewBottom - previewTop),
+        targetLeft,
+        targetTop,
+        targetWidth,
+        targetHeight,
+        interactive: visibleWidth < targetWidth - 1 || visibleHeight < targetHeight - 1,
+        mode,
+      };
+      setViewportPreview((previous) =>
+        sameViewportPreview(previous, nextPreview) ? previous : nextPreview
+      );
+    } else if (element?.style) {
+      element.style.left = "0px";
+      element.style.top = "0px";
     }
-  }, []);
+  }, [displayViewportTarget]);
 
   const syncFramebufferSize = useCallback((client) => {
     const display = typeof client?.getDisplay === "function" ? client.getDisplay() : null;
@@ -1812,13 +1969,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setStatusMessage("Power controls are unavailable through Apache Guacamole VNC.");
   }, []);
 
-  const syncViewportSelection = useCallback((_selectionIds, _options = {}) => {
+  const syncViewportSelection = useCallback((_selectionIds, options = {}) => {
+    if (options.forceReset) {
+      viewportFocusRef.current = null;
+    }
     const client = remoteClientRef.current;
     if (!client) return;
     configureDisplaySurface(client, displayMode);
     syncFramebufferSize(client);
     syncRenderedCanvasSize(client);
-    setViewportHint("");
   }, [
     configureDisplaySurface,
     displayMode,
@@ -1827,11 +1986,46 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   ]);
 
   const isConnected = sessionState === "connected";
-  const previewNavigationEnabled = false;
+  const previewNavigationEnabled = Boolean(isConnected && displayViewportTarget);
 
   const navigateViewfinderPoint = useCallback(
-    (_localX, _localY) => {},
-    []
+    (localX, localY) => {
+      if (!displayLayoutGeometry.bounds || !displayLayoutGeometry.scale || !displayViewportTarget) return;
+      const remoteWidth = Math.max(1, Number(displayViewportTarget.remoteWidth || 0));
+      const remoteHeight = Math.max(1, Number(displayViewportTarget.remoteHeight || 0));
+      const diagramX =
+        displayLayoutGeometry.bounds.left +
+        (localX - displayLayoutGeometry.offsetX) / displayLayoutGeometry.scale;
+      const diagramY =
+        displayLayoutGeometry.bounds.top +
+        (localY - displayLayoutGeometry.offsetY) / displayLayoutGeometry.scale;
+      const scaleX = remoteWidth / Math.max(1, displayLayoutGeometry.bounds.width);
+      const scaleY = remoteHeight / Math.max(1, displayLayoutGeometry.bounds.height);
+      const remoteX = clampNumber(
+        (diagramX - displayLayoutGeometry.bounds.left) * scaleX,
+        displayViewportTarget.left,
+        displayViewportTarget.left + displayViewportTarget.width
+      );
+      const remoteY = clampNumber(
+        (diagramY - displayLayoutGeometry.bounds.top) * scaleY,
+        displayViewportTarget.top,
+        displayViewportTarget.top + displayViewportTarget.height
+      );
+      viewportFocusRef.current = { x: remoteX, y: remoteY };
+      const client = remoteClientRef.current;
+      if (!client) return;
+      configureDisplaySurface(client, displayMode);
+      syncFramebufferSize(client);
+      syncRenderedCanvasSize(client);
+    },
+    [
+      configureDisplaySurface,
+      displayLayoutGeometry,
+      displayMode,
+      displayViewportTarget,
+      syncFramebufferSize,
+      syncRenderedCanvasSize,
+    ]
   );
 
   const queueViewfinderNavigate = useCallback(
@@ -1864,7 +2058,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const handlePreviewPointerDown = useCallback(
     (event) => {
       if (!isConnected || displayMode === "fit") return;
-      if (typeof event.preventDefault === "function") {
+      const targetNode =
+        event.target && typeof event.target.closest === "function"
+          ? event.target.closest("[data-viewfinder-display-button='true']")
+          : null;
+      if (!targetNode && typeof event.preventDefault === "function") {
         event.preventDefault();
       }
       const rect = event.currentTarget.getBoundingClientRect();
@@ -1977,6 +2175,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       height: 0,
     };
   }, []);
+
+  const selectDisplay = useCallback(
+    (displayId) => {
+      const nextDisplayId = normalizeText(displayId) || ALL_DISPLAYS_ID;
+      if (nextDisplayId !== selectedDisplayId) {
+        viewportFocusRef.current = null;
+      }
+      setSelectedDisplayId(nextDisplayId);
+      setDisplaySelectorExpanded(false);
+      queueDisplayFocus();
+    },
+    [queueDisplayFocus, selectedDisplayId]
+  );
 
   const forcedViewportKey = useMemo(
     () =>
@@ -2273,7 +2484,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const viewfinderHelperText = previewNavigationEnabled
     ? viewportPreview.interactive
       ? "Drag the viewport or tap anywhere on the preview to recenter."
-      : "The full desktop already fits inside the current viewport."
+      : displayViewportTarget?.focused
+        ? "Selected display already fits inside the current viewport."
+        : "The full desktop already fits inside the current viewport."
     : "";
   const highlightedMonitorIds =
     selectedDisplayId === ALL_DISPLAYS_ID ? [] : effectiveSelectedMonitorIds;
@@ -2499,7 +2712,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                       inset: 10,
                       overflow: "hidden",
                       cursor: previewNavigationEnabled
-                        ? viewportPreview.interactive
+                        ? viewportPreview.interactive && displayMode !== "fit"
                           ? "crosshair"
                           : "default"
                         : "default",
@@ -2521,6 +2734,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                           sx={{
                             position: "absolute",
                             inset: 0,
+                            appearance: "none",
                             boxSizing: "border-box",
                             borderRadius: 1.5,
                             overflow: "hidden",
@@ -2529,7 +2743,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             justifyContent: "center",
                             fontSize: "1rem",
                             fontWeight: 700,
-                            cursor: "default",
+                            cursor: focusedViewfinderMonitorId ? "pointer" : "default",
                             color: focusedViewfinderSelected ? "#08111f" : SIDEBAR_THEME.text,
                             border: focusedViewfinderSelected
                               ? "1px solid rgba(125, 201, 255, 0.42)"
@@ -2543,6 +2757,20 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                               ? "0 10px 28px rgba(91,126,255,0.25)"
                               : "none",
                             transition: "all 140ms ease",
+                            p: 0,
+                          }}
+                          component="button"
+                          type="button"
+                          data-viewfinder-display-button="true"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (focusedViewfinderMonitorId) {
+                              selectDisplay(focusedViewfinderMonitorId);
+                            }
+                          }}
+                          onDoubleClick={(event) => {
+                            event.stopPropagation();
+                            selectDisplay(ALL_DISPLAYS_ID);
                           }}
                         >
                           <Box
@@ -2566,7 +2794,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                             }}
                           />
                           <Box sx={{ position: "relative", zIndex: 1 }}>
-                          {singleViewfinderFrameRect.label}
+                            {singleViewfinderFrameRect.label}
                           </Box>
                         </Box>
                         {showViewportIndicator ? (
@@ -2596,35 +2824,44 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                           return (
                             <Box
                               key={item.id}
+                              component="button"
+                              type="button"
+                              data-viewfinder-display-button="true"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                selectDisplay(monitorId);
+                              }}
                               sx={{
                                 position: "absolute",
+                                appearance: "none",
                                 boxSizing: "border-box",
                                 left: item.x,
                                 top: item.y,
-                              width: item.widthPx,
-                              height: item.heightPx,
-                              borderRadius: 1.5,
-                              overflow: "hidden",
-                              display: "flex",
-                              alignItems: "center",
-                              justifyContent: "center",
+                                width: item.widthPx,
+                                height: item.heightPx,
+                                borderRadius: 1.5,
+                                overflow: "hidden",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
                                 fontSize: "1rem",
                                 fontWeight: 700,
-                                cursor: "default",
-                              color: selected ? "#08111f" : SIDEBAR_THEME.text,
-                              border: selected
-                                ? "1px solid rgba(125, 201, 255, 0.42)"
-                                : `1px solid ${SIDEBAR_THEME.border}`,
-                              background: selected
+                                cursor: "pointer",
+                                color: selected ? "#08111f" : SIDEBAR_THEME.text,
+                                border: selected
+                                  ? "1px solid rgba(125, 201, 255, 0.42)"
+                                  : `1px solid ${SIDEBAR_THEME.border}`,
+                                background: selected
                                   ? "linear-gradient(135deg,#7fc9ff 0%,#b195ff 100%)"
                                   : item.primary
                                     ? "rgba(125,183,255,0.18)"
                                     : "rgba(148,163,184,0.14)",
-                              boxShadow: selected
-                                ? "0 10px 28px rgba(91,126,255,0.25)"
-                                : "none",
-                              transition: "all 140ms ease",
-                            }}
+                                boxShadow: selected
+                                  ? "0 10px 28px rgba(91,126,255,0.25)"
+                                  : "none",
+                                transition: "all 140ms ease",
+                                p: 0,
+                              }}
                           >
                             <Box
                               component="canvas"
@@ -2737,7 +2974,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                         label={option.label}
                         active={displaySettingsEnabled && selectedDisplayId === option.id}
                         disabled={!displaySettingsEnabled}
-                        onClick={() => setSelectedDisplayId(option.id)}
+                        onClick={() => selectDisplay(option.id)}
                       />
                     ))}
                   </Box>
