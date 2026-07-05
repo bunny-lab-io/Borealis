@@ -1963,7 +1963,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         field: "enabled",
         headerName: "Enabled",
-        width: 115,
+        width: 92,
         flex: 0,
         cellRenderer: (params) => <PolicyBooleanCell value={params.value} />,
         valueFormatter: (params) => (params.value ? "Enabled" : "Disabled"),
@@ -1971,7 +1971,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         field: "reboot_after_install",
         headerName: "Reboot?",
-        width: 115,
+        width: 92,
         flex: 0,
         cellRenderer: (params) => <PolicyBooleanCell value={params.value} />,
         valueFormatter: (params) => (params.value ? "Enabled" : "Disabled"),
