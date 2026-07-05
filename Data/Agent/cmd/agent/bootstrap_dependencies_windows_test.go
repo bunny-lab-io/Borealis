@@ -24,9 +24,29 @@ func TestUltraVNCBootstrapConfigEnablesAllDisplays(t *testing.T) {
 	for _, expected := range []string{
 		"primary=1",
 		"secondary=1",
+		"FileTransferEnabled=0",
 	} {
-		if !strings.Contains(rendered, expected) {
-			t.Fatalf("bootstrap config missing %q:\n%s", expected, rendered)
+		if !bootstrapSectionContains(rendered, "admin", expected) {
+			t.Fatalf("bootstrap admin section missing %q:\n%s", expected, rendered)
 		}
 	}
+	if !bootstrapSectionContains(rendered, "UltraVNC", "passwd=") {
+		t.Fatalf("bootstrap UltraVNC section missing password:\n%s", rendered)
+	}
+	if !bootstrapSectionContains(rendered, "poll", "PollFullScreen=1") {
+		t.Fatalf("bootstrap poll section missing PollFullScreen=1:\n%s", rendered)
+	}
+}
+
+func bootstrapSectionContains(content string, section string, expected string) bool {
+	header := "[" + section + "]"
+	start := strings.Index(content, header)
+	if start < 0 {
+		return false
+	}
+	sectionText := content[start+len(header):]
+	if next := strings.Index(sectionText, "\n["); next >= 0 {
+		sectionText = sectionText[:next]
+	}
+	return strings.Contains(sectionText, expected)
 }

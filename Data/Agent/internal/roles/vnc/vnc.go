@@ -1143,32 +1143,33 @@ func resolveVNCConfigDir() string {
 
 func ultraVNCSettings(port int, passwordHash string, removeWallpaper bool, vncExe string) map[string]string {
 	settings := map[string]string{
-		"UseRegistry":        "0",
-		"AuthRequired":       "1",
-		"MSLogonRequired":    "0",
-		"NewMSLogon":         "0",
-		"primary":            "1",
-		"secondary":          "1",
-		"PortNumber":         strconv.Itoa(port),
-		"AutoPortSelect":     "0",
-		"SocketConnect":      "1",
-		"AllowLoopback":      "1",
-		"LoopbackOnly":       "0",
-		"HTTPConnect":        "0",
-		"AllowShutdown":      "1",
-		"DisableTrayIcon":    "1",
-		"EnableFileTransfer": "0",
-		"RemoveWallpaper":    boolInt(removeWallpaper),
-		"TurboMode":          "1",
-		"PollUnderCursor":    "0",
-		"PollForeground":     "0",
-		"PollFullScreen":     "1",
-		"OnlyPollConsole":    "0",
-		"OnlyPollOnEvent":    "0",
-		"EnableVirtual":      "0",
-		"SingleWindow":       "0",
-		"passwd":             passwordHash,
-		"passwd2":            "",
+		"UseRegistry":         "0",
+		"AuthRequired":        "1",
+		"MSLogonRequired":     "0",
+		"NewMSLogon":          "0",
+		"primary":             "1",
+		"secondary":           "1",
+		"PortNumber":          strconv.Itoa(port),
+		"AutoPortSelect":      "0",
+		"SocketConnect":       "1",
+		"AllowLoopback":       "1",
+		"LoopbackOnly":        "0",
+		"HTTPConnect":         "0",
+		"AllowShutdown":       "1",
+		"DisableTrayIcon":     "1",
+		"EnableFileTransfer":  "0",
+		"FileTransferEnabled": "0",
+		"RemoveWallpaper":     boolInt(removeWallpaper),
+		"TurboMode":           "1",
+		"PollUnderCursor":     "0",
+		"PollForeground":      "0",
+		"PollFullScreen":      "1",
+		"OnlyPollConsole":     "0",
+		"OnlyPollOnEvent":     "0",
+		"EnableVirtual":       "0",
+		"SingleWindow":        "0",
+		"passwd":              passwordHash,
+		"passwd2":             "",
 	}
 	root := filepath.Dir(vncExe)
 	if root != "." && root != "" {
@@ -1187,23 +1188,45 @@ func ultraVNCSettings(port int, passwordHash string, removeWallpaper bool, vncEx
 }
 
 func renderUltraVNCConfig(settings map[string]string) string {
-	order := []string{
-		"UseRegistry", "AuthRequired", "MSLogonRequired", "NewMSLogon", "PortNumber", "AutoPortSelect",
-		"primary", "secondary", "SocketConnect", "AllowLoopback", "LoopbackOnly", "HTTPConnect", "AllowShutdown",
-		"DisableTrayIcon", "EnableFileTransfer", "RemoveWallpaper", "TurboMode", "PollUnderCursor", "PollForeground",
-		"PollFullScreen", "OnlyPollConsole", "OnlyPollOnEvent", "EnableDriver", "EnableHook",
-		"EnableVirtual", "SingleWindow", "passwd", "passwd2",
+	sections := []struct {
+		name string
+		keys []string
+	}{
+		{
+			name: "admin",
+			keys: []string{
+				"UseRegistry", "AuthRequired", "MSLogonRequired", "NewMSLogon", "primary", "secondary",
+				"PortNumber", "AutoPortSelect", "SocketConnect", "AllowLoopback", "LoopbackOnly", "HTTPConnect",
+				"AllowShutdown", "DisableTrayIcon", "EnableFileTransfer", "FileTransferEnabled", "RemoveWallpaper",
+			},
+		},
+		{
+			name: "UltraVNC",
+			keys: []string{"passwd", "passwd2"},
+		},
+		{
+			name: "poll",
+			keys: []string{
+				"TurboMode", "PollUnderCursor", "PollForeground", "PollFullScreen", "OnlyPollConsole",
+				"OnlyPollOnEvent", "EnableDriver", "EnableHook", "EnableVirtual", "SingleWindow",
+			},
+		},
 	}
 	var builder strings.Builder
-	builder.WriteString("[UltraVNC]\n")
-	for _, key := range order {
-		value, ok := settings[key]
-		if !ok {
-			continue
+	for _, section := range sections {
+		builder.WriteString("[")
+		builder.WriteString(section.name)
+		builder.WriteString("]\n")
+		for _, key := range section.keys {
+			value, ok := settings[key]
+			if !ok {
+				continue
+			}
+			builder.WriteString(key)
+			builder.WriteString("=")
+			builder.WriteString(value)
+			builder.WriteString("\n")
 		}
-		builder.WriteString(key)
-		builder.WriteString("=")
-		builder.WriteString(value)
 		builder.WriteString("\n")
 	}
 	return builder.String()

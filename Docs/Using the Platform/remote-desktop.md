@@ -73,7 +73,7 @@ If another operator already has the device open, Borealis joins the same shared 
     - Browser receives a Borealis one-time token, not the UltraVNC password.
     - Guacamole connects through local `guacd`, then to the agent VNC listener over WireGuard.
     - VNC role keeps UltraVNC available after firewall scope and runtime credentials are ready.
-    - Agent VNC config sets UltraVNC `primary=1` and `secondary=1` so multi-monitor Windows endpoints start Guacamole sessions with the full desktop framebuffer instead of primary-only capture.
+    - Agent VNC config sets UltraVNC `[admin]` values `primary=1` and `secondary=1` so multi-monitor Windows endpoints start Guacamole sessions with the full desktop framebuffer instead of primary-only capture.
     - VNC establish performs a fast TCP probe first, then longer recovery and restart probes for slow Agent readiness.
     - Engine VNC readiness waits can be tuned with `BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS`, `BOREALIS_VNC_START_READY_WAIT_SECONDS`, `BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS`, `BOREALIS_VNC_RESTART_READY_WAIT_SECONDS`, `BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS`, and `BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS`.
     - Engine calls Agent `vnc_start` synchronously through the site-worker before issuing a browser Guacamole token, so stale TCP listener probes cannot race ahead of Agent-side VNC config and service readiness.
