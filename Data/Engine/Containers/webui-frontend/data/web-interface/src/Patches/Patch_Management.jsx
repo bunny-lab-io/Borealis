@@ -1991,7 +1991,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         colId: "pending_updates",
         headerName: "Pending Updates",
         width: 550,
-        minWidth: 550,
+        minWidth: 275,
         flex: 0,
         valueGetter: (params) => pendingUpdateBreakdownText(params.data || {}),
         cellRenderer: (params) => (
