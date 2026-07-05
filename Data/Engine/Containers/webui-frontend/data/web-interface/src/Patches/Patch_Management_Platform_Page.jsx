@@ -26,7 +26,7 @@ import {
   GridShell,
   MAGIC_UI,
 } from "../Devices/Tabs/Shared.jsx";
-import { PATCH_PAGE_TABS } from "./Patch_Management.jsx";
+import { PATCH_GRID_SX, PATCH_PAGE_TABS, formatScheduleType } from "./Patch_Management.jsx";
 
 const STATE_FILTER_OPTIONS = [
   { key: "pending", label: "Pending" },
@@ -160,26 +160,21 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
 
   const policyColumnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
-      { field: "policy_type", headerName: "Policy Type", width: 190, minWidth: 175 },
-      { field: "enabled", headerName: "Enabled", width: 120 },
-      { field: "role_scope", headerName: "Scope", width: 135 },
-      { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220 },
-      { field: "target_count", headerName: "Targeted Devices", width: 175 },
-      { field: "deferral_days", headerName: "Update Deferral Period", width: 215 },
-      { field: "install_schedule_type", headerName: "Schedule", width: 130 },
-      { field: "install_start_ts", headerName: "First Run", width: 190 },
-      {
-        field: "managed_update_mode",
-        headerName: "Borealis Managed Updates",
-        headerTooltip: "When enabled, Borealis prevents automatic OS patch installs while preserving Borealis-controlled patch scans and installs.",
-        width: 235,
-      },
-      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190 },
+      { field: "name", headerName: "Policy", flex: 1, minWidth: 300 },
+      { field: "policy_type", headerName: "Policy Type", width: 190, minWidth: 175, flex: 0 },
+      { field: "enabled", headerName: "Enabled", width: 120, flex: 0 },
+      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, flex: 0 },
+      { field: "role_scope", headerName: "Scope", width: 135, flex: 0 },
+      { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220, flex: 0 },
+      { field: "target_count", headerName: "Targeted Devices", width: 175, flex: 0 },
+      { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0 },
+      { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
+      { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0 },
       {
         field: "actions",
         headerName: "Actions",
         width: 95,
+        flex: 0,
         sortable: false,
         filter: false,
         resizable: false,
@@ -316,6 +311,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
       >
         <GridShell
           sx={{
+            ...PATCH_GRID_SX,
             flexGrow: 1,
             minHeight: 520,
             height: "100%",
@@ -333,6 +329,8 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
             paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
+            rowHeight={44}
+            headerHeight={44}
             overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
             theme={DEVICE_DETAILS_GRID_THEME}
           />

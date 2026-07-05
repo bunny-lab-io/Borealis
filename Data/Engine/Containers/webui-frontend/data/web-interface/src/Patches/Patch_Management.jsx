@@ -45,7 +45,8 @@ import {
 } from "../Devices/Tabs/Shared.jsx";
 
 const PAGE_TITLE = "Windows Patch Management";
-const PAGE_SUBTITLE = "Windows patch inventory across deployed agents.";
+const PAGE_SUBTITLE =
+  "Ad-hoc installation of Windows Updates and patch policies. Policies are applied on a hierarchal granular level, where the deepest nested policies apply last.";
 
 const STATE_FILTER_OPTIONS = [
   { key: "pending", label: "Pending" },
@@ -148,6 +149,26 @@ const POLICY_ACTION_MENU_HEADER_SX = {
   minWidth: 0,
 };
 
+export const PATCH_GRID_SX = {
+  "--ag-background-color": "#070b1a",
+  "--ag-foreground-color": "#f4f7ff",
+  "--ag-header-background-color": "#0f172a",
+  "--ag-header-foreground-color": "#cfe0ff",
+  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
+  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
+  "--ag-border-color": "rgba(125,183,255,0.18)",
+  "--ag-row-border-color": "rgba(125,183,255,0.14)",
+  "--ag-border-radius": "8px",
+  "& .ag-row-hover": {
+    backgroundColor: "rgba(73,156,196,0.2) !important",
+  },
+  "& .ag-row-selected": {
+    backgroundColor: "rgba(125,211,252,0.2) !important",
+    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
+  },
+};
+
 export function text(value) {
   return String(value ?? "").trim();
 }
@@ -206,6 +227,16 @@ function formatDeviceCount(value) {
   const count = Number(value || 0);
   const safeCount = Number.isFinite(count) && count > 0 ? count : 0;
   return `${safeCount.toLocaleString()} ${safeCount === 1 ? "Device" : "Devices"}`;
+}
+
+export function formatScheduleType(value) {
+  const raw = text(value);
+  if (!raw) return "";
+  return raw
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1).toLowerCase()}`)
+    .join(" ");
 }
 
 export function policyTypeLabel(policyType) {
@@ -407,6 +438,15 @@ function policySiteKey(site = {}) {
 
 function policyTargetSiteText(policy = {}) {
   return normalizeTargetSites(policy).map((site) => text(site.name)).filter(Boolean).join(", ");
+}
+
+function policyEditPath(policy = {}) {
+  const source = policy && typeof policy === "object" ? policy : {};
+  if (!source.id) return "#";
+  const policyType = normalizePolicyTypeValue(source);
+  if (policyType === "global") return APP_PATHS.patchPolicyGlobal(source.id);
+  if (policyType === "device_filter") return APP_PATHS.patchPolicyDeviceFilter(source.id);
+  return APP_PATHS.patchPolicySite(source.id);
 }
 
 function policySortLabel(policy = {}) {
@@ -1184,14 +1224,7 @@ function PatchPolicyTab() {
 
   const openEdit = useCallback((policy) => {
     if (!policy?.id) return;
-    const policyType = normalizePolicyTypeValue(policy);
-    const nextPath =
-      policyType === "global"
-        ? APP_PATHS.patchPolicyGlobal(policy.id)
-        : policyType === "device_filter"
-          ? APP_PATHS.patchPolicyDeviceFilter(policy.id)
-          : APP_PATHS.patchPolicySite(policy.id);
-    navigate(nextPath);
+    navigate(policyEditPath(policy));
   }, [navigate]);
 
   const deletePolicy = useCallback(async (policy = {}) => {
@@ -1298,6 +1331,12 @@ function PatchPolicyTab() {
     const row = params.data || {};
     const depth = policyRowDepth(row);
     const policyName = text(row.name) || "Patch Policy";
+    const editPath = policyEditPath(row);
+    const handleClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openEdit(row);
+    };
     return (
       <Box
         sx={{
@@ -1315,33 +1354,43 @@ function PatchPolicyTab() {
             aria-hidden="true"
             sx={{
               width: 13,
-              height: 18,
+              height: 12,
               flexShrink: 0,
               borderLeft: "1px solid rgba(125,183,255,0.34)",
               borderBottom: "1px solid rgba(125,183,255,0.34)",
               borderBottomLeftRadius: 5,
+              transform: "translateY(-3px)",
             }}
           />
         ) : null}
         <PolicyRoundedIcon
           sx={{
             fontSize: 18,
-            color: normalizePolicyTypeValue(row) === "global" ? "#f8d47a" : BOREALIS_BLUE,
+            color: BOREALIS_BLUE,
             flexShrink: 0,
           }}
         />
-        <Typography
-          component="span"
-          noWrap
+        <Box
+          component="a"
+          href={editPath}
+          onClick={handleClick}
+          title={policyName}
           sx={{
-            color: normalizePolicyTypeValue(row) === "global" ? MAGIC_UI.textBright : BOREALIS_BLUE,
+            color: "#58a6ff",
+            textDecoration: "none",
             fontSize: 13,
-            fontWeight: 700,
+            fontWeight: 500,
             minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            "&:hover": {
+              textDecoration: "underline",
+            },
           }}
         >
           {policyName}
-        </Typography>
+        </Box>
         {row.__isReference ? (
           <Box
             component="span"
@@ -1363,34 +1412,43 @@ function PatchPolicyTab() {
         ) : null}
       </Box>
     );
-  }, []);
+  }, [openEdit]);
 
   const targetSitesCellRenderer = useCallback((params) => {
     const sites = Array.isArray(params.data?.__targetSites) ? params.data.__targetSites : normalizeTargetSites(params.data || {});
+    const tooltipText = sites.map((site) => text(site.name)).filter(Boolean).join(", ") || "No Site Targets";
     if (!sites.length) {
-      return <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12 }}>No Site Targets</Typography>;
+      return (
+        <Tooltip title={tooltipText} arrow>
+          <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12, lineHeight: 1 }}>
+            No Site Targets
+          </Typography>
+        </Tooltip>
+      );
     }
     const visibleSites = sites.slice(0, 3);
     const hiddenCount = sites.length - visibleSites.length;
     return (
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, minWidth: 0, overflow: "hidden" }}>
-        {visibleSites.map((site) => (
+      <Tooltip title={tooltipText} arrow>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, minWidth: 0, width: "100%", height: "100%", overflow: "hidden" }}>
+          {visibleSites.map((site) => (
           <Box
             key={`${site.site_id || site.id || 0}-${site.name}`}
             component="span"
             sx={{
               display: "inline-flex",
               alignItems: "center",
+              justifyContent: "center",
               maxWidth: 145,
+              height: 20,
               borderRadius: 999,
               px: 0.8,
-              py: 0.2,
               color: "#89c2ff",
               border: "1px solid rgba(88,166,255,0.42)",
               backgroundColor: "rgba(88,166,255,0.14)",
               fontSize: 11.5,
               fontWeight: 600,
-              lineHeight: 1.25,
+              lineHeight: 1,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -1398,27 +1456,31 @@ function PatchPolicyTab() {
           >
             {text(site.name)}
           </Box>
-        ))}
-        {hiddenCount > 0 ? (
+          ))}
+          {hiddenCount > 0 ? (
           <Box
             component="span"
             sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
               borderRadius: 999,
+              height: 20,
               px: 0.75,
-              py: 0.2,
               color: "#cbd5e1",
               border: "1px solid rgba(148,163,184,0.34)",
               backgroundColor: "rgba(15,23,42,0.62)",
               fontSize: 11.5,
               fontWeight: 600,
-              lineHeight: 1.25,
+              lineHeight: 1,
               flexShrink: 0,
             }}
           >
             +{hiddenCount}
           </Box>
-        ) : null}
-      </Box>
+          ) : null}
+        </Box>
+      </Tooltip>
     );
   }, []);
 
@@ -1427,8 +1489,8 @@ function PatchPolicyTab() {
       {
         field: "name",
         headerName: "Policy",
-        flex: 1.35,
-        minWidth: 260,
+        flex: 1,
+        minWidth: 300,
         valueGetter: (params) => text(params.data?.name),
         cellRenderer: policyNameCellRenderer,
       },
@@ -1437,15 +1499,18 @@ function PatchPolicyTab() {
         headerName: "Policy Type",
         width: 190,
         minWidth: 175,
+        flex: 0,
         valueGetter: (params) => params.data?.__policyTypeLabel || policyTableTypeLabel(normalizePolicyTypeValue(params.data || {})),
       },
-      { field: "enabled", headerName: "Enabled", width: 120, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
-      { field: "role_scope", headerName: "Scope", width: 135 },
+      { field: "enabled", headerName: "Enabled", width: 120, flex: 0, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
+      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, flex: 0, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
+      { field: "role_scope", headerName: "Scope", width: 135, flex: 0 },
       {
         colId: "targeted_sites",
         headerName: "Targeted Sites",
         width: 255,
         minWidth: 220,
+        flex: 0,
         valueGetter: (params) => params.data?.__targetSitesText || policyTargetSiteText(params.data || {}),
         cellRenderer: targetSitesCellRenderer,
       },
@@ -1453,23 +1518,17 @@ function PatchPolicyTab() {
         field: "target_count",
         headerName: "Targeted Devices",
         width: 175,
+        flex: 0,
         valueFormatter: (params) => formatDeviceCount(params.value),
       },
-      { field: "deferral_days", headerName: "Update Deferral Period", width: 215, valueFormatter: (params) => `${Number(params.value || 0)} days` },
-      { field: "install_schedule_type", headerName: "Schedule", width: 130 },
-      { field: "install_start_ts", headerName: "First Run", width: 190, valueFormatter: (params) => formatTimestamp(params.value) },
-      {
-        field: "managed_update_mode",
-        headerName: "Borealis Managed Updates",
-        headerTooltip: "When enabled, Borealis asks the Agent to prevent automatic Windows Update installs while preserving Borealis-controlled patch scans and installs.",
-        width: 235,
-        valueFormatter: (params) => (params.value ? "Managed by Borealis" : "Not enforced"),
-      },
-      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
+      { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0, valueFormatter: (params) => `${Number(params.value || 0)} days` },
+      { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
+      { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0, valueFormatter: (params) => formatTimestamp(params.value) },
       {
         colId: "actions",
         headerName: "Actions",
         width: 95,
+        flex: 0,
         sortable: false,
         filter: false,
         resizable: false,
@@ -1511,14 +1570,12 @@ function PatchPolicyTab() {
       {loadError ? <Box sx={{ p: 2 }}><Alert severity="error">{loadError}</Alert></Box> : null}
       <GridShell
         sx={{
+          ...PATCH_GRID_SX,
           flexGrow: 1,
           minHeight: loadError ? 460 : 520,
           height: "100%",
           borderRadius: 0,
           border: "none",
-          "& .patch-policy-linked-reference .ag-cell": {
-            backgroundColor: "rgba(180,137,255,0.035)",
-          },
         }}
       >
         <AgGridReact
@@ -1531,6 +1588,8 @@ function PatchPolicyTab() {
           paginationPageSize={50}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
+          rowHeight={44}
+          headerHeight={44}
           getRowId={(params) => String(params.data?.__hierarchyKey || params.data?.id || params.rowIndex)}
           rowClassRules={{
             "patch-policy-linked-reference": (params) => Boolean(params.data?.__isReference),
@@ -2161,13 +2220,11 @@ export default function PatchManagement() {
           ) : null}
           <GridShell
             sx={{
+              ...PATCH_GRID_SX,
               flexGrow: 1,
               minHeight: 520,
               borderRadius: 0,
               border: "none",
-              "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-              "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-              "& .ag-row-hover": { backgroundColor: "rgba(73,156,196,0.2) !important" },
             }}
           >
             <AgGridReact
@@ -2181,6 +2238,8 @@ export default function PatchManagement() {
               paginationPageSize={100}
               paginationPageSizeSelector={[20, 50, 100]}
               animateRows
+              rowHeight={44}
+              headerHeight={44}
               getRowId={(params) => String(params.data?.id || params.rowIndex)}
               theme={DEVICE_DETAILS_GRID_THEME}
             />
