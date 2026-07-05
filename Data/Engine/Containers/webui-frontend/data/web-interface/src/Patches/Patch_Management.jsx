@@ -388,10 +388,10 @@ export function policyTypeLabel(policyType) {
 }
 
 function policyTableTypeLabel(policyType) {
-  const normalized = text(policyType).toLowerCase();
+  const normalized = normalizePolicyTypeValue({ policy_type: policyType });
   if (normalized === "global") return "Global";
-  if (normalized === "device_filter") return "Device Filter Policy";
-  return "Site-Level Override";
+  if (normalized === "device_filter") return "Device Filter";
+  return "Site";
 }
 
 const POLICY_PENDING_LAYERS = Object.freeze([
@@ -787,8 +787,12 @@ function PatchPolicySourceCell({ row = {} }) {
 
 function normalizePolicyTypeValue(policy = {}) {
   const source = policy && typeof policy === "object" ? policy : {};
-  const normalized = text(source.policy_type).toLowerCase();
-  if (normalized === "global" || normalized === "device_filter") return normalized;
+  const normalized = text(source.policy_type)
+    .toLowerCase()
+    .replace(/[\s/-]+/g, "_")
+    .replace(/_+/g, "_");
+  if (normalized === "global" || normalized === "global_policy") return "global";
+  if (normalized === "device_filter" || normalized === "device_filter_policy") return "device_filter";
   return "site";
 }
 
