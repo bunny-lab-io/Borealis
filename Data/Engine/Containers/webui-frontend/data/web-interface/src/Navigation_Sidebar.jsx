@@ -60,8 +60,21 @@ const SITE_SCOPED_NAV_KEYS = new Set([
   "watchdogs",
   "jobs",
   "software",
-  "patch-management",
+  "patch-management-windows",
 ]);
+
+const OS_NAV_ICON_CLASSES = Object.freeze({
+  windows: "fa-brands fa-windows",
+  linux: "fa-brands fa-linux",
+  macos: "fa-brands fa-apple",
+});
+
+const FONT_AWESOME_NAV_ICON_SX = {
+  fontSize: "0.95rem",
+  width: 20,
+  lineHeight: 1,
+  textAlign: "center",
+};
 
 function buildSiteScopedPath(path, siteId, extraParams = {}) {
   const params = new URLSearchParams();
@@ -172,11 +185,29 @@ const BASE_NAV_SECTIONS = Object.freeze([
         navKey: "software",
         to: APP_PATHS.software,
       },
+    ],
+  },
+  {
+    id: "patch-management",
+    title: "Patch Management",
+    items: [
       {
-        icon: PatchIcon,
-        label: "Patch Management",
-        navKey: "patch-management",
-        to: APP_PATHS.patchManagement,
+        iconClass: OS_NAV_ICON_CLASSES.windows,
+        label: "Windows",
+        navKey: "patch-management-windows",
+        to: APP_PATHS.patchManagementWindows,
+      },
+      {
+        iconClass: OS_NAV_ICON_CLASSES.linux,
+        label: "Linux",
+        navKey: "patch-management-linux",
+        to: APP_PATHS.patchManagementLinux,
+      },
+      {
+        iconClass: OS_NAV_ICON_CLASSES.macos,
+        label: "MacOS",
+        navKey: "patch-management-macos",
+        to: APP_PATHS.patchManagementMacOS,
       },
     ],
   },
@@ -281,6 +312,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
     devices: true,
     automation: true,
     alerting: true,
+    "patch-management": true,
     filters: true,
     access: true,
     admin: true,
@@ -363,8 +395,8 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         {
           icon: PatchIcon,
           label: "Patch Management",
-          navKey: "patch-management",
-          to: buildSiteScopedPath(APP_PATHS.patchManagement, selectedSiteId),
+          navKey: "patch-management-windows",
+          to: buildSiteScopedPath(APP_PATHS.patchManagementWindows, selectedSiteId),
         },
         {
           icon: SettingsIcon,
@@ -579,6 +611,16 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
                 );
               }
               const IconComponent = item.icon;
+              const iconNode = item.iconClass ? (
+                <Box
+                  component="i"
+                  className={item.iconClass}
+                  aria-hidden="true"
+                  sx={FONT_AWESOME_NAV_ICON_SX}
+                />
+              ) : IconComponent ? (
+                <IconComponent fontSize="small" />
+              ) : null;
               const activeOverride = section.siteScoped
                 ? activeNavKey === item.navKey
                 : selectedSiteId && SITE_SCOPED_NAV_KEYS.has(item.navKey)
@@ -587,7 +629,7 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
               return (
                 <NavItem
                   key={item.navKey}
-                  icon={<IconComponent fontSize="small" />}
+                  icon={iconNode}
                   label={item.label}
                   navKey={item.navKey}
                   to={item.to}

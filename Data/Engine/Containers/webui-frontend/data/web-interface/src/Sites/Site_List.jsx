@@ -3190,7 +3190,12 @@ export default function SiteList() {
             if (res.ok) {
               setCreateOpen(false);
               if (name) {
-                sendNotification(`Site ${name} Created Successfully`);
+                sendNotification({
+                  title: "Site Created",
+                  message: `Site ${name} Created Successfully. Configure patch coverage at <b>${APP_PATHS.patchManagementSitePolicies}</b>.`,
+                  icon: "success",
+                  variant: "success",
+                });
               }
               fetchSites();
             }

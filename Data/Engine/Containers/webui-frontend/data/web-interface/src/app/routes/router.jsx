@@ -199,13 +199,99 @@ export function buildAppRoutes() {
             },
             {
               path: "patch-management",
+              element: <RootShell />,
               handle: {
                 title: "Patch Management",
                 breadcrumb: "Patch Management",
-                navKey: "patch-management",
+                navKey: "patch-management-windows",
                 pageKey: "patch-management",
               },
-              lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchManagementRoute"),
+              children: [
+                {
+                  index: true,
+                  element: <Navigate to={APP_PATHS.patchManagementWindows} replace />,
+                },
+                {
+                  path: "windows",
+                  handle: {
+                    title: "Windows Patch Management",
+                    breadcrumb: "Windows",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-management-windows",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchManagementRoute"),
+                },
+                {
+                  path: "linux",
+                  handle: {
+                    title: "Linux Patch Management",
+                    breadcrumb: "Linux",
+                    navKey: "patch-management-linux",
+                    pageKey: "patch-management-linux",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchLinuxRoute"),
+                },
+                {
+                  path: "macos",
+                  handle: {
+                    title: "MacOS Patch Management",
+                    breadcrumb: "MacOS",
+                    navKey: "patch-management-macos",
+                    pageKey: "patch-management-macos",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchMacOSRoute"),
+                },
+                {
+                  path: "policies/site/new",
+                  handle: {
+                    title: "New Site Patch Policy",
+                    breadcrumb: "New Site Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-site-new",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+                {
+                  path: "policies/global/:policyId",
+                  handle: {
+                    title: "Global Patch Policy",
+                    breadcrumb: "Global Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-global",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+                {
+                  path: "policies/site/:policyId",
+                  handle: {
+                    title: "Site Patch Policy",
+                    breadcrumb: "Site Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-site",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+                {
+                  path: "policies/device-filter/new",
+                  handle: {
+                    title: "New Device Filter Patch Policy",
+                    breadcrumb: "New Device Filter Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-device-filter-new",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+                {
+                  path: "policies/device-filter/:policyId",
+                  handle: {
+                    title: "Device Filter Patch Policy",
+                    breadcrumb: "Device Filter Policy",
+                    navKey: "patch-management-windows",
+                    pageKey: "patch-policy-device-filter",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
+                },
+              ],
             },
             {
               path: "filters",

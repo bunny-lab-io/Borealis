@@ -26,6 +26,8 @@ const (
 	patchCommandTimeout  = 3 * time.Minute
 	patchInstallTimeout  = 90 * time.Minute
 	patchInstallQueueMax = 2 * time.Hour
+	patchPolicyTimeout   = 45 * time.Second
+	patchRebootTimeout   = 20 * time.Second
 )
 
 var kbPattern = regexp.MustCompile(`(?i)\bKB\d{4,9}\b`)
@@ -274,6 +276,98 @@ func (m *Manager) HandleInstallRequest(ctx context.Context, payload any) (any, e
 		"kb":         cleanText(patch["kb"]),
 		"title":      cleanText(patch["title"]),
 	}, nil
+}
+
+func (m *Manager) HandlePolicyEnforcementRequest(ctx context.Context, payload any) (any, error) {
+	body, ok := payload.(map[string]any)
+	if !ok {
+		return errorResponse("invalid_request", "Patch policy enforcement payload must be an object."), nil
+	}
+	if !m.matchesTarget(body) {
+		return errorResponse("not_for_host", "The patch policy enforcement request targeted another device."), nil
+	}
+	if !m.supported {
+		return errorResponse("unsupported_platform", fallbackText(m.unsupportedReason, "Patch management is unsupported on this platform.")), nil
+	}
+	mode := normalizePatchPolicyEnforcementMode(firstNonNil(firstValue(body, "enforcement_mode", "mode"), body["state"]))
+	if mode == "" {
+		return errorResponse("invalid_enforcement_mode", "Patch policy enforcement mode must be managed, frozen, or unmanaged."), nil
+	}
+	requestID := fallbackText(cleanText(body["request_id"]), fmt.Sprintf("patch-policy-%d", time.Now().UnixNano()))
+	runner := m.runner
+	if runner == nil {
+		runner = runCommand
+	}
+	result, err := runner(ctx, patchPolicyTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchPolicyEnforcementScript(mode, requestID))
+	parsed := parseLastJSONObject(result.Stdout)
+	response := map[string]any{
+		"ok":             err == nil && result.ExitCode == 0,
+		"status":         "applied",
+		"request_id":     requestID,
+		"mode":           mode,
+		"stdout":         result.Stdout,
+		"stderr":         result.Stderr,
+		"exit_code":      result.ExitCode,
+		"drift_detected": false,
+	}
+	for key, value := range parsed {
+		response[key] = value
+	}
+	if err != nil || result.ExitCode != 0 {
+		response["ok"] = false
+		response["status"] = "failed"
+		response["error"] = "patch_policy_enforcement_failed"
+		response["message"] = commandError(result, err).Error()
+	}
+	return response, nil
+}
+
+func (m *Manager) HandleRebootRequest(ctx context.Context, payload any) (any, error) {
+	body, ok := payload.(map[string]any)
+	if !ok {
+		return errorResponse("invalid_request", "Patch reboot payload must be an object."), nil
+	}
+	if !m.matchesTarget(body) {
+		return errorResponse("not_for_host", "The patch reboot request targeted another device."), nil
+	}
+	if !m.supported {
+		return errorResponse("unsupported_platform", fallbackText(m.unsupportedReason, "Patch management is unsupported on this platform.")), nil
+	}
+	requestID := fallbackText(cleanText(body["request_id"]), fmt.Sprintf("patch-reboot-%d", time.Now().UnixNano()))
+	delaySeconds := coerceInt64(firstNonNil(firstValue(body, "delay_seconds", "delay"), int64(60)))
+	if delaySeconds < 30 {
+		delaySeconds = 30
+	}
+	if delaySeconds > 3600 {
+		delaySeconds = 3600
+	}
+	force := truthy(firstNonNil(firstValue(body, "force_logged_in_user", "force"), false))
+	runner := m.runner
+	if runner == nil {
+		runner = runCommand
+	}
+	result, err := runner(ctx, patchRebootTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsPatchRebootScript(requestID, delaySeconds, force))
+	parsed := parseLastJSONObject(result.Stdout)
+	response := map[string]any{
+		"ok":            err == nil && result.ExitCode == 0,
+		"status":        "scheduled",
+		"request_id":    requestID,
+		"delay_seconds": delaySeconds,
+		"force":         force,
+		"stdout":        result.Stdout,
+		"stderr":        result.Stderr,
+		"exit_code":     result.ExitCode,
+	}
+	for key, value := range parsed {
+		response[key] = value
+	}
+	if err != nil || result.ExitCode != 0 {
+		response["ok"] = false
+		response["status"] = "failed"
+		response["error"] = "patch_reboot_failed"
+		response["message"] = commandError(result, err).Error()
+	}
+	return response, nil
 }
 
 func (m *Manager) RequestRefresh(reason string) {
@@ -601,6 +695,158 @@ func patchInstallRequest(body map[string]any) map[string]any {
 		out["kb"] = kb
 	}
 	return out
+}
+
+func normalizePatchPolicyEnforcementMode(value any) string {
+	switch strings.ToLower(cleanText(value)) {
+	case "managed", "lock", "locked", "enforced":
+		return "managed"
+	case "frozen", "freeze":
+		return "frozen"
+	case "unmanaged", "disabled", "off", "none":
+		return "unmanaged"
+	default:
+		return ""
+	}
+}
+
+func parseLastJSONObject(output string) map[string]any {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err == nil {
+			return payload
+		}
+	}
+	return nil
+}
+
+func windowsPatchPolicyEnforcementScript(mode string, requestID string) string {
+	payload, _ := json.Marshal(map[string]any{
+		"mode":       normalizePatchPolicyEnforcementMode(mode),
+		"request_id": requestID,
+	})
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	return fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
+$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')) | ConvertFrom-Json
+$Mode = [string]$payload.mode
+$RequestID = [string]$payload.request_id
+$BorealisPath = 'HKLM:\SOFTWARE\Borealis\PatchManagement'
+$WUPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+$AUPath = Join-Path $WUPath 'AU'
+function Ensure-Key([string]$Path) {
+  if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
+}
+function Read-Value([string]$Path, [string]$Name) {
+  if (-not (Test-Path $Path)) { return $null }
+  try { return (Get-ItemProperty -Path $Path -Name $Name -ErrorAction Stop).$Name } catch { return $null }
+}
+function Backup-Value([string]$SourcePath, [string]$Name, [string]$BackupName) {
+  Ensure-Key $BorealisPath
+  $current = Read-Value $SourcePath $Name
+  if ($null -eq $current) {
+    New-ItemProperty -Path $BorealisPath -Name ($BackupName + '_WasPresent') -Value 0 -PropertyType DWord -Force | Out-Null
+  } else {
+    New-ItemProperty -Path $BorealisPath -Name ($BackupName + '_WasPresent') -Value 1 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $BorealisPath -Name $BackupName -Value ([int]$current) -PropertyType DWord -Force | Out-Null
+  }
+}
+function Restore-Value([string]$TargetPath, [string]$Name, [string]$BackupName) {
+  Ensure-Key $TargetPath
+  $wasPresent = Read-Value $BorealisPath ($BackupName + '_WasPresent')
+  if ($wasPresent -eq 1) {
+    $backup = Read-Value $BorealisPath $BackupName
+    New-ItemProperty -Path $TargetPath -Name $Name -Value ([int]$backup) -PropertyType DWord -Force | Out-Null
+  } else {
+    Remove-ItemProperty -Path $TargetPath -Name $Name -ErrorAction SilentlyContinue
+  }
+}
+Ensure-Key $WUPath
+Ensure-Key $AUPath
+Ensure-Key $BorealisPath
+$previousMode = Read-Value $BorealisPath 'Mode'
+if ($Mode -eq 'managed' -or $Mode -eq 'frozen') {
+  Backup-Value $AUPath 'NoAutoUpdate' 'AU_NoAutoUpdate'
+  Backup-Value $AUPath 'AUOptions' 'AU_AUOptions'
+  Backup-Value $WUPath 'SetDisableUXWUAccess' 'WU_SetDisableUXWUAccess'
+  New-ItemProperty -Path $AUPath -Name 'NoAutoUpdate' -Value 1 -PropertyType DWord -Force | Out-Null
+  New-ItemProperty -Path $AUPath -Name 'AUOptions' -Value 2 -PropertyType DWord -Force | Out-Null
+  if ($Mode -eq 'frozen') {
+    New-ItemProperty -Path $WUPath -Name 'SetDisableUXWUAccess' -Value 1 -PropertyType DWord -Force | Out-Null
+  } else {
+    Remove-ItemProperty -Path $WUPath -Name 'SetDisableUXWUAccess' -ErrorAction SilentlyContinue
+  }
+  New-ItemProperty -Path $BorealisPath -Name 'ManagedBy' -Value 'Borealis' -PropertyType String -Force | Out-Null
+  New-ItemProperty -Path $BorealisPath -Name 'Mode' -Value $Mode -PropertyType String -Force | Out-Null
+} elseif ($Mode -eq 'unmanaged') {
+  if ((Read-Value $BorealisPath 'ManagedBy') -eq 'Borealis') {
+    Restore-Value $AUPath 'NoAutoUpdate' 'AU_NoAutoUpdate'
+    Restore-Value $AUPath 'AUOptions' 'AU_AUOptions'
+    Restore-Value $WUPath 'SetDisableUXWUAccess' 'WU_SetDisableUXWUAccess'
+  }
+  New-ItemProperty -Path $BorealisPath -Name 'Mode' -Value 'unmanaged' -PropertyType String -Force | Out-Null
+}
+$result = [ordered]@{
+  ok = $true
+  status = 'applied'
+  request_id = $RequestID
+  mode = $Mode
+  previous_mode = [string]$previousMode
+  no_auto_update = Read-Value $AUPath 'NoAutoUpdate'
+  au_options = Read-Value $AUPath 'AUOptions'
+  disable_ux = Read-Value $WUPath 'SetDisableUXWUAccess'
+  drift_detected = $false
+}
+$result | ConvertTo-Json -Compress
+`, encoded)
+}
+
+func windowsPatchRebootScript(requestID string, delaySeconds int64, force bool) string {
+	payload, _ := json.Marshal(map[string]any{
+		"request_id":    requestID,
+		"delay_seconds": delaySeconds,
+		"force":         force,
+	})
+	encoded := base64.StdEncoding.EncodeToString(payload)
+	return fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
+$payload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('%s')) | ConvertFrom-Json
+$RequestID = [string]$payload.request_id
+$DelaySeconds = [int]$payload.delay_seconds
+$Force = [bool]$payload.force
+$LoggedInUser = $null
+try {
+  $LoggedInUser = (Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).UserName
+} catch {
+  $LoggedInUser = $null
+}
+if ($LoggedInUser -and -not $Force) {
+  [ordered]@{
+    ok = $true
+    status = 'skipped_logged_in_user'
+    request_id = $RequestID
+    logged_in_user = $LoggedInUser
+    scheduled = $false
+  } | ConvertTo-Json -Compress
+  exit 0
+}
+$comment = 'Borealis Patch Management reboot ' + $RequestID
+& shutdown.exe /r /t $DelaySeconds /c $comment /d p:2:17
+[ordered]@{
+  ok = $true
+  status = 'scheduled'
+  request_id = $RequestID
+  delay_seconds = $DelaySeconds
+  force = $Force
+  logged_in_user = [string]$LoggedInUser
+  scheduled = $true
+} | ConvertTo-Json -Compress
+`, encoded)
 }
 
 func parsePatchInstallResult(output string) map[string]any {

@@ -20,6 +20,8 @@ Scheduled Jobs run saved automation now, once, or on a recurring cadence. Use th
 
 Script jobs can target SYSTEM or current user. Ansible jobs target SSH or WinRM. Workflow jobs use the workflow's own runtime model and ignore scheduler-level targets/context. Patch Management opens this page on the `Schedule` tab with the selected KB, trigger type, targets, and return path already filled when operators schedule an ad-hoc Windows update install. Bulk patch installs use this page for shared timing, then create one scheduled job per selected patch.
 
+Patch policies also create scheduled jobs, but operators configure them from the Windows page under `Patch Management > Windows > Patch Management Policies`. Each policy run creates one `Patch Management` job per approved KB/update identity so normal job history and per-device progress stay preserved.
+
 ## Choose Schedule
 
 Common schedule types include immediate, once, every 5/10/15/30 minutes, hourly, daily, weekly, monthly, and yearly.
@@ -92,4 +94,6 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
     - Filter targets preserve allowed site scope from creation/edit time.
     - Remote SSH/WinRM Ansible requires active WireGuard peer IP and selected credential or service account path.
     - Patch install occurrences freeze target membership, queue `patch_install_run` work items, then call the site worker host-service bridge so the Agent SYSTEM socket performs WUA install work.
+    - Patch policy evaluation runs from the scheduler manager before normal scheduled-job ticks. Due policies create immediate `job_kind=patch_install` jobs with `trigger=policy`, `policy_id`, and `policy_run_id` in the patch component.
+    - Policy-created patch jobs still use regular scheduled-job run history, target rows, activity output, and progress metadata. Operators review them through the Scheduled Jobs `Patch Management` filter.
     - `Scheduled_Jobs_List.jsx` defaults to the `Normal` filter. Normal, Immediate, Scheduled, Recurring, and Completed exclude `agent_maintenance` and `patch_install` job kinds. `Maintenance` includes Agent maintenance and future job-kind names with a standalone `maintenance` token. `Patch Management` includes patch job-kind names such as `patch_install`.

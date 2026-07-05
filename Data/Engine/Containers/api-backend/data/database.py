@@ -56,6 +56,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         _ensure_device_filter_sites(conn, logger=logger)
         _ensure_device_software_inventory(conn, logger=logger)
         _ensure_device_patch_inventory(conn, logger=logger)
+        _ensure_patch_policy_tables(conn, logger=logger)
         _ensure_metadata_fields(conn, logger=logger)
         _ensure_scheduled_jobs(conn, logger=logger)
         _ensure_scheduled_job_support_tables(conn, logger=logger)
@@ -954,6 +955,426 @@ def _ensure_device_patch_inventory(conn: sqlite3.Connection, *, logger: Optional
     except Exception as exc:
         if logger:
             logger.error("Failed to ensure device_patch_inventory table: %s", exc, exc_info=True)
+        else:
+            raise
+    finally:
+        cur.close()
+
+
+def _patch_policy_default_start_ts(weekday: int, hour: int) -> int:
+    now = int(time.time())
+    local = time.localtime(now)
+    days_until = (weekday - local.tm_wday) % 7
+    target = time.mktime(
+        (
+            local.tm_year,
+            local.tm_mon,
+            local.tm_mday,
+            hour,
+            0,
+            0,
+            local.tm_wday,
+            local.tm_yday,
+            local.tm_isdst,
+        )
+    )
+    target += days_until * 86400
+    if target <= now:
+        target += 7 * 86400
+    return int(target)
+
+
+def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_catalog_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patch_key TEXT,
+                kb TEXT,
+                update_id TEXT,
+                revision_number INTEGER,
+                title TEXT NOT NULL,
+                classification TEXT,
+                category TEXT,
+                severity TEXT,
+                published_at INTEGER,
+                first_seen_at INTEGER NOT NULL,
+                last_seen_at INTEGER NOT NULL,
+                metadata_json TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_catalog_identity
+                ON patch_catalog_entries(patch_key, kb, update_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_catalog_kb
+                ON patch_catalog_entries(kb)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                policy_type TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                locked INTEGER NOT NULL DEFAULT 0,
+                role_scope TEXT NOT NULL DEFAULT 'Both',
+                approval_mode TEXT NOT NULL DEFAULT 'conservative_msp',
+                deferral_days INTEGER NOT NULL DEFAULT 14,
+                managed_update_mode INTEGER NOT NULL DEFAULT 1,
+                install_schedule_type TEXT NOT NULL DEFAULT 'weekly',
+                install_start_ts INTEGER,
+                reboot_after_install INTEGER NOT NULL DEFAULT 0,
+                reboot_schedule_enabled INTEGER NOT NULL DEFAULT 0,
+                reboot_schedule_type TEXT NOT NULL DEFAULT 'weekly',
+                reboot_start_ts INTEGER,
+                force_reboot_logged_in INTEGER NOT NULL DEFAULT 0,
+                created_by TEXT,
+                updated_by TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute("PRAGMA table_info(patch_policies)")
+        policy_columns = {row[1] for row in cur.fetchall()}
+        for column_name, sql in (
+            ("name", "ALTER TABLE patch_policies ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
+            ("description", "ALTER TABLE patch_policies ADD COLUMN description TEXT"),
+            ("policy_type", "ALTER TABLE patch_policies ADD COLUMN policy_type TEXT NOT NULL DEFAULT 'site'"),
+            ("enabled", "ALTER TABLE patch_policies ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"),
+            ("locked", "ALTER TABLE patch_policies ADD COLUMN locked INTEGER NOT NULL DEFAULT 0"),
+            ("role_scope", "ALTER TABLE patch_policies ADD COLUMN role_scope TEXT NOT NULL DEFAULT 'Both'"),
+            ("approval_mode", "ALTER TABLE patch_policies ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'conservative_msp'"),
+            ("deferral_days", "ALTER TABLE patch_policies ADD COLUMN deferral_days INTEGER NOT NULL DEFAULT 14"),
+            ("managed_update_mode", "ALTER TABLE patch_policies ADD COLUMN managed_update_mode INTEGER NOT NULL DEFAULT 1"),
+            ("install_schedule_type", "ALTER TABLE patch_policies ADD COLUMN install_schedule_type TEXT NOT NULL DEFAULT 'weekly'"),
+            ("install_start_ts", "ALTER TABLE patch_policies ADD COLUMN install_start_ts INTEGER"),
+            ("reboot_after_install", "ALTER TABLE patch_policies ADD COLUMN reboot_after_install INTEGER NOT NULL DEFAULT 0"),
+            ("reboot_schedule_enabled", "ALTER TABLE patch_policies ADD COLUMN reboot_schedule_enabled INTEGER NOT NULL DEFAULT 0"),
+            ("reboot_schedule_type", "ALTER TABLE patch_policies ADD COLUMN reboot_schedule_type TEXT NOT NULL DEFAULT 'weekly'"),
+            ("reboot_start_ts", "ALTER TABLE patch_policies ADD COLUMN reboot_start_ts INTEGER"),
+            ("force_reboot_logged_in", "ALTER TABLE patch_policies ADD COLUMN force_reboot_logged_in INTEGER NOT NULL DEFAULT 0"),
+            ("created_by", "ALTER TABLE patch_policies ADD COLUMN created_by TEXT"),
+            ("updated_by", "ALTER TABLE patch_policies ADD COLUMN updated_by TEXT"),
+            ("created_at", "ALTER TABLE patch_policies ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0"),
+            ("updated_at", "ALTER TABLE patch_policies ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column_name not in policy_columns:
+                cur.execute(sql)
+        cur.execute(
+            """
+            UPDATE patch_policies
+               SET policy_type = 'global',
+                   locked = 1,
+                   role_scope = 'Both'
+             WHERE lower(trim(name)) = 'global patch policy'
+               AND policy_type <> 'global'
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policies_type_enabled
+                ON patch_policies(policy_type, enabled)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_sites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                site_id INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_sites_site
+                ON patch_policy_sites(site_id, policy_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                target_type TEXT NOT NULL,
+                device_guid TEXT,
+                hostname TEXT,
+                filter_id INTEGER,
+                target_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY(filter_id) REFERENCES device_filters(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_targets_policy
+                ON patch_policy_targets(policy_id, target_type)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_exclusions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                exclusion_type TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                device_guid TEXT,
+                hostname TEXT,
+                site_id INTEGER,
+                filter_id INTEGER,
+                reason TEXT,
+                created_by TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE,
+                FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE SET NULL,
+                FOREIGN KEY(filter_id) REFERENCES device_filters(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cur.execute("PRAGMA table_info(patch_policy_exclusions)")
+        exclusion_columns = {row[1] for row in cur.fetchall()}
+        if "site_id" not in exclusion_columns:
+            cur.execute("ALTER TABLE patch_policy_exclusions ADD COLUMN site_id INTEGER")
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_policy
+                ON patch_policy_exclusions(policy_id, exclusion_type)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_exclusions_site_host
+                ON patch_policy_exclusions(site_id, hostname)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                rule_type TEXT NOT NULL,
+                match_type TEXT NOT NULL,
+                match_value TEXT NOT NULL,
+                override_parent_block INTEGER NOT NULL DEFAULT 0,
+                notes TEXT,
+                created_by TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_rules_policy
+                ON patch_policy_rules(policy_id, rule_type, match_type)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER NOT NULL,
+                scheduled_ts INTEGER NOT NULL,
+                started_at INTEGER NOT NULL,
+                finished_at INTEGER,
+                status TEXT NOT NULL,
+                summary_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_patch_policy_runs_policy_scheduled
+                ON patch_policy_runs(policy_id, scheduled_ts)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_device_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_guid TEXT,
+                hostname TEXT NOT NULL,
+                effective_policy_id INTEGER,
+                exclusion_mode TEXT,
+                enforcement_mode TEXT,
+                enforcement_status TEXT,
+                drift_detected INTEGER NOT NULL DEFAULT 0,
+                last_evaluated_at INTEGER NOT NULL,
+                last_enforced_at INTEGER,
+                metadata_json TEXT,
+                FOREIGN KEY(effective_policy_id) REFERENCES patch_policies(id) ON DELETE SET NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_patch_policy_device_state_host
+                ON patch_policy_device_state(hostname)
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patch_policy_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                policy_id INTEGER,
+                action TEXT NOT NULL,
+                actor TEXT,
+                detail_json TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY(policy_id) REFERENCES patch_policies(id) ON DELETE SET NULL
+            )
+            """
+        )
+        now = int(time.time())
+        workstation_install_start_ts = _patch_policy_default_start_ts(1, 2)
+        server_install_start_ts = _patch_policy_default_start_ts(2, 2)
+        reboot_start_ts = _patch_policy_default_start_ts(5, 1)
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM patch_policies
+             WHERE policy_type = 'global'
+               AND role_scope IN ('Server', 'Workstation')
+            """
+        )
+        split_globals = int(cur.fetchone()[0] or 0)
+        if split_globals == 0:
+            cur.execute("DELETE FROM patch_policy_device_state")
+            cur.execute("DELETE FROM patch_policy_audit")
+            cur.execute("DELETE FROM patch_policy_sites")
+            cur.execute("DELETE FROM patch_policy_targets")
+            cur.execute("DELETE FROM patch_policy_exclusions")
+            cur.execute("DELETE FROM patch_policy_rules")
+            cur.execute("DELETE FROM patch_policy_runs")
+            cur.execute("DELETE FROM patch_policies")
+        else:
+            cur.execute(
+                """
+                DELETE FROM patch_policies
+                 WHERE policy_type = 'global'
+                   AND role_scope NOT IN ('Server', 'Workstation')
+                """
+            )
+        for name, description, role_scope, install_start_ts in (
+            (
+                "Global Workstation Policy",
+                "Default Borealis workstation patch policy baseline. Locked from deletion and preserved across redeploys.",
+                "Workstation",
+                workstation_install_start_ts,
+            ),
+            (
+                "Global Server Policy",
+                "Default Borealis server patch policy baseline. Locked from deletion and preserved across redeploys.",
+                "Server",
+                server_install_start_ts,
+            ),
+        ):
+            cur.execute(
+                """
+                SELECT id
+                  FROM patch_policies
+                 WHERE policy_type = 'global'
+                   AND role_scope = ?
+                 LIMIT 1
+                """,
+                (role_scope,),
+            )
+            if cur.fetchone() is None:
+                cur.execute(
+                    """
+                    INSERT INTO patch_policies(
+                        name, description, policy_type, enabled, locked, role_scope,
+                        approval_mode, deferral_days, managed_update_mode,
+                        install_schedule_type, install_start_ts, reboot_after_install,
+                        reboot_schedule_enabled, reboot_schedule_type, reboot_start_ts,
+                        force_reboot_logged_in, created_by, updated_by, created_at, updated_at
+                    ) VALUES (?, ?, 'global', 1, 1, ?, 'conservative_msp', 14, 1,
+                              'weekly', ?, 0, 0, 'weekly', ?, 0, 'engine-init', 'engine-init', ?, ?)
+                    """,
+                    (name, description, role_scope, install_start_ts, reboot_start_ts, now, now),
+                )
+        cur.execute(
+            """
+            UPDATE patch_policies
+               SET locked = 1
+             WHERE policy_type = 'global'
+               AND role_scope IN ('Server', 'Workstation')
+            """
+        )
+        cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global'")
+        for (policy_id,) in cur.fetchall():
+            cur.execute("SELECT id FROM patch_policy_rules WHERE policy_id = ? LIMIT 1", (policy_id,))
+            if cur.fetchone() is not None:
+                continue
+            for rule_type, match_type, match_value in (
+                ("approve", "severity", "Critical"),
+                ("approve", "severity", "Important"),
+                ("approve", "classification", "Security Updates"),
+                ("approve", "classification", "Critical Updates"),
+                ("approve", "title_contains", "Security Intelligence Update"),
+                ("block", "classification", "Drivers"),
+                ("block", "classification", "Feature Packs"),
+                ("block", "title_contains", "Preview"),
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO patch_policy_rules(
+                        policy_id, rule_type, match_type, match_value,
+                        override_parent_block, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 'engine-init', ?)
+                    """,
+                    (policy_id, rule_type, match_type, match_value, now),
+                )
+        cur.execute("SELECT id FROM patch_policies WHERE policy_type = 'global'")
+        for (policy_id,) in cur.fetchall():
+            for rule_type, match_type, match_value in (
+                ("approve", "title_contains", "Security Intelligence Update"),
+                ("block", "title_contains", "Preview"),
+            ):
+                cur.execute(
+                    """
+                    SELECT id
+                      FROM patch_policy_rules
+                     WHERE policy_id = ?
+                       AND rule_type = ?
+                       AND match_type = ?
+                       AND LOWER(TRIM(match_value)) = LOWER(TRIM(?))
+                     LIMIT 1
+                    """,
+                    (policy_id, rule_type, match_type, match_value),
+                )
+                if cur.fetchone() is not None:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO patch_policy_rules(
+                        policy_id, rule_type, match_type, match_value,
+                        override_parent_block, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, 0, 'engine-init', ?)
+                    """,
+                    (policy_id, rule_type, match_type, match_value, now),
+                )
+    except Exception as exc:
+        if logger:
+            logger.error("Failed to ensure patch policy tables: %s", exc, exc_info=True)
         else:
             raise
     finally:

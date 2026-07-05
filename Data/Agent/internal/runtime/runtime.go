@@ -346,6 +346,8 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	if a.patches != nil {
 		socket.On("patch_inventory_refresh_request", a.patches.HandleRefreshRequest)
 		socket.On("patch_install_request", a.patches.HandleInstallRequest)
+		socket.On("patch_policy_enforcement_request", a.patches.HandlePolicyEnforcementRequest)
+		socket.On("patch_reboot_request", a.patches.HandleRebootRequest)
 	}
 	if a.software != nil {
 		socket.On("software_inventory_refresh_request", a.software.HandleRefreshRequest)

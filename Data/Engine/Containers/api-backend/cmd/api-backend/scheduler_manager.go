@@ -314,6 +314,11 @@ func (m *goSchedulerManager) tickOnce(ctx context.Context) error {
 	if err := m.purgeOldScheduledRuns(ctx, now); err != nil {
 		log.Printf("scheduled run history purge failed: %v", err)
 	}
+	nowMinute := schedulerFloorMinute(now)
+	profile := operatorProfile{Username: "job-scheduler", Role: "Admin"}
+	if err := m.processPatchPolicyTick(ctx, profile, now, nowMinute); err != nil {
+		log.Printf("patch policy tick failed: %v", err)
+	}
 	jobs, err := m.enabledScheduledJobs(ctx)
 	if err != nil {
 		return err
@@ -326,8 +331,6 @@ func (m *goSchedulerManager) tickOnce(ctx context.Context) error {
 	for _, host := range schedulerHostnameVariants(onlineHosts) {
 		online[strings.ToLower(strings.TrimSpace(host))] = true
 	}
-	nowMinute := schedulerFloorMinute(now)
-	profile := operatorProfile{Username: "job-scheduler", Role: "Admin"}
 	for _, job := range jobs {
 		if err := m.processScheduledJobTick(ctx, profile, job, now, nowMinute, online); err != nil {
 			log.Printf("scheduled job tick failed job_id=%d: %v", nullInt(job.ID), err)
