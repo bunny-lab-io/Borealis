@@ -175,6 +175,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
       { field: "role_scope", headerName: "Scope", width: 135, flex: 0 },
       { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220, flex: 0 },
       { field: "target_count", headerName: "Targeted Devices", width: 175, flex: 0 },
+      { field: "pending_updates", headerName: "Pending Updates", width: 295, minWidth: 260, flex: 0 },
       { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0 },
       { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
       { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0 },
@@ -258,7 +259,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
             notifyNotImplemented();
           }}
         >
-          New Device / Filter Policy
+          New Device Filter Policy
         </MenuItem>
       </Menu>
       <PageBodyFrame

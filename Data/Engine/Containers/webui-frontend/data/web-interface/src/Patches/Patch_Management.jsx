@@ -283,13 +283,13 @@ export function formatScheduleType(value) {
 
 export function policyTypeLabel(policyType) {
   if (policyType === "global") return "Global Policy";
-  return policyType === "device_filter" ? "Device / Filter Policy" : "Site Policy";
+  return policyType === "device_filter" ? "Device Filter Policy" : "Site Policy";
 }
 
 function policyTableTypeLabel(policyType) {
   const normalized = text(policyType).toLowerCase();
   if (normalized === "global") return "Global";
-  if (normalized === "device_filter") return "Device / Filter Policies";
+  if (normalized === "device_filter") return "Device Filter Policy";
   return "Site-Level Override";
 }
 
@@ -438,6 +438,176 @@ function buildPatchFleetRows(rows = []) {
       sensitivity: "base",
     });
   });
+}
+
+function pendingUpdateBreakdown(policy = {}) {
+  const raw = Array.isArray(policy?.pending_update_breakdown) ? policy.pending_update_breakdown : [];
+  return raw
+    .map((item) => ({
+      policy_type: normalizePolicyTypeValue({ policy_type: item?.policy_type }),
+      label: text(item?.label) || policyTableTypeLabel(item?.policy_type),
+      count: Number(item?.count || 0) || 0,
+    }))
+    .filter((item) => item.count > 0)
+    .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
+}
+
+function policyLayerSortIndex(policyType) {
+  const normalized = text(policyType).toLowerCase();
+  if (normalized === "global") return 0;
+  if (normalized === "site") return 1;
+  if (normalized === "device_filter") return 2;
+  return 10;
+}
+
+function pendingUpdateBreakdownText(policy = {}) {
+  const breakdown = pendingUpdateBreakdown(policy);
+  if (!breakdown.length) return "0 Updates";
+  return breakdown.map((item) => `${item.count.toLocaleString()} ${item.label}`).join(" / ");
+}
+
+function PendingUpdatesCell({ policy = {}, onSelect }) {
+  const breakdown = pendingUpdateBreakdown(policy);
+  if (!breakdown.length) {
+    return (
+      <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 13 }}>
+        0 Updates
+      </Typography>
+    );
+  }
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+      {breakdown.map((item, index) => (
+        <React.Fragment key={`${item.policy_type}-${index}`}>
+          {index > 0 ? (
+            <Typography component="span" sx={{ color: "rgba(148,163,184,0.62)", mx: 0.55, fontSize: 12 }}>
+              /
+            </Typography>
+          ) : null}
+          <Tooltip title={`Show ${item.count.toLocaleString()} pending ${item.label} update${item.count === 1 ? "" : "s"} in Patch List`}>
+            <Typography
+              component="button"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelect?.(policy, item.policy_type, item.label);
+              }}
+              sx={{
+                p: 0,
+                border: "none",
+                background: "transparent",
+                color: BOREALIS_BLUE,
+                cursor: "pointer",
+                font: "inherit",
+                fontSize: 13,
+                fontWeight: 800,
+                whiteSpace: "nowrap",
+                textDecoration: "none",
+                "&:hover": {
+                  color: "#93c5fd",
+                  textDecoration: "none",
+                },
+              }}
+            >
+              {`${item.count.toLocaleString()} ${item.label}`}
+            </Typography>
+          </Tooltip>
+        </React.Fragment>
+      ))}
+    </Box>
+  );
+}
+
+function patchPolicyHierarchyIDs(row = {}) {
+  const source = row && typeof row === "object" ? row : {};
+  const ids = Array.isArray(source.patch_policy_hierarchy_policy_ids) ? source.patch_policy_hierarchy_policy_ids : [];
+  return ids.map((id) => Number(id || 0)).filter((id) => Number.isFinite(id) && id > 0);
+}
+
+function patchRowMatchesPolicyPendingFilter(row = {}, filter = {}) {
+  if (!filter?.active) return true;
+  if (text(row.state).toLowerCase() !== "pending") return false;
+  if (!row.patch_policy_install_candidate) return false;
+  if (filter.layer && normalizePolicyTypeValue({ policy_type: row.patch_policy_effective_policy_type }) !== filter.layer) return false;
+  if (filter.scopeID > 0 && !patchPolicyHierarchyIDs(row).includes(filter.scopeID)) return false;
+  return true;
+}
+
+function patchPolicySourceGroups(row = {}) {
+  const children = Array.isArray(row?.childRows) ? row.childRows : [row];
+  const groups = new Map();
+  children.forEach((child) => {
+    if (!child?.patch_policy_install_candidate) return;
+    const policyType = normalizePolicyTypeValue({ policy_type: child.patch_policy_effective_policy_type });
+    const policyID = Number(child.patch_policy_effective_policy_id || 0) || 0;
+    const policyName = text(child.patch_policy_effective_policy_name) || policyTableTypeLabel(policyType);
+    const key = `${policyType}:${policyID || policyName}`;
+    const current = groups.get(key) || {
+      policy_type: policyType,
+      label: policyTableTypeLabel(policyType),
+      policy_name: policyName,
+      count: 0,
+    };
+    current.count += 1;
+    groups.set(key, current);
+  });
+  return Array.from(groups.values()).sort((left, right) => {
+    const layerDelta = policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type);
+    if (layerDelta !== 0) return layerDelta;
+    return text(left.policy_name).localeCompare(text(right.policy_name));
+  });
+}
+
+function patchPolicySourceText(row = {}) {
+  const groups = patchPolicySourceGroups(row);
+  if (!groups.length) return text(row.state).toLowerCase() === "pending" ? "No policy install candidate" : "";
+  return groups.map((group) => `${group.label}: ${group.policy_name} (${group.count})`).join(", ");
+}
+
+function PatchPolicySourceCell({ row = {} }) {
+  const groups = patchPolicySourceGroups(row);
+  if (!groups.length) {
+    return (
+      <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12.5 }}>
+        {text(row.state).toLowerCase() === "pending" ? "No policy install" : ""}
+      </Typography>
+    );
+  }
+  const tooltip = groups.map((group) => `${group.label}: ${group.policy_name} (${group.count.toLocaleString()} update${group.count === 1 ? "" : "s"})`).join(", ");
+  return (
+    <Tooltip title={tooltip}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.55, overflow: "hidden", minWidth: 0 }}>
+        {groups.slice(0, 3).map((group) => (
+          <Box
+            key={`${group.policy_type}-${group.policy_name}`}
+            component="span"
+            sx={{
+              maxWidth: 145,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              borderRadius: 999,
+              px: 0.85,
+              py: 0.18,
+              color: BOREALIS_BLUE,
+              background: "rgba(88,166,255,0.12)",
+              border: "1px solid rgba(88,166,255,0.28)",
+              fontSize: 11.5,
+              fontWeight: 800,
+              lineHeight: 1.45,
+            }}
+          >
+            {`${group.label} ${group.count.toLocaleString()}`}
+          </Box>
+        ))}
+        {groups.length > 3 ? (
+          <Typography component="span" sx={{ color: MAGIC_UI.textMuted, fontSize: 12, fontWeight: 700 }}>
+            +{groups.length - 3}
+          </Typography>
+        ) : null}
+      </Box>
+    </Tooltip>
+  );
 }
 
 function normalizePolicyTypeValue(policy = {}) {
@@ -1213,7 +1383,7 @@ function PatchPolicyDialog({ open, policyType, metadata, policy, onClose, onSave
   );
 }
 
-function PatchPolicyTab() {
+function PatchPolicyTab({ onPendingUpdatesClick }) {
   const navigate = useNavigate();
   const [policies, setPolicies] = useState([]);
   const [loadError, setLoadError] = useState("");
@@ -1590,6 +1760,20 @@ function PatchPolicyTab() {
         flex: 0,
         valueFormatter: (params) => formatDeviceCount(params.value),
       },
+      {
+        colId: "pending_updates",
+        headerName: "Pending Updates",
+        width: 295,
+        minWidth: 260,
+        flex: 0,
+        valueGetter: (params) => pendingUpdateBreakdownText(params.data || {}),
+        cellRenderer: (params) => (
+          <PendingUpdatesCell
+            policy={params.data || {}}
+            onSelect={(policy, policyType, label) => onPendingUpdatesClick?.({ policy, policyType, label })}
+          />
+        ),
+      },
       { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0, valueFormatter: (params) => `${Number(params.value || 0)} days` },
       { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
       { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0, valueFormatter: (params) => formatTimestamp(params.value) },
@@ -1604,7 +1788,7 @@ function PatchPolicyTab() {
         cellRenderer: actionCellRenderer,
       },
     ],
-    [actionCellRenderer, policyNameCellRenderer, targetSitesCellRenderer]
+    [actionCellRenderer, onPendingUpdatesClick, policyNameCellRenderer, targetSitesCellRenderer]
   );
 
   const ActionMenuPolicyIcon = policyIconForType(normalizePolicyTypeValue(actionMenuPolicy));
@@ -1822,6 +2006,18 @@ export default function PatchManagement() {
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
   );
+  const policyPendingFilter = useMemo(() => {
+    const scopeID = Number(searchParams.get("policy_scope") || 0) || 0;
+    const layerRaw = text(searchParams.get("policy_layer")).toLowerCase();
+    const layer = ["global", "site", "device_filter"].includes(layerRaw) ? layerRaw : "";
+    return {
+      active: scopeID > 0 || Boolean(layer),
+      scopeID,
+      layer,
+      scopeName: text(searchParams.get("policy_scope_name")),
+      layerLabel: text(searchParams.get("policy_layer_label")) || (layer ? policyTableTypeLabel(layer) : ""),
+    };
+  }, [searchParams]);
   const activeTab = useMemo(() => {
     const requested = text(searchParams.get("tab")) || "patch_list";
     return PATCH_PAGE_TABS.some((tab) => tab.key === requested) ? requested : "patch_list";
@@ -1835,6 +2031,30 @@ export default function PatchManagement() {
         nextParams.set("tab", nextTab);
       }
       setSearchParams(nextParams, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
+  const clearPolicyPendingFilter = useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("policy_scope");
+    nextParams.delete("policy_layer");
+    nextParams.delete("policy_scope_name");
+    nextParams.delete("policy_layer_label");
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+  const applyPolicyPendingFilter = useCallback(
+    ({ policy = {}, policyType = "", label = "" } = {}) => {
+      const policyID = Number(policy?.id || 0) || 0;
+      if (!policyID || !policyType) return;
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set("tab", "patch_list");
+      nextParams.set("policy_scope", String(policyID));
+      nextParams.set("policy_layer", policyType);
+      nextParams.set("policy_scope_name", text(policy?.name) || "Patch Policy");
+      nextParams.set("policy_layer_label", text(label) || policyTableTypeLabel(policyType));
+      setStateFilter("pending");
+      setSeverityFilter("");
+      setSearchParams(nextParams, { replace: false });
     },
     [searchParams, setSearchParams]
   );
@@ -1907,20 +2127,25 @@ export default function PatchManagement() {
     [patchRows, selectedSiteId]
   );
 
+  const policyScopedRows = useMemo(
+    () => siteScopedRows.filter((row) => patchRowMatchesPolicyPendingFilter(row, policyPendingFilter)),
+    [policyPendingFilter, siteScopedRows]
+  );
+
   const severityCountRows = useMemo(
     () =>
       stateFilter
-        ? siteScopedRows.filter((row) => text(row.state).toLowerCase() === stateFilter)
-        : siteScopedRows,
-    [siteScopedRows, stateFilter]
+        ? policyScopedRows.filter((row) => text(row.state).toLowerCase() === stateFilter)
+        : policyScopedRows,
+    [policyScopedRows, stateFilter]
   );
 
   const stateCountRows = useMemo(
     () =>
       severityFilter
-        ? siteScopedRows.filter((row) => normalizeSeverity(row.severity) === severityFilter)
-        : siteScopedRows,
-    [severityFilter, siteScopedRows]
+        ? policyScopedRows.filter((row) => normalizeSeverity(row.severity) === severityFilter)
+        : policyScopedRows,
+    [policyScopedRows, severityFilter]
   );
 
   const stateCounts = useMemo(
@@ -1951,12 +2176,12 @@ export default function PatchManagement() {
 
   const visibleRows = useMemo(
     () =>
-      siteScopedRows.filter((row) => {
+      policyScopedRows.filter((row) => {
         if (stateFilter && text(row.state).toLowerCase() !== stateFilter) return false;
         if (severityFilter && normalizeSeverity(row.severity) !== severityFilter) return false;
         return true;
       }),
-    [severityFilter, siteScopedRows, stateFilter]
+    [policyScopedRows, severityFilter, stateFilter]
   );
 
   const displayRows = useMemo(() => buildPatchFleetRows(visibleRows), [visibleRows]);
@@ -2188,6 +2413,14 @@ export default function PatchManagement() {
         valueFormatter: (params) => formatState(params.value),
       },
       {
+        colId: "policy_source",
+        headerName: "Policy Source",
+        width: 260,
+        minWidth: 230,
+        valueGetter: (params) => patchPolicySourceText(params.data || {}),
+        cellRenderer: (params) => <PatchPolicySourceCell row={params.data || {}} />,
+      },
+      {
         field: "install",
         headerName: "Install",
         width: 240,
@@ -2336,7 +2569,7 @@ export default function PatchManagement() {
       >
         <MenuItem onClick={() => handleNewPolicyOption("site")}>New Site Policy</MenuItem>
         <MenuItem onClick={() => handleNewPolicyOption("device_filter")}>
-          New Device / Filter Policy
+          New Device Filter Policy
         </MenuItem>
       </Menu>
       <PageBodyFrame
@@ -2360,7 +2593,12 @@ export default function PatchManagement() {
                   options={STATE_FILTER_OPTIONS}
                   activeKey={stateFilter}
                   counts={stateCounts}
-                  onChange={setStateFilter}
+                  onChange={(value) => {
+                    setStateFilter(value);
+                    if (policyPendingFilter.active && value !== "pending") {
+                      clearPolicyPendingFilter();
+                    }
+                  }}
                 />
               </FilterSliderBlock>
               <FilterSliderBlock label="Severity">
@@ -2371,6 +2609,42 @@ export default function PatchManagement() {
                   onChange={setSeverityFilter}
                 />
               </FilterSliderBlock>
+              {policyPendingFilter.active ? (
+                <Box
+                  sx={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    alignSelf: "flex-end",
+                    gap: 0.8,
+                    borderRadius: 999,
+                    border: "1px solid rgba(88,166,255,0.35)",
+                    background: "rgba(8,12,24,0.78)",
+                    px: 1.35,
+                    py: 0.55,
+                  }}
+                >
+                  <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 700 }}>
+                    {`Policy: ${policyPendingFilter.scopeName || "Patch Policy"} - ${policyPendingFilter.layerLabel || "Pending Updates"}`}
+                  </Typography>
+                  <Button
+                    size="small"
+                    onClick={clearPolicyPendingFilter}
+                    sx={{
+                      minWidth: 0,
+                      px: 1,
+                      py: 0.15,
+                      borderRadius: 999,
+                      color: MAGIC_UI.textBright,
+                      textTransform: "none",
+                      fontSize: "0.76rem",
+                      border: "1px solid rgba(148,163,184,0.28)",
+                      "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
+                    }}
+                  >
+                    Clear
+                  </Button>
+                </Box>
+              ) : null}
               {siteName ? (
                 <Box
                   sx={{
@@ -2449,7 +2723,7 @@ export default function PatchManagement() {
           </GridShell>
         </>
       ) : (
-        <PatchPolicyTab />
+        <PatchPolicyTab onPendingUpdatesClick={applyPolicyPendingFilter} />
       )}
       </PageBodyFrame>
     </>

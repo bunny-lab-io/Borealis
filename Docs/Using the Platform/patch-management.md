@@ -5,7 +5,7 @@ Patch Management groups OS-specific patch surfaces under one sidebar section. Wi
 The Windows Patch Management page has two tabs:
 
 - `Patch List` shows available and installed Windows updates.
-- `Patch Management Policies` shows global baselines, site-level overrides, and device/filter policies in one hierarchy table.
+- `Patch Management Policies` shows global baselines, site-level overrides, and device filter policies in one hierarchy table.
 
 ## Open Fleet Patch Audit
 
@@ -25,7 +25,7 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 
 1. Open `Patch Management > Windows`.
 2. Select `Patch Management Policies`.
-3. Use `New Policy` and choose `New Site Policy` or `New Device / Filter Policy`.
+3. Use `New Policy` and choose `New Site Policy` or `New Device Filter Policy`.
 4. Create a policy and choose its policy type: `Server` or `Workstation`.
 5. Choose the install schedule. Times use the Engine host timezone.
 6. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
@@ -37,15 +37,17 @@ Two Global Patch Policies are created automatically during Engine database initi
 
 Use `Run Updates Now` from the policy row action menu only when you want Borealis to create patch install jobs immediately for that policy hierarchy. The confirmation dialog warns that matching devices will download and install approved updates now, and that configured reboot behavior can run after installation finishes.
 
-The policy table nests site-level overrides under the matching `Server` or `Workstation` global policy. Device / Filter policies appear under matching site-level overrides when their eligible devices belong to those targeted sites. If a Device / Filter policy targets devices in multiple sites, Borealis can show linked references to the same policy in multiple hierarchy positions. If no matching site-level override exists for a targeted site, the Device / Filter policy appears directly under the matching global policy. The `Targeted Sites` column shows searchable site bubbles so operators can inspect policy reach without opening the editor.
+The policy table nests site-level overrides under the matching `Server` or `Workstation` global policy. Device Filter policies appear under matching site-level overrides when their eligible devices belong to those targeted sites. If a Device Filter policy targets devices in multiple sites, Borealis can show linked references to the same policy in multiple hierarchy positions. If no matching site-level override exists for a targeted site, the Device Filter policy appears directly under the matching global policy. The `Targeted Sites` column shows searchable site bubbles so operators can inspect policy reach without opening the editor.
 
 Windows patch policies are single-domain. Site policies target one or more sites plus exactly one policy type: `Server` or `Workstation`. One site and policy type combination can only be covered by one enabled site policy.
 
-Device / Filter policies also choose exactly one policy type. Borealis resolves direct devices and filters first, then strips devices that do not match the policy type. Devices with no declared `device_type` are ignored by Windows patch automation until typed. A `device_type` containing `server` is treated as `Server`; any other non-empty value is treated as `Workstation`.
+Device Filter policies also choose exactly one policy type. Borealis resolves direct devices and filters first, then strips devices that do not match the policy type. Devices with no declared `device_type` are ignored by Windows patch automation until typed. A `device_type` containing `server` is treated as `Server`; any other non-empty value is treated as `Workstation`.
 
-The policy list `Covered` column shows eligible typed Windows devices. Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
+The policy list `Targeted Devices` column shows eligible typed Windows devices. Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
 
-Device / Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
+Device Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
+
+The `Pending Updates` policy column shows approved, deferral-ready pending update instances that would create policy-driven install jobs. Counts are split by the effective policy layer, such as `2 Global / 15 Site-Level Override / 10 Device Filter`. Select a blue count to open `Patch List` filtered to the matching policy hierarchy and layer. The Patch List `Policy Source` column shows which policy layer and policy name would install each grouped update.
 
 ## Exclusions and Reboots
 
@@ -133,8 +135,8 @@ Pending rows come from Windows Update Agent search results that are not installe
     - KB cells link to `https://www.catalog.update.microsoft.com/Search.aspx?q=<KB>` in a new tab when the row has a normalized KB value.
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
     - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and `ensureSplitGlobalPatchPolicies()`. When no split global policy exists, Borealis clears legacy patch policy definitions/history/state, preserves `patch_catalog_entries` and `device_patch_inventory`, then seeds `Global Workstation Policy` and `Global Server Policy`. Redeploy does not overwrite existing split global policies.
-    - Policy hierarchy is Global -> Site -> Device/Filter within the same policy type. Device/filter policy is deepest. Same site+role overlaps block site policy save. Direct device/filter target overlap blocks device/filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
-    - Windows fleet UI renders one converged `Patch Management Policies` table. The API includes `target_sites`, `target_site_ids`, and `target_site_names`; device/filter target sites come from eligible resolved devices, so linked policy references disappear from a site branch when that policy no longer targets eligible devices in that site.
+    - Policy hierarchy is Global -> Site -> Device Filter within the same policy type. Device Filter policy is deepest. Same site+role overlaps block site policy save. Direct device filter target overlap blocks device filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
+    - Windows fleet UI renders one converged `Patch Management Policies` table. The API includes `target_sites`, `target_site_ids`, and `target_site_names`; device filter target sites come from eligible resolved devices, so linked policy references disappear from a site branch when that policy no longer targets eligible devices in that site.
     - Windows patch policy role scopes are `Server` and `Workstation`. `Both` is retained only as a legacy overlap helper and is rejected by policy save validation. Empty `device_type` devices do not match either role. `device_type` strings containing `server` match `Server`; any other non-empty value matches `Workstation`.
     - Effective policy resolution groups policies by device identity, selects the deepest same-role match, and assigns each device to only that effective policy. Parent policy runs therefore do not create duplicate KB jobs for devices covered by child policies.
     - Policy rules support `approve` and `block` against `severity`, `classification`, `category`, `kb`, `update_id`, and `patch_key`. Parent approve rules do not flow into children. Parent block rules inherit downward; child approval of a parent block requires confirmation and stores `override_parent_block`.

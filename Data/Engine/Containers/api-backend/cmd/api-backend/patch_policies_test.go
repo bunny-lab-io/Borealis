@@ -133,6 +133,35 @@ func TestPatchPolicyRoleMatchingSkipsUntypedDevices(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
+	counts := map[string]int{
+		patchPolicyTypeDeviceFilter: 10,
+		patchPolicyTypeGlobal:       2,
+		patchPolicyTypeSite:         15,
+	}
+	if got := patchPolicyPendingTotal(counts); got != 27 {
+		t.Fatalf("pending total=%d want 27", got)
+	}
+	payload := patchPolicyPendingBreakdownPayload(counts)
+	if len(payload) != 3 {
+		t.Fatalf("expected three payload entries, got %#v", payload)
+	}
+	expected := []struct {
+		policyType string
+		label      string
+		count      int
+	}{
+		{patchPolicyTypeGlobal, "Global", 2},
+		{patchPolicyTypeSite, "Site-Level Override", 15},
+		{patchPolicyTypeDeviceFilter, "Device Filter", 10},
+	}
+	for idx, want := range expected {
+		if payload[idx]["policy_type"] != want.policyType || payload[idx]["label"] != want.label || payload[idx]["count"] != want.count {
+			t.Fatalf("payload[%d]=%#v want type=%q label=%q count=%d", idx, payload[idx], want.policyType, want.label, want.count)
+		}
+	}
+}
+
 func TestPatchPolicyHostnameExclusionKeysAreSiteAware(t *testing.T) {
 	siteSevenKeys := patchPolicyCoverageKeys(nil, []patchPolicyExclusionRef{{
 		ExclusionType: patchPolicyExclusionFrozen,

@@ -802,7 +802,7 @@ export default function PatchPolicyEditor() {
                   ? "Global Scope"
                   : policyType === "site"
                     ? "Site Scope"
-                    : "Device / Filter Targets"
+                    : "Device Filter Targets"
               }
             />
             {draftPolicyType === "global" ? (
@@ -825,7 +825,7 @@ export default function PatchPolicyEditor() {
                     "& .MuiAlert-icon": { color: MAGIC_UI.accentA },
                   }}
                 >
-                  Global Patch Policy applies to every typed Windows device in this policy type unless a deeper site or device/filter policy overrides it.
+                  Global Patch Policy applies to every typed Windows device in this policy type unless a deeper site or device filter policy overrides it.
                 </Alert>
               </Stack>
             ) : policyType === "site" ? (

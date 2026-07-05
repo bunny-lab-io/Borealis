@@ -274,8 +274,8 @@ export function buildAppRoutes() {
                 {
                   path: "policies/device-filter/new",
                   handle: {
-                    title: "New Device / Filter Patch Policy",
-                    breadcrumb: "New Device / Filter Policy",
+                    title: "New Device Filter Patch Policy",
+                    breadcrumb: "New Device Filter Policy",
                     navKey: "patch-management-windows",
                     pageKey: "patch-policy-device-filter-new",
                   },
@@ -284,8 +284,8 @@ export function buildAppRoutes() {
                 {
                   path: "policies/device-filter/:policyId",
                   handle: {
-                    title: "Device / Filter Patch Policy",
-                    breadcrumb: "Device / Filter Policy",
+                    title: "Device Filter Patch Policy",
+                    breadcrumb: "Device Filter Policy",
                     navKey: "patch-management-windows",
                     pageKey: "patch-policy-device-filter",
                   },

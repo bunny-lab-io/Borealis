@@ -389,17 +389,43 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 	if closeErr != nil {
 		return nil, closeErr
 	}
+	indexRows := rows
+	if policyType != "" {
+		conn, err = s.db.Conn(ctx)
+		if err != nil {
+			return nil, errors.Join(errOperatorStoreDown, err)
+		}
+		allRows, loadErr := loadPatchPolicyRows(ctx, conn, "", nil)
+		closeErr = conn.Close()
+		if loadErr != nil {
+			if closeErr != nil {
+				return nil, errors.Join(loadErr, closeErr)
+			}
+			return nil, loadErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		indexRows = allRows
+	}
+	pendingIndex, err := s.patchPolicyPendingInventoryIndex(ctx, profile, indexRows, nil)
+	if err != nil {
+		return nil, err
+	}
 	out := []map[string]any{}
 	for _, row := range rows {
 		if !patchPolicyVisible(row, allowedSiteIDs) {
 			continue
 		}
 		payload := patchPolicyPayload(row)
+		pendingCounts := pendingIndex.BreakdownByPolicyID[nullInt(row.ID)]
 		counts, targetSites := patchPolicyCoverageListSummary(ctx, s, profile, row)
 		payload["target_count"] = counts["eligible"]
 		payload["raw_target_count"] = counts["raw"]
 		payload["ignored_role_count"] = counts["ignored_role"]
 		payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
+		payload["pending_update_count"] = patchPolicyPendingTotal(pendingCounts)
+		payload["pending_update_breakdown"] = patchPolicyPendingBreakdownPayload(pendingCounts)
 		payload["target_sites"] = targetSites
 		payload["target_site_ids"] = patchPolicyTargetSiteIDs(targetSites)
 		payload["target_site_names"] = patchPolicyTargetSiteNames(targetSites)
@@ -1223,7 +1249,7 @@ func normalizePatchPolicySaveBody(body map[string]any, existing patchPolicyRow, 
 		return patchPolicySaveValues{}, "Site policies require at least one site."
 	}
 	if values.PolicyType == patchPolicyTypeDeviceFilter && len(values.Targets) == 0 {
-		return patchPolicySaveValues{}, "Device / Filter policies require at least one target."
+		return patchPolicySaveValues{}, "Device Filter policies require at least one target."
 	}
 	if values.PolicyType == patchPolicyTypeGlobal {
 		values.SiteIDs = nil
@@ -1719,6 +1745,266 @@ func patchPolicyEffectiveRules(hierarchy []patchPolicyRow) []patchPolicyRule {
 		}
 	}
 	return out
+}
+
+type patchPolicyPendingInventoryIndex struct {
+	BreakdownByPolicyID map[int64]map[string]int
+	RowsByInventoryID   map[int64]patchPolicyPendingInventoryRow
+}
+
+type patchPolicyInventoryAssignment struct {
+	EffectivePolicyID    int64
+	EffectivePolicyName  string
+	EffectivePolicyType  string
+	EffectiveRoleScope   string
+	HierarchyPolicyIDs   []int64
+	HierarchyPolicyNames []string
+	Hierarchy            []map[string]any
+	Rules                []patchPolicyRule
+	DeferralDays         int64
+}
+
+type patchPolicyPendingInventoryRow struct {
+	patchPolicyInventoryAssignment
+	InstallCandidate bool
+	SkipReason       string
+}
+
+func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Context, profile operatorProfile, rows []patchPolicyRow, activeJobs map[string]map[string]any) (patchPolicyPendingInventoryIndex, error) {
+	index := patchPolicyPendingInventoryIndex{
+		BreakdownByPolicyID: map[int64]map[string]int{},
+		RowsByInventoryID:   map[int64]patchPolicyPendingInventoryRow{},
+	}
+	if rows == nil {
+		if err := s.ensurePatchPolicySchema(ctx); err != nil {
+			return index, err
+		}
+		conn, err := s.db.Conn(ctx)
+		if err != nil {
+			return index, errors.Join(errOperatorStoreDown, err)
+		}
+		loadedRows, loadErr := loadPatchPolicyRows(ctx, conn, "", nil)
+		closeErr := conn.Close()
+		if loadErr != nil {
+			if closeErr != nil {
+				return index, errors.Join(loadErr, closeErr)
+			}
+			return index, loadErr
+		}
+		if closeErr != nil {
+			return index, closeErr
+		}
+		rows = loadedRows
+	}
+	if len(rows) == 0 {
+		return index, nil
+	}
+	policyByID := map[int64]patchPolicyRow{}
+	for _, row := range rows {
+		if id := nullInt(row.ID); id > 0 {
+			policyByID[id] = row
+		}
+	}
+	effectiveScopes, err := s.patchPolicyEffectiveScopes(ctx, profile, rows)
+	if err != nil {
+		return index, err
+	}
+	assignmentsByGUID := map[string]patchPolicyInventoryAssignment{}
+	pendingDevices := map[string]patchPolicyDevice{}
+	for policyID, scope := range effectiveScopes {
+		if scope == nil {
+			continue
+		}
+		effectiveRow := firstPatchPolicyRow(policyByID[policyID], scope.Policy)
+		effectivePolicyID := nullInt(effectiveRow.ID)
+		if effectivePolicyID <= 0 {
+			continue
+		}
+		for _, device := range scope.Devices {
+			if device.ExclusionMode != "" || device.Conflict {
+				continue
+			}
+			guid := strings.ToLower(normalizeCanonicalGUID(device.DeviceGUID))
+			if guid == "" {
+				continue
+			}
+			hierarchyRows := patchPolicyRowsForIDs(policyByID, device.HierarchyPolicyIDs)
+			hierarchyNames := make([]string, 0, len(hierarchyRows))
+			for _, hierarchyRow := range hierarchyRows {
+				hierarchyNames = append(hierarchyNames, nullString(hierarchyRow.Name))
+			}
+			deviceKey := patchPolicyDeviceIdentity(device)
+			rules := scope.RulesByDevice[deviceKey]
+			if len(rules) == 0 {
+				rules = effectiveRow.Rules
+			}
+			assignmentsByGUID[guid] = patchPolicyInventoryAssignment{
+				EffectivePolicyID:    effectivePolicyID,
+				EffectivePolicyName:  nullString(effectiveRow.Name),
+				EffectivePolicyType:  normalizePatchPolicyType(effectiveRow.PolicyType.String),
+				EffectiveRoleScope:   normalizePatchPolicyRoleScope(effectiveRow.RoleScope.String),
+				HierarchyPolicyIDs:   append([]int64(nil), device.HierarchyPolicyIDs...),
+				HierarchyPolicyNames: hierarchyNames,
+				Hierarchy:            patchPolicyHierarchySummary(hierarchyRows),
+				Rules:                append([]patchPolicyRule(nil), rules...),
+				DeferralDays:         firstPositiveInt64(nullInt(effectiveRow.DeferralDays), 14),
+			}
+			pendingDevices[guid] = device
+		}
+	}
+	if len(pendingDevices) == 0 {
+		return index, nil
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return index, errors.Join(errOperatorStoreDown, err)
+	}
+	if activeJobs == nil {
+		activeJobs, err = loadActivePatchInstallJobs(ctx, conn, profile)
+		if err != nil {
+			_ = conn.Close()
+			return index, err
+		}
+	}
+	pendingRows, err := loadPendingPolicyPatchRows(ctx, conn, pendingDevices)
+	closeErr := conn.Close()
+	if err != nil {
+		if closeErr != nil {
+			return index, errors.Join(err, closeErr)
+		}
+		return index, err
+	}
+	if closeErr != nil {
+		return index, closeErr
+	}
+	for _, pendingRow := range pendingRows {
+		inventoryID := nullInt(pendingRow.ID)
+		guid := strings.ToLower(normalizeCanonicalGUID(pendingRow.DeviceGUID.String))
+		assignment, ok := assignmentsByGUID[guid]
+		if !ok || inventoryID <= 0 {
+			continue
+		}
+		rowResult := patchPolicyPendingInventoryRow{patchPolicyInventoryAssignment: assignment, InstallCandidate: true}
+		patch := patchInventoryPayload(pendingRow)
+		if !patchPolicyDeferralSatisfied(pendingRow, assignment.DeferralDays, time.Now().Unix()) {
+			rowResult.InstallCandidate = false
+			rowResult.SkipReason = "deferred"
+		} else if patchPolicyDecision(assignment.Rules, patch) != patchPolicyRuleApprove {
+			rowResult.InstallCandidate = false
+			rowResult.SkipReason = "not_approved"
+		} else {
+			for _, activeKey := range patchActiveIdentityKeys(patch) {
+				if activeJobs[activeKey] != nil {
+					rowResult.InstallCandidate = false
+					rowResult.SkipReason = "active_lockout"
+					break
+				}
+			}
+		}
+		index.RowsByInventoryID[inventoryID] = rowResult
+		if !rowResult.InstallCandidate {
+			continue
+		}
+		for _, policyID := range assignment.HierarchyPolicyIDs {
+			if policyID <= 0 {
+				continue
+			}
+			if index.BreakdownByPolicyID[policyID] == nil {
+				index.BreakdownByPolicyID[policyID] = map[string]int{}
+			}
+			index.BreakdownByPolicyID[policyID][assignment.EffectivePolicyType]++
+		}
+	}
+	return index, nil
+}
+
+func firstPatchPolicyRow(left patchPolicyRow, right patchPolicyRow) patchPolicyRow {
+	if nullInt(left.ID) > 0 {
+		return left
+	}
+	return right
+}
+
+func patchPolicyRowsForIDs(rowsByID map[int64]patchPolicyRow, ids []int64) []patchPolicyRow {
+	out := []patchPolicyRow{}
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if row, ok := rowsByID[id]; ok {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func patchPolicyHierarchySummary(rows []patchPolicyRow) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, map[string]any{
+			"id":          nullInt(row.ID),
+			"name":        nullString(row.Name),
+			"policy_type": normalizePatchPolicyType(row.PolicyType.String),
+			"role_scope":  normalizePatchPolicyRoleScope(row.RoleScope.String),
+		})
+	}
+	return out
+}
+
+func patchPolicyPendingTotal(counts map[string]int) int {
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	return total
+}
+
+func patchPolicyPendingBreakdownPayload(counts map[string]int) []map[string]any {
+	out := []map[string]any{}
+	for _, policyType := range []string{patchPolicyTypeGlobal, patchPolicyTypeSite, patchPolicyTypeDeviceFilter} {
+		count := counts[policyType]
+		if count <= 0 {
+			continue
+		}
+		out = append(out, map[string]any{
+			"policy_type": policyType,
+			"label":       patchPolicyTypeDisplayLabel(policyType),
+			"count":       count,
+		})
+	}
+	return out
+}
+
+func patchPolicyTypeDisplayLabel(policyType string) string {
+	switch normalizePatchPolicyType(policyType) {
+	case patchPolicyTypeGlobal:
+		return "Global"
+	case patchPolicyTypeDeviceFilter:
+		return "Device Filter"
+	default:
+		return "Site-Level Override"
+	}
+}
+
+func attachPatchPolicyInventoryPayload(payload map[string]any, index patchPolicyPendingInventoryIndex) {
+	if payload == nil {
+		return
+	}
+	inventoryID := coerceInt64(firstPresentAny(payload["inventory_id"], payload["id"]))
+	row, ok := index.RowsByInventoryID[inventoryID]
+	if !ok {
+		return
+	}
+	payload["patch_policy_effective_policy_id"] = row.EffectivePolicyID
+	payload["patch_policy_effective_policy_name"] = row.EffectivePolicyName
+	payload["patch_policy_effective_policy_type"] = row.EffectivePolicyType
+	payload["patch_policy_effective_policy_type_label"] = patchPolicyTypeDisplayLabel(row.EffectivePolicyType)
+	payload["patch_policy_effective_role_scope"] = row.EffectiveRoleScope
+	payload["patch_policy_hierarchy_policy_ids"] = row.HierarchyPolicyIDs
+	payload["patch_policy_hierarchy_policy_names"] = row.HierarchyPolicyNames
+	payload["patch_policy_hierarchy"] = row.Hierarchy
+	payload["patch_policy_install_candidate"] = row.InstallCandidate
+	payload["patch_policy_skip_reason"] = row.SkipReason
 }
 
 func (s *postgresOperatorStore) patchPolicyDynamicConflicts(ctx context.Context, profile operatorProfile, currentPolicyID int64, current patchPolicyRow) ([]map[string]any, error) {

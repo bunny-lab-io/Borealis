@@ -621,9 +621,9 @@ func (s *postgresOperatorStore) listPatchAudit(ctx context.Context, profile oper
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 	activeJobs, err := loadActivePatchInstallJobs(ctx, conn, profile)
 	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 
@@ -670,22 +670,48 @@ func (s *postgresOperatorStore) listPatchAudit(ctx context.Context, profile oper
 
 	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
-	defer rows.Close()
 
 	result := []map[string]any{}
 	for rows.Next() {
 		row, err := scanPatchInventoryRow(rows)
 		if err != nil {
+			_ = rows.Close()
+			_ = conn.Close()
 			return nil, err
 		}
 		payload := patchInventoryPayload(row)
 		attachActivePatchInstallJob(payload, activeJobs)
 		result = append(result, payload)
 	}
+	closeRowsErr := rows.Close()
+	closeConnErr := conn.Close()
 	if err := rows.Err(); err != nil {
+		if closeRowsErr != nil {
+			return nil, errors.Join(err, closeRowsErr)
+		}
+		if closeConnErr != nil {
+			return nil, errors.Join(err, closeConnErr)
+		}
 		return nil, err
+	}
+	if closeRowsErr != nil {
+		if closeConnErr != nil {
+			return nil, errors.Join(closeRowsErr, closeConnErr)
+		}
+		return nil, closeRowsErr
+	}
+	if closeConnErr != nil {
+		return nil, closeConnErr
+	}
+	policyIndex, err := s.patchPolicyPendingInventoryIndex(ctx, profile, nil, activeJobs)
+	if err != nil {
+		return nil, err
+	}
+	for _, payload := range result {
+		attachPatchPolicyInventoryPayload(payload, policyIndex)
 	}
 	return result, nil
 }
