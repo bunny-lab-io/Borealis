@@ -1937,9 +1937,8 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         field: "name",
         headerName: "Policy Name",
-        width: 370,
         minWidth: 370,
-        flex: 0,
+        flex: 1,
         valueGetter: (params) => text(params.data?.name),
         cellRenderer: policyNameCellRenderer,
       },
@@ -2005,7 +2004,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         colId: "actions",
         headerName: "Actions",
-        width: 70,
+        width: 35,
         flex: 0,
         sortable: false,
         filter: false,

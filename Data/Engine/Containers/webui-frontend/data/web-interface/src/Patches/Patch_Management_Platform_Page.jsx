@@ -186,7 +186,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
 
   const policyColumnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Policy Name", width: 370, minWidth: 370, flex: 0 },
+      { field: "name", headerName: "Policy Name", minWidth: 370, flex: 1 },
       { field: "policy_type", headerName: "Policy Scope", width: 170, minWidth: 170, flex: 0 },
       {
         field: "enabled",
@@ -210,7 +210,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
       {
         field: "actions",
         headerName: "Actions",
-        width: 70,
+        width: 35,
         flex: 0,
         sortable: false,
         filter: false,
