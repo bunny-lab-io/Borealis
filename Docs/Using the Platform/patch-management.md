@@ -35,6 +35,8 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 
 Two Global Patch Policies are created automatically during Engine database initialization. `Global Workstation Policy` is locked from deletion, enabled by default, uses Tuesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off. `Global Server Policy` uses the same defaults except its install window is Wednesday 2:00 AM Engine-local time.
 
+Use `Run Updates Now` from the policy row action menu only when you want Borealis to create patch install jobs immediately for that policy hierarchy. The confirmation dialog warns that matching devices will download and install approved updates now, and that configured reboot behavior can run after installation finishes.
+
 The policy table nests site-level overrides under the matching `Server` or `Workstation` global policy. Device / Filter policies appear under matching site-level overrides when their eligible devices belong to those targeted sites. If a Device / Filter policy targets devices in multiple sites, Borealis can show linked references to the same policy in multiple hierarchy positions. If no matching site-level override exists for a targeted site, the Device / Filter policy appears directly under the matching global policy. The `Targeted Sites` column shows searchable site bubbles so operators can inspect policy reach without opening the editor.
 
 Windows patch policies are single-domain. Site policies target one or more sites plus exactly one policy type: `Server` or `Workstation`. One site and policy type combination can only be covered by one enabled site policy.
@@ -90,7 +92,7 @@ Pending rows come from Windows Update Agent search results that are not installe
     - `DELETE /api/patches/policies/<policy_id>` - delete one unlocked policy. Global policy returns a locked-policy error.
     - `POST /api/patches/policies/<policy_id>/preview` - resolve target coverage, role-filtered counts, conflicts, and parent-block override warnings.
     - `GET /api/patches/policies/effective?hostname=<hostname>` - show effective same-role hierarchy, inherited exclusion source, and override source for one device.
-    - `POST /api/patches/policies/evaluate` - manually evaluate due patches for one policy or all enabled policies.
+    - `POST /api/patches/policies/evaluate` - backend policy runner used by `Run Updates Now` and scheduler-driven policy execution. Manual calls create immediate patch-install jobs for matching approved updates.
     - `POST /api/scheduled_jobs` with `job_kind=patch_install` - create an ad-hoc patch install job from the Patch Management install flow. Bulk and policy flows call this once per selected patch identity.
     - `POST /api/agent/patches/install-progress` - device-authenticated Agent progress update for scheduled patch installs. The Engine stores latest progress in scheduled activity metadata and emits `scheduled_job_patch_progress`.
     - `POST /api/agent/details` - accepts `details.patches` from the Agent `patch_management` role.

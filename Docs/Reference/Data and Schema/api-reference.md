@@ -101,7 +101,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/patches/policies` (Token Authenticated) - list patch policies, optionally filtered by `type=global`, `type=site`, or `type=device_filter`. Rows include `eligible / raw Devices Match Policy Type` count labels.
     - `POST /api/patches/policies` (Admin) - create a site or device/filter patch policy. Windows policy `role_scope` must be `Server` or `Workstation`; global policies are seeded by Borealis and cannot be created manually. Hostname-based device exclusions require `site_id` unless `device_guid` is present.
     - `GET /api/patches/policies/metadata` (Token Authenticated) - policy editor metadata for sites, device filters, Windows role scopes, rule types, match types, exclusions, and defaults.
-    - `POST /api/patches/policies/evaluate` (Admin) - manually evaluate all due policies or a single `policy_id`.
+    - `POST /api/patches/policies/evaluate` (Admin) - run policy evaluation for all due policies or a single `policy_id`. Manual UI use is labeled `Run Updates Now` because matching approved updates create immediate patch-install jobs.
     - `GET /api/patches/policies/effective?hostname=<hostname>` (Token Authenticated) - return effective same-role policy hierarchy for one typed Windows device, including inherited exclusion source and override source metadata.
     - `POST /api/patches/policies/conflicts` (Token Authenticated) - preview policy coverage, role-filtered target counts, and conflict state for a draft policy payload.
     - `GET /api/patches/policies/<policy_id>` (Token Authenticated) - get one visible patch policy.

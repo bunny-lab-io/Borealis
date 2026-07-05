@@ -34,6 +34,7 @@ import PolicyRoundedIcon from "@mui/icons-material/PolicyRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
+import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
@@ -1220,6 +1221,8 @@ function PatchPolicyTab() {
   const [actionMenuAnchor, setActionMenuAnchor] = useState(null);
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [actionMenuPolicy, setActionMenuPolicy] = useState(null);
+  const [runUpdatesPolicy, setRunUpdatesPolicy] = useState(null);
+  const [runUpdatesError, setRunUpdatesError] = useState("");
 
   const loadPolicies = useCallback(async () => {
     try {
@@ -1290,10 +1293,26 @@ function PatchPolicyTab() {
     }
   }, [loadPolicies]);
 
-  const evaluatePolicy = useCallback(async (policy = {}) => {
+  const openRunUpdatesDialog = useCallback(
+    (policy = {}) => {
+      if (!policy?.id) return;
+      closeActionMenu();
+      setRunUpdatesError("");
+      setRunUpdatesPolicy(policy);
+    },
+    [closeActionMenu]
+  );
+
+  const closeRunUpdatesDialog = useCallback(() => {
+    if (runUpdatesPolicy?.id && busyId === `run-updates-${runUpdatesPolicy.id}`) return;
+    setRunUpdatesError("");
+    setRunUpdatesPolicy(null);
+  }, [busyId, runUpdatesPolicy]);
+
+  const runUpdatesNow = useCallback(async (policy = {}) => {
     if (!policy?.id) return;
-    closeActionMenu();
-    setBusyId(`eval-${policy.id}`);
+    setBusyId(`run-updates-${policy.id}`);
+    setRunUpdatesError("");
     try {
       const response = await fetch("/api/patches/policies/evaluate", {
         method: "POST",
@@ -1304,12 +1323,13 @@ function PatchPolicyTab() {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.message || payload?.error || `HTTP ${response.status}`);
       await loadPolicies();
+      setRunUpdatesPolicy(null);
     } catch (error) {
-      setLoadError(`Evaluate failed: ${String(error?.message || error)}`);
+      setRunUpdatesError(`Run Updates Now failed: ${String(error?.message || error)}`);
     } finally {
       setBusyId("");
     }
-  }, [closeActionMenu, loadPolicies]);
+  }, [loadPolicies]);
 
   const actionMenuItems = useMemo(
     () => [
@@ -1325,12 +1345,12 @@ function PatchPolicyTab() {
         },
       },
       {
-        id: "evaluate",
-        label: "Evaluate",
+        id: "run-updates-now",
+        label: "Run Updates Now",
         icon: <PlayArrowRoundedIcon fontSize="small" />,
-        disabled: !actionMenuPolicy?.id || busyId === `eval-${actionMenuPolicy?.id}`,
+        disabled: !actionMenuPolicy?.id || busyId === `run-updates-${actionMenuPolicy?.id}`,
         onClick: () => {
-          void evaluatePolicy(actionMenuPolicy);
+          openRunUpdatesDialog(actionMenuPolicy);
         },
       },
       {
@@ -1349,7 +1369,7 @@ function PatchPolicyTab() {
         },
       },
     ],
-    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, evaluatePolicy, openEdit]
+    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, openEdit, openRunUpdatesDialog]
   );
 
   const actionCellRenderer = useCallback(
@@ -1588,6 +1608,8 @@ function PatchPolicyTab() {
   );
 
   const ActionMenuPolicyIcon = policyIconForType(normalizePolicyTypeValue(actionMenuPolicy));
+  const RunUpdatesPolicyIcon = policyIconForType(normalizePolicyTypeValue(runUpdatesPolicy));
+  const runUpdatesBusy = Boolean(runUpdatesPolicy?.id && busyId === `run-updates-${runUpdatesPolicy.id}`);
 
   return (
     <>
@@ -1618,6 +1640,136 @@ function PatchPolicyTab() {
           </MenuItem>
         ))}
       </Menu>
+      <Dialog
+        open={Boolean(runUpdatesPolicy)}
+        onClose={runUpdatesBusy ? undefined : closeRunUpdatesDialog}
+        maxWidth="sm"
+        fullWidth
+        PaperProps={{
+          sx: {
+            borderRadius: 3,
+            background:
+              "radial-gradient(110% 120% at 0% 0%, rgba(250, 204, 21, 0.14), transparent 52%), " +
+              "radial-gradient(110% 120% at 100% 0%, rgba(125, 211, 252, 0.14), transparent 58%), rgba(8,12,24,0.98)",
+            border: "1px solid rgba(245, 158, 11, 0.35)",
+            boxShadow: "0 24px 70px rgba(2,8,23,0.74)",
+            color: MAGIC_UI.textBright,
+            overflow: "hidden",
+          },
+        }}
+      >
+        <DialogTitle sx={{ px: 3, pt: 3, pb: 1.25 }}>
+          <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.4 }}>
+            <Box
+              sx={{
+                width: 36,
+                height: 36,
+                borderRadius: 2,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#facc15",
+                background: "rgba(113,63,18,0.42)",
+                border: "1px solid rgba(245,158,11,0.42)",
+                flexShrink: 0,
+              }}
+            >
+              <WarningAmberRoundedIcon fontSize="small" />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ color: MAGIC_UI.textBright, fontSize: "1.05rem", fontWeight: 800, lineHeight: 1.25 }}>
+                Run Updates Now
+              </Typography>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 0.7, minWidth: 0 }}>
+                <RunUpdatesPolicyIcon sx={{ color: BOREALIS_BLUE, fontSize: 18, flexShrink: 0 }} />
+                <Typography noWrap sx={{ color: MAGIC_UI.textMuted, fontSize: "0.84rem" }}>
+                  {text(runUpdatesPolicy?.name) || "Patch Policy"}
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+        </DialogTitle>
+        <DialogContent sx={{ px: 3, pt: 1.5, pb: 2 }}>
+          <Stack spacing={1.6}>
+            <Alert
+              severity="warning"
+              icon={<WarningAmberRoundedIcon />}
+              sx={{
+                background: "rgba(113, 63, 18, 0.42)",
+                color: MAGIC_UI.textBright,
+                border: "1px solid rgba(245, 158, 11, 0.45)",
+                "& .MuiAlert-icon": { color: "#facc15" },
+              }}
+            >
+              Proceeding will create patch install jobs immediately.
+            </Alert>
+            <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.92rem", lineHeight: 1.65 }}>
+              Devices that belong to this policy and its parent policies will download and install approved updates immediately. If reboot after install is configured, reboot will take place after the update finishes.
+            </Typography>
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: { xs: "1fr", sm: "repeat(3, minmax(0, 1fr))" },
+                gap: 1,
+                p: 1.25,
+                borderRadius: 2,
+                border: "1px solid rgba(148,163,184,0.18)",
+                background: "rgba(5,10,24,0.58)",
+              }}
+            >
+              {[
+                ["Policy Type", policyRowTypeLabel(runUpdatesPolicy)],
+                ["Scope", text(runUpdatesPolicy?.role_scope) || "Not Configured"],
+                ["Targeted Devices", formatDeviceCount(runUpdatesPolicy?.target_count)],
+              ].map(([label, value]) => (
+                <Box key={label} sx={{ minWidth: 0 }}>
+                  <Typography sx={{ color: BOREALIS_BLUE, fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0 }}>
+                    {label}
+                  </Typography>
+                  <Typography noWrap sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 700, mt: 0.35 }}>
+                    {value}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
+            {runUpdatesError ? <Alert severity="error">{runUpdatesError}</Alert> : null}
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pt: 0.5, pb: 2.5, gap: 1 }}>
+          <Button
+            onClick={closeRunUpdatesDialog}
+            disabled={runUpdatesBusy}
+            sx={{
+              borderRadius: 999,
+              px: 2,
+              textTransform: "none",
+              color: MAGIC_UI.textBright,
+              border: "1px solid rgba(148,163,184,0.3)",
+              background: "rgba(5,10,24,0.72)",
+              "&:hover": { background: "rgba(15,23,42,0.86)", borderColor: "rgba(125,211,252,0.44)" },
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => runUpdatesNow(runUpdatesPolicy)}
+            disabled={runUpdatesBusy || !runUpdatesPolicy?.id}
+            startIcon={<PlayArrowRoundedIcon />}
+            sx={{
+              borderRadius: 999,
+              px: 2,
+              textTransform: "none",
+              fontWeight: 800,
+              color: "#06101d",
+              backgroundImage: "linear-gradient(135deg, #facc15 0%, #7dd3fc 100%)",
+              "&:hover": { backgroundImage: "linear-gradient(135deg, #fde047 0%, #91dcff 100%)" },
+              "&.Mui-disabled": { color: "rgba(15,23,42,0.52)", opacity: 0.68 },
+            }}
+          >
+            {runUpdatesBusy ? "Creating Jobs..." : "Run Updates Now"}
+          </Button>
+        </DialogActions>
+      </Dialog>
       {loadError ? <Box sx={{ p: 2 }}><Alert severity="error">{loadError}</Alert></Box> : null}
       <GridShell
         sx={{
