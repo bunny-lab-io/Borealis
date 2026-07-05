@@ -1147,6 +1147,8 @@ func ultraVNCSettings(port int, passwordHash string, removeWallpaper bool, vncEx
 		"AuthRequired":       "1",
 		"MSLogonRequired":    "0",
 		"NewMSLogon":         "0",
+		"primary":            "1",
+		"secondary":          "1",
 		"PortNumber":         strconv.Itoa(port),
 		"AutoPortSelect":     "0",
 		"SocketConnect":      "1",
@@ -1187,8 +1189,8 @@ func ultraVNCSettings(port int, passwordHash string, removeWallpaper bool, vncEx
 func renderUltraVNCConfig(settings map[string]string) string {
 	order := []string{
 		"UseRegistry", "AuthRequired", "MSLogonRequired", "NewMSLogon", "PortNumber", "AutoPortSelect",
-		"SocketConnect", "AllowLoopback", "LoopbackOnly", "HTTPConnect", "AllowShutdown", "DisableTrayIcon",
-		"EnableFileTransfer", "RemoveWallpaper", "TurboMode", "PollUnderCursor", "PollForeground",
+		"primary", "secondary", "SocketConnect", "AllowLoopback", "LoopbackOnly", "HTTPConnect", "AllowShutdown",
+		"DisableTrayIcon", "EnableFileTransfer", "RemoveWallpaper", "TurboMode", "PollUnderCursor", "PollForeground",
 		"PollFullScreen", "OnlyPollConsole", "OnlyPollOnEvent", "EnableDriver", "EnableHook",
 		"EnableVirtual", "SingleWindow", "passwd", "passwd2",
 	}

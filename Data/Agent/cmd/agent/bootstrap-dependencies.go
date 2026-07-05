@@ -359,6 +359,8 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"AuthRequired=1\n" +
 		"MSLogonRequired=0\n" +
 		"NewMSLogon=0\n" +
+		"primary=1\n" +
+		"secondary=1\n" +
 		"PortNumber=5900\n" +
 		"AutoPortSelect=0\n" +
 		"SocketConnect=1\n" +

@@ -292,6 +292,8 @@ func TestUltraVNCConfigIncludesSecurityAndCaptureSettings(t *testing.T) {
 		"PortNumber=5901",
 		"SocketConnect=1",
 		"AllowLoopback=1",
+		"primary=1",
+		"secondary=1",
 		"RemoveWallpaper=1",
 		"passwd=DBD83CFD727A145800",
 		"passwd2=",
