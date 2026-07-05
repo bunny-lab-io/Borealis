@@ -168,16 +168,15 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
 
   const policyColumnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Policy", flex: 1, minWidth: 300 },
-      { field: "policy_type", headerName: "Policy Type", width: 190, minWidth: 175, flex: 0 },
+      { field: "name", headerName: "Policy Name", flex: 1, minWidth: 300 },
+      { field: "policy_type", headerName: "Policy Scope", width: 190, minWidth: 175, flex: 0 },
       { field: "enabled", headerName: "Enabled", width: 120, flex: 0 },
-      { field: "reboot_after_install", headerName: "Reboot after Install", width: 190, flex: 0 },
-      { field: "role_scope", headerName: "Scope", width: 135, flex: 0 },
+      { field: "reboot_after_install", headerName: "Reboot?", width: 125, flex: 0 },
+      { field: "role_scope", headerName: "Device Type", width: 145, flex: 0 },
       { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220, flex: 0 },
-      { field: "pending_updates", headerName: "Pending Updates", width: 390, minWidth: 340, flex: 0 },
-      { field: "deferral_days", headerName: "Update Deferral Period", width: 215, flex: 0 },
-      { field: "install_schedule_type", headerName: "Schedule", width: 130, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
-      { field: "install_start_ts", headerName: "First Run", width: 190, flex: 0 },
+      { field: "pending_updates", headerName: "Pending Updates", width: 520, minWidth: 420, flex: 0 },
+      { field: "deferral_days", headerName: "Deferrment", width: 145, flex: 0 },
+      { field: "install_schedule_type", headerName: "Schedule", width: 245, minWidth: 220, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
       {
         field: "actions",
         headerName: "Actions",
@@ -337,7 +336,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
             paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
-            rowHeight={activeTab === "policies" ? 78 : 44}
+            rowHeight={44}
             headerHeight={44}
             overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
             theme={DEVICE_DETAILS_GRID_THEME}
