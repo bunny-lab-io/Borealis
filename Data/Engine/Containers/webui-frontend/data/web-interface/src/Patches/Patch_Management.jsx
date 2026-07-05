@@ -1711,6 +1711,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
     const policyName = text(row.name) || "Patch Policy";
     const editPath = policyEditPath(row);
     const PolicyTypeIcon = policyIconForType(normalizePolicyTypeValue(row));
+    const referenceSiteName = text(row.__branchSite?.name) || "Linked";
     const runDisabled = !row?.id || busyId === `run-updates-${row.id}`;
     const handleClick = (event) => {
       event.preventDefault();
@@ -1849,25 +1850,28 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
           {policyName}
         </Box>
         {row.__isReference ? (
-          <Box
-            component="span"
-            sx={{
-              ...PATCH_CHIP_TOKEN_SX,
-              height: 18,
-              minHeight: 18,
-              px: 0.7,
-              color: "#d4b5ff",
-              border: "1px solid rgba(180,137,255,0.35)",
-              background: "rgba(180,137,255,0.14)",
-              fontSize: 11,
-              fontWeight: 600,
-              flexShrink: 0,
-            }}
-          >
-            <Box component="span" className="patch-chip-label">
-              Linked
+          <Tooltip title={referenceSiteName}>
+            <Box
+              component="span"
+              sx={{
+                ...PATCH_CHIP_TOKEN_SX,
+                height: 18,
+                minHeight: 18,
+                maxWidth: 115,
+                px: 0.7,
+                color: "#d4b5ff",
+                border: "1px solid rgba(180,137,255,0.35)",
+                background: "rgba(180,137,255,0.14)",
+                fontSize: 11,
+                fontWeight: 600,
+                flexShrink: 0,
+              }}
+            >
+              <Box component="span" className="patch-chip-label">
+                {referenceSiteName}
+              </Box>
             </Box>
-          </Box>
+          </Tooltip>
         ) : null}
       </Box>
     );
