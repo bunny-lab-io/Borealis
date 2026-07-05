@@ -483,26 +483,6 @@ function pendingUpdateBreakdown(policy = {}) {
     .sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
 }
 
-function mergePendingUpdateBreakdowns(policies = []) {
-  const merged = new Map();
-  policies.forEach((policy) => {
-    ownPendingUpdateBreakdown(policy).forEach((item) => {
-      const current = merged.get(item.policy_type) || {
-        policy_type: item.policy_type,
-        label: item.label,
-        count: 0,
-        source_policy_id: item.source_policy_id,
-        source_policy_name: item.source_policy_name,
-      };
-      current.count += item.count;
-      if (!current.source_policy_id && item.source_policy_id) current.source_policy_id = item.source_policy_id;
-      if (!current.source_policy_name && item.source_policy_name) current.source_policy_name = item.source_policy_name;
-      merged.set(item.policy_type, current);
-    });
-  });
-  return Array.from(merged.values()).sort((left, right) => policyLayerSortIndex(left.policy_type) - policyLayerSortIndex(right.policy_type));
-}
-
 function policyLayerSortIndex(policyType) {
   const normalized = text(policyType).toLowerCase();
   if (normalized === "global") return 0;
@@ -589,7 +569,8 @@ function patchRowMatchesPolicyPendingFilter(row = {}, filter = {}) {
   if (!filter?.active) return true;
   if (text(row.state).toLowerCase() !== "pending") return false;
   if (!row.patch_policy_install_candidate) return false;
-  if (filter.layer && normalizePolicyTypeValue({ policy_type: row.patch_policy_effective_policy_type }) !== filter.layer) return false;
+  const sourcePolicyType = row.patch_policy_source_policy_type || row.patch_policy_effective_policy_type;
+  if (filter.layer && normalizePolicyTypeValue({ policy_type: sourcePolicyType }) !== filter.layer) return false;
   if (filter.scopeID > 0 && !patchPolicyHierarchyIDs(row).includes(filter.scopeID)) return false;
   return true;
 }
@@ -599,9 +580,11 @@ function patchPolicySourceGroups(row = {}) {
   const groups = new Map();
   children.forEach((child) => {
     if (!child?.patch_policy_install_candidate) return;
-    const policyType = normalizePolicyTypeValue({ policy_type: child.patch_policy_effective_policy_type });
-    const policyID = Number(child.patch_policy_effective_policy_id || 0) || 0;
-    const policyName = text(child.patch_policy_effective_policy_name) || policyTableTypeLabel(policyType);
+    const policyType = normalizePolicyTypeValue({
+      policy_type: child.patch_policy_source_policy_type || child.patch_policy_effective_policy_type,
+    });
+    const policyID = Number(child.patch_policy_source_policy_id || child.patch_policy_effective_policy_id || 0) || 0;
+    const policyName = text(child.patch_policy_source_policy_name || child.patch_policy_effective_policy_name) || policyTableTypeLabel(policyType);
     const key = `${policyType}:${policyID || policyName}`;
     const current = groups.get(key) || {
       policy_type: policyType,
@@ -733,7 +716,7 @@ function policyRowDepth(policy = {}) {
   return Number.isFinite(depth) && depth > 0 ? depth : 0;
 }
 
-function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null, lineagePolicies = []) {
+function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSite = null) {
   const sourcePolicy = policy && typeof policy === "object" ? policy : {};
   const targetSites = normalizeTargetSites(sourcePolicy);
   const branchSiteName = text(branchSite?.name);
@@ -747,7 +730,7 @@ function makePolicyHierarchyRow(policy = {}, depth = 0, parentKey = "", branchSi
     __policyTypeLabel: policyTableTypeLabel(normalizePolicyTypeValue(sourcePolicy)),
     __targetSites: targetSites,
     __targetSitesText: targetSites.map((site) => text(site.name)).filter(Boolean).join(", "),
-    __pendingUpdateBreakdown: mergePendingUpdateBreakdowns([...(Array.isArray(lineagePolicies) ? lineagePolicies : []), sourcePolicy]),
+    __pendingUpdateBreakdown: pendingUpdateBreakdown(sourcePolicy),
   };
 }
 
@@ -799,7 +782,7 @@ function buildPatchPolicyHierarchyRows(policies = []) {
             const deviceSites = normalizeTargetSites(devicePolicy);
             const matchedSites = deviceSites.filter((site) => siteKeySet.has(policySiteKey(site)));
             matchedSites.forEach((site) => {
-              rows.push(makePolicyHierarchyRow(devicePolicy, 2, `${sitePolicyKey}:${policySiteKey(site)}`, site, [globalPolicy, sitePolicy]));
+              rows.push(makePolicyHierarchyRow(devicePolicy, 2, `${sitePolicyKey}:${policySiteKey(site)}`, site));
             });
           });
       });
@@ -812,11 +795,11 @@ function buildPatchPolicyHierarchyRows(policies = []) {
             return !key || !coveredSiteKeys.has(key);
           });
           if (!deviceSites.length || !uncoveredSites.length && !roleSitePolicies.length) {
-            rows.push(makePolicyHierarchyRow(devicePolicy, 1, globalKey, null, [globalPolicy]));
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, globalKey, null));
             return;
           }
           uncoveredSites.forEach((site) => {
-            rows.push(makePolicyHierarchyRow(devicePolicy, 1, `${globalKey}:${policySiteKey(site)}`, site, [globalPolicy]));
+            rows.push(makePolicyHierarchyRow(devicePolicy, 1, `${globalKey}:${policySiteKey(site)}`, site));
           });
         });
     });
@@ -846,7 +829,10 @@ export function defaultPolicyDraft(policyType) {
     rules: [
       { rule_type: "approve", match_type: "severity", match_value: "Critical" },
       { rule_type: "approve", match_type: "severity", match_value: "Important" },
+      { rule_type: "approve", match_type: "classification", match_value: "Security Updates" },
+      { rule_type: "approve", match_type: "classification", match_value: "Critical Updates" },
       { rule_type: "block", match_type: "classification", match_value: "Drivers" },
+      { rule_type: "block", match_type: "classification", match_value: "Feature Packs" },
     ],
   };
 }

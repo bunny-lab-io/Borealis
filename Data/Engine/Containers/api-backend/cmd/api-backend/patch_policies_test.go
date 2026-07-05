@@ -39,6 +39,36 @@ func TestPatchPolicyDecisionRequiresOverrideForParentBlock(t *testing.T) {
 	}
 }
 
+func TestPatchPolicyEffectiveRulesInheritParentApprovalWithSource(t *testing.T) {
+	global := patchPolicyRow{
+		ID:         sql.NullInt64{Int64: 11, Valid: true},
+		Name:       sql.NullString{String: "Global Server Policy", Valid: true},
+		PolicyType: sql.NullString{String: patchPolicyTypeGlobal, Valid: true},
+		RoleScope:  sql.NullString{String: patchPolicyRoleServer, Valid: true},
+		Rules: []patchPolicyRule{{
+			RuleType:   patchPolicyRuleApprove,
+			MatchType:  "classification",
+			MatchValue: "Security Updates",
+		}},
+	}
+	site := patchPolicyRow{
+		ID:         sql.NullInt64{Int64: 22, Valid: true},
+		Name:       sql.NullString{String: "Bunny Lab Servers", Valid: true},
+		PolicyType: sql.NullString{String: patchPolicyTypeSite, Valid: true},
+		RoleScope:  sql.NullString{String: patchPolicyRoleServer, Valid: true},
+	}
+	decision := patchPolicyDecisionWithSource(
+		patchPolicyEffectiveRules([]patchPolicyRow{global, site}),
+		map[string]any{"classification": "Security Updates", "severity": "Unspecified"},
+	)
+	if decision.Decision != patchPolicyRuleApprove {
+		t.Fatalf("expected inherited global approval, got %#v", decision)
+	}
+	if decision.PolicyID != 11 || decision.PolicyType != patchPolicyTypeGlobal || decision.PolicyName != "Global Server Policy" {
+		t.Fatalf("expected global policy source, got %#v", decision)
+	}
+}
+
 func TestPatchPolicyDeferralUsesPublishedThenFirstSeenFallback(t *testing.T) {
 	now := int64(1783000000)
 	published := patchInventoryRow{
@@ -174,18 +204,21 @@ func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyType: patchPolicyTypeGlobal}, "11111111-1111-1111-1111-111111111111")
 	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	}, "11111111-1111-1111-1111-111111111111")
+	}, patchPolicyPendingInventoryRow{SourcePolicyType: patchPolicyTypeSite}, "11111111-1111-1111-1111-111111111111")
 
 	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
 		t.Fatalf("parent policy received child pending count=%d want 0", got)
 	}
-	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 2 {
-		t.Fatalf("effective policy pending count=%d want 2", got)
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeGlobal]; got != 1 {
+		t.Fatalf("effective policy global-source count=%d want 1", got)
+	}
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 1 {
+		t.Fatalf("effective policy site-source count=%d want 1", got)
 	}
 	if got := index.DeviceCountByPolicyID[22]; got != 1 {
 		t.Fatalf("effective policy pending device count=%d want 1", got)

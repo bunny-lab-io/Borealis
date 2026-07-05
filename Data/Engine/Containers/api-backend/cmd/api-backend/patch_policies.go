@@ -73,6 +73,10 @@ type patchPolicyRow struct {
 
 type patchPolicyRule struct {
 	ID                  int64
+	PolicyID            int64
+	PolicyType          string
+	PolicyName          string
+	RoleScope           string
 	RuleType            string
 	MatchType           string
 	MatchValue          string
@@ -1116,6 +1120,7 @@ func loadPatchPolicyAssociations(ctx context.Context, conn *sql.Conn, ids []int6
 		}
 		rules[policyID.Int64] = append(rules[policyID.Int64], patchPolicyRule{
 			ID:                  nullInt(id),
+			PolicyID:            policyID.Int64,
 			RuleType:            normalizePatchPolicyRuleType(ruleType.String),
 			MatchType:           normalizePatchPolicyMatchType(matchType.String),
 			MatchValue:          cleanText(matchValue.String),
@@ -1173,6 +1178,9 @@ func patchPolicyRulePayloads(rules []patchPolicyRule) []map[string]any {
 	for _, rule := range rules {
 		out = append(out, map[string]any{
 			"id":                    rule.ID,
+			"policy_id":             nullablePositiveInt64Any(rule.PolicyID),
+			"policy_type":           normalizePatchPolicyType(rule.PolicyType),
+			"policy_name":           rule.PolicyName,
 			"rule_type":             rule.RuleType,
 			"match_type":            rule.MatchType,
 			"match_value":           rule.MatchValue,
@@ -1961,18 +1969,20 @@ func patchPolicyEffectiveRules(hierarchy []patchPolicyRow) []patchPolicyRule {
 		return nil
 	}
 	out := []patchPolicyRule{}
-	for idx, row := range hierarchy {
-		if idx == len(hierarchy)-1 {
-			out = append(out, row.Rules...)
-			continue
-		}
+	for _, row := range hierarchy {
 		for _, rule := range row.Rules {
-			if rule.RuleType == patchPolicyRuleBlock {
-				out = append(out, rule)
-			}
+			out = append(out, patchPolicyRuleWithSource(row, rule))
 		}
 	}
 	return out
+}
+
+func patchPolicyRuleWithSource(row patchPolicyRow, rule patchPolicyRule) patchPolicyRule {
+	rule.PolicyID = firstPositiveInt64(rule.PolicyID, nullInt(row.ID))
+	rule.PolicyType = firstText(normalizePatchPolicyType(rule.PolicyType), normalizePatchPolicyType(row.PolicyType.String))
+	rule.PolicyName = firstText(cleanText(rule.PolicyName), nullString(row.Name))
+	rule.RoleScope = firstText(normalizePatchPolicyRoleScope(rule.RoleScope), normalizePatchPolicyRoleScope(row.RoleScope.String))
+	return rule
 }
 
 type patchPolicyPendingInventoryIndex struct {
@@ -1998,6 +2008,16 @@ type patchPolicyPendingInventoryRow struct {
 	patchPolicyInventoryAssignment
 	InstallCandidate bool
 	SkipReason       string
+	SourcePolicyID   int64
+	SourcePolicyName string
+	SourcePolicyType string
+}
+
+type patchPolicyDecisionResult struct {
+	Decision   string
+	PolicyID   int64
+	PolicyName string
+	PolicyType string
 }
 
 func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Context, profile operatorProfile, rows []patchPolicyRow, activeJobs map[string]map[string]any) (patchPolicyPendingInventoryIndex, error) {
@@ -2075,7 +2095,7 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 			deviceKey := patchPolicyDeviceIdentity(device)
 			rules := scope.RulesByDevice[deviceKey]
 			if len(rules) == 0 {
-				rules = effectiveRow.Rules
+				rules = patchPolicyEffectiveRules([]patchPolicyRow{effectiveRow})
 			}
 			assignmentsByGUID[guid] = patchPolicyInventoryAssignment{
 				EffectivePolicyID:    effectivePolicyID,
@@ -2128,10 +2148,13 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		if !patchPolicyDeferralSatisfied(pendingRow, assignment.DeferralDays, time.Now().Unix()) {
 			rowResult.InstallCandidate = false
 			rowResult.SkipReason = "deferred"
-		} else if patchPolicyDecision(assignment.Rules, patch) != patchPolicyRuleApprove {
+		} else if decision := patchPolicyDecisionWithSource(assignment.Rules, patch); decision.Decision != patchPolicyRuleApprove {
 			rowResult.InstallCandidate = false
 			rowResult.SkipReason = "not_approved"
 		} else {
+			rowResult.SourcePolicyID = firstPositiveInt64(decision.PolicyID, assignment.EffectivePolicyID)
+			rowResult.SourcePolicyName = firstText(decision.PolicyName, assignment.EffectivePolicyName)
+			rowResult.SourcePolicyType = firstText(normalizePatchPolicyType(decision.PolicyType), assignment.EffectivePolicyType)
 			for _, activeKey := range patchActiveIdentityKeys(patch) {
 				if activeJobs[activeKey] != nil {
 					rowResult.InstallCandidate = false
@@ -2144,18 +2167,21 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		if !rowResult.InstallCandidate {
 			continue
 		}
-		patchPolicyAddPendingBreakdownCount(&index, assignment, guid)
+		patchPolicyAddPendingBreakdownCount(&index, assignment, rowResult, guid)
 	}
 	return index, nil
 }
 
-func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment, deviceGUID string) {
+func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment, row patchPolicyPendingInventoryRow, deviceGUID string) {
 	if index == nil || assignment.EffectivePolicyID <= 0 {
 		return
 	}
-	policyType := normalizePatchPolicyType(assignment.EffectivePolicyType)
+	policyType := normalizePatchPolicyType(row.SourcePolicyType)
 	if policyType == "" {
-		return
+		policyType = normalizePatchPolicyType(assignment.EffectivePolicyType)
+	}
+	if policyType == "" {
+		policyType = patchPolicyTypeSite
 	}
 	if index.BreakdownByPolicyID == nil {
 		index.BreakdownByPolicyID = map[int64]map[string]int{}
@@ -2263,6 +2289,10 @@ func attachPatchPolicyInventoryPayload(payload map[string]any, index patchPolicy
 	payload["patch_policy_effective_policy_type"] = row.EffectivePolicyType
 	payload["patch_policy_effective_policy_type_label"] = patchPolicyTypeDisplayLabel(row.EffectivePolicyType)
 	payload["patch_policy_effective_role_scope"] = row.EffectiveRoleScope
+	payload["patch_policy_source_policy_id"] = firstPositiveInt64(row.SourcePolicyID, row.EffectivePolicyID)
+	payload["patch_policy_source_policy_name"] = firstText(row.SourcePolicyName, row.EffectivePolicyName)
+	payload["patch_policy_source_policy_type"] = firstText(normalizePatchPolicyType(row.SourcePolicyType), row.EffectivePolicyType)
+	payload["patch_policy_source_policy_type_label"] = patchPolicyTypeDisplayLabel(firstText(normalizePatchPolicyType(row.SourcePolicyType), row.EffectivePolicyType))
 	payload["patch_policy_hierarchy_policy_ids"] = row.HierarchyPolicyIDs
 	payload["patch_policy_hierarchy_policy_names"] = row.HierarchyPolicyNames
 	payload["patch_policy_hierarchy"] = row.Hierarchy
@@ -2832,33 +2862,52 @@ func patchPolicyDue(ctx context.Context, conn *sql.Conn, row patchPolicyRow, now
 }
 
 func patchPolicyDecision(rules []patchPolicyRule, patch map[string]any) string {
+	return patchPolicyDecisionWithSource(rules, patch).Decision
+}
+
+func patchPolicyDecisionWithSource(rules []patchPolicyRule, patch map[string]any) patchPolicyDecisionResult {
 	blocked := false
 	approved := false
 	overrideApproved := false
+	blockSource := patchPolicyDecisionResult{}
+	approveSource := patchPolicyDecisionResult{}
+	overrideSource := patchPolicyDecisionResult{}
 	for _, rule := range rules {
 		if !patchPolicyRuleMatches(rule, patch) {
 			continue
 		}
 		if rule.RuleType == patchPolicyRuleBlock {
 			blocked = true
+			blockSource = patchPolicyDecisionSource(rule, patchPolicyRuleBlock)
 		}
 		if rule.RuleType == patchPolicyRuleApprove {
 			approved = true
+			approveSource = patchPolicyDecisionSource(rule, patchPolicyRuleApprove)
 			if rule.OverrideParentBlock {
 				overrideApproved = true
+				overrideSource = patchPolicyDecisionSource(rule, patchPolicyRuleApprove)
 			}
 		}
 	}
 	if overrideApproved {
-		return patchPolicyRuleApprove
+		return overrideSource
 	}
 	if blocked {
-		return patchPolicyRuleBlock
+		return blockSource
 	}
 	if approved {
-		return patchPolicyRuleApprove
+		return approveSource
 	}
-	return ""
+	return patchPolicyDecisionResult{}
+}
+
+func patchPolicyDecisionSource(rule patchPolicyRule, decision string) patchPolicyDecisionResult {
+	return patchPolicyDecisionResult{
+		Decision:   decision,
+		PolicyID:   rule.PolicyID,
+		PolicyName: cleanText(rule.PolicyName),
+		PolicyType: normalizePatchPolicyType(rule.PolicyType),
+	}
 }
 
 func patchPolicyDeferralSatisfied(row patchInventoryRow, deferralDays int64, now int64) bool {
