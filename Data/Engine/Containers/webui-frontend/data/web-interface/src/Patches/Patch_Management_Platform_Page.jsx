@@ -26,7 +26,13 @@ import {
   GridShell,
   MAGIC_UI,
 } from "../Devices/Tabs/Shared.jsx";
-import { PATCH_GRID_SX, PATCH_PAGE_TABS, formatScheduleType } from "./Patch_Management.jsx";
+import {
+  LinuxPatchPageIcon,
+  MacOSPatchPageIcon,
+  PATCH_GRID_SX,
+  PATCH_PAGE_TABS,
+  formatScheduleType,
+} from "./Patch_Management.jsx";
 
 const STATE_FILTER_OPTIONS = [
   { key: "pending", label: "Pending" },
@@ -56,12 +62,14 @@ function platformCopy(platform) {
       title: "MacOS Patch Management",
       subtitle: "macOS patch inventory and policies are planned for a future Borealis release.",
       label: "MacOS",
+      Icon: MacOSPatchPageIcon,
     };
   }
   return {
     title: "Linux Patch Management",
     subtitle: "Linux patch inventory and policies are planned for a future Borealis release.",
     label: "Linux",
+    Icon: LinuxPatchPageIcon,
   };
 }
 
@@ -118,7 +126,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
   useRoutePageChrome({
     title: copy.title,
     subtitle: copy.subtitle,
-    Icon: SystemUpdateAltRoundedIcon,
+    Icon: copy.Icon,
     actions: pageHeaderActions,
   });
 

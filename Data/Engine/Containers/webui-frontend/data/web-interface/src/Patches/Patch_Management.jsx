@@ -64,6 +64,44 @@ const SEVERITY_FILTER_OPTIONS = [
   { key: "unspecified", label: "Unspecified" },
 ];
 
+const OS_PAGE_ICON_CLASSES = Object.freeze({
+  windows: "fa-brands fa-windows",
+  linux: "fa-brands fa-linux",
+  macos: "fa-brands fa-apple",
+});
+
+function PatchOSPageIcon({ os = "windows", sx, className = "", ...props }) {
+  return (
+    <Box
+      component="i"
+      aria-hidden="true"
+      className={`${OS_PAGE_ICON_CLASSES[os] || OS_PAGE_ICON_CLASSES.windows} ${className}`.trim()}
+      sx={{
+        width: 22,
+        lineHeight: 1,
+        textAlign: "center",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        ...sx,
+      }}
+      {...props}
+    />
+  );
+}
+
+export function WindowsPatchPageIcon(props) {
+  return <PatchOSPageIcon os="windows" {...props} />;
+}
+
+export function LinuxPatchPageIcon(props) {
+  return <PatchOSPageIcon os="linux" {...props} />;
+}
+
+export function MacOSPatchPageIcon(props) {
+  return <PatchOSPageIcon os="macos" {...props} />;
+}
+
 export const PATCH_PAGE_TABS = [
   { key: "patch_list", label: "Patch List" },
   { key: "policies", label: "Patch Management Policies" },
@@ -1913,7 +1951,7 @@ export default function PatchManagement() {
   useRoutePageChrome({
     title: PAGE_TITLE,
     subtitle: PAGE_SUBTITLE,
-    Icon: SystemUpdateAltRoundedIcon,
+    Icon: WindowsPatchPageIcon,
     actions: pageHeaderActions,
   });
 
