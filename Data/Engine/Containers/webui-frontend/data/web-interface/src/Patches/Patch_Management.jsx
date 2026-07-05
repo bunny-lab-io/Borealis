@@ -163,6 +163,12 @@ export function unixFromDatetimeLocal(value) {
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
 }
 
+function formatDeviceCount(value) {
+  const count = Number(value || 0);
+  const safeCount = Number.isFinite(count) && count > 0 ? count : 0;
+  return `${safeCount.toLocaleString()} ${safeCount === 1 ? "Device" : "Devices"}`;
+}
+
 export function policyTypeForTab(tabKey) {
   if (tabKey === "global_policies") return "global";
   return tabKey === "device_filter_policies" ? "device_filter" : "site";
@@ -1000,9 +1006,8 @@ function PatchPolicyTab({ policyType }) {
       {
         field: "target_count",
         headerName: "Covered",
-        width: 230,
-        valueFormatter: (params) =>
-          text(params.data?.role_match_label) || Number(params.value || 0).toLocaleString(),
+        width: 145,
+        valueFormatter: (params) => formatDeviceCount(params.value),
       },
       { field: "deferral_days", headerName: "Deferral", width: 120, valueFormatter: (params) => `${Number(params.value || 0)} days` },
       { field: "install_schedule_type", headerName: "Install", width: 130 },
@@ -1039,16 +1044,17 @@ function PatchPolicyTab({ policyType }) {
   );
 
   return (
-    <Stack spacing={1.6} sx={{ minHeight: 520, p: 1.2 }}>
-      {loadError ? <Alert severity="error">{loadError}</Alert> : null}
-      <Typography sx={{ color: MAGIC_UI.textBright, fontWeight: 700 }}>
-        {policyType === "global"
-          ? "Global Policies"
-          : policyType === "site"
-            ? "Site Policies"
-            : "Device / Filter Policies"}
-      </Typography>
-      <GridShell sx={{ flexGrow: 1, minHeight: 500, borderRadius: 0, border: "none" }}>
+    <>
+      {loadError ? <Box sx={{ p: 2 }}><Alert severity="error">{loadError}</Alert></Box> : null}
+      <GridShell
+        sx={{
+          flexGrow: 1,
+          minHeight: loadError ? 460 : 520,
+          height: "100%",
+          borderRadius: 0,
+          border: "none",
+        }}
+      >
         <AgGridReact
           rowData={policies}
           columnDefs={columnDefs}
@@ -1063,7 +1069,7 @@ function PatchPolicyTab({ policyType }) {
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>
-    </Stack>
+    </>
   );
 }
 

@@ -160,7 +160,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
       { field: "name", headerName: "Policy", flex: 1.2, minWidth: 220 },
       { field: "enabled", headerName: "Enabled", width: 120 },
       { field: "role_scope", headerName: "Role", width: 135 },
-      { field: "target_count", headerName: "Covered", width: 120 },
+      { field: "target_count", headerName: "Covered", width: 145 },
       { field: "deferral_days", headerName: "Deferral", width: 120 },
       { field: "install_schedule_type", headerName: "Install", width: 130 },
       { field: "install_start_ts", headerName: "Start", width: 190 },
@@ -286,6 +286,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
           sx={{
             flexGrow: 1,
             minHeight: 520,
+            height: "100%",
             borderRadius: 0,
             border: "none",
           }}
