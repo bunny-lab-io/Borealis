@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -1758,6 +1759,14 @@ func (s *postgresOperatorStore) patchPolicyDynamicConflicts(ctx context.Context,
 }
 
 func (s *postgresOperatorStore) evaluatePatchPoliciesAt(ctx context.Context, profile operatorProfile, onlyPolicyID int64, scheduledTS int64, now int64, manual bool) (map[string]any, error) {
+	result, err := s.evaluatePatchPoliciesAtOnce(ctx, profile, onlyPolicyID, scheduledTS, now, manual)
+	if err == nil || !errors.Is(err, driver.ErrBadConn) {
+		return result, err
+	}
+	return s.evaluatePatchPoliciesAtOnce(ctx, profile, onlyPolicyID, scheduledTS, now, manual)
+}
+
+func (s *postgresOperatorStore) evaluatePatchPoliciesAtOnce(ctx context.Context, profile operatorProfile, onlyPolicyID int64, scheduledTS int64, now int64, manual bool) (map[string]any, error) {
 	if err := s.ensurePatchPolicySchema(ctx); err != nil {
 		return nil, err
 	}
