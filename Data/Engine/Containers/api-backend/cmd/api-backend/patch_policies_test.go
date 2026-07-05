@@ -131,6 +131,12 @@ func TestPatchPolicyRoleMatchingSkipsUntypedDevices(t *testing.T) {
 	if !patchPolicyRoleMatches(patchPolicyRoleWorkstation, "Laptop") {
 		t.Fatalf("non-empty non-server device_type should match workstation policy")
 	}
+	if !patchPolicyRoleMatches(patchPolicyRoleServer, "Domain Controller", "Microsoft Windows Server 2022") {
+		t.Fatalf("Windows Server operating_system should match server policy without creating a new device type")
+	}
+	if patchPolicyRoleMatches(patchPolicyRoleWorkstation, "Domain Controller", "Microsoft Windows Server 2022") {
+		t.Fatalf("Windows Server operating_system should not match workstation policy")
+	}
 }
 
 func TestPatchPolicyPendingBreakdownPayloadOrdersLabelsAndTotals(t *testing.T) {
@@ -200,6 +206,21 @@ func TestPatchPolicyScheduledTargetReadsNestedTargetJSON(t *testing.T) {
 	})
 	if deviceTarget["kind"] != "device" || cleanText(deviceTarget["hostname"]) != "DC-01" || coerceInt64(deviceTarget["site_id"]) != 7 {
 		t.Fatalf("nested device target=%#v want DC-01 site 7", deviceTarget)
+	}
+}
+
+func TestPatchPolicyDeviceFilterTargetSitesUseEligibleDevices(t *testing.T) {
+	row := patchPolicyRow{PolicyType: sql.NullString{String: patchPolicyTypeDeviceFilter, Valid: true}}
+	sites := patchPolicyTargetSitesForRow(row, patchPolicyDeviceResolution{Eligible: []patchPolicyDevice{
+		{Hostname: "DC-01", SiteID: 7, SiteName: "DEEPLAB", DeviceType: "Domain Controller", OperatingSystem: "Microsoft Windows Server 2022"},
+		{Hostname: "DC-02", SiteID: 8, SiteName: "Bunny Lab", DeviceType: "Domain Controller", OperatingSystem: "Microsoft Windows Server 2022"},
+		{Hostname: "DC-03", SiteID: 7, SiteName: "DEEPLAB", DeviceType: "Domain Controller", OperatingSystem: "Microsoft Windows Server 2022"},
+	}})
+	if len(sites) != 2 {
+		t.Fatalf("expected two target sites, got %#v", sites)
+	}
+	if sites[0]["name"] != "Bunny Lab" || sites[1]["name"] != "DEEPLAB" {
+		t.Fatalf("unexpected target site order/content: %#v", sites)
 	}
 }
 

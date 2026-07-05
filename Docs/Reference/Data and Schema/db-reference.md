@@ -747,7 +747,7 @@ finally:
     - Backup/restore durable patch state.
     - Notes:
     - Engine DB init seeds two locked `policy_type='global'` policies, one `Workstation` and one `Server`. When no split global exists, Borealis clears legacy patch policy definitions/history/state before seeding the two baselines, but preserves `patch_catalog_entries` and `device_patch_inventory`.
-    - Windows patch policies use `role_scope` as policy type. `Server` and `Workstation` are valid for save flows. `Both` may exist only as legacy helper semantics and is rejected by current policy validation.
+    - Windows patch policies use `role_scope` as policy type. `Server` and `Workstation` are valid for save flows. `Both` may exist only as legacy helper semantics and is rejected by current policy validation. Windows Server `operating_system` or `device_type` containing `server` resolves to `Server`; other non-empty `device_type` values resolve to `Workstation`.
     - Site policy scope is stored in `patch_policy_sites`; device filter scope is stored in `patch_policy_targets`.
     - `patch_policy_exclusions` stores `unmanaged`, `frozen`, and `managed_override` coverage. Device hostname exclusions include `site_id` when no device GUID is present so duplicate hostnames across sites remain distinct. Exclusions still count as covered for conflict detection.
     - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation. Block rules inherit downward; approve rules are local to each policy.
