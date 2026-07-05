@@ -2018,6 +2018,7 @@ type patchPolicyPendingInventoryRow struct {
 	SourcePolicyID   int64
 	SourcePolicyName string
 	SourcePolicyType string
+	LinkedPolicies   []patchPolicyLinkedPolicy
 }
 
 type patchPolicyDecisionResult struct {
@@ -2025,6 +2026,15 @@ type patchPolicyDecisionResult struct {
 	PolicyID   int64
 	PolicyName string
 	PolicyType string
+}
+
+type patchPolicyLinkedPolicy struct {
+	PolicyID    int64
+	PolicyName  string
+	PolicyType  string
+	RuleTypes   []string
+	MatchTypes  []string
+	MatchValues []string
 }
 
 func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Context, profile operatorProfile, rows []patchPolicyRow, activeJobs map[string]map[string]any) (patchPolicyPendingInventoryIndex, error) {
@@ -2066,9 +2076,15 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		return index, nil
 	}
 	policyByID := map[int64]patchPolicyRow{}
+	globalDirectRules := []patchPolicyRule{}
 	for _, row := range rows {
 		if id := nullInt(row.ID); id > 0 {
 			policyByID[id] = row
+		}
+		if boolInt64(row.Enabled) && normalizePatchPolicyType(row.PolicyType.String) == patchPolicyTypeGlobal {
+			for _, rule := range row.Rules {
+				globalDirectRules = append(globalDirectRules, patchPolicyRuleWithSource(row, rule))
+			}
 		}
 	}
 	if resolver == nil {
@@ -2155,6 +2171,9 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndexWithResolver(ctx
 		}
 		rowResult := patchPolicyPendingInventoryRow{patchPolicyInventoryAssignment: assignment, InstallCandidate: true}
 		patch := patchInventoryPayload(pendingRow)
+		linkedRules := append([]patchPolicyRule{}, assignment.Rules...)
+		linkedRules = append(linkedRules, globalDirectRules...)
+		rowResult.LinkedPolicies = patchPolicyLinkedPoliciesForPatch(linkedRules, patch)
 		if !patchPolicyDeferralSatisfied(pendingRow, assignment.DeferralDays, time.Now().Unix()) {
 			rowResult.InstallCandidate = false
 			rowResult.SkipReason = "deferred"
@@ -2405,6 +2424,7 @@ func attachPatchPolicyInventoryPayload(payload map[string]any, index patchPolicy
 	payload["patch_policy_hierarchy"] = row.Hierarchy
 	payload["patch_policy_install_candidate"] = row.InstallCandidate
 	payload["patch_policy_skip_reason"] = row.SkipReason
+	payload["patch_policy_linked_policies"] = patchPolicyLinkedPolicyPayloads(row.LinkedPolicies)
 }
 
 func (s *postgresOperatorStore) patchPolicyDynamicConflicts(ctx context.Context, profile operatorProfile, currentPolicyID int64, current patchPolicyRow) ([]map[string]any, error) {
@@ -3014,6 +3034,101 @@ func patchPolicyDecisionSource(rule patchPolicyRule, decision string) patchPolic
 		PolicyID:   rule.PolicyID,
 		PolicyName: cleanText(rule.PolicyName),
 		PolicyType: normalizePatchPolicyType(rule.PolicyType),
+	}
+}
+
+func patchPolicyLinkedPoliciesForPatch(rules []patchPolicyRule, patch map[string]any) []patchPolicyLinkedPolicy {
+	byKey := map[string]*patchPolicyLinkedPolicy{}
+	for _, rule := range rules {
+		if !patchPolicyRuleMatches(rule, patch) {
+			continue
+		}
+		policyID := rule.PolicyID
+		policyType := normalizePatchPolicyType(rule.PolicyType)
+		policyName := cleanText(rule.PolicyName)
+		if policyType == "" {
+			policyType = patchPolicyTypeSite
+		}
+		key := policyType + ":name:" + strings.ToLower(policyName)
+		if policyID > 0 {
+			key = policyType + ":id:" + strconv.FormatInt(policyID, 10)
+		}
+		linked := byKey[key]
+		if linked == nil {
+			linked = &patchPolicyLinkedPolicy{
+				PolicyID:   policyID,
+				PolicyName: policyName,
+				PolicyType: policyType,
+			}
+			byKey[key] = linked
+		}
+		linked.RuleTypes = appendUniquePatchPolicyText(linked.RuleTypes, normalizePatchPolicyRuleType(rule.RuleType))
+		linked.MatchTypes = appendUniquePatchPolicyText(linked.MatchTypes, normalizePatchPolicyMatchType(rule.MatchType))
+		linked.MatchValues = appendUniquePatchPolicyText(linked.MatchValues, cleanText(rule.MatchValue))
+	}
+	out := make([]patchPolicyLinkedPolicy, 0, len(byKey))
+	for _, linked := range byKey {
+		out = append(out, *linked)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		leftLayer := patchPolicyLayerSortIndex(out[i].PolicyType)
+		rightLayer := patchPolicyLayerSortIndex(out[j].PolicyType)
+		if leftLayer != rightLayer {
+			return leftLayer < rightLayer
+		}
+		leftName := strings.ToLower(out[i].PolicyName)
+		rightName := strings.ToLower(out[j].PolicyName)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		return out[i].PolicyID < out[j].PolicyID
+	})
+	return out
+}
+
+func patchPolicyLinkedPolicyPayloads(policies []patchPolicyLinkedPolicy) []map[string]any {
+	out := make([]map[string]any, 0, len(policies))
+	for _, policy := range policies {
+		policyType := normalizePatchPolicyType(policy.PolicyType)
+		if policyType == "" {
+			policyType = patchPolicyTypeSite
+		}
+		out = append(out, map[string]any{
+			"policy_id":         nullablePositiveInt64Any(policy.PolicyID),
+			"policy_name":       cleanText(policy.PolicyName),
+			"policy_type":       policyType,
+			"policy_type_label": patchPolicyTypeDisplayLabel(policyType),
+			"rule_types":        append([]string(nil), policy.RuleTypes...),
+			"match_types":       append([]string(nil), policy.MatchTypes...),
+			"match_values":      append([]string(nil), policy.MatchValues...),
+		})
+	}
+	return out
+}
+
+func appendUniquePatchPolicyText(values []string, value string) []string {
+	value = cleanText(value)
+	if value == "" {
+		return values
+	}
+	for _, existing := range values {
+		if strings.EqualFold(existing, value) {
+			return values
+		}
+	}
+	return append(values, value)
+}
+
+func patchPolicyLayerSortIndex(policyType string) int {
+	switch normalizePatchPolicyType(policyType) {
+	case patchPolicyTypeGlobal:
+		return 0
+	case patchPolicyTypeSite:
+		return 1
+	case patchPolicyTypeDeviceFilter:
+		return 2
+	default:
+		return 3
 	}
 }
 
