@@ -311,6 +311,25 @@ const REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY = "borealis_remote_desktop_performa
 const PERFORMANCE_PREFERENCE_MIN = -2;
 const PERFORMANCE_PREFERENCE_MAX = 2;
 const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
+const DISPLAY_INFERENCE_MIN_WIDTH = 640;
+const DISPLAY_INFERENCE_HORIZONTAL_RATIO = 3.15;
+const COMMON_DISPLAY_SIZES = Object.freeze([
+  { width: 5120, height: 1440 },
+  { width: 3840, height: 2160 },
+  { width: 3840, height: 1600 },
+  { width: 3840, height: 1080 },
+  { width: 3440, height: 1440 },
+  { width: 2560, height: 1440 },
+  { width: 2560, height: 1080 },
+  { width: 1920, height: 1200 },
+  { width: 1920, height: 1080 },
+  { width: 1680, height: 1050 },
+  { width: 1600, height: 900 },
+  { width: 1440, height: 900 },
+  { width: 1366, height: 768 },
+  { width: 1280, height: 1024 },
+  { width: 1280, height: 720 },
+]);
 const CONNECTION_FLOW_STEPS = Object.freeze([
   {
     id: "tunnel",
@@ -385,6 +404,13 @@ function clampNumber(value, min, max) {
 }
 
 function normalizeDisplayTopology(value) {
+  if (typeof value === "string") {
+    try {
+      return normalizeDisplayTopology(JSON.parse(value));
+    } catch {
+      return [];
+    }
+  }
   if (!Array.isArray(value)) return [];
   return value
     .filter((item) => item && typeof item === "object")
@@ -554,6 +580,139 @@ function aspectRatioMatches(leftSize, rightSize, tolerance = 0.12) {
   return Math.abs(leftRatio - rightRatio) / rightRatio <= tolerance;
 }
 
+function closeDisplaySize(value, target, tolerance) {
+  return Math.abs(Number(value || 0) - Number(target || 0)) <= tolerance;
+}
+
+function commonHorizontalDisplaySplit(remoteWidth, remoteHeight) {
+  const widthTolerance = Math.max(24, Math.round(remoteWidth * 0.012));
+  const heightTolerance = Math.max(48, Math.round(remoteHeight * 0.08));
+  let best = null;
+  COMMON_DISPLAY_SIZES.forEach((leftSize) => {
+    COMMON_DISPLAY_SIZES.forEach((rightSize) => {
+      const widthError = Math.abs(leftSize.width + rightSize.width - remoteWidth);
+      const heightError = Math.abs(Math.max(leftSize.height, rightSize.height) - remoteHeight);
+      if (widthError > widthTolerance || heightError > heightTolerance) return;
+      const score =
+        widthError * 4 +
+        heightError * 2 +
+        Math.abs(leftSize.height - remoteHeight) +
+        Math.abs(rightSize.height - remoteHeight) * 0.25;
+      if (!best || score < best.score) {
+        best = {
+          leftWidth: leftSize.width,
+          leftHeight: Math.min(remoteHeight, leftSize.height),
+          rightWidth: Math.max(DISPLAY_INFERENCE_MIN_WIDTH, remoteWidth - leftSize.width),
+          rightHeight: Math.min(remoteHeight, rightSize.height),
+          score,
+        };
+      }
+    });
+  });
+  return best;
+}
+
+function buildInferredHorizontalTopology(remoteWidth, remoteHeight, split) {
+  const leftWidth = clampNumber(
+    Math.round(split.leftWidth),
+    DISPLAY_INFERENCE_MIN_WIDTH,
+    remoteWidth - DISPLAY_INFERENCE_MIN_WIDTH
+  );
+  const rightWidth = Math.max(DISPLAY_INFERENCE_MIN_WIDTH, remoteWidth - leftWidth);
+  const leftHeight = clampNumber(
+    Math.round(split.leftHeight || remoteHeight),
+    DISPLAY_INFERENCE_MIN_WIDTH,
+    remoteHeight
+  );
+  const rightHeight = clampNumber(
+    Math.round(split.rightHeight || remoteHeight),
+    DISPLAY_INFERENCE_MIN_WIDTH,
+    remoteHeight
+  );
+  return [
+    {
+      id: "1",
+      displayIndex: 1,
+      label: "1",
+      deviceName: "Inferred Display 1",
+      left: 0,
+      top: 0,
+      right: leftWidth,
+      bottom: leftHeight,
+      width: leftWidth,
+      height: leftHeight,
+      primary: true,
+      synthetic: true,
+      inferred: true,
+    },
+    {
+      id: "2",
+      displayIndex: 2,
+      label: "2",
+      deviceName: "Inferred Display 2",
+      left: leftWidth,
+      top: 0,
+      right: leftWidth + rightWidth,
+      bottom: rightHeight,
+      width: rightWidth,
+      height: rightHeight,
+      primary: false,
+      synthetic: true,
+      inferred: true,
+    },
+  ];
+}
+
+function inferHorizontalDisplaysFromFramebuffer(display, framebufferSize) {
+  const remoteWidth = Math.max(0, Number(framebufferSize?.width || 0));
+  const remoteHeight = Math.max(0, Number(framebufferSize?.height || 0));
+  if (remoteWidth < DISPLAY_INFERENCE_MIN_WIDTH * 2 || remoteHeight < DISPLAY_INFERENCE_MIN_WIDTH) {
+    return [];
+  }
+  const reportedWidth = Math.max(0, Number(display?.width || 0));
+  const reportedHeight = Math.max(0, Number(display?.height || 0));
+  const widthGap = remoteWidth - reportedWidth;
+  const commonSplit = commonHorizontalDisplaySplit(remoteWidth, remoteHeight);
+  const commonSplitMatchesReported =
+    !reportedWidth ||
+    closeDisplaySize(
+      commonSplit?.leftWidth,
+      reportedWidth,
+      Math.max(96, remoteWidth * 0.04)
+    );
+  if (
+    commonSplit &&
+    commonSplitMatchesReported
+  ) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
+  }
+  const heightTolerance = Math.max(120, Math.round(remoteHeight * 0.28));
+  if (
+    reportedWidth >= DISPLAY_INFERENCE_MIN_WIDTH &&
+    widthGap >= DISPLAY_INFERENCE_MIN_WIDTH &&
+    closeDisplaySize(reportedHeight, remoteHeight, heightTolerance)
+  ) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+      leftWidth: reportedWidth,
+      leftHeight: reportedHeight,
+      rightWidth: widthGap,
+      rightHeight: remoteHeight,
+    });
+  }
+  if (commonSplit) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, commonSplit);
+  }
+  if (remoteWidth / remoteHeight >= DISPLAY_INFERENCE_HORIZONTAL_RATIO) {
+    return buildInferredHorizontalTopology(remoteWidth, remoteHeight, {
+      leftWidth: Math.round(remoteWidth / 2),
+      leftHeight: remoteHeight,
+      rightWidth: Math.round(remoteWidth / 2),
+      rightHeight: remoteHeight,
+    });
+  }
+  return [];
+}
+
 function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
   const authoritativeFramebufferSize =
     framebufferSize?.width && framebufferSize?.height
@@ -573,6 +732,13 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
         !topologyMatchesFramebuffer(bounds, framebufferSize) ||
         !aspectRatioMatches(display, authoritativeFramebufferSize);
       if (shouldUsePreferredSize) {
+        const inferredTopology = inferHorizontalDisplaysFromFramebuffer(
+          display,
+          authoritativeFramebufferSize
+        );
+        if (inferredTopology.length > 1) {
+          return inferredTopology;
+        }
         return [
           {
             ...display,
@@ -598,6 +764,10 @@ function displayDiagramTopology(topology, framebufferSize, renderedCanvasSize) {
         : null;
   if (!fallbackSize?.width || !fallbackSize?.height) {
     return [];
+  }
+  const inferredTopology = inferHorizontalDisplaysFromFramebuffer(null, fallbackSize);
+  if (inferredTopology.length > 1) {
+    return inferredTopology;
   }
   return [
     {
@@ -736,7 +906,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     session: true,
   });
   const [selectedDisplayId, setSelectedDisplayId] = useState(ALL_DISPLAYS_ID);
-  const [displaySelectorExpanded, setDisplaySelectorExpanded] = useState(false);
   const [displayTopology, setDisplayTopology] = useState([]);
   const [framebufferSize, setFramebufferSize] = useState({ width: 0, height: 0 });
   const [renderedCanvasSize, setRenderedCanvasSize] = useState({ width: 0, height: 0 });
@@ -836,6 +1005,10 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     () => displayDiagramTopology(normalizedDisplayTopology, framebufferSize, renderedCanvasSize),
     [framebufferSize, normalizedDisplayTopology, renderedCanvasSize]
   );
+  const inferredDisplayTopology = useMemo(
+    () => diagramTopology.some((item) => item?.inferred),
+    [diagramTopology]
+  );
   const diagramBounds = useMemo(
     () => displayTopologyBounds(diagramTopology),
     [diagramTopology]
@@ -843,21 +1016,21 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const displaySelectorOptions = useMemo(
     () => [
       { id: ALL_DISPLAYS_ID, label: "All", shortLabel: "All" },
-      ...normalizedDisplayTopology.map((item) => ({
+      ...diagramTopology.map((item) => ({
         id: monitorSelectionId(item),
         label: `Display ${item.label}`,
         shortLabel: item.label,
       })),
     ],
-    [normalizedDisplayTopology]
+    [diagramTopology]
   );
   const effectiveSelectedMonitorIds = useMemo(() => {
     if (selectedDisplayId === ALL_DISPLAYS_ID) return [];
     const availableIds = new Set(
-      normalizedDisplayTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
+      diagramTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
     );
     return availableIds.has(selectedDisplayId) ? [selectedDisplayId] : [];
-  }, [normalizedDisplayTopology, selectedDisplayId]);
+  }, [diagramTopology, selectedDisplayId]);
   const displaySelectorLabel = useMemo(() => {
     const selectedOption = displaySelectorOptions.find((item) => item.id === selectedDisplayId);
     return `Display: ${selectedOption?.shortLabel || "All"}`;
@@ -1073,7 +1246,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     viewportFocusRef.current = null;
     setDisplayTopology([]);
     setSelectedDisplayId(ALL_DISPLAYS_ID);
-    setDisplaySelectorExpanded(false);
     setDisplayMode("fit");
     setViewportPreview({
       left: 0,
@@ -2183,7 +2355,6 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         viewportFocusRef.current = null;
       }
       setSelectedDisplayId(nextDisplayId);
-      setDisplaySelectorExpanded(false);
       queueDisplayFocus();
     },
     [queueDisplayFocus, selectedDisplayId]
@@ -2210,11 +2381,11 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   useEffect(() => {
     if (selectedDisplayId === ALL_DISPLAYS_ID) return;
     const availableIds = new Set(
-      normalizedDisplayTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
+      diagramTopology.map((item) => monitorSelectionId(item)).filter(Boolean)
     );
     if (availableIds.has(selectedDisplayId)) return;
     setSelectedDisplayId(ALL_DISPLAYS_ID);
-  }, [normalizedDisplayTopology, selectedDisplayId]);
+  }, [diagramTopology, selectedDisplayId]);
 
   useEffect(() => {
     if (!isConnected) return undefined;
@@ -2920,7 +3091,12 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     Monitor layout shown from agent telemetry. Targeted monitor selection will unlock once it matches the live desktop geometry.
                   </Typography>
                 ) : null}
-                {!normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
+                {inferredDisplayTopology ? (
+                  <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
+                    Display regions inferred from the live framebuffer.
+                  </Typography>
+                ) : null}
+                {!inferredDisplayTopology && !normalizedDisplayTopology.length && framebufferSize.width > 0 && framebufferSize.height > 0 ? (
                   <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
                     Showing the live framebuffer as a single display map.
                   </Typography>
@@ -2953,32 +3129,30 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                   label={displaySelectorLabel}
                   active={displaySettingsEnabled && selectedDisplayId !== ALL_DISPLAYS_ID}
                   disabled={!displaySettingsEnabled}
-                  onClick={() => setDisplaySelectorExpanded((previous) => !previous)}
+                  onClick={queueDisplayFocus}
                   trailing={
                     <ExpandMoreIcon
                       sx={{
                         color: displaySettingsEnabled ? NAV_COLORS.cyan : "rgba(143,191,255,0.35)",
-                        transform: displaySelectorExpanded ? "rotate(180deg)" : "none",
+                        transform: "rotate(180deg)",
                         transition: "transform 140ms ease",
                       }}
                     />
                   }
                   ariaLabel="Choose display"
                 />
-                {displaySelectorExpanded ? (
-                  <Box sx={{ pb: 0.5, pl: 1.5 }}>
-                    {displaySelectorOptions.map((option) => (
-                      <SidebarNavRow
-                        key={option.id}
-                        icon={<DesktopIcon fontSize="small" />}
-                        label={option.label}
-                        active={displaySettingsEnabled && selectedDisplayId === option.id}
-                        disabled={!displaySettingsEnabled}
-                        onClick={() => selectDisplay(option.id)}
-                      />
-                    ))}
-                  </Box>
-                ) : null}
+                <Box sx={{ pb: 0.5, pl: 1.5 }}>
+                  {displaySelectorOptions.map((option) => (
+                    <SidebarNavRow
+                      key={option.id}
+                      icon={<DesktopIcon fontSize="small" />}
+                      label={option.label}
+                      active={displaySettingsEnabled && selectedDisplayId === option.id}
+                      disabled={!displaySettingsEnabled}
+                      onClick={() => selectDisplay(option.id)}
+                    />
+                  ))}
+                </Box>
               </>
             </SidebarSection>
 

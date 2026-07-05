@@ -25,7 +25,7 @@ If another operator already has the device open, Borealis joins the same shared 
 
 - Reconnect if the browser stream drops after it was already ready.
 - Adjust speed/quality preference when bandwidth is constrained.
-- Use display controls or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
+- Use the always-open display selector or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
 - In `Actual` or `Scaled` mode, drag or click the viewfinder to reposition the focused viewport.
 - Use Ctrl+Alt+Del from session controls when Windows secure desktop needs it.
 - Disconnect when finished. Closing the browser leaves a short reconnect window.
@@ -84,4 +84,5 @@ If another operator already has the device open, Borealis joins the same shared 
     - Guacamole startup treats post-ready backend status `519` as retryable, opens a fresh `guacd` session, and keeps `participant_id` plus token hints in VNC proxy logs for browser-to-Engine correlation.
     - Remote Desktop speed/quality preferences flow from WebUI through the Go VNC broker into the site-worker Guacamole session as `-2` through `2`; the default favors speed for lower-end endpoints.
     - WebUI display focus is client-side only: Guacamole keeps one full-framebuffer VNC session, while `Remote_Desktop.jsx` positions and scales the Guacamole display element to crop one monitor or pan inside `Actual` / `Scaled` view modes.
+    - When live Agent topology only reports one display but the Guacamole framebuffer is clearly wider than a single monitor, WebUI infers horizontal `Display 1` / `Display 2` focus regions so operators can still switch crops quickly.
     - Agent VNC readiness serializes local service checks, gives pending services time to settle, force-kills stuck `STOP_PENDING` UltraVNC processes after grace time, and waits for the listener before reporting ready.
