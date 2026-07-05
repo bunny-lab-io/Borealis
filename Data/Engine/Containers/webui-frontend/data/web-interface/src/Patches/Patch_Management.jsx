@@ -364,6 +364,24 @@ function PolicyScheduleCell({ policy = {} }) {
   );
 }
 
+function PolicyBooleanCell({ value = false }) {
+  return (
+    <Box sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Checkbox
+        checked={Boolean(value)}
+        disabled
+        size="small"
+        sx={{
+          p: 0,
+          color: "rgba(148,163,184,0.62)",
+          "&.Mui-checked": { color: "rgba(148,163,184,0.68)" },
+          "&.Mui-disabled": { color: "rgba(148,163,184,0.48)" },
+        }}
+      />
+    </Box>
+  );
+}
+
 export function policyTypeLabel(policyType) {
   if (policyType === "global") return "Global Policy";
   return policyType === "device_filter" ? "Device Filter Policy" : "Site Policy";
@@ -1919,27 +1937,42 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         field: "name",
         headerName: "Policy Name",
-        flex: 1,
-        minWidth: 300,
+        width: 370,
+        minWidth: 370,
+        flex: 0,
         valueGetter: (params) => text(params.data?.name),
         cellRenderer: policyNameCellRenderer,
       },
       {
         field: "policy_type",
         headerName: "Policy Scope",
-        width: 190,
-        minWidth: 175,
+        width: 170,
+        minWidth: 170,
         flex: 0,
         valueGetter: (params) => params.data?.__policyTypeLabel || policyTableTypeLabel(normalizePolicyTypeValue(params.data || {})),
       },
-      { field: "enabled", headerName: "Enabled", width: 120, flex: 0, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
-      { field: "reboot_after_install", headerName: "Reboot?", width: 125, flex: 0, valueFormatter: (params) => (params.value ? "Enabled" : "Disabled") },
-      { field: "role_scope", headerName: "Device Type", width: 145, flex: 0 },
+      {
+        field: "enabled",
+        headerName: "Enabled",
+        width: 115,
+        flex: 0,
+        cellRenderer: (params) => <PolicyBooleanCell value={params.value} />,
+        valueFormatter: (params) => (params.value ? "Enabled" : "Disabled"),
+      },
+      {
+        field: "reboot_after_install",
+        headerName: "Reboot?",
+        width: 115,
+        flex: 0,
+        cellRenderer: (params) => <PolicyBooleanCell value={params.value} />,
+        valueFormatter: (params) => (params.value ? "Enabled" : "Disabled"),
+      },
+      { field: "role_scope", headerName: "Device Type", width: 130, flex: 0 },
       {
         colId: "targeted_sites",
         headerName: "Targeted Sites",
-        width: 255,
-        minWidth: 220,
+        width: 200,
+        minWidth: 200,
         flex: 0,
         cellClass: "patch-chip-cell",
         valueGetter: (params) => params.data?.__targetSitesText || policyTargetSiteText(params.data || {}),
@@ -1948,8 +1981,8 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         colId: "pending_updates",
         headerName: "Pending Updates",
-        width: 520,
-        minWidth: 420,
+        width: 550,
+        minWidth: 550,
         flex: 0,
         valueGetter: (params) => pendingUpdateBreakdownText(params.data || {}),
         cellRenderer: (params) => (
@@ -1959,7 +1992,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
           />
         ),
       },
-      { field: "deferral_days", headerName: "Deferrment", width: 145, flex: 0, valueFormatter: (params) => `${Number(params.value || 0)} days` },
+      { field: "deferral_days", headerName: "Deferrment", width: 140, flex: 0, valueFormatter: (params) => `${Number(params.value || 0)} days` },
       {
         colId: "schedule",
         headerName: "Schedule",
@@ -1972,7 +2005,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
       {
         colId: "actions",
         headerName: "Actions",
-        width: 95,
+        width: 70,
         flex: 0,
         sortable: false,
         filter: false,

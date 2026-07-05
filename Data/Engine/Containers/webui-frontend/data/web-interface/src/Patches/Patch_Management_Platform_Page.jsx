@@ -84,6 +84,24 @@ function FilterSliderBlock({ label = "", children }) {
   );
 }
 
+function PlaceholderPolicyBooleanCell({ value = false }) {
+  return (
+    <Box sx={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Checkbox
+        checked={Boolean(value)}
+        disabled
+        size="small"
+        sx={{
+          p: 0,
+          color: "rgba(148,163,184,0.62)",
+          "&.Mui-checked": { color: "rgba(148,163,184,0.68)" },
+          "&.Mui-disabled": { color: "rgba(148,163,184,0.48)" },
+        }}
+      />
+    </Box>
+  );
+}
+
 export default function PatchManagementPlatformPage({ platform = "linux" }) {
   const copy = platformCopy(platform);
   const notifyOperator = useAppNotifications({
@@ -168,19 +186,31 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
 
   const policyColumnDefs = useMemo(
     () => [
-      { field: "name", headerName: "Policy Name", flex: 1, minWidth: 300 },
-      { field: "policy_type", headerName: "Policy Scope", width: 190, minWidth: 175, flex: 0 },
-      { field: "enabled", headerName: "Enabled", width: 120, flex: 0 },
-      { field: "reboot_after_install", headerName: "Reboot?", width: 125, flex: 0 },
-      { field: "role_scope", headerName: "Device Type", width: 145, flex: 0 },
-      { field: "targeted_sites", headerName: "Targeted Sites", width: 255, minWidth: 220, flex: 0 },
-      { field: "pending_updates", headerName: "Pending Updates", width: 520, minWidth: 420, flex: 0 },
-      { field: "deferral_days", headerName: "Deferrment", width: 145, flex: 0 },
+      { field: "name", headerName: "Policy Name", width: 370, minWidth: 370, flex: 0 },
+      { field: "policy_type", headerName: "Policy Scope", width: 170, minWidth: 170, flex: 0 },
+      {
+        field: "enabled",
+        headerName: "Enabled",
+        width: 115,
+        flex: 0,
+        cellRenderer: (params) => <PlaceholderPolicyBooleanCell value={params.value} />,
+      },
+      {
+        field: "reboot_after_install",
+        headerName: "Reboot?",
+        width: 115,
+        flex: 0,
+        cellRenderer: (params) => <PlaceholderPolicyBooleanCell value={params.value} />,
+      },
+      { field: "role_scope", headerName: "Device Type", width: 130, flex: 0 },
+      { field: "targeted_sites", headerName: "Targeted Sites", width: 200, minWidth: 200, flex: 0 },
+      { field: "pending_updates", headerName: "Pending Updates", width: 550, minWidth: 550, flex: 0 },
+      { field: "deferral_days", headerName: "Deferrment", width: 140, flex: 0 },
       { field: "install_schedule_type", headerName: "Schedule", width: 245, minWidth: 220, flex: 0, valueFormatter: (params) => formatScheduleType(params.value) },
       {
         field: "actions",
         headerName: "Actions",
-        width: 95,
+        width: 70,
         flex: 0,
         sortable: false,
         filter: false,
