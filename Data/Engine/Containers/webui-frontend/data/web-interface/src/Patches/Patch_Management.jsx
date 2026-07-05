@@ -4,15 +4,12 @@ import {
   Box,
   Button,
   Checkbox,
-  Divider,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   FormControlLabel,
   IconButton,
-  ListItemIcon,
-  ListItemText,
   Menu,
   MenuItem,
   Stack,
@@ -28,9 +25,8 @@ import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import DevicesRoundedIcon from "@mui/icons-material/DevicesRounded";
 import FilterAltIcon from "@mui/icons-material/FilterAlt";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
 import PlayArrowRoundedIcon from "@mui/icons-material/PlayArrowRounded";
-import PolicyRoundedIcon from "@mui/icons-material/PolicyRounded";
+import PlayCircleOutlineRoundedIcon from "@mui/icons-material/PlayCircleOutlineRounded";
 import PublicRoundedIcon from "@mui/icons-material/PublicRounded";
 import SaveRoundedIcon from "@mui/icons-material/SaveRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
@@ -153,42 +149,6 @@ const FILTER_LABEL_SX = {
   fontWeight: 600,
   lineHeight: 1.1,
   pl: 1,
-};
-
-const POLICY_ACTION_MENU_PAPER_SX = {
-  mt: 0.75,
-  minWidth: 250,
-  borderRadius: 2,
-  border: `1px solid ${MAGIC_UI.panelBorder}`,
-  background: "rgba(8, 12, 24, 0.96)",
-  color: MAGIC_UI.textBright,
-  boxShadow: "0 24px 60px rgba(2, 8, 23, 0.72)",
-  backdropFilter: "blur(12px)",
-  "& .MuiMenu-list": {
-    p: 0.75,
-  },
-  "& .MuiMenuItem-root": {
-    minHeight: 38,
-    borderRadius: 1,
-    fontSize: "0.88rem",
-    color: MAGIC_UI.textBright,
-  },
-  "& .MuiMenuItem-root:hover": {
-    background: "rgba(125, 183, 255, 0.12)",
-  },
-  "& .MuiListItemIcon-root": {
-    minWidth: 32,
-    color: BOREALIS_BLUE,
-  },
-};
-
-const POLICY_ACTION_MENU_HEADER_SX = {
-  px: 1,
-  py: 0.75,
-  display: "flex",
-  alignItems: "center",
-  gap: 1,
-  minWidth: 0,
 };
 
 const PATCH_CHIP_TOKEN_SX = {
@@ -1485,9 +1445,6 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
   const [policies, setPolicies] = useState([]);
   const [loadError, setLoadError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [actionMenuAnchor, setActionMenuAnchor] = useState(null);
-  const [actionMenuPosition, setActionMenuPosition] = useState(null);
-  const [actionMenuPolicy, setActionMenuPolicy] = useState(null);
   const [runUpdatesPolicy, setRunUpdatesPolicy] = useState(null);
   const [runUpdatesError, setRunUpdatesError] = useState("");
 
@@ -1506,39 +1463,6 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
   useEffect(() => {
     void loadPolicies();
   }, [loadPolicies]);
-
-  const closeActionMenu = useCallback(() => {
-    setActionMenuAnchor(null);
-    setActionMenuPosition(null);
-    setActionMenuPolicy(null);
-  }, []);
-
-  const openActionMenu = useCallback(
-    (event, policy) => {
-      if (!policy?.id) return;
-      event?.preventDefault?.();
-      event?.stopPropagation?.();
-      setActionMenuAnchor(event?.currentTarget || null);
-      setActionMenuPosition(null);
-      setActionMenuPolicy(policy);
-    },
-    []
-  );
-
-  const openContextMenu = useCallback((event, policy, node) => {
-    if (!policy?.id) return;
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    if (node && !node.isSelected?.()) {
-      node.setSelected(true, true);
-    }
-    setActionMenuAnchor(null);
-    setActionMenuPosition({
-      top: event.clientY + 2,
-      left: event.clientX + 2,
-    });
-    setActionMenuPolicy(policy);
-  }, []);
 
   const openEdit = useCallback((policy) => {
     if (!policy?.id) return;
@@ -1560,15 +1484,11 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
     }
   }, [loadPolicies]);
 
-  const openRunUpdatesDialog = useCallback(
-    (policy = {}) => {
-      if (!policy?.id) return;
-      closeActionMenu();
-      setRunUpdatesError("");
-      setRunUpdatesPolicy(policy);
-    },
-    [closeActionMenu]
-  );
+  const openRunUpdatesDialog = useCallback((policy = {}) => {
+    if (!policy?.id) return;
+    setRunUpdatesError("");
+    setRunUpdatesPolicy(policy);
+  }, []);
 
   const closeRunUpdatesDialog = useCallback(() => {
     if (runUpdatesPolicy?.id && busyId === `run-updates-${runUpdatesPolicy.id}`) return;
@@ -1598,66 +1518,43 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
     }
   }, [loadPolicies]);
 
-  const actionMenuItems = useMemo(
-    () => [
-      {
-        id: "edit",
-        label: "Edit",
-        icon: <PolicyRoundedIcon fontSize="small" />,
-        disabled: false,
-        onClick: () => {
-          const policy = actionMenuPolicy;
-          closeActionMenu();
-          openEdit(policy);
-        },
-      },
-      {
-        id: "run-updates-now",
-        label: "Run Updates Now",
-        icon: <PlayArrowRoundedIcon fontSize="small" />,
-        disabled: !actionMenuPolicy?.id || busyId === `run-updates-${actionMenuPolicy?.id}`,
-        onClick: () => {
-          openRunUpdatesDialog(actionMenuPolicy);
-        },
-      },
-      {
-        id: "delete",
-        label: "Delete",
-        icon: <DeleteRoundedIcon fontSize="small" />,
-        disabled:
-          !actionMenuPolicy?.id ||
-          Boolean(actionMenuPolicy?.locked) ||
-          normalizePolicyTypeValue(actionMenuPolicy) === "global" ||
-          busyId === `delete-${actionMenuPolicy?.id}`,
-        onClick: () => {
-          const policy = actionMenuPolicy;
-          closeActionMenu();
-          void deletePolicy(policy);
-        },
-      },
-    ],
-    [actionMenuPolicy, busyId, closeActionMenu, deletePolicy, openEdit, openRunUpdatesDialog]
-  );
-
   const actionCellRenderer = useCallback(
     (params) => {
       const policy = params.data || {};
+      const deleteDisabled =
+        !policy?.id ||
+        Boolean(policy?.locked) ||
+        normalizePolicyTypeValue(policy) === "global" ||
+        busyId === `delete-${policy?.id}`;
+      const deleteTooltip =
+        Boolean(policy?.locked) || normalizePolicyTypeValue(policy) === "global"
+          ? "Global policies are locked"
+          : "Delete Policy";
       return (
-        <IconButton
-          size="small"
-          onClick={(event) => openActionMenu(event, policy)}
-          sx={{
-            color: BOREALIS_BLUE,
-            width: 32,
-            height: 32,
-            "&:hover": { background: "rgba(125, 183, 255, 0.12)" },
-          }}
-        >
-          <MoreVertIcon fontSize="small" />
-        </IconButton>
+        <Tooltip title={deleteTooltip}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={deleteDisabled}
+              onClick={(event) => {
+                event.stopPropagation();
+                void deletePolicy(policy);
+              }}
+              sx={{
+                color: "rgba(148,163,184,0.78)",
+                width: 32,
+                height: 32,
+                "&:hover": { color: "#f87171", background: "rgba(248,113,113,0.1)" },
+                "&.Mui-disabled": { color: "rgba(71,85,105,0.48)" },
+              }}
+            >
+              <DeleteRoundedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       );
     },
-    [openActionMenu]
+    [busyId, deletePolicy]
   );
 
   const hierarchyRows = useMemo(() => buildPatchPolicyHierarchyRows(policies), [policies]);
@@ -1668,6 +1565,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
     const policyName = text(row.name) || "Patch Policy";
     const editPath = policyEditPath(row);
     const PolicyTypeIcon = policyIconForType(normalizePolicyTypeValue(row));
+    const runDisabled = !row?.id || busyId === `run-updates-${row.id}`;
     const handleClick = (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -1706,6 +1604,34 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
             flexShrink: 0,
           }}
         />
+        <Tooltip title="Run Updates Now">
+          <span>
+            <IconButton
+              size="small"
+              disabled={runDisabled}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openRunUpdatesDialog(row);
+              }}
+              sx={{
+                width: 24,
+                height: 24,
+                color: "rgba(100,116,139,0.92)",
+                flexShrink: 0,
+                "&:hover": {
+                  color: BOREALIS_BLUE,
+                  background: "rgba(125,183,255,0.1)",
+                },
+                "&.Mui-disabled": {
+                  color: "rgba(71,85,105,0.5)",
+                },
+              }}
+            >
+              <PlayCircleOutlineRoundedIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Box
           component="a"
           href={editPath}
@@ -1750,7 +1676,7 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         ) : null}
       </Box>
     );
-  }, [openEdit]);
+  }, [busyId, openEdit, openRunUpdatesDialog]);
 
   const targetSitesCellRenderer = useCallback((params) => {
     const sites = Array.isArray(params.data?.__targetSites) ? params.data.__targetSites : normalizeTargetSites(params.data || {});
@@ -1881,39 +1807,11 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
     [actionCellRenderer, onPendingUpdatesClick, policyNameCellRenderer, targetSitesCellRenderer]
   );
 
-  const ActionMenuPolicyIcon = policyIconForType(normalizePolicyTypeValue(actionMenuPolicy));
   const RunUpdatesPolicyIcon = policyIconForType(normalizePolicyTypeValue(runUpdatesPolicy));
   const runUpdatesBusy = Boolean(runUpdatesPolicy?.id && busyId === `run-updates-${runUpdatesPolicy.id}`);
 
   return (
     <>
-      <Menu
-        anchorEl={actionMenuAnchor}
-        anchorReference={actionMenuPosition ? "anchorPosition" : "anchorEl"}
-        anchorPosition={actionMenuPosition || undefined}
-        open={Boolean(actionMenuPolicy)}
-        onClose={closeActionMenu}
-        PaperProps={{ sx: POLICY_ACTION_MENU_PAPER_SX }}
-      >
-        <Box sx={POLICY_ACTION_MENU_HEADER_SX}>
-          <ActionMenuPolicyIcon sx={{ color: BOREALIS_BLUE, fontSize: 20, flexShrink: 0 }} />
-          <Box sx={{ minWidth: 0 }}>
-            <Typography noWrap sx={{ color: MAGIC_UI.textBright, fontSize: "0.9rem", fontWeight: 700 }}>
-              {text(actionMenuPolicy?.name) || "Patch Policy"}
-            </Typography>
-            <Typography noWrap sx={{ color: MAGIC_UI.textMuted, fontSize: "0.76rem" }}>
-              {policyRowTypeLabel(actionMenuPolicy)}
-            </Typography>
-          </Box>
-        </Box>
-        <Divider sx={{ borderColor: "rgba(148,163,184,0.18)", my: 0.5 }} />
-        {actionMenuItems.map((item) => (
-          <MenuItem key={item.id} disabled={item.disabled} onClick={item.onClick}>
-            <ListItemIcon>{item.icon}</ListItemIcon>
-            <ListItemText primary={item.label} />
-          </MenuItem>
-        ))}
-      </Menu>
       <Dialog
         open={Boolean(runUpdatesPolicy)}
         onClose={runUpdatesBusy ? undefined : closeRunUpdatesDialog}
@@ -2071,8 +1969,6 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
           rowClassRules={{
             "patch-policy-linked-reference": (params) => Boolean(params.data?.__isReference),
           }}
-          onCellContextMenu={(params) => openContextMenu(params.event, params.data, params.node)}
-          suppressContextMenu
           theme={DEVICE_DETAILS_GRID_THEME}
         />
       </GridShell>

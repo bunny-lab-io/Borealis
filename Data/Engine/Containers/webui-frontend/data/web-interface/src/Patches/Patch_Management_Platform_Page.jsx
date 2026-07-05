@@ -12,7 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import SystemUpdateAltRoundedIcon from "@mui/icons-material/SystemUpdateAltRounded";
 import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
@@ -198,7 +198,7 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
               "&:hover": { background: "rgba(125, 183, 255, 0.12)" },
             }}
           >
-            <MoreVertIcon fontSize="small" />
+            <DeleteRoundedIcon fontSize="small" />
           </IconButton>
         ),
       },
