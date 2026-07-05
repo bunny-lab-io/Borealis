@@ -426,6 +426,7 @@ func (s *postgresOperatorStore) listPatchPolicies(ctx context.Context, profile o
 		payload["role_match_label"] = patchPolicyRoleMatchLabel(counts)
 		payload["pending_update_count"] = patchPolicyPendingTotal(pendingCounts)
 		payload["pending_update_breakdown"] = patchPolicyPendingBreakdownPayload(pendingCounts)
+		payload["pending_update_device_count"] = pendingIndex.DeviceCountByPolicyID[nullInt(row.ID)]
 		payload["target_sites"] = targetSites
 		payload["target_site_ids"] = patchPolicyTargetSiteIDs(targetSites)
 		payload["target_site_names"] = patchPolicyTargetSiteNames(targetSites)
@@ -1748,8 +1749,10 @@ func patchPolicyEffectiveRules(hierarchy []patchPolicyRow) []patchPolicyRule {
 }
 
 type patchPolicyPendingInventoryIndex struct {
-	BreakdownByPolicyID map[int64]map[string]int
-	RowsByInventoryID   map[int64]patchPolicyPendingInventoryRow
+	BreakdownByPolicyID   map[int64]map[string]int
+	DeviceCountByPolicyID map[int64]int
+	deviceGUIDsByPolicyID map[int64]map[string]struct{}
+	RowsByInventoryID     map[int64]patchPolicyPendingInventoryRow
 }
 
 type patchPolicyInventoryAssignment struct {
@@ -1772,8 +1775,10 @@ type patchPolicyPendingInventoryRow struct {
 
 func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Context, profile operatorProfile, rows []patchPolicyRow, activeJobs map[string]map[string]any) (patchPolicyPendingInventoryIndex, error) {
 	index := patchPolicyPendingInventoryIndex{
-		BreakdownByPolicyID: map[int64]map[string]int{},
-		RowsByInventoryID:   map[int64]patchPolicyPendingInventoryRow{},
+		BreakdownByPolicyID:   map[int64]map[string]int{},
+		DeviceCountByPolicyID: map[int64]int{},
+		deviceGUIDsByPolicyID: map[int64]map[string]struct{}{},
+		RowsByInventoryID:     map[int64]patchPolicyPendingInventoryRow{},
 	}
 	if rows == nil {
 		if err := s.ensurePatchPolicySchema(ctx); err != nil {
@@ -1905,12 +1910,12 @@ func (s *postgresOperatorStore) patchPolicyPendingInventoryIndex(ctx context.Con
 		if !rowResult.InstallCandidate {
 			continue
 		}
-		patchPolicyAddPendingBreakdownCount(&index, assignment)
+		patchPolicyAddPendingBreakdownCount(&index, assignment, guid)
 	}
 	return index, nil
 }
 
-func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment) {
+func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex, assignment patchPolicyInventoryAssignment, deviceGUID string) {
 	if index == nil || assignment.EffectivePolicyID <= 0 {
 		return
 	}
@@ -1925,6 +1930,21 @@ func patchPolicyAddPendingBreakdownCount(index *patchPolicyPendingInventoryIndex
 		index.BreakdownByPolicyID[assignment.EffectivePolicyID] = map[string]int{}
 	}
 	index.BreakdownByPolicyID[assignment.EffectivePolicyID][policyType]++
+	deviceGUID = strings.ToLower(normalizeCanonicalGUID(deviceGUID))
+	if deviceGUID == "" {
+		return
+	}
+	if index.deviceGUIDsByPolicyID == nil {
+		index.deviceGUIDsByPolicyID = map[int64]map[string]struct{}{}
+	}
+	if index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID] == nil {
+		index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID] = map[string]struct{}{}
+	}
+	index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID][deviceGUID] = struct{}{}
+	if index.DeviceCountByPolicyID == nil {
+		index.DeviceCountByPolicyID = map[int64]int{}
+	}
+	index.DeviceCountByPolicyID[assignment.EffectivePolicyID] = len(index.deviceGUIDsByPolicyID[assignment.EffectivePolicyID])
 }
 
 func firstPatchPolicyRow(left patchPolicyRow, right patchPolicyRow) patchPolicyRow {
@@ -2985,11 +3005,19 @@ func patchPolicyCoverageKeys(targets []patchPolicyTargetRef, exclusions []patchP
 }
 
 func patchPolicyScheduledTarget(entry map[string]any) map[string]any {
-	targetType := normalizePatchPolicyTargetType(firstPresentAny(entry["target_type"], entry["kind"], entry["type"]))
-	if targetType == "filter" || coerceInt64(entry["filter_id"]) > 0 {
-		return map[string]any{"kind": "filter", "filter_id": firstPresentAny(entry["filter_id"], entry["id"])}
+	target := schedulerAnyMap(entry["target"])
+	targetType := normalizePatchPolicyTargetType(firstPresentAny(entry["target_type"], entry["kind"], entry["type"], target["target_type"], target["kind"], target["type"]))
+	filterID := firstPresentAny(entry["filter_id"], entry["id"], target["filter_id"], target["id"])
+	if targetType == "filter" || coerceInt64(filterID) > 0 {
+		return map[string]any{"kind": "filter", "filter_id": filterID, "name": firstPresentAny(entry["name"], target["name"])}
 	}
-	return map[string]any{"kind": "device", "hostname": entry["hostname"], "device_guid": firstPresentAny(entry["device_guid"], entry["guid"]), "site_id": entry["site_id"], "site_name": entry["site_name"]}
+	return map[string]any{
+		"kind":        "device",
+		"hostname":    firstPresentAny(entry["hostname"], target["hostname"]),
+		"device_guid": firstPresentAny(entry["device_guid"], entry["guid"], target["device_guid"], target["guid"]),
+		"site_id":     firstPresentAny(entry["site_id"], entry["siteId"], target["site_id"], target["siteId"]),
+		"site_name":   firstPresentAny(entry["site_name"], entry["siteName"], entry["site"], target["site_name"], target["siteName"], target["site"]),
+	}
 }
 
 func patchPolicyTargetIdentityFromAny(value any) string {

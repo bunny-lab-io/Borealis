@@ -1843,9 +1843,10 @@ function PatchPolicyTab({ onPendingUpdatesClick }) {
         cellRenderer: targetSitesCellRenderer,
       },
       {
-        field: "target_count",
-        headerName: "Targeted Devices",
-        width: 175,
+        field: "pending_update_device_count",
+        headerName: "Devices with Pending Updates",
+        width: 235,
+        minWidth: 210,
         flex: 0,
         valueFormatter: (params) => formatDeviceCount(params.value),
       },

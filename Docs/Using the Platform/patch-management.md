@@ -43,7 +43,7 @@ Windows patch policies are single-domain. Site policies target one or more sites
 
 Device Filter policies also choose exactly one policy type. Borealis resolves direct devices and filters first, then strips devices that do not match the policy type. Devices with no declared `device_type` are ignored by Windows patch automation until typed. A `device_type` containing `server` is treated as `Server`; any other non-empty value is treated as `Workstation`.
 
-The policy list `Targeted Devices` column shows eligible typed Windows devices. Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
+The policy list `Devices with Pending Updates` column shows unique devices with approved, deferral-ready pending install candidates owned by that policy row. Policy editor target rows can show `eligible / raw Devices Match Policy Type` so operators can see how many raw Windows device matches were stripped by server/workstation filtering.
 
 Device Filter policies override site and global policy behavior. Direct same-layer overlaps are blocked at save time. Dynamic filter overlaps mark affected devices as conflicted during evaluation so automation skips them instead of guessing which policy should win. Parent policies skip devices already owned by a deeper same-type policy, so policy-created patch jobs do not duplicate deployments.
 

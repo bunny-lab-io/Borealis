@@ -125,7 +125,7 @@ func TestPatchPolicyRoleMatchingSkipsUntypedDevices(t *testing.T) {
 	if patchPolicyRoleMatches(patchPolicyRoleWorkstation, "") {
 		t.Fatalf("untyped devices should not match workstation policy")
 	}
-	if !patchPolicyRoleMatches(patchPolicyRoleServer, "Domain Controller Server") {
+	if !patchPolicyRoleMatches(patchPolicyRoleServer, "Windows Server") {
 		t.Fatalf("server device_type should match server policy")
 	}
 	if !patchPolicyRoleMatches(patchPolicyRoleWorkstation, "Laptop") {
@@ -168,13 +168,38 @@ func TestPatchPolicyPendingBreakdownCountsEffectivePolicyOnly(t *testing.T) {
 		EffectivePolicyID:   22,
 		EffectivePolicyType: patchPolicyTypeSite,
 		HierarchyPolicyIDs:  []int64{11, 22},
-	})
+	}, "11111111-1111-1111-1111-111111111111")
+	patchPolicyAddPendingBreakdownCount(&index, patchPolicyInventoryAssignment{
+		EffectivePolicyID:   22,
+		EffectivePolicyType: patchPolicyTypeSite,
+		HierarchyPolicyIDs:  []int64{11, 22},
+	}, "11111111-1111-1111-1111-111111111111")
 
 	if got := index.BreakdownByPolicyID[11][patchPolicyTypeSite]; got != 0 {
 		t.Fatalf("parent policy received child pending count=%d want 0", got)
 	}
-	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 1 {
-		t.Fatalf("effective policy pending count=%d want 1", got)
+	if got := index.BreakdownByPolicyID[22][patchPolicyTypeSite]; got != 2 {
+		t.Fatalf("effective policy pending count=%d want 2", got)
+	}
+	if got := index.DeviceCountByPolicyID[22]; got != 1 {
+		t.Fatalf("effective policy pending device count=%d want 1", got)
+	}
+}
+
+func TestPatchPolicyScheduledTargetReadsNestedTargetJSON(t *testing.T) {
+	filterTarget := patchPolicyScheduledTarget(map[string]any{
+		"target_type": "filter",
+		"target":      map[string]any{"filter_id": float64(42), "name": "Domain Controllers"},
+	})
+	if filterTarget["kind"] != "filter" || coerceInt64(filterTarget["filter_id"]) != 42 {
+		t.Fatalf("nested filter target=%#v want filter_id=42", filterTarget)
+	}
+
+	deviceTarget := patchPolicyScheduledTarget(map[string]any{
+		"target": map[string]any{"hostname": "DC-01", "site_id": float64(7), "site_name": "DEEPLAB"},
+	})
+	if deviceTarget["kind"] != "device" || cleanText(deviceTarget["hostname"]) != "DC-01" || coerceInt64(deviceTarget["site_id"]) != 7 {
+		t.Fatalf("nested device target=%#v want DC-01 site 7", deviceTarget)
 	}
 }
 
