@@ -354,11 +354,13 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		return "", err
 	}
 	captureSettings := ultraVNCCaptureSettings()
-	content := "[UltraVNC]\n" +
+	content := "[admin]\n" +
 		"UseRegistry=0\n" +
 		"AuthRequired=1\n" +
 		"MSLogonRequired=0\n" +
 		"NewMSLogon=0\n" +
+		"primary=1\n" +
+		"secondary=1\n" +
 		"PortNumber=5900\n" +
 		"AutoPortSelect=0\n" +
 		"SocketConnect=1\n" +
@@ -368,7 +370,14 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"AllowShutdown=1\n" +
 		"DisableTrayIcon=1\n" +
 		"EnableFileTransfer=0\n" +
+		"FileTransferEnabled=0\n" +
 		"RemoveWallpaper=1\n" +
+		"\n" +
+		"[UltraVNC]\n" +
+		"passwd=" + placeholderHash + "\n" +
+		"passwd2=\n" +
+		"\n" +
+		"[poll]\n" +
 		"TurboMode=1\n" +
 		"PollUnderCursor=0\n" +
 		"PollForeground=0\n" +
@@ -378,9 +387,7 @@ func ensureUltraVNCBootstrapConfig(cfg BootstrapConfig, logger *BootstrapLogger)
 		"EnableDriver=" + captureSettings.enableDriver + "\n" +
 		"EnableHook=" + captureSettings.enableHook + "\n" +
 		"EnableVirtual=0\n" +
-		"SingleWindow=0\n" +
-		"passwd=" + placeholderHash + "\n" +
-		"passwd2=\n"
+		"SingleWindow=0\n"
 	if err := os.WriteFile(configPath, []byte(content), 0644); err != nil {
 		return "", err
 	}

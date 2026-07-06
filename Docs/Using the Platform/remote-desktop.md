@@ -25,6 +25,9 @@ If another operator already has the device open, Borealis joins the same shared 
 
 - Reconnect if the browser stream drops after it was already ready.
 - Adjust speed/quality preference when bandwidth is constrained.
+- Use the always-open display selector or the viewfinder to fit the full desktop or focus one monitor when the Windows endpoint has multiple displays.
+- After a display is selected, Borealis switches the viewer to `Fit`, clips video and mouse input to that display, and previews that display region by itself. The viewfinder center-fits multi-display layouts so wide monitor spans stay inside the sidebar preview.
+- Use `Fit` or `Scaled` when `Display: All` is selected. Single-display focus uses `Fit` only.
 - Use Ctrl+Alt+Del from session controls when Windows secure desktop needs it.
 - Disconnect when finished. Closing the browser leaves a short reconnect window.
 
@@ -72,6 +75,7 @@ If another operator already has the device open, Borealis joins the same shared 
     - Browser receives a Borealis one-time token, not the UltraVNC password.
     - Guacamole connects through local `guacd`, then to the agent VNC listener over WireGuard.
     - VNC role keeps UltraVNC available after firewall scope and runtime credentials are ready.
+    - Agent VNC config sets UltraVNC `[admin]` values `primary=1` and `secondary=1` so multi-monitor Windows endpoints start Guacamole sessions with the full desktop framebuffer instead of primary-only capture.
     - VNC establish performs a fast TCP probe first, then longer recovery and restart probes for slow Agent readiness.
     - Engine VNC readiness waits can be tuned with `BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS`, `BOREALIS_VNC_START_READY_WAIT_SECONDS`, `BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS`, `BOREALIS_VNC_RESTART_READY_WAIT_SECONDS`, `BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS`, and `BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS`.
     - Engine calls Agent `vnc_start` synchronously through the site-worker before issuing a browser Guacamole token, so stale TCP listener probes cannot race ahead of Agent-side VNC config and service readiness.
@@ -80,4 +84,7 @@ If another operator already has the device open, Borealis joins the same shared 
     - Site-worker emits `first_frame` events after Guacamole sees the first display instruction, and the Engine records `first_frame_at` on the shared VNC session snapshot.
     - Guacamole startup treats post-ready backend status `519` as retryable, opens a fresh `guacd` session, and keeps `participant_id` plus token hints in VNC proxy logs for browser-to-Engine correlation.
     - Remote Desktop speed/quality preferences flow from WebUI through the Go VNC broker into the site-worker Guacamole session as `-2` through `2`; the default favors speed for lower-end endpoints.
+    - WebUI display focus is client-side only: Guacamole keeps one full-framebuffer VNC session, while `Remote_Desktop.jsx` positions and scales the Guacamole display element inside an overflow-hidden clip layer to crop one monitor. `Display: All` supports `Fit` and `Scaled`; single-display focus forces `Fit` and clamps mouse coordinates to the selected display.
+    - Windows Agent display topology prefers active monitor geometry from `EnumDisplayMonitors` when that data is at least as complete as `EnumDisplaySettingsEx`. This preserves physical positions such as secondary monitors to the left of the primary monitor instead of trusting a stale or flattened display-settings layout.
+    - When live Agent topology only reports one display but the Guacamole framebuffer is clearly wider, WebUI uses `display_virtual_bounds` first to project the reported monitor into framebuffer coordinates, then uses reported framebuffer gaps when one monitor size is known. If Windows collapses the whole desktop into one very-wide display, WebUI uses aspect-ratio priors to expose best-effort display rows without hardcoding pixel resolutions.
     - Agent VNC readiness serializes local service checks, gives pending services time to settle, force-kills stuck `STOP_PENDING` UltraVNC processes after grace time, and waits for the listener before reporting ready.

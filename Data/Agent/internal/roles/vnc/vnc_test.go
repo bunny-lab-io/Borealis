@@ -91,6 +91,123 @@ func TestDisplayVirtualBoundsIncludesNegativeOrigins(t *testing.T) {
 	}
 }
 
+func TestSelectDisplayTopologyPrefersRicherFallback(t *testing.T) {
+	primaryOnly := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryOnly, sampleDisplayTopology())
+
+	if len(selected) != 2 {
+		t.Fatalf("expected richer fallback topology, got %#v", selected)
+	}
+	if selected[0]["display_index"] != 1 || selected[1]["display_index"] != 2 {
+		t.Fatalf("expected display-index sorting, got %#v", selected)
+	}
+}
+
+func TestSelectDisplayTopologyPrefersLargerFallbackBounds(t *testing.T) {
+	primaryOnly := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         1920,
+			"bottom":        1080,
+			"width":         1920,
+			"height":        1080,
+			"primary":       true,
+		},
+	}
+	fallback := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryOnly, fallback)
+
+	if len(selected) != 1 || selected[0]["width"] != 5760 {
+		t.Fatalf("expected larger fallback bounds, got %#v", selected)
+	}
+}
+
+func TestSelectDisplayTopologyPrefersFallbackWhenGeometryDiffers(t *testing.T) {
+	primaryWrong := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+		{
+			"id":            "2",
+			"display_index": 2,
+			"left":          5760,
+			"top":           360,
+			"right":         7680,
+			"bottom":        1440,
+			"width":         1920,
+			"height":        1080,
+			"primary":       false,
+		},
+	}
+	fallbackCorrect := []map[string]any{
+		{
+			"id":            "1",
+			"display_index": 1,
+			"left":          0,
+			"top":           0,
+			"right":         5760,
+			"bottom":        1440,
+			"width":         5760,
+			"height":        1440,
+			"primary":       true,
+		},
+		{
+			"id":            "2",
+			"display_index": 2,
+			"left":          -1920,
+			"top":           360,
+			"right":         0,
+			"bottom":        1440,
+			"width":         1920,
+			"height":        1080,
+			"primary":       false,
+		},
+	}
+
+	selected := selectDisplayTopology(primaryWrong, fallbackCorrect)
+
+	if len(selected) != 2 || selected[1]["left"] != -1920 {
+		t.Fatalf("expected monitor-info fallback geometry, got %#v", selected)
+	}
+}
+
 func TestEnsureRequestPayloadIncludesDisplayTopology(t *testing.T) {
 	manager := &Manager{
 		authClient:       fakeVNCAuthClient{agentID: "agent-1"},
@@ -286,19 +403,34 @@ func TestUltraVNCConfigIncludesSecurityAndCaptureSettings(t *testing.T) {
 	settings := ultraVNCSettings(5901, "DBD83CFD727A145800", true, "")
 	rendered := renderUltraVNCConfig(settings)
 	for _, expected := range []string{
+		"[admin]",
 		"[UltraVNC]",
+		"[poll]",
 		"UseRegistry=0",
 		"AuthRequired=1",
 		"PortNumber=5901",
 		"SocketConnect=1",
 		"AllowLoopback=1",
+		"FileTransferEnabled=0",
 		"RemoveWallpaper=1",
 		"passwd=DBD83CFD727A145800",
 		"passwd2=",
+		"PollFullScreen=1",
 	} {
 		if !strings.Contains(rendered, expected) {
 			t.Fatalf("config missing %q:\n%s", expected, rendered)
 		}
+	}
+	for _, expected := range []string{"primary=1", "secondary=1"} {
+		if !sectionContains(rendered, "admin", expected) {
+			t.Fatalf("admin section missing %q:\n%s", expected, rendered)
+		}
+	}
+	if !sectionContains(rendered, "poll", "EnableVirtual=0") {
+		t.Fatalf("poll section missing EnableVirtual=0:\n%s", rendered)
+	}
+	if !sectionContains(rendered, "UltraVNC", "passwd=DBD83CFD727A145800") {
+		t.Fatalf("UltraVNC section missing password:\n%s", rendered)
 	}
 }
 
@@ -784,6 +916,19 @@ func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
 	if err := manager.startService(context.Background(), serviceName); err != nil {
 		t.Fatalf("startService returned error for already-running service: %v", err)
 	}
+}
+
+func sectionContains(content string, section string, expected string) bool {
+	header := "[" + section + "]"
+	start := strings.Index(content, header)
+	if start < 0 {
+		return false
+	}
+	sectionText := content[start+len(header):]
+	if next := strings.Index(sectionText, "\n["); next >= 0 {
+		sectionText = sectionText[:next]
+	}
+	return strings.Contains(sectionText, expected)
 }
 
 func containsCall(calls []string, expected string) bool {
