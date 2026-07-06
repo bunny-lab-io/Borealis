@@ -547,6 +547,8 @@ class SiteWorkerSocketRuntime:
             hostname = _normalize_file_text(request.form.get("hostname"))
             device_guid = _normalize_file_text(request.form.get("device_guid"))
             agent_id = _normalize_file_text(request.form.get("agent_id"))
+            if not device_guid:
+                device_guid = normalize_guid(infer_guid_from_agent_id(agent_id))
             operator_id = _normalize_file_text(request.form.get("operator_id")) or "unknown"
             target_path = _normalize_file_text(request.form.get("target_path"))
             transfer_base_url = _normalize_file_text(request.form.get("transfer_base_url"))
@@ -569,7 +571,11 @@ class SiteWorkerSocketRuntime:
             if not files and not manifest_only_empty_upload:
                 missing_fields.append("files")
             if missing_fields:
-                return jsonify({"error": "invalid_request", "missing": missing_fields}), 400
+                return jsonify({
+                    "error": "invalid_request",
+                    "message": "Upload transfer request is missing: {0}.".format(", ".join(missing_fields)),
+                    "missing": missing_fields,
+                }), 400
             try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
@@ -627,6 +633,8 @@ class SiteWorkerSocketRuntime:
             hostname = _normalize_file_text(data.get("hostname"))
             device_guid = _normalize_file_text(data.get("device_guid"))
             agent_id = _normalize_file_text(data.get("agent_id"))
+            if not device_guid:
+                device_guid = normalize_guid(infer_guid_from_agent_id(agent_id))
             operator_id = _normalize_file_text(data.get("operator_id")) or "unknown"
             transfer_base_url = _normalize_file_text(data.get("transfer_base_url"))
             selections = _normalize_transfer_entries(data.get("items") or data.get("paths") or data.get("path"))

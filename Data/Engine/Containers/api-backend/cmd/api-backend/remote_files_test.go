@@ -176,10 +176,13 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 			})
 		case "/remote-files/transfers/upload":
 			sawUpload = true
+			if r.ContentLength <= 0 {
+				t.Fatalf("expected upload transfer request to set content length, got %d", r.ContentLength)
+			}
 			if err := r.ParseMultipartForm(1 << 20); err != nil {
 				t.Fatalf("multipart parse failed: %v", err)
 			}
-			if r.FormValue("hostname") != "LAB-OPERATOR-01" || r.FormValue("device_guid") == "" || r.FormValue("target_path") != "C:\\Temp" {
+			if r.FormValue("hostname") != "LAB-OPERATOR-01" || r.FormValue("device_guid") != "00000000-0000-4000-8000-000000000123" || r.FormValue("target_path") != "C:\\Temp" {
 				t.Fatalf("unexpected upload form host=%q guid=%q target=%q", r.FormValue("hostname"), r.FormValue("device_guid"), r.FormValue("target_path"))
 			}
 			if files := r.MultipartForm.File["files"]; len(files) != 1 || files[0].Filename != "one.txt" {
@@ -204,9 +207,8 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 	store := &fakeProcessStore{
 		profile: operatorProfile{Username: "operator", Role: "Admin"},
 		snapshot: deviceProcessContext{
-			GUID:     "00000000-0000-4000-8000-000000000123",
 			Hostname: "LAB-OPERATOR-01",
-			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			AgentID:  "LAB-OPERATOR-01_00000000-0000-4000-8000-000000000123_SYSTEM",
 			Route:    routeForTestWorker(t, worker.URL),
 		},
 	}

@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -290,6 +291,14 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_manifest_mismatch"})
 			return
 		}
+		deviceGUID := remoteFileTransferDeviceGUID(snapshot)
+		if deviceGUID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":   "device_guid_unavailable",
+				"message": "File transfer requires a device GUID. Reconnect the Agent or refresh device inventory before uploading.",
+			})
+			return
+		}
 
 		conflictResolutions := normalizeConflictResolutionMap(r.FormValue("conflict_resolutions"))
 		conflictPayload, status, workerErr := remoteFileUploadConflictsPayload(r.Context(), auth, snapshot, operatorID, targetPath, manifestItems)
@@ -376,7 +385,7 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 		workerURLs := remoteOpsWorkerURLs(r, snapshot.Route)
 		session, workerStatus, workerErr := remoteFilePostWorkerUpload(r.Context(), auth, snapshot.Route, remoteFileUploadWorkerRequest{
 			Hostname:        snapshot.Hostname,
-			DeviceGUID:      snapshot.GUID,
+			DeviceGUID:      deviceGUID,
 			AgentID:         snapshot.AgentID,
 			OperatorID:      operatorID,
 			TargetPath:      targetPath,
@@ -413,11 +422,19 @@ func remoteFileDownloadHandler(auth *authService) func(http.ResponseWriter, *htt
 			kind := strings.ToLower(cleanText(selections[0]["kind"]))
 			archiveRequired = kind == "directory"
 		}
+		deviceGUID := remoteFileTransferDeviceGUID(snapshot)
+		if deviceGUID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":   "device_guid_unavailable",
+				"message": "File transfer requires a device GUID. Reconnect the Agent or refresh device inventory before downloading.",
+			})
+			return
+		}
 		archiveName := guessRemoteFileDownloadName(snapshot.Hostname, selections, archiveRequired)
 		workerURLs := remoteOpsWorkerURLs(r, snapshot.Route)
 		session, workerStatus, workerErr := remoteFilePostWorkerJSON(r.Context(), auth, snapshot.Route, "/remote-files/transfers/download", map[string]any{
 			"hostname":          snapshot.Hostname,
-			"device_guid":       snapshot.GUID,
+			"device_guid":       deviceGUID,
 			"agent_id":          snapshot.AgentID,
 			"operator_id":       operatorID,
 			"items":             selections,
@@ -722,6 +739,10 @@ func decodeRemoteFileJSON(w http.ResponseWriter, r *http.Request, limit int64) (
 	return body, true
 }
 
+func remoteFileTransferDeviceGUID(snapshot deviceProcessContext) string {
+	return firstText(normalizeCanonicalGUID(snapshot.GUID), guidFromAgentID(snapshot.AgentID))
+}
+
 func requireRemoteFileContext(w http.ResponseWriter, r *http.Request, auth *authService, hostname string) (deviceProcessContext, string, bool) {
 	return loadRemoteFileContext(w, r, auth, hostname, true)
 }
@@ -785,51 +806,63 @@ func remoteFilePostWorkerUpload(ctx context.Context, auth *authService, route *a
 	if target == "" {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
-	pipeReader, pipeWriter := io.Pipe()
-	writer := multipart.NewWriter(pipeWriter)
-	errCh := make(chan error, 1)
-	go func() {
-		err := writeRemoteFileUploadMultipart(writer, request)
-		closeErr := writer.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = pipeWriter.CloseWithError(err)
-		} else {
-			_ = pipeWriter.Close()
-		}
-		errCh <- err
-	}()
+	body, contentType, contentLength, cleanup, err := remoteFileUploadMultipartBody(request)
+	if err != nil {
+		return nil, http.StatusBadGateway, map[string]any{"error": "worker_request_failed", "message": err.Error()}
+	}
+	defer cleanup()
 
 	requestCtx, cancel := context.WithTimeout(ctx, 900*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target, pipeReader)
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, target, body)
 	if err != nil {
-		_ = pipeReader.Close()
 		return nil, http.StatusBadGateway, map[string]any{"error": "worker_request_failed", "message": err.Error()}
 	}
+	req.ContentLength = contentLength
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		_ = pipeReader.Close()
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 400 {
-		if writeErr := <-errCh; writeErr != nil {
-			return nil, http.StatusBadGateway, map[string]any{"error": "worker_request_failed", "message": writeErr.Error()}
-		}
-	} else {
-		_ = pipeReader.Close()
-		select {
-		case <-errCh:
-		default:
+	return decodeRemoteFileWorkerJSONResponse(resp)
+}
+
+func remoteFileUploadMultipartBody(request remoteFileUploadWorkerRequest) (io.ReadCloser, string, int64, func(), error) {
+	file, err := os.CreateTemp("", "borealis-remote-file-upload-*.multipart")
+	if err != nil {
+		return nil, "", 0, func() {}, err
+	}
+	cleanup := func() {
+		name := file.Name()
+		_ = file.Close()
+		if name != "" {
+			_ = os.Remove(name)
 		}
 	}
-	return decodeRemoteFileWorkerJSONResponse(resp)
+	writer := multipart.NewWriter(file)
+	contentType := writer.FormDataContentType()
+	writeErr := writeRemoteFileUploadMultipart(writer, request)
+	closeErr := writer.Close()
+	if writeErr == nil {
+		writeErr = closeErr
+	}
+	if writeErr != nil {
+		cleanup()
+		return nil, "", 0, func() {}, writeErr
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, "", 0, func() {}, err
+	}
+	return file, contentType, stat.Size(), cleanup, nil
 }
 
 func writeRemoteFileUploadMultipart(writer *multipart.Writer, request remoteFileUploadWorkerRequest) error {
