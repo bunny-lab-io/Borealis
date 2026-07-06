@@ -290,6 +290,14 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "upload_manifest_mismatch"})
 			return
 		}
+		deviceGUID := remoteFileTransferDeviceGUID(snapshot)
+		if deviceGUID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":   "device_guid_unavailable",
+				"message": "File transfer requires a device GUID. Reconnect the Agent or refresh device inventory before uploading.",
+			})
+			return
+		}
 
 		conflictResolutions := normalizeConflictResolutionMap(r.FormValue("conflict_resolutions"))
 		conflictPayload, status, workerErr := remoteFileUploadConflictsPayload(r.Context(), auth, snapshot, operatorID, targetPath, manifestItems)
@@ -376,7 +384,7 @@ func remoteFileUploadHandler(auth *authService) func(http.ResponseWriter, *http.
 		workerURLs := remoteOpsWorkerURLs(r, snapshot.Route)
 		session, workerStatus, workerErr := remoteFilePostWorkerUpload(r.Context(), auth, snapshot.Route, remoteFileUploadWorkerRequest{
 			Hostname:        snapshot.Hostname,
-			DeviceGUID:      snapshot.GUID,
+			DeviceGUID:      deviceGUID,
 			AgentID:         snapshot.AgentID,
 			OperatorID:      operatorID,
 			TargetPath:      targetPath,
@@ -413,11 +421,19 @@ func remoteFileDownloadHandler(auth *authService) func(http.ResponseWriter, *htt
 			kind := strings.ToLower(cleanText(selections[0]["kind"]))
 			archiveRequired = kind == "directory"
 		}
+		deviceGUID := remoteFileTransferDeviceGUID(snapshot)
+		if deviceGUID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"error":   "device_guid_unavailable",
+				"message": "File transfer requires a device GUID. Reconnect the Agent or refresh device inventory before downloading.",
+			})
+			return
+		}
 		archiveName := guessRemoteFileDownloadName(snapshot.Hostname, selections, archiveRequired)
 		workerURLs := remoteOpsWorkerURLs(r, snapshot.Route)
 		session, workerStatus, workerErr := remoteFilePostWorkerJSON(r.Context(), auth, snapshot.Route, "/remote-files/transfers/download", map[string]any{
 			"hostname":          snapshot.Hostname,
-			"device_guid":       snapshot.GUID,
+			"device_guid":       deviceGUID,
 			"agent_id":          snapshot.AgentID,
 			"operator_id":       operatorID,
 			"items":             selections,
@@ -720,6 +736,10 @@ func decodeRemoteFileJSON(w http.ResponseWriter, r *http.Request, limit int64) (
 		body = map[string]any{}
 	}
 	return body, true
+}
+
+func remoteFileTransferDeviceGUID(snapshot deviceProcessContext) string {
+	return firstText(normalizeCanonicalGUID(snapshot.GUID), guidFromAgentID(snapshot.AgentID))
 }
 
 func requireRemoteFileContext(w http.ResponseWriter, r *http.Request, auth *authService, hostname string) (deviceProcessContext, string, bool) {

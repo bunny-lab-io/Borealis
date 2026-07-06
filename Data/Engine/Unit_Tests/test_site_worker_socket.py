@@ -505,7 +505,6 @@ def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_
         headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
         data={
             "hostname": AGENT_HOSTNAME,
-            "device_guid": AGENT_GUID,
             "agent_id": AGENT_ID,
             "operator_id": "unit",
             "target_path": r"C:\Temp",
@@ -521,6 +520,7 @@ def test_site_worker_file_upload_route_stores_transfer_and_emits_worker_url(tmp_
     stored_session = runtime._file_transfer_store.get_session(transfer_id)
     assert stored_session is not None
     assert stored_session["hostname"] == AGENT_HOSTNAME
+    assert stored_session["device_guid"] == AGENT_GUID.upper()
     assert emitted == [
         {
             "hostname": AGENT_HOSTNAME,
