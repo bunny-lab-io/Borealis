@@ -1,8 +1,16 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPatchPolicyRoleScopeOverlap(t *testing.T) {
@@ -445,4 +453,141 @@ func TestPatchPolicyHostnameExclusionKeysAreSiteAware(t *testing.T) {
 	if key, ok := patchPolicyTargetOverlapsKeys(globalKeys, "device", "", "duplicate-host", 0, 7); !ok || key != "device-host:*:duplicate-host" {
 		t.Fatalf("site-specific hostname should overlap global coverage, got key=%q ok=%v", key, ok)
 	}
+}
+
+func TestPatchPolicyDeleteWritesAuditBeforeParentDelete(t *testing.T) {
+	state := &patchPolicyDeleteDriverState{}
+	driverName := fmt.Sprintf("patch-policy-delete-order-%d", time.Now().UnixNano())
+	sql.Register(driverName, patchPolicyDeleteDriver{state: state})
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("open fake db: %v", err)
+	}
+	defer db.Close()
+
+	store := &postgresOperatorStore{db: db, patchPolicySchemaOK: true}
+	payload, status, err := store.deletePatchPolicy(context.Background(), operatorProfile{Username: "operator", Role: "Admin"}, 44)
+	if err != nil {
+		t.Fatalf("delete policy returned error: status=%d payload=%#v err=%v", status, payload, err)
+	}
+	if status != http.StatusOK || payload["status"] != "deleted" {
+		t.Fatalf("unexpected delete response: status=%d payload=%#v", status, payload)
+	}
+	if !state.committed {
+		t.Fatalf("delete transaction did not commit")
+	}
+	sequence := strings.Join(state.execs, "\n")
+	auditIdx := strings.Index(sequence, "insert into engine.patch_policy_audit")
+	deleteIdx := strings.Index(sequence, "delete from engine.patch_policies")
+	if auditIdx < 0 || deleteIdx < 0 {
+		t.Fatalf("missing audit or delete statement in sequence: %s", sequence)
+	}
+	if auditIdx > deleteIdx {
+		t.Fatalf("audit insert must happen before parent delete to satisfy FK, got sequence: %s", sequence)
+	}
+}
+
+type patchPolicyDeleteDriverState struct {
+	execs     []string
+	deleted   bool
+	committed bool
+}
+
+type patchPolicyDeleteDriver struct {
+	state *patchPolicyDeleteDriverState
+}
+
+func (d patchPolicyDeleteDriver) Open(_ string) (driver.Conn, error) {
+	return &patchPolicyDeleteConn{state: d.state}, nil
+}
+
+type patchPolicyDeleteConn struct {
+	state *patchPolicyDeleteDriverState
+}
+
+func (c *patchPolicyDeleteConn) Prepare(_ string) (driver.Stmt, error) {
+	return nil, errors.New("prepare unsupported")
+}
+
+func (c *patchPolicyDeleteConn) Close() error {
+	return nil
+}
+
+func (c *patchPolicyDeleteConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *patchPolicyDeleteConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return patchPolicyDeleteTx{state: c.state}, nil
+}
+
+func (c *patchPolicyDeleteConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	switch {
+	case strings.Contains(normalized, "from engine.patch_policies"):
+		return &patchPolicyDeleteRows{
+			columns: []string{"id", "name", "description", "policy_type", "enabled", "locked", "role_scope", "approval_mode", "deferral_days", "managed_update_mode", "install_schedule_type", "install_start_ts", "reboot_after_install", "reboot_schedule_enabled", "reboot_schedule_type", "reboot_start_ts", "force_reboot_logged_in", "created_by", "updated_by", "created_at", "updated_at"},
+			values: [][]driver.Value{{
+				int64(44), "Site Servers", "Delete me", patchPolicyTypeSite, int64(1), int64(0), patchPolicyRoleServer, "conservative_msp", int64(14), int64(1), "weekly", int64(1783497600), int64(0), int64(0), "weekly", nil, int64(0), "operator", "operator", int64(1783000000), int64(1783000000),
+			}},
+		}, nil
+	case strings.Contains(normalized, "from engine.patch_policy_sites"):
+		return &patchPolicyDeleteRows{columns: []string{"policy_id", "id", "name"}}, nil
+	case strings.Contains(normalized, "from engine.patch_policy_targets"):
+		return &patchPolicyDeleteRows{columns: []string{"policy_id", "target_type", "device_guid", "hostname", "filter_id", "target_json"}}, nil
+	case strings.Contains(normalized, "from engine.patch_policy_exclusions"):
+		return &patchPolicyDeleteRows{columns: []string{"policy_id", "exclusion_type", "target_type", "device_guid", "hostname", "site_id", "name", "filter_id", "reason", "created_by", "created_at"}}, nil
+	case strings.Contains(normalized, "from engine.patch_policy_rules"):
+		return &patchPolicyDeleteRows{columns: []string{"policy_id", "id", "rule_type", "match_type", "match_value", "override_parent_block", "notes", "created_by", "created_at"}}, nil
+	default:
+		return nil, fmt.Errorf("unexpected query: %s", normalized)
+	}
+}
+
+func (c *patchPolicyDeleteConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	normalized := strings.ToLower(strings.Join(strings.Fields(query), " "))
+	c.state.execs = append(c.state.execs, normalized)
+	if strings.Contains(normalized, "insert into engine.patch_policy_audit") && c.state.deleted {
+		return nil, errors.New("audit insert after delete violates patch_policy_audit policy_id FK")
+	}
+	if strings.Contains(normalized, "delete from engine.patch_policies") {
+		c.state.deleted = true
+	}
+	return driver.RowsAffected(1), nil
+}
+
+type patchPolicyDeleteTx struct {
+	state *patchPolicyDeleteDriverState
+}
+
+func (tx patchPolicyDeleteTx) Commit() error {
+	tx.state.committed = true
+	return nil
+}
+
+func (tx patchPolicyDeleteTx) Rollback() error {
+	return nil
+}
+
+type patchPolicyDeleteRows struct {
+	columns []string
+	values  [][]driver.Value
+	index   int
+}
+
+func (r *patchPolicyDeleteRows) Columns() []string {
+	return r.columns
+}
+
+func (r *patchPolicyDeleteRows) Close() error {
+	return nil
+}
+
+func (r *patchPolicyDeleteRows) Next(dest []driver.Value) error {
+	if r.index >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.index])
+	r.index++
+	return nil
 }
