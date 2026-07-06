@@ -11,8 +11,14 @@ import (
 func TestUltraVNCBootstrapConfigEnablesAllDisplays(t *testing.T) {
 	programData := t.TempDir()
 	t.Setenv("ProgramData", programData)
+	cfg := BootstrapConfig{InstallDir: t.TempDir()}
+	logger, closeLog, err := openBootstrapLogger(cfg, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeLog()
 
-	configPath, err := ensureUltraVNCBootstrapConfig(BootstrapConfig{}, nil)
+	configPath, err := ensureUltraVNCBootstrapConfig(cfg, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
