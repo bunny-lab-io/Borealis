@@ -176,6 +176,9 @@ func TestRemoteFileUploadStartsWorkerTransfer(t *testing.T) {
 			})
 		case "/remote-files/transfers/upload":
 			sawUpload = true
+			if r.ContentLength <= 0 {
+				t.Fatalf("expected upload transfer request to set content length, got %d", r.ContentLength)
+			}
 			if err := r.ParseMultipartForm(1 << 20); err != nil {
 				t.Fatalf("multipart parse failed: %v", err)
 			}

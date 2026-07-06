@@ -571,7 +571,11 @@ class SiteWorkerSocketRuntime:
             if not files and not manifest_only_empty_upload:
                 missing_fields.append("files")
             if missing_fields:
-                return jsonify({"error": "invalid_request", "missing": missing_fields}), 400
+                return jsonify({
+                    "error": "invalid_request",
+                    "message": "Upload transfer request is missing: {0}.".format(", ".join(missing_fields)),
+                    "missing": missing_fields,
+                }), 400
             try:
                 snapshot = self._file_transfer_store.create_upload_session(
                     hostname=hostname,
