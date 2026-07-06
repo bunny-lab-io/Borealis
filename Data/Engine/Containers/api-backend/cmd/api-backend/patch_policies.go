@@ -676,10 +676,17 @@ func (s *postgresOperatorStore) deletePatchPolicy(ctx context.Context, profile o
 		return nil, http.StatusInternalServerError, err
 	}
 	defer rollbackQuietly(tx)
-	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.patch_policies WHERE id=$1", policyID); err != nil {
+	now := time.Now().Unix()
+	auditDetail := map[string]any{
+		"id":          policyID,
+		"name":        nullString(rows[0].Name),
+		"policy_type": normalizePatchPolicyType(rows[0].PolicyType.String),
+		"role_scope":  normalizePatchPolicyRoleScope(rows[0].RoleScope.String),
+	}
+	if err := insertPatchPolicyAuditTx(ctx, tx, policyID, "deleted", profile.Username, auditDetail, now); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	if err := insertPatchPolicyAuditTx(ctx, tx, policyID, "deleted", profile.Username, map[string]any{"name": nullString(rows[0].Name)}, time.Now().Unix()); err != nil {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.patch_policies WHERE id=$1", policyID); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	if err := tx.Commit(); err != nil {
