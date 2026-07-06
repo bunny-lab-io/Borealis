@@ -1057,6 +1057,50 @@ function sameViewportPreview(left, right) {
   );
 }
 
+function emptyDisplayRenderState() {
+  return {
+    scale: 1,
+    focused: false,
+    hostWidth: 0,
+    hostHeight: 0,
+    displayWidth: 0,
+    displayHeight: 0,
+    clipLeft: 0,
+    clipTop: 0,
+    clipWidth: 0,
+    clipHeight: 0,
+    inputLeft: 0,
+    inputTop: 0,
+    inputRight: 0,
+    inputBottom: 0,
+    displayLeft: 0,
+    displayTop: 0,
+    targetLeft: 0,
+    targetTop: 0,
+    targetRight: 0,
+    targetBottom: 0,
+  };
+}
+
+function mouseStateHasButtons(mouseState) {
+  return Boolean(
+    mouseState?.left ||
+      mouseState?.middle ||
+      mouseState?.right ||
+      mouseState?.up ||
+      mouseState?.down
+  );
+}
+
+function clearMouseStateButtons(mouseState) {
+  if (!mouseState) return;
+  mouseState.left = false;
+  mouseState.middle = false;
+  mouseState.right = false;
+  mouseState.up = false;
+  mouseState.down = false;
+}
+
 export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -1136,6 +1180,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const containerRef = useRef(null);
   const displayScrollRef = useRef(null);
   const displayRef = useRef(null);
+  const displayMouseBindingRef = useRef({ element: null, mouse: null });
+  const displayRenderStateRef = useRef(emptyDisplayRenderState());
   const viewfinderShellRef = useRef(null);
   const viewfinderRef = useRef(null);
   const remoteClientRef = useRef(null);
@@ -1506,6 +1552,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           client.__borealisMouse.onmouseup = null;
           client.__borealisMouse.onmousemove = null;
         }
+        client.__borealisPointerButtonsDown = false;
         client.disconnect();
       }
     } catch {
@@ -1516,6 +1563,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     if (host) {
       host.innerHTML = "";
     }
+    displayRenderStateRef.current = emptyDisplayRenderState();
     forcedViewportKeyRef.current = "";
     viewportFocusRef.current = null;
     setFramebufferSize({ width: 0, height: 0 });
@@ -1537,11 +1585,13 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const configureDisplaySurface = useCallback((client, mode) => {
     const host = displayRef.current;
     const display = typeof client?.getDisplay === "function" ? client.getDisplay() : null;
-    const element = display?.getElement?.() || host?.firstElementChild || null;
+    const element = display?.getElement?.() || client?.__borealisDisplayElement || null;
+    const clip = client?.__borealisClipElement || null;
     const width = Number(display?.getWidth?.() || 0);
     const height = Number(display?.getHeight?.() || 0);
     const hostWidth = Math.max(1, Number(host?.clientWidth || 0));
     const hostHeight = Math.max(1, Number(host?.clientHeight || 0));
+    const focused = Boolean(displayViewportTarget?.focused);
     const targetScaleX =
       displayViewportTarget?.remoteWidth > 0 && width > 0
         ? width / displayViewportTarget.remoteWidth
@@ -1590,8 +1640,16 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       }
       const nextScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
       display.scale(nextScale);
-      const visibleWidth = hostWidth / nextScale;
-      const visibleHeight = hostHeight / nextScale;
+      const clipWidth = focused
+        ? Math.max(1, Math.min(hostWidth, targetWidth * nextScale))
+        : hostWidth;
+      const clipHeight = focused
+        ? Math.max(1, Math.min(hostHeight, targetHeight * nextScale))
+        : hostHeight;
+      const clipLeft = focused ? Math.max(0, (hostWidth - clipWidth) / 2) : 0;
+      const clipTop = focused ? Math.max(0, (hostHeight - clipHeight) / 2) : 0;
+      const visibleWidth = clipWidth / nextScale;
+      const visibleHeight = clipHeight / nextScale;
       const targetRight = targetLeft + targetWidth;
       const targetBottom = targetTop + targetHeight;
       const focus = viewportFocusRef.current;
@@ -1612,21 +1670,76 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           ? focus.y
           : targetTop + targetHeight / 2;
       const visibleLeft =
-        visibleWidth >= targetWidth
+        focused
+          ? targetLeft
+          : visibleWidth >= targetWidth
           ? targetLeft - (visibleWidth - targetWidth) / 2
           : clampNumber(focusX - visibleWidth / 2, targetLeft, targetRight - visibleWidth);
       const visibleTop =
-        visibleHeight >= targetHeight
+        focused
+          ? targetTop
+          : visibleHeight >= targetHeight
           ? targetTop - (visibleHeight - targetHeight) / 2
           : clampNumber(focusY - visibleHeight / 2, targetTop, targetBottom - visibleHeight);
-      if (element?.style) {
-        element.style.left = `${Math.round(-visibleLeft * nextScale * 100) / 100}px`;
-        element.style.top = `${Math.round(-visibleTop * nextScale * 100) / 100}px`;
+      if (clip?.style) {
+        clip.style.display = "block";
+        clip.style.position = "absolute";
+        clip.style.overflow = "hidden";
+        clip.style.left = `${Math.round(clipLeft * 100) / 100}px`;
+        clip.style.top = `${Math.round(clipTop * 100) / 100}px`;
+        clip.style.width = `${Math.round(clipWidth * 100) / 100}px`;
+        clip.style.height = `${Math.round(clipHeight * 100) / 100}px`;
+        clip.style.maxWidth = "100%";
+        clip.style.maxHeight = "100%";
       }
-      const previewLeft = clampNumber(visibleLeft, targetLeft, targetRight);
-      const previewTop = clampNumber(visibleTop, targetTop, targetBottom);
-      const previewRight = clampNumber(visibleLeft + visibleWidth, targetLeft, targetRight);
-      const previewBottom = clampNumber(visibleTop + visibleHeight, targetTop, targetBottom);
+      const displayLeft = clipLeft - visibleLeft * nextScale;
+      const displayTop = clipTop - visibleTop * nextScale;
+      if (element?.style) {
+        element.style.left = `${Math.round((displayLeft - clipLeft) * 100) / 100}px`;
+        element.style.top = `${Math.round((displayTop - clipTop) * 100) / 100}px`;
+      }
+      const inputLeft = focused
+        ? clipLeft
+        : clampNumber(displayLeft, 0, hostWidth);
+      const inputTop = focused
+        ? clipTop
+        : clampNumber(displayTop, 0, hostHeight);
+      const inputRight = focused
+        ? clipLeft + clipWidth
+        : clampNumber(displayLeft + width * nextScale, 0, hostWidth);
+      const inputBottom = focused
+        ? clipTop + clipHeight
+        : clampNumber(displayTop + height * nextScale, 0, hostHeight);
+      displayRenderStateRef.current = {
+        scale: nextScale,
+        focused,
+        hostWidth,
+        hostHeight,
+        displayWidth: width,
+        displayHeight: height,
+        clipLeft,
+        clipTop,
+        clipWidth,
+        clipHeight,
+        inputLeft,
+        inputTop,
+        inputRight,
+        inputBottom,
+        displayLeft,
+        displayTop,
+        targetLeft,
+        targetTop,
+        targetRight,
+        targetBottom,
+      };
+      const previewLeft = focused ? targetLeft : clampNumber(visibleLeft, targetLeft, targetRight);
+      const previewTop = focused ? targetTop : clampNumber(visibleTop, targetTop, targetBottom);
+      const previewRight = focused
+        ? targetRight
+        : clampNumber(visibleLeft + visibleWidth, targetLeft, targetRight);
+      const previewBottom = focused
+        ? targetBottom
+        : clampNumber(visibleTop + visibleHeight, targetTop, targetBottom);
       const nextPreview = {
         left: previewLeft,
         top: previewTop,
@@ -1636,7 +1749,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         targetTop,
         targetWidth,
         targetHeight,
-        interactive: visibleWidth < targetWidth - 1 || visibleHeight < targetHeight - 1,
+        interactive: focused ? false : visibleWidth < targetWidth - 1 || visibleHeight < targetHeight - 1,
         mode,
       };
       setViewportPreview((previous) =>
@@ -1645,6 +1758,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     } else if (element?.style) {
       element.style.left = "0px";
       element.style.top = "0px";
+      displayRenderStateRef.current = emptyDisplayRenderState();
     }
   }, [displayViewportTarget]);
 
@@ -1775,6 +1889,66 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       scheduleIdleTimers();
     }
   }, [scheduleIdleTimers]);
+
+  const mapDisplayMouseState = useCallback((mouseState, eventType, previousButtonsDown) => {
+    const renderState = displayRenderStateRef.current || emptyDisplayRenderState();
+    const scale = Number(renderState.scale || 0);
+    if (!scale || !Number.isFinite(scale)) return null;
+    const inputLeft = Number(renderState.inputLeft || 0);
+    const inputTop = Number(renderState.inputTop || 0);
+    const inputRight = Number(renderState.inputRight || 0);
+    const inputBottom = Number(renderState.inputBottom || 0);
+    if (inputRight <= inputLeft || inputBottom <= inputTop) return null;
+    const localX = Number(mouseState?.x || 0);
+    const localY = Number(mouseState?.y || 0);
+    const insideInput =
+      localX >= inputLeft &&
+      localX <= inputRight &&
+      localY >= inputTop &&
+      localY <= inputBottom;
+    if (!insideInput) {
+      if (eventType === "mousedown" && !previousButtonsDown) {
+        clearMouseStateButtons(mouseState);
+        return null;
+      }
+      if (eventType === "mousemove" && !previousButtonsDown) {
+        return null;
+      }
+      if (eventType === "mouseup" && !previousButtonsDown) {
+        return null;
+      }
+    }
+    const clampedLocalX = clampNumber(localX, inputLeft, inputRight);
+    const clampedLocalY = clampNumber(localY, inputTop, inputBottom);
+    const remoteX = clampNumber(
+      (clampedLocalX - Number(renderState.displayLeft || 0)) / scale,
+      Number(renderState.targetLeft || 0),
+      Math.max(Number(renderState.targetLeft || 0), Number(renderState.targetRight || 0) - 1)
+    );
+    const remoteY = clampNumber(
+      (clampedLocalY - Number(renderState.displayTop || 0)) / scale,
+      Number(renderState.targetTop || 0),
+      Math.max(Number(renderState.targetTop || 0), Number(renderState.targetBottom || 0) - 1)
+    );
+    const mappedState = new Guacamole.Mouse.State(mouseState || {});
+    mappedState.x = remoteX;
+    mappedState.y = remoteY;
+    return mappedState;
+  }, []);
+
+  const forwardDisplayMouseState = useCallback(
+    (mouseState, eventType) => {
+      const client = remoteClientRef.current;
+      if (!client || typeof client.sendMouseState !== "function") return;
+      const previousButtonsDown = Boolean(client.__borealisPointerButtonsDown);
+      const mappedState = mapDisplayMouseState(mouseState, eventType, previousButtonsDown);
+      if (!mappedState) return;
+      registerDesktopActivity();
+      client.sendMouseState(mappedState, false);
+      client.__borealisPointerButtonsDown = mouseStateHasButtons(mappedState);
+    },
+    [mapDisplayMouseState, registerDesktopActivity]
+  );
 
   useEffect(() => {
     if (sessionState !== "connected") {
@@ -1920,16 +2094,38 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       client.__borealisViewer = "guacamole";
       const display = client.getDisplay();
       const displayElement = display.getElement();
-      displayElement.style.margin = "auto";
+      const clipElement = document.createElement("div");
+      clipElement.setAttribute("data-borealis-display-clip", "true");
+      clipElement.style.position = "absolute";
+      clipElement.style.overflow = "hidden";
+      clipElement.style.left = "0px";
+      clipElement.style.top = "0px";
+      clipElement.style.width = "100%";
+      clipElement.style.height = "100%";
+      clipElement.style.maxWidth = "100%";
+      clipElement.style.maxHeight = "100%";
+      displayElement.style.margin = "0";
       displayElement.style.boxShadow = VNC_CANVAS_BOX_SHADOW;
+      displayElement.style.position = "absolute";
+      displayElement.style.left = "0px";
+      displayElement.style.top = "0px";
+      displayElement.style.transformOrigin = "top left";
       displayElement.tabIndex = -1;
-      displayHost.appendChild(displayElement);
+      clipElement.appendChild(displayElement);
+      displayHost.appendChild(clipElement);
       queueDisplayFocus();
-      const mouse = new Guacamole.Mouse(displayElement);
-      mouse.onmousedown = mouse.onmouseup = mouse.onmousemove = (mouseState) => {
-        registerDesktopActivity();
-        client.sendMouseState(mouseState, true);
-      };
+      let mouseBinding = displayMouseBindingRef.current;
+      if (!mouseBinding?.mouse || mouseBinding.element !== displayHost) {
+        mouseBinding = {
+          element: displayHost,
+          mouse: new Guacamole.Mouse(displayHost),
+        };
+        displayMouseBindingRef.current = mouseBinding;
+      }
+      const mouse = mouseBinding.mouse;
+      mouse.onmousedown = (mouseState) => forwardDisplayMouseState(mouseState, "mousedown");
+      mouse.onmouseup = (mouseState) => forwardDisplayMouseState(mouseState, "mouseup");
+      mouse.onmousemove = (mouseState) => forwardDisplayMouseState(mouseState, "mousemove");
       const keyboard = new Guacamole.Keyboard(displayHost);
       keyboard.onkeydown = (keysym) => {
         registerDesktopActivity();
@@ -1943,6 +2139,9 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       };
       client.__borealisMouse = mouse;
       client.__borealisKeyboard = keyboard;
+      client.__borealisClipElement = clipElement;
+      client.__borealisDisplayElement = displayElement;
+      client.__borealisPointerButtonsDown = false;
       remoteClientRef.current = client;
 
       return await new Promise((resolve, reject) => {
@@ -1971,6 +2170,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           mouse.onmousedown = null;
           mouse.onmouseup = null;
           mouse.onmousemove = null;
+          client.__borealisPointerButtonsDown = false;
         };
         const finishResolve = () => {
           if (settled) return;
@@ -2162,6 +2362,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     [
       configureDisplaySurface,
       displayMode,
+      forwardDisplayMouseState,
       notifyOperator,
       queueDisplayFocus,
       registerDesktopActivity,
