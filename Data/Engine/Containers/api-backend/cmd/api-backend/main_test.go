@@ -1981,6 +1981,7 @@ func TestSiteInstallMetadataIncludesInternalCA(t *testing.T) {
 	t.Setenv("BOREALIS_LOCAL_CA_CERT_PATH", caPath)
 	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.internal.example")
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.internal.example")
+	t.Setenv("BOREALIS_ENGINE_IP_FALLBACK", "192.168.3.251")
 
 	payload := siteInstallMetadata(nil)
 	if got := payload["deployment_profile"]; got != "internal-only" {
@@ -1988,6 +1989,9 @@ func TestSiteInstallMetadataIncludesInternalCA(t *testing.T) {
 	}
 	if got := payload["engine_ca_required"]; got != true {
 		t.Fatalf("engine CA required = %#v", got)
+	}
+	if got := payload["server_ip_fallback"]; got != "192.168.3.251" {
+		t.Fatalf("server IP fallback = %#v", got)
 	}
 	engineCA, ok := payload["engine_ca"].(map[string]any)
 	if !ok {

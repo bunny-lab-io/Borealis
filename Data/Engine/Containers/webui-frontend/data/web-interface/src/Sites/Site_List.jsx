@@ -1125,6 +1125,29 @@ function normalizeInstallEngineCA(payload) {
   };
 }
 
+function normalizeInstallServerIPFallback(payload) {
+  const text = String(payload?.server_ip_fallback || payload?.public_edge?.server_ip_fallback || "").trim();
+  if (!text || text.includes("://") || text.includes("/")) {
+    return "";
+  }
+  const parts = text.split(".");
+  if (parts.length !== 4) {
+    return "";
+  }
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((octet, index) => !Number.isInteger(octet) || octet < 0 || octet > 255 || String(octet) !== parts[index])) {
+    return "";
+  }
+  if (
+    text === "0.0.0.0" ||
+    octets[0] === 127 ||
+    octets[0] >= 224
+  ) {
+    return "";
+  }
+  return text;
+}
+
 export async function loadSiteListPageData(request) {
   const progress = createRouteRequestPlan(request, 4);
   try {
@@ -1132,8 +1155,9 @@ export async function loadSiteListPageData(request) {
     const data = await progress.fetchJson("/api/sites");
     let installServerUrl = deriveInstallServerUrl(data);
     let installEngineCA = normalizeInstallEngineCA(data);
+    let installServerIPFallback = normalizeInstallServerIPFallback(data);
     const requiresEngineCA = Boolean(data?.engine_ca_required || data?.deployment_profile === "internal-only");
-    if (!installServerUrl || (requiresEngineCA && !installEngineCA)) {
+    if (!installServerUrl || (requiresEngineCA && (!installEngineCA || !installServerIPFallback))) {
       try {
         const overviewPayload = await progress.fetchJson("/api/server/overview");
         installServerUrl = installServerUrl || deriveInstallServerUrl({
@@ -1143,6 +1167,7 @@ export async function loadSiteListPageData(request) {
             overviewPayload?.host?.public_hostname || overviewPayload?.public_edge?.fqdn || "",
         });
         installEngineCA = installEngineCA || normalizeInstallEngineCA(overviewPayload);
+        installServerIPFallback = installServerIPFallback || normalizeInstallServerIPFallback(overviewPayload);
       } catch (error) {
         rethrowIfRouteRedirect(error);
       }
@@ -1155,6 +1180,7 @@ export async function loadSiteListPageData(request) {
       siteWorkerPayload: {},
       installServerUrl,
       installEngineCA,
+      installServerIPFallback,
       initialError: "",
     };
   } catch (error) {
@@ -1164,6 +1190,7 @@ export async function loadSiteListPageData(request) {
       siteWorkerPayload: {},
       installServerUrl: "",
       installEngineCA: null,
+      installServerIPFallback: "",
       initialError: getRouteErrorMessage(error, "Unable to load sites."),
     };
   } finally {
@@ -1785,13 +1812,17 @@ function installEngineCAB64(engineCA) {
   return String(engineCA?.pem_b64 || "").trim();
 }
 
-export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null) {
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null, serverIPFallback = "") {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
   const normalizedBranch = normalizeInstallBranch(branch);
   const usesDefaultBranch = normalizedBranch === DEFAULT_INSTALL_BRANCH;
   const engineCAB64 = installEngineCAB64(engineCA);
+  const normalizedServerIPFallback = normalizeInstallServerIPFallback({ server_ip_fallback: serverIPFallback });
   if (!normalizedServerUrl || !normalizedEnrollmentCode) {
+    return "";
+  }
+  if (engineCA?.required && !engineCAB64) {
     return "";
   }
 
@@ -1806,12 +1837,16 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "linux") {
+    if (engineCA?.required && !normalizedServerIPFallback) {
+      return "";
+    }
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 "${escapeShellDoubleQuoted(engineCAB64)}"` : "";
+    const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback "${escapeShellDoubleQuoted(normalizedServerIPFallback)}"` : "";
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
-      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"${caArg} --install-service`;
+      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"${caArg}${serverIPFallbackArg} --install-service`;
     return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
       `chmod 700 /tmp/Borealis-Agent; ` +
       `sudo /tmp/Borealis-Agent ${launchArgs}`;
@@ -2087,10 +2122,12 @@ export default function SiteList() {
   const initialRows = useMemo(() => (Array.isArray(loaderData?.rows) ? loaderData.rows : []), [loaderData]);
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
   const initialInstallEngineCA = loaderData?.installEngineCA || null;
+  const initialInstallServerIPFallback = String(loaderData?.installServerIPFallback || "");
   const [rows, setRows] = useState(() => initialRows);
   const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => ({}));
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
   const [installEngineCA, setInstallEngineCA] = useState(() => initialInstallEngineCA);
+  const [installServerIPFallback, setInstallServerIPFallback] = useState(() => initialInstallServerIPFallback);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -2211,7 +2248,7 @@ export default function SiteList() {
         cache: "no-store",
       });
       if (!response.ok) {
-        return { installServerUrl: "", installEngineCA: null };
+        return { installServerUrl: "", installEngineCA: null, installServerIPFallback: "" };
       }
       const payload = await response.json().catch(() => ({}));
       return {
@@ -2220,9 +2257,10 @@ export default function SiteList() {
           public_hostname: payload?.host?.public_hostname || payload?.public_edge?.fqdn || "",
         }),
         installEngineCA: normalizeInstallEngineCA(payload),
+        installServerIPFallback: normalizeInstallServerIPFallback(payload),
       };
     } catch {
-      return { installServerUrl: "", installEngineCA: null };
+      return { installServerUrl: "", installEngineCA: null, installServerIPFallback: "" };
     }
   }, []);
 
@@ -2235,21 +2273,25 @@ export default function SiteList() {
       }
       let nextInstallServerUrl = deriveInstallServerUrl(data);
       let nextInstallEngineCA = normalizeInstallEngineCA(data);
+      let nextInstallServerIPFallback = normalizeInstallServerIPFallback(data);
       const requiresEngineCA = Boolean(data?.engine_ca_required || data?.deployment_profile === "internal-only");
-      if (!nextInstallServerUrl || (requiresEngineCA && !nextInstallEngineCA)) {
+      if (!nextInstallServerUrl || (requiresEngineCA && (!nextInstallEngineCA || !nextInstallServerIPFallback))) {
         const overviewMetadata = await fetchInstallMetadataFromOverview();
         nextInstallServerUrl = nextInstallServerUrl || overviewMetadata.installServerUrl;
         nextInstallEngineCA = nextInstallEngineCA || overviewMetadata.installEngineCA;
+        nextInstallServerIPFallback = nextInstallServerIPFallback || overviewMetadata.installServerIPFallback;
       }
       setRows(Array.isArray(data?.sites) ? data.sites : []);
       setInstallServerUrl(nextInstallServerUrl);
       setInstallEngineCA(nextInstallEngineCA);
+      setInstallServerIPFallback(nextInstallServerIPFallback);
       setLoadError("");
     } catch {
       setRows([]);
       setSiteWorkerPayload({});
       setInstallServerUrl("");
       setInstallEngineCA(null);
+      setInstallServerIPFallback("");
       setLoadError("Unable to load sites.");
     }
   }, [fetchInstallMetadataFromOverview]);
@@ -2329,8 +2371,10 @@ export default function SiteList() {
     setResourceHistoryVersion((version) => version + 1);
     setSiteConnectionSnapshotVersion((version) => version + 1);
     setInstallServerUrl(initialInstallServerUrl);
+    setInstallEngineCA(initialInstallEngineCA);
+    setInstallServerIPFallback(initialInstallServerIPFallback);
     setLoadError(String(loaderData?.initialError || ""));
-  }, [initialInstallServerUrl, initialRows, loaderData]);
+  }, [initialInstallEngineCA, initialInstallServerIPFallback, initialInstallServerUrl, initialRows, loaderData]);
 
   useEffect(() => {
     recordSiteWorkerResourceHistory(resourceHistoryRef.current, siteWorkerPayload, Date.now());
@@ -2489,12 +2533,15 @@ export default function SiteList() {
     const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
     const enrollmentCode = String(site?.enrollment_code || "").trim();
     const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, installEngineCA);
+    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, installEngineCA, installServerIPFallback);
 
     if (!command) {
+      const internalLinuxMissingFallback = osId === "linux" && installEngineCA?.required && !installServerIPFallback;
       await sendNotification({
         title: "Install Command Unavailable",
-        message: `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the public engine URL or enrollment code is unavailable.`,
+        message: internalLinuxMissingFallback
+          ? `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the Internal-Only Engine IP fallback is unavailable.`
+          : `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the public engine URL or enrollment code is unavailable.`,
         icon: "warning",
         variant: "error",
       });
@@ -2518,7 +2565,7 @@ export default function SiteList() {
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installEngineCA, installServerUrl, selectedInstallBranch, sendNotification]);
+  }, [copyTextToClipboard, installEngineCA, installServerIPFallback, installServerUrl, selectedInstallBranch, sendNotification]);
 
   const handleSelectInstallOs = useCallback(async (osId) => {
     const activeSite = installMenuSite;

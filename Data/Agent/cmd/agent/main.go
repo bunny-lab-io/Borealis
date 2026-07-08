@@ -48,6 +48,7 @@ func run() int {
 	var helperStateDir string
 	flag.StringVar(&options.ConfigPath, "config-path", "", "Path to agent.json. Defaults beside Agent.exe.")
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
+	flag.StringVar(&options.ServerIPFallback, "server-ip-fallback", "", "Borealis Engine IP fallback used only as a connection route hint.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
 	flag.StringVar(&options.TrustedEngineCAPEM, "trusted-engine-ca-pem", "", "Trusted Borealis Engine CA PEM for Internal-Only deployments.")
@@ -354,6 +355,12 @@ func persistInstallConfig(options agentruntime.Options) error {
 			return err
 		}
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if strings.TrimSpace(options.ServerIPFallback) != "" {
+		if err := agentconfig.ValidateServerIPFallback(options.ServerIPFallback); err != nil {
+			return err
+		}
+		cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(options.ServerIPFallback)
 	}
 	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
 		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)

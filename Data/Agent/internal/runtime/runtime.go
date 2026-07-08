@@ -30,6 +30,7 @@ import (
 type Options struct {
 	ConfigPath         string
 	ServerURL          string
+	ServerIPFallback   string
 	EnrollmentCode     string
 	RepoRef            string
 	ReleaseChannel     string
@@ -96,6 +97,12 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 			return nil, err
 		}
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if strings.TrimSpace(options.ServerIPFallback) != "" {
+		if err := agentconfig.ValidateServerIPFallback(options.ServerIPFallback); err != nil {
+			return nil, err
+		}
+		cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(options.ServerIPFallback)
 	}
 	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
 		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
@@ -338,7 +345,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	a.logger.Printf("socket connecting route=%s", socketBaseURL)
 	headers := a.authClient.AuthHeaders()
-	socket := transport.NewClient(socketBaseURL, headers, transport.WithTLSConfig(a.authClient.TLSConfig()))
+	socket := transport.NewClient(socketBaseURL, headers, transport.WithTLSConfig(a.authClient.TLSConfig()), transport.WithDialContext(a.authClient.DialContext()))
 	socket.OnActivity(a.recordConnectedSocketActivity)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname

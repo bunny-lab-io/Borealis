@@ -51,6 +51,7 @@ type Client struct {
 	connected   bool
 	timeout     time.Duration
 	tlsConfig   *tls.Config
+	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 const defaultNamespaceConnectTimeout = 45 * time.Second
@@ -61,6 +62,14 @@ func WithTLSConfig(tlsConfig *tls.Config) Option {
 	return func(c *Client) {
 		if tlsConfig != nil {
 			c.tlsConfig = tlsConfig.Clone()
+		}
+	}
+}
+
+func WithDialContext(dialContext func(context.Context, string, string) (net.Conn, error)) Option {
+	return func(c *Client) {
+		if dialContext != nil {
+			c.dialContext = dialContext
 		}
 	}
 }
@@ -116,6 +125,9 @@ func (c *Client) Connect(ctx context.Context) error {
 	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
 	if c.tlsConfig != nil {
 		dialer.TLSClientConfig = c.tlsConfig.Clone()
+	}
+	if c.dialContext != nil {
+		dialer.NetDialContext = c.dialContext
 	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, header)
 	if err != nil {

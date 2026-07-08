@@ -31,14 +31,15 @@ const (
 var fileMu sync.Mutex
 
 type AgentConfig struct {
-	SchemaVersion  int              `json:"schema_version"`
-	ServerURL      string           `json:"server_url"`
-	EnrollmentCode string           `json:"enrollment_code,omitempty"`
-	Agent          AgentSection     `json:"agent"`
-	RemoteOps      RemoteOpsSection `json:"remote_ops"`
-	Identity       IdentitySection  `json:"identity"`
-	Tokens         TokenSection     `json:"tokens"`
-	Trust          TrustSection     `json:"trust"`
+	SchemaVersion    int              `json:"schema_version"`
+	ServerURL        string           `json:"server_url"`
+	ServerIPFallback string           `json:"server_ip_fallback,omitempty"`
+	EnrollmentCode   string           `json:"enrollment_code,omitempty"`
+	Agent            AgentSection     `json:"agent"`
+	RemoteOps        RemoteOpsSection `json:"remote_ops"`
+	Identity         IdentitySection  `json:"identity"`
+	Tokens           TokenSection     `json:"tokens"`
+	Trust            TrustSection     `json:"trust"`
 }
 
 type AgentSection struct {
@@ -184,6 +185,35 @@ func ValidateServerURLForEnrollment(value string) error {
 	return nil
 }
 
+func NormalizeServerIPFallback(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	ip := net.ParseIP(text)
+	if ip == nil {
+		return ""
+	}
+	if ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
+		return ""
+	}
+	return ip.String()
+}
+
+func ValidateServerIPFallback(value string) error {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return nil
+	}
+	if strings.Contains(text, "://") || strings.Contains(text, "/") {
+		return fmt.Errorf("server_ip_fallback must be a bare IP address, not URL or CIDR")
+	}
+	if NormalizeServerIPFallback(text) == "" {
+		return fmt.Errorf("server_ip_fallback must be a non-loopback IP address")
+	}
+	return nil
+}
+
 func NormalizeEngineCAPEM(value string) string {
 	text := strings.ReplaceAll(strings.TrimSpace(value), "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
@@ -323,6 +353,7 @@ func saveUnlocked(path string, cfg *AgentConfig, writer string) error {
 	}
 	cfg.ApplyDefaults()
 	cfg.ServerURL = NormalizeServerURL(cfg.ServerURL)
+	cfg.ServerIPFallback = NormalizeServerIPFallback(cfg.ServerIPFallback)
 	touchStateMetadata(cfg, writer)
 
 	parent := filepath.Dir(path)
@@ -525,6 +556,7 @@ func (c *AgentConfig) ApplyDefaults() {
 		c.Agent.Branch = DefaultBranch
 	}
 	c.Agent.InstalledBuildID = NormalizeBuildID(c.Agent.InstalledBuildID)
+	c.ServerIPFallback = NormalizeServerIPFallback(c.ServerIPFallback)
 	c.Trust.EngineCAPEM = NormalizeEngineCAPEM(c.Trust.EngineCAPEM)
 	c.RemoteOps = normalizeRemoteOpsSection(c.RemoteOps)
 	c.Agent.Update = normalizeUpdateSection(c.Agent.Update)

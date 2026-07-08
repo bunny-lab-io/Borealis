@@ -15,7 +15,7 @@ Sites group devices for enrollment, operator visibility, targeting, onboarding, 
 4. Save.
 5. Copy the site install command when deploying agents for that site.
 
-Each site has its own enrollment code. Agent install commands include the selected Engine URL and site enrollment code. Internal-Only Engine commands also include Borealis local CA data so the Agent can validate the Engine FQDN without disabling TLS verification.
+Each site has its own enrollment code. Agent install commands include the selected Engine URL and site enrollment code. Internal-Only Engine commands also include Borealis local CA data so the Agent can validate the Engine FQDN without disabling TLS verification. Linux Internal-Only commands also include an Engine IP fallback so agents without private DNS can still connect while keeping the FQDN as the trusted identity.
 
 ## Assign Devices
 
@@ -73,7 +73,7 @@ Select any colored section of the Connected Devices bar, or its `Connected`, `Di
     - Sites live in `sites`.
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
-    - `GET /api/sites` returns install-command metadata: `public_base_url`, `public_hostname`, `deployment_profile`, `engine_ca_required`, and Internal-Only `engine_ca.pem_b64`.
+    - `GET /api/sites` returns install-command metadata: `public_base_url`, `public_hostname`, `deployment_profile`, `engine_ca_required`, Internal-Only `engine_ca.pem_b64`, and Internal-Only `server_ip_fallback`.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
     - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. Sites does not fetch worker metrics from the route loader; browser polling starts immediately after the page renders and continues every 5 seconds.
     - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.

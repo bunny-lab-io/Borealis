@@ -98,12 +98,16 @@ type commandRunner func(ctx context.Context, timeout time.Duration, name string,
 
 func New(authClient *auth.Client, hostname string, serviceMode string) *Manager {
 	supported, reason := detectSupport()
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	if authClient != nil {
+		httpClient = authClient.HTTPClientWithTimeout(30 * time.Second)
+	}
 	manager := &Manager{
 		authClient:        authClient,
 		hostname:          strings.TrimSpace(hostname),
 		serviceMode:       auth.NormalizeServiceMode(serviceMode),
 		runner:            runCommand,
-		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		httpClient:        httpClient,
 		wakeup:            make(chan struct{}, 1),
 		supported:         supported,
 		unsupportedReason: reason,

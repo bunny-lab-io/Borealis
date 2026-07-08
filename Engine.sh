@@ -815,6 +815,58 @@ raise SystemExit(0)
 PY
 }
 
+normalize_engine_ip_fallback() {
+  python3 - "$1" <<'PY'
+import ipaddress
+import sys
+
+raw = (sys.argv[1] or "").strip()
+if not raw or "://" in raw or "/" in raw:
+    raise SystemExit(1)
+try:
+    ip = ipaddress.ip_address(raw)
+except Exception:
+    raise SystemExit(1)
+if ip.is_unspecified or ip.is_loopback or ip.is_multicast:
+    raise SystemExit(1)
+print(str(ip))
+PY
+}
+
+detect_engine_ip_fallback() {
+  local candidate=""
+  if command -v ip >/dev/null 2>&1; then
+    candidate="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "src" && (i+1) <= NF) {print $(i+1); exit}}')"
+    if [[ -n "${candidate}" ]] && normalize_engine_ip_fallback "${candidate}" >/dev/null 2>&1; then
+      normalize_engine_ip_fallback "${candidate}"
+      return 0
+    fi
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    while read -r candidate; do
+      if [[ -n "${candidate}" ]] && normalize_engine_ip_fallback "${candidate}" >/dev/null 2>&1; then
+        normalize_engine_ip_fallback "${candidate}"
+        return 0
+      fi
+    done < <(hostname -I 2>/dev/null | tr ' ' '\n')
+  fi
+  printf '%s\n' ""
+}
+
+resolve_engine_ip_fallback() {
+  local engine_profile="$1"
+  [[ "$(normalize_engine_deployment_profile "${engine_profile}")" == "internal-only" ]] || {
+    printf '%s\n' ""
+    return 0
+  }
+  local configured="${BOREALIS_ENGINE_IP_FALLBACK:-$(read_env_value BOREALIS_ENGINE_IP_FALLBACK)}"
+  if [[ -n "${configured}" ]]; then
+    normalize_engine_ip_fallback "${configured}" || die "BOREALIS_ENGINE_IP_FALLBACK must be a bare non-loopback IP address."
+    return 0
+  fi
+  detect_engine_ip_fallback
+}
+
 validate_engine_fqdn() {
   local value="$1"
   local label="${2:-Engine FQDN}"
@@ -1336,6 +1388,7 @@ write_compose_env() {
   local runtime_owner_uid
   local runtime_owner_gid
   local host_timezone
+  local engine_ip_fallback=""
   local local_ca_enabled=0
   local local_ca_cert=""
   local local_ca_key=""
@@ -1343,6 +1396,7 @@ write_compose_env() {
   local local_tls_key=""
   local local_ca_b64=""
   if [[ "${engine_profile}" == "internal-only" ]]; then
+    engine_ip_fallback="$(resolve_engine_ip_fallback "${engine_profile}")"
     local_ca_enabled=1
     local_ca_cert="$(local_ca_cert_path)"
     local_ca_key="$(local_ca_key_path)"
@@ -1387,6 +1441,7 @@ BOREALIS_PUBLIC_VNC_PATH=/remote-desktop/vnc
 BOREALIS_PUBLIC_WIREGUARD_HOST=${public_host}
 BOREALIS_PUBLIC_WIREGUARD_PORT=30000
 BOREALIS_PUBLIC_HOSTNAME_ALIASES=${fqdn_aliases}
+BOREALIS_ENGINE_IP_FALLBACK=${engine_ip_fallback}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE=${engine_profile}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL=${engine_profile_label}
 BOREALIS_ACME_EMAIL=${acme_email}

@@ -13,6 +13,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	path := filepath.Join(dir, FileName)
 	cfg := Default()
 	cfg.ServerURL = "https://borealis.example.com/"
+	cfg.ServerIPFallback = "192.168.3.251"
 	cfg.EnrollmentCode = "CODE"
 	cfg.Agent.GUID = "guid"
 	cfg.Agent.ReleaseChannel = "Unstable"
@@ -52,6 +53,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	}
 	if loaded.ServerURL != "https://borealis.example.com" {
 		t.Fatalf("server url not normalized: %q", loaded.ServerURL)
+	}
+	if loaded.ServerIPFallback != "192.168.3.251" {
+		t.Fatalf("server_ip_fallback not normalized: %q", loaded.ServerIPFallback)
 	}
 	if loaded.Agent.Branch != "feature/test" {
 		t.Fatalf("branch mismatch: %q", loaded.Agent.Branch)
@@ -108,6 +112,24 @@ func TestValidateServerURLForEnrollmentRejectsRawIP(t *testing.T) {
 	}
 	if err := ValidateServerURLForEnrollment("https://borealis.internal.example"); err != nil {
 		t.Fatalf("FQDN server URL rejected: %v", err)
+	}
+}
+
+func TestValidateServerIPFallbackRejectsUnsafeValues(t *testing.T) {
+	for _, value := range []string{
+		"https://192.0.2.10",
+		"192.0.2.10/32",
+		"borealis.example.com",
+		"127.0.0.1",
+		"0.0.0.0",
+		"224.0.0.1",
+	} {
+		if err := ValidateServerIPFallback(value); err == nil {
+			t.Fatalf("server_ip_fallback %q accepted", value)
+		}
+	}
+	if err := ValidateServerIPFallback("192.168.3.251"); err != nil {
+		t.Fatalf("private server_ip_fallback rejected: %v", err)
 	}
 }
 

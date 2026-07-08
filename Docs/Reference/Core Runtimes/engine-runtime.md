@@ -52,7 +52,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `api-backend` uses `alpine:3.24` with `ca-certificates`, `git`, and `tzdata`; Python dependencies, Docker CLI plugins, OCR tooling, and WireGuard command-line tools are not installed in this container. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
     - `job-scheduler` uses `alpine:3.24` with Bash, Python 3, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`; Docker Buildx is not installed in this container.
     - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
-    - Server overview and Sites install metadata expose deployment profile, FQDN aliases, certificate mode, local CA fingerprint/expiry, and local CA base64 PEM for Internal-Only Agent install commands.
+    - Server overview and Sites install metadata expose deployment profile, FQDN aliases, certificate mode, local CA fingerprint/expiry, local CA base64 PEM, and `server_ip_fallback` for Internal-Only Agent install commands.
+    - Internal-Only Engine IP fallback metadata is normalized by `Data/Engine/Containers/api-backend/cmd/api-backend/engine_ip_fallback.go` and sourced from `BOREALIS_ENGINE_IP_FALLBACK`.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored as timestamped full `mode=max` exports under `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` when usable; plain Docker build remains the fallback.
     - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, clears Docker builder cache, and deletes whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
@@ -77,6 +78,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.
     - `Engine.sh --deployment-profile externally-accessible deploy prod`: public-DNS/ACME HTTPS edge profile.
     - `Engine.sh --deployment-profile internal-only deploy prod`: private-DNS/local-CA HTTPS edge profile.
+    - Internal-Only deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when the Engine profile is Internal-Only.
     - `Engine.sh deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
     - `Engine.sh --service api-backend restart`: restart API container only.
     - `Engine.sh --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.

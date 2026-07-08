@@ -247,10 +247,12 @@ func collectOverviewPublicEdgePayload() map[string]any {
 	fqdn := strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME"))
 	deploymentProfile := overviewEngineDeploymentProfile()
 	localCAPayload := collectOverviewLocalCAPayload()
+	serverIPFallback := ""
 	certificateMode := "traefik_default"
 	acmePath := overviewACMEStoragePath()
 	certificates, certificateReadError := collectOverviewACMECertificates(acmePath, fqdn)
 	if deploymentProfile == "internal-only" {
+		serverIPFallback = overviewEngineIPFallback()
 		certificateMode = "local_ca"
 		certificates = []any{}
 		certificateReadError = ""
@@ -268,6 +270,7 @@ func collectOverviewPublicEdgePayload() map[string]any {
 		"fqdn_aliases":             overviewFQDNAliases(fqdn),
 		"deployment_profile":       deploymentProfile,
 		"deployment_profile_label": overviewEngineDeploymentProfileLabel(),
+		"server_ip_fallback":       serverIPFallback,
 		"certificate_mode":         certificateMode,
 		"acme_email":               overviewACMEEmail(),
 		"public_base_url":          strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),

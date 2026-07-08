@@ -8,6 +8,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -104,6 +106,57 @@ func TestEnrollmentHandshake(t *testing.T) {
 	}
 	if client.RemoteOpsBaseURL() != server.URL+"/_borealis/site-workers/worker-agent-route" {
 		t.Fatalf("remote ops base url mismatch: %q", client.RemoteOpsBaseURL())
+	}
+}
+
+func TestDialContextForConfigFallsBackToServerIP(t *testing.T) {
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.test"
+	cfg.ServerIPFallback = "192.168.3.251"
+	dialContext := DialContextForConfig(cfg)
+	if dialContext == nil {
+		t.Fatal("dial context missing")
+	}
+
+	var addresses []string
+	wrapped := dialContextWithIPFallback(
+		func(ctx context.Context, network string, address string) (net.Conn, error) {
+			addresses = append(addresses, address)
+			if len(addresses) == 1 {
+				return nil, errors.New("primary failed")
+			}
+			left, right := net.Pipe()
+			t.Cleanup(func() { _ = right.Close() })
+			return left, nil
+		},
+		"borealis.example.test",
+		"192.168.3.251",
+	)
+	conn, err := wrapped(context.Background(), "tcp", "borealis.example.test:443")
+	if err != nil {
+		t.Fatalf("fallback dial failed: %v", err)
+	}
+	_ = conn.Close()
+	if len(addresses) != 2 || addresses[0] != "borealis.example.test:443" || addresses[1] != "192.168.3.251:443" {
+		t.Fatalf("dial addresses = %#v", addresses)
+	}
+}
+
+func TestDialContextForConfigSkipsFallbackForOtherHosts(t *testing.T) {
+	var addresses []string
+	wrapped := dialContextWithIPFallback(
+		func(ctx context.Context, network string, address string) (net.Conn, error) {
+			addresses = append(addresses, address)
+			return nil, errors.New("primary failed")
+		},
+		"borealis.example.test",
+		"192.168.3.251",
+	)
+	if _, err := wrapped(context.Background(), "tcp", "github.com:443"); err == nil {
+		t.Fatal("unrelated host dial unexpectedly succeeded")
+	}
+	if len(addresses) != 1 || addresses[0] != "github.com:443" {
+		t.Fatalf("dial addresses = %#v", addresses)
 	}
 }
 

@@ -30,6 +30,15 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		}
 		cfg.ServerURL = options.ServerURL
 	}
+	if strings.TrimSpace(options.ServerIPFallback) != "" {
+		if err := agentconfig.ValidateServerIPFallback(options.ServerIPFallback); err != nil {
+			return err
+		}
+		if configLoaded {
+			current.ServerIPFallback = agentconfig.NormalizeServerIPFallback(options.ServerIPFallback)
+			_ = agentconfig.Save(configPath, &current)
+		}
+	}
 	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
 		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
 		if err != nil {

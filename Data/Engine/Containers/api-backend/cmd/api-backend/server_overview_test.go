@@ -103,6 +103,7 @@ func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.internal.example")
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.internal.example,borealis.internal.example")
 	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.internal.example")
+	t.Setenv("BOREALIS_ENGINE_IP_FALLBACK", "192.168.3.251")
 
 	payload := collectOverviewPublicEdgePayload()
 	if got := payload["deployment_profile"]; got != "internal-only" {
@@ -110,6 +111,9 @@ func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
 	}
 	if got := payload["certificate_mode"]; got != "local_ca" {
 		t.Fatalf("certificate mode = %#v", got)
+	}
+	if got := payload["server_ip_fallback"]; got != "192.168.3.251" {
+		t.Fatalf("server IP fallback = %#v", got)
 	}
 	certificates, ok := payload["certificates"].([]any)
 	if !ok || len(certificates) != 1 {
