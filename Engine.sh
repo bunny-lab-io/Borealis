@@ -409,6 +409,56 @@ container_running() {
   docker inspect -f '{{.State.Running}}' "${container_name}" 2>/dev/null | grep -qx true
 }
 
+container_health_status() {
+  local container_name="$1"
+  docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_name}" 2>/dev/null || true
+}
+
+wait_for_postgres_container() {
+  local timeout_seconds="${1:-150}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local status=""
+  while ((SECONDS < deadline)); do
+    status="$(container_health_status borealis-engine-postgres-db)"
+    if [[ "${status}" == "healthy" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  printf '[%s] postgres-db did not become healthy, final status=%s\n' "$(date +%FT%T)" "${status:-unknown}" >> "${BUILD_LOG}"
+  docker logs --tail 120 borealis-engine-postgres-db >> "${BUILD_LOG}" 2>&1 || true
+  return 1
+}
+
+ensure_engine_database_schema() {
+  local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
+  if [[ -z "${site_worker_image}" ]]; then
+    site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
+  fi
+  [[ -n "${site_worker_image}" ]] || die "Unable to resolve site-worker image for Engine database schema initialization."
+
+  log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
+  compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
+  if ! wait_for_postgres_container 150; then
+    die "postgres-db did not become healthy for Engine database schema initialization. See ${BUILD_LOG}."
+  fi
+
+  log_status "Database schema" "Ensuring Engine tables" "${C_YELLOW}"
+  if ! docker run --rm \
+    --network host \
+    --env-file "${COMPOSE_ENV}" \
+    -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
+    -v "${RUNTIME_ROOT}:/opt/Borealis/Engine" \
+    --entrypoint python \
+    "${site_worker_image}" \
+    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"])' \
+    >> "${BUILD_LOG}" 2>&1; then
+    log_status "Database schema" "Failed" "${C_RED}"
+    die "Engine database schema initialization failed. See ${BUILD_LOG}."
+  fi
+  log_status "Database schema" "Ready" "${C_GREEN}"
+}
+
 ensure_no_host_postgres_conflict() {
   if host_postgres_units_active && ! container_running borealis-engine-postgres-db; then
     die "Host PostgreSQL is active on this machine and conflicts with container postgres-db on 127.0.0.1:5432. Stop and disable host PostgreSQL before deploying."
@@ -2376,6 +2426,7 @@ deploy_engine() {
   export_image_manifest_env
   write_image_manifest "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
+  ensure_engine_database_schema
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""

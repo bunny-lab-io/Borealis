@@ -123,6 +123,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
     ### PostgreSQL profile notes
     - `Engine.sh deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - `Engine.sh deploy` starts `postgres-db`, waits for health, and runs `Data.Engine.database.initialise_engine_database` from the current `site-worker` image before API/scheduler reconciliation.
     - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
     - Site-worker scheduled-lane values are active work-item slots: Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.
     - Shared Ansible work items can target multiple hosts inside one slot. Individual Ansible work items target one host per slot.

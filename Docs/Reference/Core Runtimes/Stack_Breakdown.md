@@ -208,26 +208,27 @@ WebUI targets:
 Compose dependency order:
 
 1. `postgres-db`, `wireguard-tunnel`, `remote-desktop-guacd`, and `webui-frontend` can start independently.
-2. `postgres-db` must pass healthcheck:
+2. `Engine.sh deploy` starts `postgres-db` first and runs one-shot Engine schema setup from the current `site-worker` image before API or scheduler reconciliation.
+3. `postgres-db` must pass healthcheck:
 ```text
 pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
-3. `wireguard-tunnel` must create the Unix control socket.
-4. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
-5. `webui-frontend` must serve `/` on `127.0.0.1:8000` in prod and dev.
-6. `api-backend` waits for:
+4. `wireguard-tunnel` must create the Unix control socket.
+5. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
+6. `webui-frontend` must serve `/` on `127.0.0.1:8000` in prod and dev.
+7. `api-backend` waits for:
 ```text
 postgres-db: service_healthy
 wireguard-tunnel: service_healthy
 remote-desktop-guacd: service_healthy
 ```
-7. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
-8. `traefik-edge` waits for:
+8. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
+9. `traefik-edge` waits for:
 ```text
 api-backend: service_healthy
 webui-frontend: service_healthy
 ```
-9. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
+10. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
 
 Traefik is the public edge. API and WebUI stay on loopback behind Traefik.
 

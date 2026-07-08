@@ -255,6 +255,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Runtime state: `Engine/Services/postgres-db/state`.
 - Compose environment: `Engine/Deploy/compose.env`.
 - Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
+- Engine deploy starts `postgres-db` and runs schema setup before API and scheduler containers reconcile. Operators do not need a separate first-run schema command.
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
 - Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
@@ -306,6 +307,7 @@ finally:
 
     ### Source map
 
+    - Deploy-time schema caller: `Engine.sh`
     - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
     - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`

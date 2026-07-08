@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 
 from Data.Engine.edge_runtime import LetsEncryptSettings, load_settings, write_runtime_artifacts
 
@@ -44,6 +46,42 @@ def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Pat
     dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
 
     assert 'Host(`borealis.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
+
+
+def test_dynamic_config_routes_hostname_aliases(tmp_path: Path) -> None:
+    settings = _build_settings(tmp_path)
+    settings.fqdn_aliases = "borealis.example.com,alias.example.com"
+
+    artifacts = write_runtime_artifacts(settings)
+    dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
+
+    assert 'Host(`borealis.example.com`,`alias.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
+    assert 'Host(`borealis.example.com`,`alias.example.com`) && PathPrefix(`/remote-desktop/vnc`)' in dynamic_config
+    assert 'Host(`borealis.example.com`,`alias.example.com`) && !PathPrefix(`/remote-desktop/vnc`)' in dynamic_config
+
+
+def test_traefik_entrypoint_routes_hostname_aliases(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_traefik = fake_bin / "traefik"
+    fake_traefik.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_traefik.chmod(0o755)
+    project_root = tmp_path / "runtime"
+    entrypoint = Path(__file__).resolve().parents[3] / "Data" / "Engine" / "Containers" / "traefik-edge" / "entrypoint.sh"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        "BOREALIS_PROJECT_ROOT": str(project_root),
+        "BOREALIS_PUBLIC_HOSTNAME": "borealis.example.test",
+        "BOREALIS_PUBLIC_HOSTNAME_ALIASES": "borealis.example.test, alias.example.test",
+    }
+
+    subprocess.run(["sh", str(entrypoint)], check=True, env=env, capture_output=True, text=True)
+    dynamic_config = (
+        project_root / "Engine" / "Services" / "traefik-edge" / "config" / "dynamic" / "core.yml"
+    ).read_text(encoding="utf-8")
+
+    assert dynamic_config.count("Host(`borealis.example.test`,`alias.example.test`)") == 4
 
 
 def test_static_config_trusts_configured_reverse_proxy_for_client_ip(tmp_path: Path, monkeypatch) -> None:

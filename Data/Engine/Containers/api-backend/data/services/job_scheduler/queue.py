@@ -240,8 +240,26 @@ def _route_tls_block() -> str:
     return "      tls: {}"
 
 
+def _public_host_rule() -> str:
+    raw_hosts = [
+        str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost"),
+        *str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME_ALIASES") or "").replace("\n", ",").split(","),
+    ]
+    hosts: List[str] = []
+    seen: set[str] = set()
+    for raw in raw_hosts:
+        host = str(raw or "").strip().lower().rstrip(".")
+        if not host or host in seen or any(char in host for char in "`\"' \t\r\n"):
+            continue
+        hosts.append(host)
+        seen.add(host)
+    if not hosts:
+        hosts = ["localhost"]
+    return "Host(" + ",".join(f"`{host}`" for host in hosts) + ")"
+
+
 def _worker_route_config(route: Mapping[str, Any]) -> str:
-    hostname = str(os.environ.get("BOREALIS_PUBLIC_HOSTNAME") or "localhost").strip() or "localhost"
+    host_rule = _public_host_rule()
     route_name = str(route.get("route_name") or "").strip()
     route_path_prefix = str(route.get("route_path_prefix") or "").rstrip("/")
     upstream_scheme = str(route.get("upstream_scheme") or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME).strip() or DEFAULT_SITE_WORKER_ROUTE_UPSTREAM_SCHEME
@@ -277,7 +295,7 @@ def _worker_route_config(route: Mapping[str, Any]) -> str:
         f"    {route_name}:",
         "      entryPoints:",
         "        - websecure",
-        f"      rule: \"Host(`{hostname}`) && PathPrefix(`{route_path_prefix}`)\"",
+        f"      rule: \"{host_rule} && PathPrefix(`{route_path_prefix}`)\"",
         "      middlewares:",
         f"        - {strip_name}",
         f"      service: {service_name}",
@@ -290,7 +308,7 @@ def _worker_route_config(route: Mapping[str, Any]) -> str:
                 f"    {guacamole_route_name}:",
                 "      entryPoints:",
                 "        - websecure",
-                f"      rule: \"Host(`{hostname}`) && PathPrefix(`{guacamole_route_path}`)\"",
+                f"      rule: \"{host_rule} && PathPrefix(`{guacamole_route_path}`)\"",
                 "      middlewares:",
                 f"        - {strip_name}",
                 f"      service: {guacamole_service_name}",
