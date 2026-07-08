@@ -465,6 +465,27 @@ function deriveInitialAssembly(locationState, assemblyGuid, mode) {
   return null;
 }
 
+function buildInitialAssemblySignature(incomingState, assemblyGuid, mode) {
+  const state = incomingState && typeof incomingState === "object" ? incomingState : null;
+  const row = state?.row && typeof state.row === "object" ? state.row : null;
+  const createContext =
+    (row?.createContext && typeof row.createContext === "object" ? row.createContext : null) ||
+    (state?.createContext && typeof state.createContext === "object" ? state.createContext : null);
+  return JSON.stringify({
+    mode,
+    routeAssemblyGuid: assemblyGuid || null,
+    stateAssemblyGuid: state?.assemblyGuid || row?.assemblyGuid || null,
+    stateMode: state?.mode || null,
+    statePath: state?.path || row?.sourcePath || row?.relPath || row?.path || "",
+    nonce: state?.nonce || null,
+    createName: createContext?.name || "",
+    createDescription: createContext?.description || "",
+    createType: createContext?.type || createContext?.defaultType || "",
+    rowName: row?.name || "",
+    rowDomain: row?.domain || "",
+  });
+}
+
 function GlassPanel({ children, sx }) {
   return <Box sx={[GLASS_PANEL_SX, sx]}>{children}</Box>;
 }
@@ -738,6 +759,13 @@ export default function AssemblyEditor() {
   const [errorMessage, setErrorMessage] = useState("");
   const [jsonPreviewOpen, setJsonPreviewOpen] = useState(false);
   const [jsonPreviewText, setJsonPreviewText] = useState("");
+  const routeInitialAssembly = location.state?.initialAssembly || null;
+  const routeInitialAssemblySignature = buildInitialAssemblySignature(
+    routeInitialAssembly,
+    routeAssemblyGuid || null,
+    normalizedMode
+  );
+  const lastInitialAssemblySignatureRef = useRef(routeInitialAssemblySignature);
   const { activeKey: activeTab, setActiveKey: setActiveTab } = useUrlTabState({
     param: "tab",
     defaultKey: "summary",
@@ -773,8 +801,12 @@ export default function AssemblyEditor() {
   );
 
   useEffect(() => {
+    if (lastInitialAssemblySignatureRef.current === routeInitialAssemblySignature) {
+      return;
+    }
+    lastInitialAssemblySignatureRef.current = routeInitialAssemblySignature;
     setInitialAssembly(deriveInitialAssembly(location.state, routeAssemblyGuid || null, normalizedMode));
-  }, [location.key, location.state, normalizedMode, routeAssemblyGuid]);
+  }, [location.key, location.state, normalizedMode, routeAssemblyGuid, routeInitialAssemblySignature]);
 
   useEffect(() => {
     let canceled = false;
