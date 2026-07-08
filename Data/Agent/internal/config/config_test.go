@@ -18,6 +18,7 @@ func TestSaveLoadConfig(t *testing.T) {
 	cfg.Agent.ReleaseChannel = "Unstable"
 	cfg.Agent.Branch = "feature/test"
 	cfg.Agent.InstalledBuildID = "ABCDEF"
+	cfg.Trust.EngineCAPEM = "-----BEGIN CERTIFICATE-----\r\nAQID\r\n-----END CERTIFICATE-----"
 	cfg.RemoteOps.Available = true
 	cfg.RemoteOps.SiteID = 1
 	cfg.RemoteOps.WorkerGUID = "worker-config-route"
@@ -61,6 +62,9 @@ func TestSaveLoadConfig(t *testing.T) {
 	if loaded.Agent.InstalledBuildID != "abcdef" {
 		t.Fatalf("installed build id mismatch: %q", loaded.Agent.InstalledBuildID)
 	}
+	if loaded.Trust.EngineCAPEM != "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" {
+		t.Fatalf("engine CA PEM not normalized: %q", loaded.Trust.EngineCAPEM)
+	}
 	if loaded.Agent.LogRetentionDays != DefaultLogRetentionDays {
 		t.Fatalf("log retention default = %d, want %d", loaded.Agent.LogRetentionDays, DefaultLogRetentionDays)
 	}
@@ -95,6 +99,26 @@ func TestSaveLoadConfig(t *testing.T) {
 		if strings.Contains(string(raw), unexpected) {
 			t.Fatalf("config contains unexpected field %s: %s", unexpected, string(raw))
 		}
+	}
+}
+
+func TestValidateServerURLForEnrollmentRejectsRawIP(t *testing.T) {
+	if err := ValidateServerURLForEnrollment("https://192.0.2.10"); err == nil {
+		t.Fatal("raw IP server URL accepted")
+	}
+	if err := ValidateServerURLForEnrollment("https://borealis.internal.example"); err != nil {
+		t.Fatalf("FQDN server URL rejected: %v", err)
+	}
+}
+
+func TestDecodeEngineCAB64NormalizesPEM(t *testing.T) {
+	encoded := "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tDQpBUUlEDQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0t"
+	decoded, err := DecodeEngineCAB64(encoded)
+	if err != nil {
+		t.Fatalf("DecodeEngineCAB64 failed: %v", err)
+	}
+	if decoded != "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" {
+		t.Fatalf("decoded PEM = %q", decoded)
 	}
 }
 

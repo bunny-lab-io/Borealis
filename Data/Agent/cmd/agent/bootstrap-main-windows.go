@@ -236,6 +236,9 @@ func validateFreshBootstrap(cfg BootstrapConfig) error {
 	if strings.TrimSpace(cfg.ServerURL) == "" || strings.TrimSpace(cfg.SiteEnrollmentCode) == "" {
 		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required")
 	}
+	if err := agentconfig.ValidateServerURLForEnrollment(cfg.ServerURL); err != nil {
+		return err
+	}
 	return nil
 }
 

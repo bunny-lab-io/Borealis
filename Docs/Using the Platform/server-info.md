@@ -12,7 +12,7 @@ Server Info is the admin dashboard for Engine runtime health. Use it to inspect 
 1. Open `Admin Settings > Server Info`.
 2. Start with summary cards.
 3. Review runtime, service, resource, access, and security rows.
-4. Check public certificate health before blaming browser or agent trust.
+4. Check edge certificate health before blaming browser or agent trust.
 5. Check WireGuard state before troubleshooting shell, desktop, SSH, or WinRM.
 
 ## Run Service Actions
@@ -69,7 +69,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     ### Runtime behavior
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
-    - Public-edge certificate health reads Traefik `acme.json` from the Engine state path, decodes base64 PEM certificate material, and reports expiry, severity, domains, resolver, and fingerprint in `/api/server/overview`.
+    - Public-edge certificate health reads Traefik `acme.json` for Externally Accessible deployments, or the Borealis local CA/leaf certificate files for Internal-Only deployments. `/api/server/overview` reports profile, certificate mode, expiry, severity, domains, resolver/source, fingerprint, and local CA bundle metadata for install flows.
     - Active Operator Sessions counts live `/api/realtime/events` SSE subscribers. The realtime hub emits `server_operator_presence_changed` when subscribers connect or disconnect so Server Info can refresh without waiting for the next poll.
     - Service actions queue work items so API request can return before service changes interrupt runtime.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.

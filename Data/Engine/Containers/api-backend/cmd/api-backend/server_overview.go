@@ -245,19 +245,231 @@ func collectOverviewPublicEdgePayload() map[string]any {
 	endpointHost := firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_HOST")), strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")))
 	endpointPort := parseIntDefault(os.Getenv("BOREALIS_PUBLIC_WIREGUARD_PORT"), parseIntDefault(os.Getenv("BOREALIS_WIREGUARD_PORT"), 30000))
 	fqdn := strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME"))
+	deploymentProfile := overviewEngineDeploymentProfile()
+	localCAPayload := collectOverviewLocalCAPayload()
+	certificateMode := "traefik_default"
 	acmePath := overviewACMEStoragePath()
 	certificates, certificateReadError := collectOverviewACMECertificates(acmePath, fqdn)
+	if deploymentProfile == "internal-only" {
+		certificateMode = "local_ca"
+		certificates = []any{}
+		certificateReadError = ""
+		if row, errText := collectOverviewPEMCertificate(overviewLocalTLSCertPath(), "traefik_local_ca", "local-ca", fqdn); row != nil {
+			certificates = append(certificates, row)
+		} else if errText != "" {
+			certificateReadError = errText
+		}
+	} else if len(certificates) > 0 {
+		certificateMode = "acme"
+	}
 	return map[string]any{
-		"enabled":            parseTruthy(os.Getenv("BOREALIS_PUBLIC_EDGE_ENABLED")),
-		"fqdn":               fqdn,
-		"acme_email":         overviewACMEEmail(),
-		"public_base_url":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
-		"public_vnc_path":    firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_VNC_PATH")), "/remote-desktop/vnc"),
-		"wireguard_endpoint": endpointDisplay(endpointHost, endpointPort),
-		"certificates":       certificates,
-		"certificate_count":  len(certificates),
-		"acme_storage_path":  acmePath,
-		"acme_read_error":    certificateReadError,
+		"enabled":                  parseTruthy(os.Getenv("BOREALIS_PUBLIC_EDGE_ENABLED")),
+		"fqdn":                     fqdn,
+		"fqdn_aliases":             overviewFQDNAliases(fqdn),
+		"deployment_profile":       deploymentProfile,
+		"deployment_profile_label": overviewEngineDeploymentProfileLabel(),
+		"certificate_mode":         certificateMode,
+		"acme_email":               overviewACMEEmail(),
+		"public_base_url":          strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
+		"public_vnc_path":          firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_VNC_PATH")), "/remote-desktop/vnc"),
+		"wireguard_endpoint":       endpointDisplay(endpointHost, endpointPort),
+		"certificates":             certificates,
+		"certificate_count":        len(certificates),
+		"acme_storage_path":        acmePath,
+		"acme_read_error":          certificateReadError,
+		"local_ca":                 localCAPayload,
+	}
+}
+
+func overviewEngineDeploymentProfile() string {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE")))
+	value = strings.ReplaceAll(value, "_", "-")
+	switch value {
+	case "internal-only", "internal", "local-only":
+		return "internal-only"
+	default:
+		return "externally-accessible"
+	}
+}
+
+func overviewEngineDeploymentProfileLabel() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL")); value != "" {
+		return value
+	}
+	if overviewEngineDeploymentProfile() == "internal-only" {
+		return "Internal-Only"
+	}
+	return "Externally Accessible"
+}
+
+func overviewFQDNAliases(primary string) []any {
+	seen := map[string]bool{}
+	values := []any{}
+	add := func(value string) {
+		value = strings.TrimSpace(strings.ToLower(strings.TrimSuffix(value, ".")))
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	add(primary)
+	for _, value := range strings.Split(os.Getenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES"), ",") {
+		add(value)
+	}
+	return values
+}
+
+func overviewLocalCAEnabled() bool {
+	if parseTruthy(os.Getenv("BOREALIS_LOCAL_CA_ENABLED")) {
+		return true
+	}
+	return overviewEngineDeploymentProfile() == "internal-only"
+}
+
+func overviewLocalCACertPath() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_LOCAL_CA_CERT_PATH")); value != "" {
+		return value
+	}
+	if value := cleanText(overviewTraefikSettings()["local_ca_cert_path"]); value != "" {
+		return value
+	}
+	return filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "local-ca", "borealis-local-ca.pem")
+}
+
+func overviewLocalCAKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_LOCAL_CA_KEY_PATH")); value != "" {
+		return value
+	}
+	return filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "local-ca", "borealis-local-ca.key")
+}
+
+func overviewLocalTLSCertPath() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_LOCAL_TLS_CERT_PATH")); value != "" {
+		return value
+	}
+	if value := cleanText(overviewTraefikSettings()["local_tls_cert_path"]); value != "" {
+		return value
+	}
+	return filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "local-certs", "traefik-local-leaf.pem")
+}
+
+func overviewLocalTLSKeyPath() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_LOCAL_TLS_KEY_PATH")); value != "" {
+		return value
+	}
+	if value := cleanText(overviewTraefikSettings()["local_tls_key_path"]); value != "" {
+		return value
+	}
+	return filepath.Join(projectRoot(), "Engine", "Services", "traefik-edge", "state", "local-certs", "traefik-local-leaf.key")
+}
+
+func collectOverviewLocalCAPayload() map[string]any {
+	enabled := overviewLocalCAEnabled()
+	path := overviewLocalCACertPath()
+	payload := map[string]any{
+		"enabled":     enabled,
+		"cert_path":   path,
+		"installable": false,
+		"pem_b64":     "",
+		"status":      "disabled",
+		"severity":    "healthy",
+		"read_error":  "",
+	}
+	if !enabled {
+		return payload
+	}
+	row, errText := collectOverviewPEMCertificate(path, "borealis_local_ca", "local-ca", "Borealis Local Engine CA")
+	if row == nil {
+		payload["status"] = "missing"
+		payload["severity"] = "critical"
+		payload["read_error"] = errText
+		return payload
+	}
+	for key, value := range row {
+		payload[key] = value
+	}
+	if content, err := os.ReadFile(path); err == nil && len(content) > 0 {
+		payload["pem_b64"] = base64.StdEncoding.EncodeToString(content)
+		payload["installable"] = true
+	} else if err != nil {
+		payload["read_error"] = err.Error()
+	}
+	return payload
+}
+
+func collectOverviewPEMCertificate(path string, source string, resolver string, fallbackName string) (map[string]any, string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, "certificate_path_unavailable"
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err.Error()
+	}
+	remaining := content
+	for {
+		block, rest := pem.Decode(remaining)
+		if block == nil {
+			return nil, "certificate_pem_unavailable"
+		}
+		remaining = rest
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err.Error()
+		}
+		return overviewPEMCertificateRow(cert, path, source, resolver, fallbackName), ""
+	}
+}
+
+func overviewPEMCertificateRow(cert *x509.Certificate, path string, source string, resolver string, fallbackName string) map[string]any {
+	fingerprint := sha256.Sum256(cert.Raw)
+	now := time.Now().UTC()
+	daysRemaining := int64(cert.NotAfter.UTC().Sub(now).Hours() / 24)
+	severity := "healthy"
+	status := "valid"
+	if !cert.NotAfter.After(now) {
+		severity = "critical"
+		status = "expired"
+	} else if daysRemaining <= 30 {
+		severity = "warning"
+		status = "expiring"
+	}
+	domains := []any{}
+	seen := map[string]bool{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		domains = append(domains, value)
+	}
+	add(cert.Subject.CommonName)
+	for _, name := range cert.DNSNames {
+		add(name)
+	}
+	for _, ip := range cert.IPAddresses {
+		add(ip.String())
+	}
+	return map[string]any{
+		"name":               firstText(cert.Subject.CommonName, fallbackName),
+		"domains":            domains,
+		"resolver":           resolver,
+		"source":             source,
+		"status":             status,
+		"severity":           severity,
+		"not_before":         cert.NotBefore.UTC().Format(time.RFC3339),
+		"expires_at":         cert.NotAfter.UTC().Format(time.RFC3339),
+		"days_remaining":     daysRemaining,
+		"issuer":             cert.Issuer.String(),
+		"subject":            cert.Subject.String(),
+		"serial_number":      cert.SerialNumber.String(),
+		"sha256_fingerprint": strings.ToUpper(hex.EncodeToString(fingerprint[:])),
+		"path":               path,
 	}
 }
 

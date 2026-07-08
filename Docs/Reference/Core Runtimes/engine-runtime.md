@@ -41,6 +41,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine/` is generated runtime state. Do not edit it directly.
     - Deploy state lives in `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
     - Service state lives in `Engine/Services/<role>/` with only directories used by that service.
+    - Traefik ACME state lives under `Engine/Services/traefik-edge/state/acme.json` for Externally Accessible deployments. Internal-Only deployments store Borealis local CA material under `Engine/Services/traefik-edge/state/local-ca/` and managed leaf material under `Engine/Services/traefik-edge/state/local-certs/`.
     - Logs live under `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
     - Ansible runtime lives under `Engine/Services/api-backend/cache/Ansible/`.
     - TLS and signing certificates live under `Engine/Services/api-backend/secrets/Certificates/`.
@@ -51,6 +52,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `api-backend` uses `alpine:3.24` with `ca-certificates`, `git`, and `tzdata`; Python dependencies, Docker CLI plugins, OCR tooling, and WireGuard command-line tools are not installed in this container. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
     - `job-scheduler` uses `alpine:3.24` with Bash, Python 3, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`; Docker Buildx is not installed in this container.
     - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
+    - Server overview and Sites install metadata expose deployment profile, FQDN aliases, certificate mode, local CA fingerprint/expiry, and local CA base64 PEM for Internal-Only Agent install commands.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored as timestamped full `mode=max` exports under `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` when usable; plain Docker build remains the fallback.
     - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, clears Docker builder cache, and deletes whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
@@ -66,13 +68,15 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, Docker-backed service actions, and `site-worker-<uuid>` lifecycle. It owns the host Docker socket in container mode.
     - Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
     - `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
-    - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
+    - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME or Borealis local CA TLS identity, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
     - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
     - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
     - `wireguard-tunnel` owns constrained WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
 
     ### Launcher commands
     - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.
+    - `Engine.sh --deployment-profile externally-accessible deploy prod`: public-DNS/ACME HTTPS edge profile.
+    - `Engine.sh --deployment-profile internal-only deploy prod`: private-DNS/local-CA HTTPS edge profile.
     - `Engine.sh deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
     - `Engine.sh --service api-backend restart`: restart API container only.
     - `Engine.sh --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.

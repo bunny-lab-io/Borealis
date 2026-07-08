@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -298,6 +299,45 @@ func TestRemoteOpsRouteNeedsRefreshHonorsAge(t *testing.T) {
 	client.mu.Unlock()
 	if !client.RemoteOpsRouteNeedsRefresh(time.Minute) {
 		t.Fatal("stale site-worker route did not require refresh")
+	}
+}
+
+func TestHTTPClientUsesTrustedEngineCA(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ok" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("missing authorization")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	cfg := agentconfig.Default()
+	cfg.ServerURL = server.URL
+	cfg.Trust.EngineCAPEM = string(certPEM)
+	cfg.Agent.GUID = "GUID"
+	cfg.Tokens.AccessToken = "access"
+	cfg.Tokens.AccessExpiresAt = time.Now().Add(time.Hour).Unix()
+	cfg.Tokens.RefreshToken = "refresh"
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]string
+	if _, err := client.GetJSON(context.Background(), "/ok", &payload); err != nil {
+		t.Fatalf("trusted CA request failed: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 

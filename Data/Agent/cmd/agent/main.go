@@ -50,6 +50,8 @@ func run() int {
 	flag.StringVar(&options.ServerURL, "server-url", "", "Borealis Engine public URL.")
 	flag.StringVar(&options.EnrollmentCode, "site-enrollment-code", "", "Site enrollment code.")
 	flag.StringVar(&options.EnrollmentCode, "enrollment-code", "", "Enrollment code.")
+	flag.StringVar(&options.TrustedEngineCAPEM, "trusted-engine-ca-pem", "", "Trusted Borealis Engine CA PEM for Internal-Only deployments.")
+	flag.StringVar(&options.TrustedEngineCAB64, "trusted-engine-ca-b64", "", "Trusted Borealis Engine CA PEM base64 for Internal-Only deployments.")
 	flag.StringVar(&repoRef, "repo-ref", "", "Borealis repository branch/ref used by bootstrap installers.")
 	flag.StringVar(&options.ReleaseChannel, "release-channel", "", "Agent release channel: stable or unstable.")
 	flag.StringVar(&helperStateDir, "helper-state-dir", "", "Current-user helper state directory.")
@@ -328,6 +330,9 @@ func validateFreshDeployInstall(options agentruntime.Options) error {
 	if strings.TrimSpace(options.ServerURL) == "" || strings.TrimSpace(options.EnrollmentCode) == "" {
 		return fmt.Errorf("unsafe fresh install: --server-url and --site-enrollment-code are required to re-enroll the device")
 	}
+	if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -345,7 +350,20 @@ func persistInstallConfig(options agentruntime.Options) error {
 		return err
 	}
 	if options.ServerURL != "" {
+		if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
+			return err
+		}
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
+		if err != nil {
+			return err
+		}
+		cfg.Trust.EngineCAPEM = pemText
+	}
+	if strings.TrimSpace(options.TrustedEngineCAPEM) != "" {
+		cfg.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
 	}
 	if options.EnrollmentCode != "" {
 		cfg.EnrollmentCode = options.EnrollmentCode

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -568,6 +569,24 @@ func TestEngineBackupTrustSpecsExcludeApprovalsAndLimitActiveRows(t *testing.T) 
 	}
 	if !engineBackupKnownTableSet()["engine.device_list_views"] {
 		t.Fatalf("saved views should remain known so older backups validate")
+	}
+}
+
+func TestEngineBackupIncludesInternalLocalCAFiles(t *testing.T) {
+	specs := engineBackupFileSpecMap()
+	for id, mode := range map[string]fs.FileMode{
+		"traefik_local_ca_cert":  0o644,
+		"traefik_local_ca_key":   0o600,
+		"traefik_local_tls_cert": 0o644,
+		"traefik_local_tls_key":  0o600,
+	} {
+		spec, ok := specs[id]
+		if !ok {
+			t.Fatalf("backup file spec missing %s", id)
+		}
+		if spec.Mode != mode {
+			t.Fatalf("backup file spec %s mode = %#o, want %#o", id, spec.Mode, mode)
+		}
 	}
 }
 

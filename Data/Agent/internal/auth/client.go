@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	cryptoRand "crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -51,6 +53,10 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	httpClient, err := HTTPClientForConfig(*cfg, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	identity, changed, err := LoadOrCreateIdentity(cfg)
 	if err != nil {
 		return nil, err
@@ -65,7 +71,7 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 		configPath:  configPath,
 		cfg:         cfg,
 		identity:    identity,
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  httpClient,
 		serviceMode: NormalizeServiceMode(serviceMode),
 		hostname:    hostname,
 	}
@@ -73,6 +79,33 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 		opt(client)
 	}
 	return client, nil
+}
+
+func TLSConfigFromConfig(cfg agentconfig.AgentConfig) (*tls.Config, error) {
+	caPEM := agentconfig.NormalizeEngineCAPEM(cfg.Trust.EngineCAPEM)
+	if caPEM == "" {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("trusted engine CA PEM is invalid")
+	}
+	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, nil
+}
+
+func HTTPClientForConfig(cfg agentconfig.AgentConfig, timeout time.Duration) (*http.Client, error) {
+	tlsConfig, err := TLSConfigFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}, nil
 }
 
 func NormalizeServiceMode(value string) string {
@@ -117,6 +150,21 @@ func (c *Client) Config() agentconfig.AgentConfig {
 
 func (c *Client) Identity() Identity {
 	return c.identity
+}
+
+func (c *Client) TLSConfig() *tls.Config {
+	cfg := c.Config()
+	tlsConfig, err := TLSConfigFromConfig(cfg)
+	if err != nil {
+		return nil
+	}
+	return tlsConfig
+}
+
+func (c *Client) HTTPClient() *http.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.httpClient
 }
 
 func (c *Client) BaseURL() string {

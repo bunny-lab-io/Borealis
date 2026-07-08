@@ -28,7 +28,7 @@ On a fresh Engine, the Aegis setup screen shows **Restore Engine Config Backup**
 5. Select **Import**.
 6. Restart the API service, then unlock Aegis when prompted.
 
-Agents keep trust when the restored Engine remains reachable at the same public hostname or FQDN they already trust.
+Agents keep trust when the restored Engine remains reachable at the same FQDN they already trust. Internal-Only restores also keep the Borealis local CA and leaf key material, so do not change the Engine FQDN during a clean migration unless you plan to reinstall or reconfigure agents and browser trust.
 
 ## Restore From an Existing Engine
 
@@ -71,7 +71,7 @@ Agents keep trust when the restored Engine remains reachable at the same public 
     ### Included state
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.
     - Sites, enrollment codes, auto-approval settings, device-site assignments, and operator site assignments.
-    - Agents, latest active device key per agent, latest active refresh token per agent, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, release/settings JSON, software override JSON, and software blocklist JSON.
+    - Agents, latest active device key per agent, latest active refresh token per agent, purge barriers, VPN config/leases/key leases, agent service account rows, Agent JWT key, script signing keys, WireGuard server keys, Engine secret, Traefik ACME/settings state, Internal-Only local CA and leaf certificate/key files, release/settings JSON, software override JSON, and software blocklist JSON.
     - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, patch policies, patch allow/block rules, patch targets/exclusions, patch catalog cache, metadata definitions/values, and current software and patch inventory.
 
     ### Excluded state

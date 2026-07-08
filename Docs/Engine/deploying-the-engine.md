@@ -8,10 +8,11 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
     - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
 
-    **DNS Records & Let's Encrypt Considerations**:
+    **DNS Records & Certificate Considerations**:
 
-    - Point a public FQDN at the Engine host before production deployment (e.g. `borealis.bunny-lab.io`), this will be used by Let's Encrypt later during Engine setup.
-    - Also be sure to have an email address ready for Let's Encrypt certificate registration (e.g. `infrastructure@bunny-lab.io`)
+    - Choose an Engine FQDN before deployment. Agents and browsers must use this FQDN, not a raw IP address.
+    - Externally Accessible deployments need public DNS and an email address for Let's Encrypt certificate registration (e.g. `infrastructure@bunny-lab.io`).
+    - Internal-Only deployments need private DNS that resolves the Engine FQDN from operator browsers and enrolled agents.
 
     **Firewall Preparation**:
 
@@ -68,6 +69,33 @@ curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/ma
 ```
 
 During deployment, Borealis will install missing dependencies, prepare runtime configuration, builds changed service container images, and starts the Docker Compose stack automatically for you.
+
+### Select Engine Access Profile
+Borealis supports two Engine access profiles. Both require an FQDN so agents can validate TLS hostnames correctly.
+
+=== "Externally Accessible"
+
+    Use this when agents and operators reach Borealis through public DNS. This is the default profile.
+
+    ```sh
+    sudo bash Engine.sh --deployment-profile externally-accessible deploy prod
+    ```
+
+    Traefik requests and renews public Let's Encrypt certificates. Operators and agents trust the Engine through normal public CA validation.
+
+=== "Internal-Only"
+
+    Use this when Borealis stays on private DNS or VPN-only networks and should not request public certificates.
+
+    ```sh
+    sudo bash Engine.sh --deployment-profile internal-only deploy prod
+    ```
+
+    Traefik serves a Borealis-managed local CA leaf certificate for the Engine FQDN. Agent install commands include the local CA bundle automatically. Browsers need the Borealis local CA imported into the operator device or managed trust store before they show the Engine as trusted.
+
+!!! warning
+
+    Do not enroll agents with raw IP addresses. If DNS is not ready, stop and create the FQDN record first.
 
 ??? note "Optional: Development and Branch Installs"
     Use these commands only when testing changes or validating a specific release channel.  *Do not use in Production.*
@@ -172,8 +200,11 @@ After deployment finishes:
 
     ### Public edge and trust
 
-    - Borealis embedded Traefik manages the public HTTPS identity and ACME state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
-    - Agents must use the public HTTPS FQDN and rely on normal CA + hostname validation.
+    - Borealis embedded Traefik manages the HTTPS identity and dynamic route state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
+    - `Engine.sh --deployment-profile externally-accessible|internal-only` or `BOREALIS_ENGINE_DEPLOYMENT_PROFILE` selects the access profile. The default is `externally-accessible`.
+    - Externally Accessible uses ACME/Let's Encrypt. Internal-Only disables ACME and generates a Borealis local CA plus DNS-only Engine leaf certificate under `Engine/Services/traefik-edge/state/local-ca/` and `Engine/Services/traefik-edge/state/local-certs/`.
+    - Internal-Only CA/cert material is included in Backup/Restore. Keep the same FQDN when migrating a live Internal-Only Engine so existing agents and browsers keep trusting the restored service.
+    - Agents must use the HTTPS FQDN and rely on CA + hostname validation.
     - The Python Engine is not a direct public TLS endpoint in production.
 
     ### Agent install and enrollment notes

@@ -40,6 +40,7 @@ REPO_REF="${BOREALIS_ENGINE_REF:-}"
 REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
 REPO_REF_EXPLICIT=0
 RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
+ENGINE_DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-externally-accessible}"
 SYNC_REQUESTED=0
 DISTRO_ID="unknown"
 LAUNCH_ARGS=()
@@ -296,12 +297,16 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--deployment-profile|--deployment_profile)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
           --repo-url) REPO_URL="$2" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="$2" ;;
+          --deployment-profile|--deployment_profile)
+            ENGINE_DEPLOYMENT_PROFILE="$2"
+            export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
+            ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="$2"
             REPO_REF_EXPLICIT=1
@@ -310,16 +315,23 @@ parse_launch_options() {
             esac
             ;;
         esac
-        SYNC_REQUESTED=1
+        case "$1" in
+          --deployment-profile|--deployment_profile) ;;
+          *) SYNC_REQUESTED=1 ;;
+        esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--deployment-profile=*|--deployment_profile=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
           --install-dir) INSTALL_DIR="${value}" ;;
           --repo-url) REPO_URL="${value}" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="${value}" ;;
+          --deployment-profile|--deployment_profile)
+            ENGINE_DEPLOYMENT_PROFILE="${value}"
+            export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
+            ;;
           --ref|--branch|--repo-branch|--repo_branch)
             REPO_REF="${value}"
             REPO_REF_EXPLICIT=1
@@ -328,7 +340,10 @@ parse_launch_options() {
             esac
             ;;
         esac
-        SYNC_REQUESTED=1
+        case "${key}" in
+          --deployment-profile|--deployment_profile) ;;
+          *) SYNC_REQUESTED=1 ;;
+        esac
         shift
         ;;
       -Engine|--engine|--Engine|-EngineProduction|--EngineProduction|--engine-production)
@@ -582,6 +597,8 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/env" \
     "${RUNTIME_ROOT}/Services/traefik-edge/logs" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/state/local-ca" \
+    "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
@@ -693,19 +710,118 @@ prune_empty_legacy_runtime_paths() {
   done
 }
 
+normalize_engine_deployment_profile() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|externally-accessible|external|public|public-facing)
+      printf '%s\n' "externally-accessible"
+      ;;
+    internal-only|internal|local-only|private|on-prem|onprem)
+      printf '%s\n' "internal-only"
+      ;;
+    *)
+      die "Unsupported Engine deployment profile '${1}'. Use externally-accessible or internal-only."
+      ;;
+  esac
+}
+
+engine_deployment_profile_label() {
+  case "$(normalize_engine_deployment_profile "$1")" in
+    internal-only) printf '%s\n' "Internal-Only" ;;
+    *) printf '%s\n' "Externally Accessible" ;;
+  esac
+}
+
+normalize_engine_hostname() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+raw = (sys.argv[1] or "").strip()
+if not raw:
+    print("")
+    raise SystemExit(0)
+text = raw if "://" in raw else "https://" + raw
+try:
+    parsed = urlsplit(text)
+    host = (parsed.hostname or raw).strip().lower().rstrip(".")
+except Exception:
+    host = raw.strip().lower().rstrip(".")
+print(host)
+PY
+}
+
+hostname_is_ip_literal() {
+  python3 - "$1" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_address((sys.argv[1] or "").strip())
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+}
+
+validate_engine_fqdn() {
+  local value="$1"
+  local label="${2:-Engine FQDN}"
+  local hostname
+  hostname="$(normalize_engine_hostname "${value}")"
+  [[ -n "${hostname}" ]] || die "${label} is required."
+  [[ "${hostname}" != "localhost" ]] || die "${label} must be an FQDN, not localhost."
+  hostname_is_ip_literal "${hostname}" && die "${label} must be an FQDN, not raw IP address '${hostname}'."
+  [[ "${hostname}" == *.* ]] || die "${label} must be a fully qualified DNS name."
+  [[ "${hostname}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || die "${label} '${hostname}' contains unsupported DNS characters."
+  printf '%s\n' "${hostname}"
+}
+
+resolve_engine_hostname_aliases() {
+  local primary="$1"
+  local raw="${BOREALIS_PUBLIC_HOSTNAME_ALIASES:-${BOREALIS_ENGINE_FQDN_ALIASES:-$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)}}"
+  python3 - "${primary}" "${raw}" <<'PY'
+import sys
+
+primary = (sys.argv[1] or "").strip().lower().rstrip(".")
+raw = (sys.argv[2] or "").replace("\n", ",")
+seen = set()
+values = []
+for item in [primary, *raw.split(",")]:
+    text = item.strip().lower().rstrip(".")
+    if not text or text in seen:
+        continue
+    seen.add(text)
+    values.append(text)
+print(",".join(values))
+PY
+}
+
+validate_engine_hostname_aliases() {
+  local aliases="$1"
+  local alias=""
+  local -a __borealis_aliases=()
+  IFS=',' read -r -a __borealis_aliases <<< "${aliases}"
+  for alias in "${__borealis_aliases[@]}"; do
+    [[ -n "${alias}" ]] || continue
+    validate_engine_fqdn "${alias}" "Engine FQDN alias" >/dev/null
+  done
+}
+
 resolve_public_hostname() {
   local existing
   existing="$(read_env_value BOREALIS_PUBLIC_HOSTNAME)"
   if [[ -n "${BOREALIS_PUBLIC_HOSTNAME:-}" ]]; then
-    printf '%s\n' "${BOREALIS_PUBLIC_HOSTNAME}"
+    validate_engine_fqdn "${BOREALIS_PUBLIC_HOSTNAME}" "Engine FQDN"
   elif [[ -n "${existing}" ]]; then
-    printf '%s\n' "${existing}"
+    validate_engine_fqdn "${existing}" "Engine FQDN"
   elif [[ -t 0 ]]; then
     local input=""
-    read -r -p "Public Engine FQDN [localhost]: " input || true
-    printf '%s\n' "${input:-localhost}"
+    read -r -p "Engine FQDN: " input || true
+    validate_engine_fqdn "${input}" "Engine FQDN"
   else
-    printf '%s\n' "localhost"
+    die "Engine FQDN is required. Set BOREALIS_PUBLIC_HOSTNAME or run Engine.sh interactively."
   fi
 }
 
@@ -723,6 +839,154 @@ resolve_acme_email() {
   else
     printf '%s\n' ""
   fi
+}
+
+local_ca_root_dir() {
+  printf '%s\n' "${RUNTIME_ROOT}/Services/traefik-edge/state/local-ca"
+}
+
+local_cert_root_dir() {
+  printf '%s\n' "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs"
+}
+
+local_ca_cert_path() {
+  printf '%s\n' "$(local_ca_root_dir)/borealis-local-ca.pem"
+}
+
+local_ca_key_path() {
+  printf '%s\n' "$(local_ca_root_dir)/borealis-local-ca.key"
+}
+
+local_tls_cert_path() {
+  printf '%s\n' "$(local_cert_root_dir)/traefik-local-leaf.pem"
+}
+
+local_tls_key_path() {
+  printf '%s\n' "$(local_cert_root_dir)/traefik-local-leaf.key"
+}
+
+local_tls_metadata_path() {
+  printf '%s\n' "$(local_cert_root_dir)/traefik-local-leaf.metadata"
+}
+
+write_local_ca_config() {
+  local path="$1"
+  cat > "${path}" <<'EOF'
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+prompt = no
+
+[req_distinguished_name]
+CN = Borealis Local Engine CA
+O = Borealis
+
+[v3_ca]
+basicConstraints = critical,CA:true,pathlen:1
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+EOF
+}
+
+write_local_leaf_config() {
+  local path="$1"
+  local primary="$2"
+  local aliases="$3"
+  cat > "${path}" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = ${primary}
+O = Borealis
+
+[v3_req]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+EOF
+  local index=1
+  local alias=""
+  local -a __borealis_leaf_aliases=()
+  IFS=',' read -r -a __borealis_leaf_aliases <<< "${aliases}"
+  for alias in "${__borealis_leaf_aliases[@]}"; do
+    alias="$(printf '%s' "${alias}" | xargs)"
+    [[ -n "${alias}" ]] || continue
+    printf 'DNS.%d = %s\n' "${index}" "${alias}" >> "${path}"
+    ((index += 1))
+  done
+}
+
+ensure_local_ca_material() {
+  local profile="$1"
+  local primary="$2"
+  local aliases="$3"
+  [[ "${profile}" == "internal-only" ]] || return 0
+  command_exists openssl || die "openssl is required for Internal-Only local CA generation. Install openssl and rerun Engine.sh."
+  validate_engine_hostname_aliases "${aliases}"
+
+  local ca_dir cert_dir ca_cert ca_key leaf_cert leaf_key leaf_meta
+  ca_dir="$(local_ca_root_dir)"
+  cert_dir="$(local_cert_root_dir)"
+  ca_cert="$(local_ca_cert_path)"
+  ca_key="$(local_ca_key_path)"
+  leaf_cert="$(local_tls_cert_path)"
+  leaf_key="$(local_tls_key_path)"
+  leaf_meta="$(local_tls_metadata_path)"
+  mkdir -p "${ca_dir}" "${cert_dir}"
+
+  if [[ ! -s "${ca_cert}" || ! -s "${ca_key}" ]]; then
+    local ca_conf
+    ca_conf="$(mktemp)"
+    write_local_ca_config "${ca_conf}"
+    openssl genrsa -out "${ca_key}" 4096 >/dev/null 2>&1
+    openssl req -x509 -new -nodes -key "${ca_key}" -sha256 -days 3650 -out "${ca_cert}" -config "${ca_conf}" >/dev/null 2>&1
+    rm -f "${ca_conf}"
+    chmod 600 "${ca_key}" 2>/dev/null || true
+    chmod 644 "${ca_cert}" 2>/dev/null || true
+    log_status "Local CA" "Generated" "${C_GREEN}"
+  fi
+
+  local current_aliases=""
+  [[ -f "${leaf_meta}" ]] && current_aliases="$(read_env_value SAN_HOSTNAMES "${leaf_meta}")"
+  local renew_leaf=0
+  [[ -s "${leaf_cert}" && -s "${leaf_key}" ]] || renew_leaf=1
+  [[ "${current_aliases}" == "${aliases}" ]] || renew_leaf=1
+  if [[ -s "${leaf_cert}" ]] && ! openssl x509 -checkend 2592000 -noout -in "${leaf_cert}" >/dev/null 2>&1; then
+    renew_leaf=1
+  fi
+
+  if [[ "${renew_leaf}" -eq 1 ]]; then
+    local leaf_conf csr
+    leaf_conf="$(mktemp)"
+    csr="$(mktemp)"
+    write_local_leaf_config "${leaf_conf}" "${primary}" "${aliases}"
+    openssl genrsa -out "${leaf_key}" 2048 >/dev/null 2>&1
+    openssl req -new -key "${leaf_key}" -out "${csr}" -config "${leaf_conf}" >/dev/null 2>&1
+    openssl x509 -req -in "${csr}" -CA "${ca_cert}" -CAkey "${ca_key}" -CAcreateserial -out "${leaf_cert}" -days 397 -sha256 -extensions v3_req -extfile "${leaf_conf}" >/dev/null 2>&1
+    rm -f "${leaf_conf}" "${csr}"
+    chmod 600 "${leaf_key}" 2>/dev/null || true
+    chmod 644 "${leaf_cert}" 2>/dev/null || true
+    cat > "${leaf_meta}" <<EOF
+SAN_HOSTNAMES=${aliases}
+GENERATED_AT=$(date -u +%FT%TZ)
+EOF
+    chmod 600 "${leaf_meta}" 2>/dev/null || true
+    log_status "Local TLS leaf" "Generated" "${C_GREEN}"
+  fi
+}
+
+local_ca_cert_b64() {
+  local ca_cert
+  ca_cert="$(local_ca_cert_path)"
+  [[ -s "${ca_cert}" ]] || return 0
+  base64 -w 0 "${ca_cert}" 2>/dev/null || base64 "${ca_cert}" | tr -d '\n'
 }
 
 resolve_host_timezone() {
@@ -996,6 +1260,11 @@ write_compose_env() {
   local public_host="$2"
   local acme_email="$3"
   local trusted_proxy_ips_arg="${4-}"
+  local engine_profile="${5:-${ENGINE_DEPLOYMENT_PROFILE}}"
+  local fqdn_aliases="${6:-${public_host}}"
+  engine_profile="$(normalize_engine_deployment_profile "${engine_profile}")"
+  local engine_profile_label
+  engine_profile_label="$(engine_deployment_profile_label "${engine_profile}")"
   local postgres_password
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   [[ -n "${postgres_password}" && "${postgres_password}" != "change-me" ]] || postgres_password="$(generate_secret)"
@@ -1017,6 +1286,20 @@ write_compose_env() {
   local runtime_owner_uid
   local runtime_owner_gid
   local host_timezone
+  local local_ca_enabled=0
+  local local_ca_cert=""
+  local local_ca_key=""
+  local local_tls_cert=""
+  local local_tls_key=""
+  local local_ca_b64=""
+  if [[ "${engine_profile}" == "internal-only" ]]; then
+    local_ca_enabled=1
+    local_ca_cert="$(local_ca_cert_path)"
+    local_ca_key="$(local_ca_key_path)"
+    local_tls_cert="$(local_tls_cert_path)"
+    local_tls_key="$(local_tls_key_path)"
+    local_ca_b64="$(local_ca_cert_b64)"
+  fi
   if (($# >= 4)); then
     traefik_trusted_proxy_ips="${trusted_proxy_ips_arg}"
   else
@@ -1053,6 +1336,9 @@ BOREALIS_PUBLIC_HTTP_PORT=80
 BOREALIS_PUBLIC_VNC_PATH=/remote-desktop/vnc
 BOREALIS_PUBLIC_WIREGUARD_HOST=${public_host}
 BOREALIS_PUBLIC_WIREGUARD_PORT=30000
+BOREALIS_PUBLIC_HOSTNAME_ALIASES=${fqdn_aliases}
+BOREALIS_ENGINE_DEPLOYMENT_PROFILE=${engine_profile}
+BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL=${engine_profile_label}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -1064,6 +1350,12 @@ BOREALIS_TRAEFIK_HEALTH_PORT=${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}
 BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=${traefik_trusted_proxy_ips}
 BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS=${traefik_forwarded_headers_trusted_ips}
 BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS=${traefik_proxy_protocol_trusted_ips}
+BOREALIS_LOCAL_CA_ENABLED=${local_ca_enabled}
+BOREALIS_LOCAL_CA_CERT_PATH=${local_ca_cert}
+BOREALIS_LOCAL_CA_KEY_PATH=${local_ca_key}
+BOREALIS_LOCAL_TLS_CERT_PATH=${local_tls_cert}
+BOREALIS_LOCAL_TLS_KEY_PATH=${local_tls_key}
+BOREALIS_AGENT_ENGINE_CA_PEM_B64=${local_ca_b64}
 
 BOREALIS_DEPLOYMENT_PROFILE=${PROFILE_NAME}
 BOREALIS_DEPLOYMENT_PROFILE_RANK=${PROFILE_RANK}
@@ -2015,6 +2307,12 @@ payload = {
             "random_page_cost": env.get("BOREALIS_POSTGRES_RANDOM_PAGE_COST", ""),
         },
     },
+    "engine_deployment_profile": {
+        "id": env.get("BOREALIS_ENGINE_DEPLOYMENT_PROFILE", ""),
+        "label": env.get("BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL", ""),
+        "fqdn_aliases": env.get("BOREALIS_PUBLIC_HOSTNAME_ALIASES", ""),
+        "local_ca_enabled": env.get("BOREALIS_LOCAL_CA_ENABLED", "") in {"1", "true", "TRUE", "yes", "YES", "on", "ON"},
+    },
     "deployed_at": datetime.now(timezone.utc).isoformat(),
     "services": services,
 }
@@ -2050,10 +2348,21 @@ prepare_runtime() {
   local public_host
   local acme_email
   local traefik_trusted_proxy_ips
+  local engine_profile
+  local fqdn_aliases
+  engine_profile="$(normalize_engine_deployment_profile "${ENGINE_DEPLOYMENT_PROFILE}")"
+  ENGINE_DEPLOYMENT_PROFILE="${engine_profile}"
   public_host="$(resolve_public_hostname)"
-  acme_email="$(resolve_acme_email)"
+  fqdn_aliases="$(resolve_engine_hostname_aliases "${public_host}")"
+  validate_engine_hostname_aliases "${fqdn_aliases}"
+  if [[ "${engine_profile}" == "internal-only" ]]; then
+    acme_email=""
+    ensure_local_ca_material "${engine_profile}" "${public_host}" "${fqdn_aliases}"
+  else
+    acme_email="$(resolve_acme_email)"
+  fi
   traefik_trusted_proxy_ips="$(resolve_traefik_trusted_proxy_ips)"
-  write_compose_env "${mode}" "${public_host}" "${acme_email}" "${traefik_trusted_proxy_ips}"
+  write_compose_env "${mode}" "${public_host}" "${acme_email}" "${traefik_trusted_proxy_ips}" "${engine_profile}" "${fqdn_aliases}"
 }
 
 deploy_engine() {
@@ -2066,7 +2375,7 @@ deploy_engine() {
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
-  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -2130,7 +2439,7 @@ service_action() {
       build_images "${mode}" "${service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
-      BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)"
+      BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
@@ -2156,7 +2465,7 @@ usage() {
 Usage:
   Engine.sh deploy [prod|dev]
   Engine.sh --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
-  Engine.sh [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
+  Engine.sh [--deployment-profile externally-accessible|internal-only] [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }
 

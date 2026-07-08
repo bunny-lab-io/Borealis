@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
@@ -52,12 +53,16 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if token == "" {
 		return fmt.Errorf("access token missing")
 	}
+	engineHTTPClient, err := bootstrapEngineHTTPClient(cfg)
+	if err != nil {
+		return err
+	}
 	installed := readConfigInstalledBuildID(cfg)
 	logger.Tracef("Agent update check start: release_channel=%s repo_ref=%s installed_build_id=%s", cfg.ReleaseChannel, cfg.RepoRef, installed)
 	if shouldUseRepoRefUpdate(cfg) {
-		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt, serverURL, token)
+		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
 	}
-	manifest, err := fetchUpdateManifest(serverURL, token, installed)
+	manifest, err := fetchUpdateManifest(engineHTTPClient, serverURL, token, installed)
 	if err != nil {
 		return err
 	}
@@ -90,7 +95,7 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	archivePath := filepath.Join(updateTempDir(cfg), "agent-update.zip")
 	markConfigUpdateOperation(configPath, "staging", "")
 	logger.Tracef("Agent update artifact download start: url=%s authed=%t archive=%s", downloadURL, authed, archivePath)
-	if err := downloadUpdateArtifact(downloadURL, token, authed, archivePath); err != nil {
+	if err := downloadUpdateArtifact(engineHTTPClient, downloadURL, token, authed, archivePath); err != nil {
 		return err
 	}
 	if manifest.ArtifactSHA256 != "" {
@@ -137,6 +142,17 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	return nil
 }
 
+func bootstrapEngineHTTPClient(cfg BootstrapConfig) (*http.Client, error) {
+	agentCfg, err := agentconfig.Load(agentConfigPath(cfg.InstallDir))
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
+		agentCfg.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
+	}
+	return auth.HTTPClientForConfig(agentCfg, 180*time.Second)
+}
+
 func releaseChannelForUpdateManifest(effective string, target string) string {
 	channel := strings.ToLower(strings.TrimSpace(effective))
 	if channel == "" {
@@ -154,10 +170,10 @@ func shouldUseRepoRefUpdate(cfg BootstrapConfig) bool {
 	return agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel)
 }
 
-func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string) error {
+func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, httpClient *http.Client) error {
 	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	ref := strings.TrimSpace(cfg.RepoRef)
-	target, err := resolveEngineRepoRefSHA(serverURL, token, cfg.RepoURL, ref)
+	target, err := resolveEngineRepoRefSHA(httpClient, serverURL, token, cfg.RepoURL, ref)
 	if err != nil {
 		engineErr := err
 		logger.Warnf("Engine repo hash lookup failed for repo_ref %q; trying GitHub fallback: %v", ref, engineErr)
@@ -233,7 +249,7 @@ func downloadRepoRefUpdateSource(cfg BootstrapConfig, logger *BootstrapLogger, r
 	return sourceRoot, nil
 }
 
-func resolveEngineRepoRefSHA(serverURL string, token string, repoURL string, ref string) (string, error) {
+func resolveEngineRepoRefSHA(httpClient *http.Client, serverURL string, token string, repoURL string, ref string) (string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	if baseURL == "" {
 		return "", fmt.Errorf("server URL missing")
@@ -257,7 +273,10 @@ func resolveEngineRepoRefSHA(serverURL string, token string, repoURL string, ref
 	if strings.TrimSpace(token) != "" {
 		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(token))
 	}
-	resp, err := http.DefaultClient.Do(req)
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -313,7 +332,7 @@ func resolveGithubRefSHA(repoURL string, ref string) (string, error) {
 	return sha, nil
 }
 
-func fetchUpdateManifest(serverURL string, token string, installedBuildID string) (updateManifest, error) {
+func fetchUpdateManifest(httpClient *http.Client, serverURL string, token string, installedBuildID string) (updateManifest, error) {
 	params := url.Values{}
 	if installedBuildID != "" {
 		params.Set("installed_build_id", installedBuildID)
@@ -329,7 +348,10 @@ func fetchUpdateManifest(serverURL string, token string, installedBuildID string
 		return updateManifest{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return updateManifest{}, err
 	}
@@ -344,7 +366,7 @@ func fetchUpdateManifest(serverURL string, token string, installedBuildID string
 	return manifest, nil
 }
 
-func downloadUpdateArtifact(rawURL string, token string, authed bool, destination string) error {
+func downloadUpdateArtifact(httpClient *http.Client, rawURL string, token string, authed bool, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
 	}
@@ -357,7 +379,10 @@ func downloadUpdateArtifact(rawURL string, token string, authed bool, destinatio
 	if authed {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}

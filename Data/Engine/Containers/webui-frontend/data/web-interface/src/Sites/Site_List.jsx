@@ -1113,21 +1113,36 @@ function deriveInstallServerUrl(payload) {
   }
 }
 
+function normalizeInstallEngineCA(payload) {
+  const caPayload = payload?.engine_ca || payload?.public_edge?.local_ca || payload?.local_ca || null;
+  const pemB64 = String(caPayload?.pem_b64 || "").trim();
+  if (!pemB64) {
+    return null;
+  }
+  return {
+    pem_b64: pemB64,
+    required: Boolean(payload?.engine_ca_required || caPayload?.enabled),
+  };
+}
+
 export async function loadSiteListPageData(request) {
   const progress = createRouteRequestPlan(request, 4);
   try {
     await requireAuthenticatedRequest(request, progress);
     const data = await progress.fetchJson("/api/sites");
     let installServerUrl = deriveInstallServerUrl(data);
-    if (!installServerUrl) {
+    let installEngineCA = normalizeInstallEngineCA(data);
+    const requiresEngineCA = Boolean(data?.engine_ca_required || data?.deployment_profile === "internal-only");
+    if (!installServerUrl || (requiresEngineCA && !installEngineCA)) {
       try {
         const overviewPayload = await progress.fetchJson("/api/server/overview");
-        installServerUrl = deriveInstallServerUrl({
+        installServerUrl = installServerUrl || deriveInstallServerUrl({
           public_base_url:
             overviewPayload?.host?.public_base_url || overviewPayload?.public_edge?.public_base_url || "",
           public_hostname:
             overviewPayload?.host?.public_hostname || overviewPayload?.public_edge?.fqdn || "",
         });
+        installEngineCA = installEngineCA || normalizeInstallEngineCA(overviewPayload);
       } catch (error) {
         rethrowIfRouteRedirect(error);
       }
@@ -1139,6 +1154,7 @@ export async function loadSiteListPageData(request) {
       rows: Array.isArray(data?.sites) ? data.sites : [],
       siteWorkerPayload: {},
       installServerUrl,
+      installEngineCA,
       initialError: "",
     };
   } catch (error) {
@@ -1147,6 +1163,7 @@ export async function loadSiteListPageData(request) {
       rows: [],
       siteWorkerPayload: {},
       installServerUrl: "",
+      installEngineCA: null,
       initialError: getRouteErrorMessage(error, "Unable to load sites."),
     };
   } finally {
@@ -1758,30 +1775,43 @@ function quotePowerShellValue(value) {
   return `"${escapePowerShellDoubleQuoted(value)}"`;
 }
 
-export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH) {
+function installEngineCAB64(engineCA) {
+  if (!engineCA) {
+    return "";
+  }
+  if (typeof engineCA === "string") {
+    return String(engineCA || "").trim();
+  }
+  return String(engineCA?.pem_b64 || "").trim();
+}
+
+export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DEFAULT_INSTALL_BRANCH, engineCA = null) {
   const normalizedServerUrl = normalizeInstallServerUrl(serverUrl);
   const normalizedEnrollmentCode = String(enrollmentCode || "").trim();
   const normalizedBranch = normalizeInstallBranch(branch);
   const usesDefaultBranch = normalizedBranch === DEFAULT_INSTALL_BRANCH;
+  const engineCAB64 = installEngineCAB64(engineCA);
   if (!normalizedServerUrl || !normalizedEnrollmentCode) {
     return "";
   }
 
   if (osId === "windows") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
+    const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 ${quotePowerShellValue(engineCAB64)}` : "";
     return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
       `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
-      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}`;
+      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}${caArg}`;
   }
 
   if (osId === "linux") {
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/linux-amd64/Agent");
     const urlArg = usesDefaultBranch ? agentUrl : quoteShellValue(agentUrl);
+    const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 "${escapeShellDoubleQuoted(engineCAB64)}"` : "";
     const launchArgs = `--server-url "${escapeShellDoubleQuoted(normalizedServerUrl)}" ` +
       `--repo-ref "${escapeShellDoubleQuoted(normalizedBranch)}" ` +
-      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}" --install-service`;
+      `--site-enrollment-code "${escapeShellDoubleQuoted(normalizedEnrollmentCode)}"${caArg} --install-service`;
     return `curl -fsSL ${urlArg} -o /tmp/Borealis-Agent; ` +
       `chmod 700 /tmp/Borealis-Agent; ` +
       `sudo /tmp/Borealis-Agent ${launchArgs}`;
@@ -2056,9 +2086,11 @@ export default function SiteList() {
   const navigate = useNavigate();
   const initialRows = useMemo(() => (Array.isArray(loaderData?.rows) ? loaderData.rows : []), [loaderData]);
   const initialInstallServerUrl = String(loaderData?.installServerUrl || "");
+  const initialInstallEngineCA = loaderData?.installEngineCA || null;
   const [rows, setRows] = useState(() => initialRows);
   const [siteWorkerPayload, setSiteWorkerPayload] = useState(() => ({}));
   const [installServerUrl, setInstallServerUrl] = useState(() => initialInstallServerUrl);
+  const [installEngineCA, setInstallEngineCA] = useState(() => initialInstallEngineCA);
   const [nowSeconds, setNowSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const [loadError, setLoadError] = useState(() => String(loaderData?.initialError || ""));
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -2172,22 +2204,25 @@ export default function SiteList() {
     [navigate]
   );
 
-  const fetchInstallServerUrlFromOverview = useCallback(async () => {
+  const fetchInstallMetadataFromOverview = useCallback(async () => {
     try {
       const response = await fetch("/api/server/overview", {
         credentials: "include",
         cache: "no-store",
       });
       if (!response.ok) {
-        return "";
+        return { installServerUrl: "", installEngineCA: null };
       }
       const payload = await response.json().catch(() => ({}));
-      return deriveInstallServerUrl({
-        public_base_url: payload?.host?.public_base_url || payload?.public_edge?.public_base_url || "",
-        public_hostname: payload?.host?.public_hostname || payload?.public_edge?.fqdn || "",
-      });
+      return {
+        installServerUrl: deriveInstallServerUrl({
+          public_base_url: payload?.host?.public_base_url || payload?.public_edge?.public_base_url || "",
+          public_hostname: payload?.host?.public_hostname || payload?.public_edge?.fqdn || "",
+        }),
+        installEngineCA: normalizeInstallEngineCA(payload),
+      };
     } catch {
-      return "";
+      return { installServerUrl: "", installEngineCA: null };
     }
   }, []);
 
@@ -2198,17 +2233,26 @@ export default function SiteList() {
       if (!res.ok) {
         throw new Error(data?.message || data?.error || `HTTP ${res.status}`);
       }
-      const nextInstallServerUrl = deriveInstallServerUrl(data) || await fetchInstallServerUrlFromOverview();
+      let nextInstallServerUrl = deriveInstallServerUrl(data);
+      let nextInstallEngineCA = normalizeInstallEngineCA(data);
+      const requiresEngineCA = Boolean(data?.engine_ca_required || data?.deployment_profile === "internal-only");
+      if (!nextInstallServerUrl || (requiresEngineCA && !nextInstallEngineCA)) {
+        const overviewMetadata = await fetchInstallMetadataFromOverview();
+        nextInstallServerUrl = nextInstallServerUrl || overviewMetadata.installServerUrl;
+        nextInstallEngineCA = nextInstallEngineCA || overviewMetadata.installEngineCA;
+      }
       setRows(Array.isArray(data?.sites) ? data.sites : []);
       setInstallServerUrl(nextInstallServerUrl);
+      setInstallEngineCA(nextInstallEngineCA);
       setLoadError("");
     } catch {
       setRows([]);
       setSiteWorkerPayload({});
       setInstallServerUrl("");
+      setInstallEngineCA(null);
       setLoadError("Unable to load sites.");
     }
-  }, [fetchInstallServerUrlFromOverview]);
+  }, [fetchInstallMetadataFromOverview]);
 
   const fetchInstallBranches = useCallback(async () => {
     setBranchesLoading(true);
@@ -2445,7 +2489,7 @@ export default function SiteList() {
     const siteName = String(site?.name || "Unknown Site").trim() || "Unknown Site";
     const enrollmentCode = String(site?.enrollment_code || "").trim();
     const osLabel = INSTALL_OS_OPTIONS.find((option) => option.id === osId)?.label || "Agent";
-    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch);
+    const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, installEngineCA);
 
     if (!command) {
       await sendNotification({
@@ -2474,7 +2518,7 @@ export default function SiteList() {
       icon: "warning",
       variant: "warning",
     });
-  }, [copyTextToClipboard, installServerUrl, selectedInstallBranch, sendNotification]);
+  }, [copyTextToClipboard, installEngineCA, installServerUrl, selectedInstallBranch, sendNotification]);
 
   const handleSelectInstallOs = useCallback(async (osId) => {
     const activeSite = installMenuSite;

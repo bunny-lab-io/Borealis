@@ -25,6 +25,9 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	}
 	current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
 	current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
+	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
+		current.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
+	}
 	current.Agent.ReleaseChannel = agentconfig.NormalizeReleaseChannel(cfg.ReleaseChannel)
 	current.Agent.Branch = agentconfig.NormalizeBranch(cfg.RepoRef)
 	current.ApplyDefaults()
@@ -68,6 +71,9 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 			ReleaseChannel string `json:"release_channel"`
 			Branch         string `json:"branch"`
 		} `json:"agent"`
+		Trust struct {
+			EngineCAPEM string `json:"engine_ca_pem"`
+		} `json:"trust"`
 	}
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		return
@@ -77,6 +83,9 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	}
 	if strings.TrimSpace(cfg.SiteEnrollmentCode) == "" {
 		cfg.SiteEnrollmentCode = strings.TrimSpace(parsed.EnrollmentCode)
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAPEM) == "" {
+		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(parsed.Trust.EngineCAPEM)
 	}
 	if strings.TrimSpace(cfg.RepoRef) == "" || strings.EqualFold(strings.TrimSpace(cfg.RepoRef), defaultRepoRef) {
 		if branch := strings.TrimSpace(parsed.Agent.Branch); branch != "" {

@@ -104,7 +104,7 @@ Engine/Services/postgres-db/run   -> /var/run/borealis
 Engine/Services/traefik-edge -> /opt/Borealis/Engine/Services/traefik-edge
 ```
 
-Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory.
+Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory. Externally Accessible deployments store ACME state in `state/acme.json`; Internal-Only deployments store Borealis local CA and leaf certificate material under `state/local-ca/` and `state/local-certs/`.
 
 `remote-desktop-guacd`:
 ```text
@@ -139,7 +139,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 5. Create service runtime tree under `Engine/Services/`.
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
-8. Resolve public hostname and ACME email.
+8. Resolve Engine FQDN, deployment profile, and certificate mode. Externally Accessible resolves ACME email; Internal-Only generates or renews Borealis local CA/leaf certificate material.
 9. Detect deployment profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
 10. Compute service input hashes from each service's declared source, Dockerfile, build context, target mode, and dependency inputs.
 11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
@@ -187,7 +187,7 @@ Build cache:
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
-- `compose.env` carries image tags, stable env-file paths, deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
+- `compose.env` carries image tags, stable env-file paths, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.

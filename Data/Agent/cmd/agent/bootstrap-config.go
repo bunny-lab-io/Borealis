@@ -37,6 +37,8 @@ type cliOptions struct {
 	SiteEnrollmentCode string
 	RepoRef            string
 	ReleaseChannel     string
+	TrustedEngineCAPEM string
+	TrustedEngineCAB64 string
 	Uninstall          bool
 	Verbose            bool
 }
@@ -49,6 +51,8 @@ type BootstrapConfig struct {
 	RepoURL             string `json:"repo_url"`
 	RepoRef             string `json:"repo_ref"`
 	ReleaseChannel      string `json:"release_channel"`
+	TrustedEngineCAPEM  string `json:"trusted_engine_ca_pem"`
+	TrustedEngineCAB64  string `json:"trusted_engine_ca_b64"`
 	PayloadPath         string `json:"agent_bundle_path"`
 	PayloadSHA256       string `json:"agent_bundle_sha256"`
 	ManifestPath        string `json:"manifest_path"`
@@ -101,6 +105,18 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.ReleaseChannel = strings.TrimSpace(args[i])
+		case "--trusted-engine-ca-pem":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--trusted-engine-ca-pem requires value")
+			}
+			i++
+			opts.TrustedEngineCAPEM = strings.TrimSpace(args[i])
+		case "--trusted-engine-ca-b64":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--trusted-engine-ca-b64 requires value")
+			}
+			i++
+			opts.TrustedEngineCAB64 = strings.TrimSpace(args[i])
 		case "-uninstall":
 			opts.Uninstall = true
 		case "-verbose", "--verbose":
@@ -143,6 +159,12 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	if cli.ReleaseChannel != "" {
 		cfg.ReleaseChannel = cli.ReleaseChannel
 	}
+	if cli.TrustedEngineCAB64 != "" {
+		cfg.TrustedEngineCAB64 = cli.TrustedEngineCAB64
+	}
+	if cli.TrustedEngineCAPEM != "" {
+		cfg.TrustedEngineCAPEM = cli.TrustedEngineCAPEM
+	}
 	if cli.Verbose {
 		cfg.Verbose = true
 	}
@@ -152,6 +174,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 
 	mergeStoredBootstrapInputs(&cfg)
 	normalizeBootstrapConfig(&cfg)
+	if err := normalizeBootstrapTrustedCA(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -214,6 +239,12 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	}
 	if strings.TrimSpace(incoming.ReleaseChannel) != "" {
 		base.ReleaseChannel = incoming.ReleaseChannel
+	}
+	if strings.TrimSpace(incoming.TrustedEngineCAB64) != "" {
+		base.TrustedEngineCAB64 = incoming.TrustedEngineCAB64
+	}
+	if strings.TrimSpace(incoming.TrustedEngineCAPEM) != "" {
+		base.TrustedEngineCAPEM = incoming.TrustedEngineCAPEM
 	}
 	if strings.TrimSpace(incoming.PayloadPath) != "" {
 		base.PayloadPath = incoming.PayloadPath
@@ -303,6 +334,23 @@ func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	if cfg.NonInteractive {
 		cfg.Interactive = false
 	}
+}
+
+func normalizeBootstrapTrustedCA(cfg *BootstrapConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(cfg.TrustedEngineCAB64)
+		if err != nil {
+			return err
+		}
+		cfg.TrustedEngineCAPEM = pemText
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
+		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
+	}
+	return nil
 }
 
 func mergeStoredBootstrapInputs(cfg *BootstrapConfig) {

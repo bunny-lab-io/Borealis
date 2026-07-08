@@ -18,18 +18,40 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		configPath = options.ConfigPath
 	}
 	current, err := agentconfig.LoadOrCreate(configPath)
-	if err == nil {
+	configLoaded := err == nil
+	if configLoaded {
 		cfg.ServerURL = current.ServerURL
 		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(current.Agent.ReleaseChannel)
 		cfg.RepoRef = agentconfig.NormalizeBranch(current.Agent.Branch)
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
+		if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
+			return err
+		}
 		cfg.ServerURL = options.ServerURL
+	}
+	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
+		if err != nil {
+			return err
+		}
+		cfg.TrustedEngineCAPEM = pemText
+		if configLoaded {
+			current.Trust.EngineCAPEM = pemText
+			_ = agentconfig.Save(configPath, &current)
+		}
+	}
+	if strings.TrimSpace(options.TrustedEngineCAPEM) != "" {
+		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
+		if configLoaded {
+			current.Trust.EngineCAPEM = cfg.TrustedEngineCAPEM
+			_ = agentconfig.Save(configPath, &current)
+		}
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.RepoRef = agentconfig.NormalizeBranch(options.RepoRef)
 		cfg.ReleaseChannel = agentconfig.ReleaseChannelForBranch(cfg.RepoRef)
-		if err == nil {
+		if configLoaded {
 			current.Agent.Branch = cfg.RepoRef
 			current.Agent.ReleaseChannel = cfg.ReleaseChannel
 			_ = agentconfig.Save(configPath, &current)
@@ -37,7 +59,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	}
 	if strings.TrimSpace(options.ReleaseChannel) != "" {
 		cfg.ReleaseChannel = agentconfig.NormalizeReleaseChannel(options.ReleaseChannel)
-		if err == nil {
+		if configLoaded {
 			current.Agent.ReleaseChannel = cfg.ReleaseChannel
 			_ = agentconfig.Save(configPath, &current)
 		}
