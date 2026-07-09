@@ -121,7 +121,7 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 - Supported Windows agent traffic is owned by the SYSTEM runtime.
 - Per-session helpers do not enroll, do not store Engine tokens, and communicate with the local SYSTEM broker over local IPC.
 - Agent API and Socket.IO calls flow through the Go auth client, which refreshes tokens before retrying authenticated calls.
-- Internal-Only `server_ip_fallback` is a route hint, not a trust anchor. Agents still require the configured Engine FQDN and trusted CA validation.
+- Internal-Only `server_ip_fallback` is a route hint, not a trust anchor. Agents still require the configured Engine FQDN and trusted CA validation for HTTPS. Linux WireGuard setup may rewrite the local endpoint to the fallback IP after FQDN DNS failure; WireGuard server public key validation still authenticates the tunnel peer.
 - Script payloads are rejected when signature verification fails.
 - Agent logs bootstrap, enrollment, token refresh, role health, and signature events under `Agent/Logs`.
 

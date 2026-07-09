@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/bunny-lab-io/borealis/go-agent/internal/auth"
+	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/logutil"
 	"github.com/bunny-lab-io/borealis/go-agent/internal/scripts"
 )
@@ -68,22 +70,24 @@ func (a authClientAdapter) StoreServerSigningKey(value string) error {
 }
 
 type Manager struct {
-	authClient     AuthClient
-	hostname       string
-	serviceMode    string
-	configPath     string
-	baseDir        string
-	logPath        string
-	platform       string
-	interfaceName  string
-	wireguardExe   string
-	wgQuick        string
-	wg             string
-	ip             string
-	clientPrivate  string
-	clientPublic   string
-	runner         commandRunner
-	statusReporter func(context.Context, string, string, string) error
+	authClient       AuthClient
+	hostname         string
+	serviceMode      string
+	configPath       string
+	baseDir          string
+	logPath          string
+	platform         string
+	interfaceName    string
+	wireguardExe     string
+	wgQuick          string
+	wg               string
+	ip               string
+	serverHost       string
+	serverIPFallback string
+	clientPrivate    string
+	clientPublic     string
+	runner           commandRunner
+	statusReporter   func(context.Context, string, string, string) error
 
 	sessionMu                sync.Mutex
 	mu                       sync.Mutex
@@ -94,6 +98,7 @@ type Manager struct {
 	lastError                string
 	lastEnsureAt             int64
 	lastReadyAt              int64
+	lastAppliedEndpoint      string
 	lastReadyNotificationKey string
 	lastTunnelSnapshot       map[string]any
 	session                  *SessionConfig
@@ -135,6 +140,13 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 	baseDir := filepath.Dir(configPath)
 	logPath := filepath.Join(baseDir, "Logs", "WireGuard", "wireguard.log")
 	privateKey, publicKey := generateWireGuardKeys()
+	serverHost := ""
+	serverIPFallback := ""
+	if client != nil {
+		cfg := client.Config()
+		serverHost = serverURLHost(cfg.ServerURL)
+		serverIPFallback = agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
+	}
 	manager := &Manager{
 		authClient:         authClientAdapter{client: client},
 		hostname:           strings.TrimSpace(hostname),
@@ -148,6 +160,8 @@ func New(client *auth.Client, hostname string, serviceMode string, configPath st
 		wgQuick:            resolveExecutable("wg-quick"),
 		wg:                 resolveExecutable("wg"),
 		ip:                 resolveExecutable("ip"),
+		serverHost:         serverHost,
+		serverIPFallback:   serverIPFallback,
 		clientPrivate:      privateKey,
 		clientPublic:       publicKey,
 		runner:             runCommand,
@@ -220,6 +234,7 @@ func (m *Manager) Health() RoleHealth {
 	lastError := m.lastError
 	lastEnsureAt := m.lastEnsureAt
 	lastReadyAt := m.lastReadyAt
+	lastAppliedEndpoint := m.lastAppliedEndpoint
 	session := cloneSession(m.session)
 	snapshot := cloneMap(m.lastTunnelSnapshot)
 	m.mu.Unlock()
@@ -253,6 +268,9 @@ func (m *Manager) Health() RoleHealth {
 	}
 	if lastError != "" {
 		details["last_error"] = lastError
+	}
+	if lastAppliedEndpoint != "" && lastAppliedEndpoint != endpoint {
+		details["applied_endpoint"] = lastAppliedEndpoint
 	}
 	if !supported {
 		details["running_status"] = "Unsupported"
@@ -497,7 +515,7 @@ func (m *Manager) startSession(ctx context.Context, session *SessionConfig) erro
 			return err
 		}
 	case "linux":
-		if err := m.applyLinuxSession(ctx); err != nil {
+		if err := m.applyLinuxSession(ctx, session); err != nil {
 			return err
 		}
 	default:
@@ -536,6 +554,7 @@ func (m *Manager) stopSession(ctx context.Context, reason string, ignoreMissing 
 	}
 	m.mu.Lock()
 	m.session = nil
+	m.lastAppliedEndpoint = ""
 	m.mu.Unlock()
 	m.logf("WireGuard session stopped reason=%s", fallbackText(cleanText(reason), "stop"))
 	return nil
@@ -572,21 +591,48 @@ func (m *Manager) applyWindowsSession(ctx context.Context, session *SessionConfi
 	}
 	m.ensureWindowsServiceDisplayName(ctx)
 	m.ensureWindowsFirewall(ctx, session.AllowedIPs, session.AllowedPorts)
+	m.setAppliedEndpoint(session.Endpoint)
 	return nil
 }
 
-func (m *Manager) applyLinuxSession(ctx context.Context) error {
+func (m *Manager) applyLinuxSession(ctx context.Context, session *SessionConfig) error {
 	if strings.TrimSpace(m.wgQuick) == "" {
 		return fmt.Errorf("wg-quick not found")
 	}
 	_ = m.linuxDown(ctx)
-	result, err := m.runner(ctx, commandTimeout, m.wgQuick, "up", m.configPathForPlatform())
+	result, err := m.runLinuxUp(ctx)
 	if err != nil {
 		return err
 	}
 	if result.ExitCode != 0 {
+		if fallbackEndpoint, ok := m.wireGuardFallbackEndpoint(session.Endpoint); ok && wireGuardEndpointResolutionFailed(result) {
+			_ = m.linuxDown(ctx)
+			fallbackSession := cloneSession(session)
+			fallbackSession.Endpoint = fallbackEndpoint
+			if err := m.writeConfig(m.renderConfig(fallbackSession)); err != nil {
+				return err
+			}
+			m.logf("WireGuard endpoint DNS failed endpoint=%s; using server_ip_fallback endpoint=%s", session.Endpoint, fallbackEndpoint)
+			fallbackResult, fallbackErr := m.runLinuxUp(ctx)
+			if fallbackErr != nil {
+				return fallbackErr
+			}
+			if fallbackResult.ExitCode != 0 {
+				_ = m.linuxDown(ctx)
+				fallbackResult, fallbackErr = m.runLinuxUp(ctx)
+				if fallbackErr != nil {
+					return fallbackErr
+				}
+				if fallbackResult.ExitCode != 0 {
+					return fmt.Errorf("wg-quick up failed with server_ip_fallback endpoint %s: %s", fallbackEndpoint, commandDetail(fallbackResult))
+				}
+			}
+			m.setAppliedEndpoint(fallbackEndpoint)
+			m.ensureLinuxMTU(ctx)
+			return nil
+		}
 		_ = m.linuxDown(ctx)
-		result, err = m.runner(ctx, commandTimeout, m.wgQuick, "up", m.configPathForPlatform())
+		result, err = m.runLinuxUp(ctx)
 		if err != nil {
 			return err
 		}
@@ -594,8 +640,13 @@ func (m *Manager) applyLinuxSession(ctx context.Context) error {
 			return fmt.Errorf("wg-quick up failed: %s", commandDetail(result))
 		}
 	}
+	m.setAppliedEndpoint(session.Endpoint)
 	m.ensureLinuxMTU(ctx)
 	return nil
+}
+
+func (m *Manager) runLinuxUp(ctx context.Context) (commandResult, error) {
+	return m.runner(ctx, commandTimeout, m.wgQuick, "up", m.configPathForPlatform())
 }
 
 func (m *Manager) sessionConfigMatchesLive(ctx context.Context, desired *SessionConfig) bool {
@@ -747,6 +798,33 @@ func (m *Manager) renderIdleConfig() string {
 		"ListenPort = 0",
 		fmt.Sprintf("MTU = %d", interfaceMTU()),
 	}, "\n") + "\n"
+}
+
+func (m *Manager) wireGuardFallbackEndpoint(endpoint string) (string, bool) {
+	if m == nil {
+		return "", false
+	}
+	fallbackIP := agentconfig.NormalizeServerIPFallback(m.serverIPFallback)
+	if fallbackIP == "" {
+		return "", false
+	}
+	host, port, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil || strings.TrimSpace(port) == "" {
+		return "", false
+	}
+	if normalizeEndpointHost(host) != normalizeEndpointHost(m.serverHost) {
+		return "", false
+	}
+	return net.JoinHostPort(fallbackIP, port), true
+}
+
+func (m *Manager) setAppliedEndpoint(endpoint string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.lastAppliedEndpoint = cleanText(endpoint)
+	m.mu.Unlock()
 }
 
 func (m *Manager) configPathForPlatform() string {
@@ -1166,6 +1244,39 @@ func fallbackText(value string, fallback string) string {
 		return strings.TrimSpace(value)
 	}
 	return fallback
+}
+
+func normalizeEndpointHost(value string) string {
+	return strings.Trim(strings.ToLower(strings.TrimSpace(value)), "[] .")
+}
+
+func serverURLHost(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return ""
+	}
+	parsed, err := url.Parse(text)
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	return normalizeEndpointHost(parsed.Hostname())
+}
+
+func wireGuardEndpointResolutionFailed(result commandResult) bool {
+	text := strings.ToLower(commandDetail(result))
+	for _, marker := range []string{
+		"name or service not known",
+		"temporary failure in name resolution",
+		"no address associated with hostname",
+		"could not resolve",
+		"failed to resolve",
+		"unable to resolve",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func asInt(value any, fallback int) int {

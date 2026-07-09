@@ -145,7 +145,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 | --- | --- | --- | --- |
 | `--config-path <path>` | Full | Full | Use a specific `agent.json`. Defaults beside the running binary. |
 | `--server-url <url>` | Full | Full | Override or persist Engine URL during install, runtime start, or update check. |
-| `--server-ip-fallback <ip>` | Runtime with `--install-service` | Full | Persist an Internal-Only Engine IP route hint in `agent.json` as `server_ip_fallback`. The Agent still uses `--server-url` for request host, SNI, and certificate hostname validation. |
+| `--server-ip-fallback <ip>` | Runtime with `--install-service` | Full | Persist an Internal-Only Engine IP route hint in `agent.json` as `server_ip_fallback`. The Agent still uses `--server-url` for request host, SNI, and certificate hostname validation. Linux WireGuard setup uses it only after the FQDN endpoint fails DNS resolution. |
 | `--site-enrollment-code <code>` | Full | Full | Enrollment code for runtime install/start. Alias target is shared with `--enrollment-code`. |
 | `--enrollment-code <code>` | Full | Full | Runtime alias for `--site-enrollment-code`. Not accepted by Windows bootstrap mode. |
 | `--trusted-engine-ca-b64 <base64-pem>` | Full | Full | Persist Borealis local CA bundle for Internal-Only Engine HTTPS validation. |
@@ -209,6 +209,6 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
     - `--server-url` or `--site-enrollment-code` implies `--install-service` in the runtime parser. `--repo-ref` alone does not imply install-service.
     - Fresh install detection treats `--server-url`, `--site-enrollment-code`/`--enrollment-code`, or `--repo-ref` as fresh-deploy intent, but validation requires both server URL and enrollment code before wiping stale install state.
     - Fresh install and runtime server URL overrides require an Engine FQDN. Raw IPs and `localhost` are rejected before enrollment config is written.
-    - `--server-ip-fallback` stores a bare non-loopback IP as `server_ip_fallback`. REST, update, file-transfer, software-override, and Socket.IO connections first try the FQDN normally. If that TCP dial fails, they connect to the fallback IP while keeping the original FQDN as the HTTP host and TLS SNI name.
+    - `--server-ip-fallback` stores a bare non-loopback IP as `server_ip_fallback`. REST, update, file-transfer, software-override, and Socket.IO connections first try the FQDN normally. If that TCP dial fails, they connect to the fallback IP while keeping the original FQDN as the HTTP host and TLS SNI name. Linux WireGuard setup first tries the Engine-provided FQDN endpoint and rewrites the local `wireguard.conf` endpoint to the fallback IP only when `wg-quick up` reports endpoint DNS resolution failure.
     - `--trusted-engine-ca-b64` decodes and stores the Borealis local CA PEM in `agent.json` at `trust.engine_ca_pem`. The Go auth client appends that CA to the system trust pool for REST and Socket.IO without disabling hostname validation.
     - Metadata field selectors accept normal forms such as `1`, `field_001`, `field-1`, and `metadata1`, but operator docs should use numeric field numbers.

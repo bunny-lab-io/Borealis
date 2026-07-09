@@ -91,7 +91,7 @@ Borealis supports two Engine access profiles. Both require an FQDN so agents can
     sudo bash Engine.sh --deployment-profile internal-only deploy prod
     ```
 
-    Traefik serves a Borealis-managed local CA leaf certificate for the Engine FQDN. Agent install commands include the local CA bundle automatically. Linux Agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Browsers need the Borealis local CA imported into the operator device or managed trust store before they show the Engine as trusted.
+    Traefik serves a Borealis-managed local CA leaf certificate for the Engine FQDN. Agent install commands include the local CA bundle automatically. Linux Agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator device or managed trust store before they show the Engine as trusted.
 
 !!! warning
 
@@ -204,7 +204,7 @@ After deployment finishes:
     - `Engine.sh --deployment-profile externally-accessible|internal-only` or `BOREALIS_ENGINE_DEPLOYMENT_PROFILE` selects the access profile. The default is `externally-accessible`.
     - Externally Accessible uses ACME/Let's Encrypt. Internal-Only disables ACME and generates a Borealis local CA plus DNS-only Engine leaf certificate under `Engine/Services/traefik-edge/state/local-ca/` and `Engine/Services/traefik-edge/state/local-certs/`.
     - Internal-Only CA/cert material is included in Backup/Restore. Keep the same FQDN when migrating a live Internal-Only Engine so existing agents and browsers keep trusting the restored service.
-    - Agents must use the HTTPS FQDN and rely on CA + hostname validation. Internal-Only Linux installs can persist `server_ip_fallback` in `agent.json`; this changes the TCP dial target only after normal FQDN connection fails.
+    - Agents must use the HTTPS FQDN and rely on CA + hostname validation. Internal-Only Linux installs can persist `server_ip_fallback` in `agent.json`; this changes REST/Socket.IO TCP dial targets only after normal FQDN connection fails. The Linux WireGuard role first writes the Engine-provided FQDN endpoint, then rewrites the local WireGuard endpoint to `server_ip_fallback:<port>` only when `wg-quick up` fails because the endpoint name cannot resolve.
     - The Python Engine is not a direct public TLS endpoint in production.
 
     ### Agent install and enrollment notes
