@@ -35,7 +35,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
 
 !!! info "Internal-Only Engine"
 
-    Internal-Only Engine install commands from Sites include `--trusted-engine-ca-b64` automatically. Linux commands also include `--server-ip-fallback` when the Engine exposes a fallback IP. Use the WebUI command when possible so agents receive the Borealis local CA bundle and route hint. Agents reject raw IP `--server-url` values for install and enrollment; use the Engine FQDN.
+    Internal-Only Engine install commands from Sites include `--trusted-engine-ca-b64` and `--server-ip-fallback` automatically when the Engine exposes local CA and fallback IP metadata. Use the WebUI command when possible so agents receive the Borealis local CA bundle and route hint. Agents reject raw IP `--server-url` values for install and enrollment; use the Engine FQDN.
 
 ??? note "Manual Internal-Only install"
 
@@ -134,6 +134,7 @@ Downloaded Windows `Agent.exe` uses bootstrap mode unless one of the runtime fla
 | `--repo-ref <ref>` | Git branch, tag, or commit used for source/unstable bootstrap payloads. | Non-`main` refs default the release channel to `unstable`. |
 | `--repo-branch <ref>` | Legacy alias for `--repo-ref`. | Prefer `--repo-ref`. |
 | `--release-channel <channel>` | Agent release channel. | `stable`, `release`, and `releases` normalize to stable. `unstable`, `source`, `branch`, `repo`, and `repository` normalize to unstable. |
+| `--server-ip-fallback <ip>` | Persist Internal-Only Engine IP route hint. | Stores `server_ip_fallback` in `agent.json`; HTTPS still uses the Engine FQDN for host, SNI, and certificate validation. |
 | `--verbose` | Write verbose bootstrap diagnostics. | Also accepted as `-verbose`. |
 | `-uninstall` | Full Windows Agent cleanup. | Single dash. Destructive. Removes Borealis-owned services, tasks, dependencies, and install state. |
 
@@ -145,7 +146,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 | --- | --- | --- | --- |
 | `--config-path <path>` | Full | Full | Use a specific `agent.json`. Defaults beside the running binary. |
 | `--server-url <url>` | Full | Full | Override or persist Engine URL during install, runtime start, or update check. |
-| `--server-ip-fallback <ip>` | Runtime with `--install-service` | Full | Persist an Internal-Only Engine IP route hint in `agent.json` as `server_ip_fallback`. The Agent still uses `--server-url` for request host, SNI, and certificate hostname validation. Linux WireGuard setup uses it only after the FQDN endpoint fails DNS resolution. |
+| `--server-ip-fallback <ip>` | Full | Full | Persist an Internal-Only Engine IP route hint in `agent.json` as `server_ip_fallback`. The Agent still uses `--server-url` for request host, SNI, and certificate hostname validation. Linux WireGuard setup uses it only after the FQDN endpoint fails DNS resolution. |
 | `--site-enrollment-code <code>` | Full | Full | Enrollment code for runtime install/start. Alias target is shared with `--enrollment-code`. |
 | `--enrollment-code <code>` | Full | Full | Runtime alias for `--site-enrollment-code`. Not accepted by Windows bootstrap mode. |
 | `--trusted-engine-ca-b64 <base64-pem>` | Full | Full | Persist Borealis local CA bundle for Internal-Only Engine HTTPS validation. |
@@ -204,7 +205,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 
     ### Runtime behavior
 
-    - Windows has two argument surfaces. If no runtime flag from `hasRuntimeFlag()` is present, `Agent.exe` runs bootstrap mode and accepts only the Windows bootstrap arguments. If a runtime flag is present, it skips bootstrap and uses the standard Go `flag` parser.
+    - Windows has two argument surfaces. If no runtime flag from `hasRuntimeFlag()` is present, `Agent.exe` runs bootstrap mode and accepts only the Windows bootstrap arguments. If a runtime flag is present, it skips bootstrap and uses the standard Go `flag` parser. Windows bootstrap mode accepts `--server-ip-fallback` so WebUI install commands can persist Internal-Only route metadata without switching into runtime flag mode.
     - Linux has one argument surface: the standard Go `flag` parser in `main.go`.
     - `--server-url` or `--site-enrollment-code` implies `--install-service` in the runtime parser. `--repo-ref` alone does not imply install-service.
     - Fresh install detection treats `--server-url`, `--site-enrollment-code`/`--enrollment-code`, or `--repo-ref` as fresh-deploy intent, but validation requires both server URL and enrollment code before wiping stale install state.

@@ -24,6 +24,7 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		return err
 	}
 	current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
+	current.ServerIPFallback = agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
 	current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
 	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
 		current.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
@@ -65,9 +66,10 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 		return
 	}
 	var parsed struct {
-		ServerURL      string `json:"server_url"`
-		EnrollmentCode string `json:"enrollment_code"`
-		Agent          struct {
+		ServerURL        string `json:"server_url"`
+		ServerIPFallback string `json:"server_ip_fallback"`
+		EnrollmentCode   string `json:"enrollment_code"`
+		Agent            struct {
 			ReleaseChannel string `json:"release_channel"`
 			Branch         string `json:"branch"`
 		} `json:"agent"`
@@ -80,6 +82,9 @@ func mergeConfigJSONBootstrapInputs(cfg *BootstrapConfig) {
 	}
 	if strings.TrimSpace(cfg.ServerURL) == "" {
 		cfg.ServerURL = strings.TrimSpace(parsed.ServerURL)
+	}
+	if strings.TrimSpace(cfg.ServerIPFallback) == "" {
+		cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(parsed.ServerIPFallback)
 	}
 	if strings.TrimSpace(cfg.SiteEnrollmentCode) == "" {
 		cfg.SiteEnrollmentCode = strings.TrimSpace(parsed.EnrollmentCode)

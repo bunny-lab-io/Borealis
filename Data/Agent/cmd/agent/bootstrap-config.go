@@ -34,6 +34,7 @@ var defaultRepoRef = "main"
 
 type cliOptions struct {
 	ServerURL          string
+	ServerIPFallback   string
 	SiteEnrollmentCode string
 	RepoRef            string
 	ReleaseChannel     string
@@ -46,6 +47,7 @@ type cliOptions struct {
 type BootstrapConfig struct {
 	InstallDir          string `json:"install_dir"`
 	ServerURL           string `json:"server_url"`
+	ServerIPFallback    string `json:"server_ip_fallback"`
 	SiteEnrollmentCode  string `json:"site_enrollment_code"`
 	LegacyEnrollment    string `json:"enrollment_code"`
 	RepoURL             string `json:"repo_url"`
@@ -87,6 +89,12 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.ServerURL = strings.TrimSpace(args[i])
+		case "--server-ip-fallback":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--server-ip-fallback requires value")
+			}
+			i++
+			opts.ServerIPFallback = strings.TrimSpace(args[i])
 		case "--site-enrollment-code":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, errors.New("--site-enrollment-code requires value")
@@ -150,6 +158,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	if cli.ServerURL != "" {
 		cfg.ServerURL = cli.ServerURL
 	}
+	if cli.ServerIPFallback != "" {
+		cfg.ServerIPFallback = cli.ServerIPFallback
+	}
 	if cli.SiteEnrollmentCode != "" {
 		cfg.SiteEnrollmentCode = cli.SiteEnrollmentCode
 	}
@@ -174,6 +185,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 
 	mergeStoredBootstrapInputs(&cfg)
 	normalizeBootstrapConfig(&cfg)
+	if err := normalizeBootstrapServerIPFallback(&cfg); err != nil {
+		return cfg, err
+	}
 	if err := normalizeBootstrapTrustedCA(&cfg); err != nil {
 		return cfg, err
 	}
@@ -224,6 +238,9 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	}
 	if strings.TrimSpace(incoming.ServerURL) != "" {
 		base.ServerURL = incoming.ServerURL
+	}
+	if strings.TrimSpace(incoming.ServerIPFallback) != "" {
+		base.ServerIPFallback = incoming.ServerIPFallback
 	}
 	if strings.TrimSpace(incoming.SiteEnrollmentCode) != "" {
 		base.SiteEnrollmentCode = incoming.SiteEnrollmentCode
@@ -334,6 +351,17 @@ func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	if cfg.NonInteractive {
 		cfg.Interactive = false
 	}
+}
+
+func normalizeBootstrapServerIPFallback(cfg *BootstrapConfig) error {
+	if cfg == nil || strings.TrimSpace(cfg.ServerIPFallback) == "" {
+		return nil
+	}
+	if err := agentconfig.ValidateServerIPFallback(cfg.ServerIPFallback); err != nil {
+		return err
+	}
+	cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
+	return nil
 }
 
 func normalizeBootstrapTrustedCA(cfg *BootstrapConfig) error {

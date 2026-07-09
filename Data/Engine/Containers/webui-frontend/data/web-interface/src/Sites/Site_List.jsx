@@ -1827,13 +1827,17 @@ export function buildInstallCommand(osId, serverUrl, enrollmentCode, branch = DE
   }
 
   if (osId === "windows") {
+    if (engineCA?.required && !normalizedServerIPFallback) {
+      return "";
+    }
     const agentUrl = rawBorealisFileUrl(normalizedBranch, "Data/Agent/dist/windows-amd64/Agent.exe");
     const caArg = engineCAB64 ? ` --trusted-engine-ca-b64 ${quotePowerShellValue(engineCAB64)}` : "";
+    const serverIPFallbackArg = engineCAB64 && normalizedServerIPFallback ? ` --server-ip-fallback ${quotePowerShellValue(normalizedServerIPFallback)}` : "";
     return `$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"; ` +
       `Invoke-WebRequest -UseBasicParsing -Uri ${quotePowerShellValue(agentUrl)} -OutFile $borealisAgent; ` +
       `& $borealisAgent --server-url ${quotePowerShellValue(normalizedServerUrl)} ` +
       `--repo-ref ${quotePowerShellValue(normalizedBranch)} ` +
-      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}${caArg}`;
+      `--site-enrollment-code ${quotePowerShellValue(normalizedEnrollmentCode)}${caArg}${serverIPFallbackArg}`;
   }
 
   if (osId === "linux") {
@@ -2536,10 +2540,10 @@ export default function SiteList() {
     const command = buildInstallCommand(osId, installServerUrl, enrollmentCode, selectedInstallBranch, installEngineCA, installServerIPFallback);
 
     if (!command) {
-      const internalLinuxMissingFallback = osId === "linux" && installEngineCA?.required && !installServerIPFallback;
+      const internalMissingFallback = installEngineCA?.required && !installServerIPFallback;
       await sendNotification({
         title: "Install Command Unavailable",
-        message: internalLinuxMissingFallback
+        message: internalMissingFallback
           ? `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the Internal-Only Engine IP fallback is unavailable.`
           : `Borealis could not build the <b>${osLabel}</b> install command for <b>${siteName}</b> because the public engine URL or enrollment code is unavailable.`,
         icon: "warning",

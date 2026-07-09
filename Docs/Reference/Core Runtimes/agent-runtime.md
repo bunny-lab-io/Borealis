@@ -88,7 +88,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 
     ### Networking and authentication
     - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
-    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname. Linux WireGuard setup first applies the Engine FQDN endpoint, then rewrites only the local WireGuard endpoint to `server_ip_fallback:<port>` when `wg-quick up` fails because DNS cannot resolve the Engine FQDN.
+    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname. Linux WireGuard setup first applies the Engine FQDN endpoint, then rewrites only the local WireGuard endpoint to `server_ip_fallback:<port>` when `wg-quick up` fails because DNS cannot resolve the Engine FQDN.
     - `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
     - Socket.IO is used by the SYSTEM runtime for:
       - `quick_job_run` dispatch (system jobs plus broker-backed current-user jobs).
@@ -190,7 +190,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     #### Security
     - Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `agent.json`.
     - Refresh/access tokens are stored in `agent.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
-    - REST and Socket.IO traffic use the Engine FQDN with normal CA + hostname validation. Internal-Only installs persist the Borealis local CA PEM in `agent.json` and append it to the system trust pool. Linux Internal-Only installs can also persist `server_ip_fallback`; this changes HTTPS TCP dial targets only after normal FQDN connection fails and lets the WireGuard role rewrite the endpoint to the fallback IP only after FQDN resolution fails during `wg-quick up`.
+    - REST and Socket.IO traffic use the Engine FQDN with normal CA + hostname validation. Internal-Only installs persist the Borealis local CA PEM in `agent.json` and append it to the system trust pool. Internal-Only installs can also persist `server_ip_fallback`; this changes HTTPS TCP dial targets only after normal FQDN connection fails. On Linux, it also lets the WireGuard role rewrite the endpoint to the fallback IP only after FQDN resolution fails during `wg-quick up`.
     - Validates script payloads with backend-issued Ed25519 signatures before execution.
     - Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. The Agent never uses `InsecureSkipVerify`; local CA trust still requires FQDN SAN match. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
     - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.

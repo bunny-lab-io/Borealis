@@ -15,7 +15,7 @@ Sites group devices for enrollment, operator visibility, targeting, onboarding, 
 4. Save.
 5. Copy the site install command when deploying agents for that site.
 
-Each site has its own enrollment code. Agent install commands include the selected Engine URL and site enrollment code. Internal-Only Engine commands also include Borealis local CA data so the Agent can validate the Engine FQDN without disabling TLS verification. Linux Internal-Only commands also include an Engine IP fallback so agents without private DNS can enroll, reconnect, and start WireGuard while keeping the FQDN as the trusted HTTPS identity.
+Each site has its own enrollment code. Agent install commands include the selected Engine URL and site enrollment code. Internal-Only Engine commands also include Borealis local CA data so the Agent can validate the Engine FQDN without disabling TLS verification. Internal-Only commands also include an Engine IP fallback so agents without private DNS can enroll and reconnect while keeping the FQDN as the trusted HTTPS identity. Linux agents also use that fallback to start WireGuard when endpoint DNS fails.
 
 ## Assign Devices
 
