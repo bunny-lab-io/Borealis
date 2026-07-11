@@ -468,6 +468,9 @@ dashboard_update_status() {
     subject="postgres-db"
   fi
   dashboard_ensure_row "${subject}"
+  if [[ "${DASHBOARD_STATUS[${subject}]:-}" == "${status}" && "${DASHBOARD_COLOR[${subject}]:-}" == "${color}" ]]; then
+    return 0
+  fi
   DASHBOARD_STATUS["${subject}"]="${status}"
   DASHBOARD_COLOR["${subject}"]="${color}"
   DASHBOARD_UPDATED["${subject}"]="$(dashboard_human_timestamp)"
@@ -932,16 +935,6 @@ dashboard_subject_for_service() {
   esac
 }
 
-mark_compose_services_status() {
-  local status="$1"
-  local color="$2"
-  shift 2 || true
-  local service=""
-  for service in "$@"; do
-    log_status "$(dashboard_subject_for_service "${service}")" "${status}" "${color}"
-  done
-}
-
 refresh_compose_service_statuses() {
   local services=("$@")
   if [[ "${#services[@]}" -eq 0 ]]; then
@@ -979,6 +972,49 @@ refresh_compose_service_statuses() {
   done
 }
 
+compose_service_status_is_transient() {
+  case "$1" in
+    ""|created|restarting|starting)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+wait_for_compose_services_to_settle() {
+  local timeout_seconds="$1"
+  shift
+  local services=("$@")
+  if [[ "${#services[@]}" -eq 0 ]]; then
+    services=("${SERVICE_ROLES[@]}")
+  fi
+  local deadline=$((SECONDS + timeout_seconds))
+  local service=""
+  local status=""
+  local pending=0
+  while true; do
+    refresh_compose_service_statuses "${services[@]}"
+    pending=0
+    for service in "${services[@]}"; do
+      status="$(container_health_status "borealis-engine-${service}")"
+      if compose_service_status_is_transient "${status}"; then
+        pending=1
+      fi
+    done
+    if [[ "${pending}" -eq 0 ]]; then
+      refresh_compose_service_statuses "${services[@]}"
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      printf '[%s] Compose service status settle timed out after %ss for services: %s\n' "$(date +%FT%T)" "${timeout_seconds}" "${services[*]}" >> "${BUILD_LOG}"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 wait_for_postgres_container() {
   local timeout_seconds="${1:-150}"
   local deadline=$((SECONDS + timeout_seconds))
@@ -1002,8 +1038,8 @@ handle_database_schema_output_line() {
   line="$1"
   if [[ "${line}" == "${progress_prefix}"* ]]; then
     table_name="${line#${progress_prefix}}"
-    log_status "Database schema" "Ensuring table \"${table_name}\" Exists" "${C_YELLOW}"
-    printf '[%s] Database schema: [Ensuring table "%s" Exists]\n' "$(date +%FT%T)" "${table_name}" >> "${BUILD_LOG}"
+    log_status "Database schema" "Ensuring Table \"${table_name}\" Exists" "${C_YELLOW}"
+    printf '[%s] Database schema: [Ensuring Table "%s" Exists]\n' "$(date +%FT%T)" "${table_name}" >> "${BUILD_LOG}"
   else
     printf '%s\n' "${line}" >> "${BUILD_LOG}"
   fi
@@ -2447,7 +2483,7 @@ build_service_image() {
   previous="$(previous_image_hash "${service}")"
   previous_tag="$(previous_image_tag "${service}")"
   if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-    log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+    log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
     printf '[%s] %s unchanged as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
     return 0
   fi
@@ -2456,7 +2492,7 @@ build_service_image() {
     legacy_hash="$(compute_service_hash "${service}" "${mode}" "legacy")"
     if [[ "${previous}" == "${legacy_hash}" ]] && docker image inspect "${previous_tag}" >/dev/null 2>&1; then
       docker tag "${previous_tag}" "${tag}"
-      log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after hash normalization; retagged %s as %s\n' "$(date +%FT%T)" "${service}" "${previous_tag}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
@@ -2471,7 +2507,7 @@ build_service_image() {
     IMAGE_HASHES["${service}"]="${image_hash}"
     IMAGE_TAGS["${service}"]="${tag}"
     if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-      log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after artifact preparation as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
@@ -3227,7 +3263,7 @@ deploy_engine() {
     mapfile -t target_services <<< "${target_service_lines}"
   fi
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Docker Compose" "Already Up-to-Date" "${C_GREEN}"
+    log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
     refresh_compose_service_statuses
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
@@ -3238,12 +3274,11 @@ deploy_engine() {
   fi
   if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
-    mark_compose_services_status "Starting" "${C_YELLOW}" "${target_services[@]}"
     if ! compose_base up -d --no-deps --no-build "${target_services[@]}" >> "${BUILD_LOG}" 2>&1; then
       log_status "Docker Compose" "Failed" "${C_RED}"
       die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
     fi
-    refresh_compose_service_statuses "${target_services[@]}"
+    wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
@@ -3253,13 +3288,12 @@ deploy_engine() {
     return 0
   fi
   log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
-  mark_compose_services_status "Starting" "${C_YELLOW}" "${SERVICE_ROLES[@]}"
   if ! compose_base up -d --no-build >> "${BUILD_LOG}" 2>&1; then
     log_status "Docker Compose" "Failed" "${C_RED}"
     die "Docker Compose stack reconciliation failed. See ${BUILD_LOG}."
   fi
-  refresh_compose_service_statuses
-  log_status "Docker Compose" "Reconciled Stack" "${C_GREEN}"
+  wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
+  log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
   prune_engine_docker_storage "${mode}"
