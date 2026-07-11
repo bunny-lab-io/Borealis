@@ -121,9 +121,9 @@ DASHBOARD_NETWORK_LABEL=""
 DASHBOARD_PROFILE=""
 DASHBOARD_WEBUI_URL=""
 DASHBOARD_DOMAIN_WIDTH=16
-DASHBOARD_ITEM_WIDTH=42
+DASHBOARD_ITEM_WIDTH=30
 DASHBOARD_STATUS_WIDTH=40
-DASHBOARD_UPDATED_WIDTH=18
+DASHBOARD_UPDATED_WIDTH=30
 DASHBOARD_DYNAMIC_ROWS=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
@@ -253,6 +253,35 @@ dashboard_updated_text() {
   printf '%s\n' "${DASHBOARD_UPDATED[${row}]:--}"
 }
 
+dashboard_day_suffix() {
+  local day="$1"
+  case $((day % 100)) in
+    11|12|13)
+      printf '%s\n' "th"
+      return 0
+      ;;
+  esac
+  case $((day % 10)) in
+    1) printf '%s\n' "st" ;;
+    2) printf '%s\n' "nd" ;;
+    3) printf '%s\n' "rd" ;;
+    *) printf '%s\n' "th" ;;
+  esac
+}
+
+dashboard_human_timestamp() {
+  local day
+  local month
+  local suffix
+  local timestamp
+  local time
+  local year
+  timestamp="$(LC_TIME=C date '+%B|%-d|%Y|%-I:%M%p')"
+  IFS='|' read -r month day year time <<< "${timestamp}"
+  suffix="$(dashboard_day_suffix "${day}")"
+  printf '%s %s%s %s @ %s\n' "${month}" "${day}" "${suffix}" "${year}" "${time}"
+}
+
 dashboard_row_label() {
   case "$1" in
     "webui-frontend")
@@ -318,15 +347,15 @@ dashboard_compute_table_widths() {
   local cols
   cols="$(dashboard_terminal_columns)"
   DASHBOARD_DOMAIN_WIDTH=16
-  DASHBOARD_UPDATED_WIDTH=18
-  DASHBOARD_ITEM_WIDTH=42
+  DASHBOARD_UPDATED_WIDTH=30
+  DASHBOARD_ITEM_WIDTH=30
   DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
   if ((DASHBOARD_STATUS_WIDTH < 28)); then
     DASHBOARD_STATUS_WIDTH=28
     DASHBOARD_ITEM_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_STATUS_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
   fi
-  if ((DASHBOARD_ITEM_WIDTH < 28)); then
-    DASHBOARD_ITEM_WIDTH=28
+  if ((DASHBOARD_ITEM_WIDTH < 24)); then
+    DASHBOARD_ITEM_WIDTH=24
     DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
   fi
   if ((DASHBOARD_STATUS_WIDTH < 20)); then
@@ -441,7 +470,7 @@ dashboard_update_status() {
   dashboard_ensure_row "${subject}"
   DASHBOARD_STATUS["${subject}"]="${status}"
   DASHBOARD_COLOR["${subject}"]="${color}"
-  DASHBOARD_UPDATED["${subject}"]="$(date +%T)"
+  DASHBOARD_UPDATED["${subject}"]="$(dashboard_human_timestamp)"
   if [[ "${subject}" == "Profile" ]]; then
     DASHBOARD_PROFILE="${status}"
   fi

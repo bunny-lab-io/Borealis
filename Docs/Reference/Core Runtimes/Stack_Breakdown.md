@@ -208,6 +208,7 @@ Deploy output:
 - The dashboard title shows `Production` or `Development`, the Engine network mode, the detected sizing `Profile`, and the active build log path.
 - Service rows start as `Pending...` and update in place as deploy stages run.
 - Service rows render in one table with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
+- `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
 - Domains include `Frontend`, `Backend`, `Networking`, `Database`, `Reconciliation`, `Housekeeping`, and `Complete`.
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
 - Service rows use compact status values such as `Already Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Built`, `Starting`, `Running`, `Healthy`, `Reconciling Stack`, or `Complete`.
