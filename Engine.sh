@@ -69,6 +69,22 @@ BUILD_ROLES=(
   "site-worker"
   "webui-frontend"
 )
+BUILD_SECTION_FRONTEND=(
+  "webui-frontend"
+)
+BUILD_SECTION_BACKEND=(
+  "api-backend"
+  "job-scheduler"
+  "site-worker"
+  "remote-desktop-guacd"
+)
+BUILD_SECTION_NETWORKING=(
+  "traefik-edge"
+  "wireguard-tunnel"
+)
+BUILD_SECTION_DATABASE=(
+  "postgres-db"
+)
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
   C_RESET=$'\033[0m'
@@ -93,6 +109,7 @@ declare -A IMAGE_HASHES
 declare -A DOCKERFILES
 declare -A BUILD_CONTEXTS
 declare -A BUILD_STATUSES
+CURRENT_BUILD_SELECTION=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
@@ -104,6 +121,24 @@ log_status() {
   local status="$2"
   local color="$3"
   printf '[%s] %s: %b[%s]%b\n' "$(date +%FT%T)" "${subject}" "${color}${C_BOLD}" "${status}" "${C_RESET}"
+}
+
+log_section() {
+  local label="$1"
+  printf '\n%b[%s]%b\n' "${C_BLUE}${C_BOLD}" "${label}" "${C_RESET}"
+}
+
+deploy_mode_display_label() {
+  case "$(normalize_mode "$1")" in
+    dev) printf '%s\n' "Development" ;;
+    *) printf '%s\n' "Production" ;;
+  esac
+}
+
+log_deploy_header() {
+  local mode="$1"
+  local network_mode="$2"
+  printf '[%s] Deploying %s [%s] Borealis Engine:\n' "$(date +%FT%T)" "$(deploy_mode_display_label "${mode}")" "$(engine_network_mode_display_label "${network_mode}")"
 }
 
 build_status_subject() {
@@ -126,6 +161,42 @@ log_build_status() {
   local status="$2"
   local color="$3"
   log_status "$(build_status_subject "${service}")" "${status}" "${color}"
+}
+
+selected_build_role_present() {
+  local needle="$1"
+  shift || true
+  local candidate=""
+  for candidate in "$@"; do
+    [[ "${candidate}" == "${needle}" ]] && return 0
+  done
+  return 1
+}
+
+build_section_images() {
+  local mode="$1"
+  local label="$2"
+  shift 2
+  local section_services=("$@")
+  local service=""
+  local has_selected=0
+  for service in "${section_services[@]}"; do
+    if selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}"; then
+      has_selected=1
+      break
+    fi
+  done
+  [[ "${has_selected}" -eq 1 ]] || return 0
+
+  log_section "${label}"
+  for service in "${section_services[@]}"; do
+    selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
+    build_service_image "${service}" "${mode}"
+    if [[ "${service}" == "job-scheduler" ]]; then
+      log_build_status "site-worker-orchestrator" "Uses Shared Parent Container Image" "${C_GREEN}"
+      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
+    fi
+  done
 }
 
 log_detail() {
@@ -1542,7 +1613,7 @@ write_compose_env() {
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
-    log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
+    log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
 
   cat > "${RUNTIME_ENV}" <<EOF
@@ -1974,12 +2045,13 @@ build_images() {
   GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${selected[@]}"; do
     validate_build_role "${service}"
-    build_service_image "${service}" "${mode}"
-    if [[ "${service}" == "job-scheduler" ]]; then
-      log_build_status "site-worker-orchestrator" "Uses Shared Container Image" "${C_GREEN}"
-      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
-    fi
   done
+  CURRENT_BUILD_SELECTION=("${selected[@]}")
+  build_section_images "${mode}" "Frontend Services" "${BUILD_SECTION_FRONTEND[@]}"
+  build_section_images "${mode}" "Backend Services" "${BUILD_SECTION_BACKEND[@]}"
+  build_section_images "${mode}" "Networking Services" "${BUILD_SECTION_NETWORKING[@]}"
+  build_section_images "${mode}" "Database Services" "${BUILD_SECTION_DATABASE[@]}"
+  CURRENT_BUILD_SELECTION=()
 }
 
 engine_docker_cleanup_enabled() {
@@ -2002,7 +2074,7 @@ prune_stale_site_worker_images() {
       | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
   )
   ((${#stale_images[@]} > 0)) || return 0
-  log_status "Docker cleanup" "Pruning stale site-worker images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Stale Site Worker Images" "${C_YELLOW}"
   local image=""
   for image in "${stale_images[@]}"; do
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
@@ -2024,7 +2096,7 @@ restore_required_engine_images() {
   done
   ((${#missing_services[@]} > 0)) || return 0
 
-  log_status "Docker cleanup" "Restoring required images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Restoring Required Container Images" "${C_YELLOW}"
   GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${missing_services[@]}"; do
     build_service_image "${service}" "${mode}"
@@ -2034,11 +2106,11 @@ restore_required_engine_images() {
 prune_expired_engine_build_cache_exports() {
   local cache_root="${DEPLOY_DIR}/cache/buildkit"
   [[ -d "${cache_root}" ]] || return 0
-  log_status "Docker cleanup" "Pruning Engine build cache >${BUILD_CACHE_RETENTION_DAYS}d" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Engine Build Cache >${BUILD_CACHE_RETENTION_DAYS}d" "${C_YELLOW}"
   printf '[%s] Pruning Engine Buildx cache exports older than %d days from %s\n' "$(date +%FT%T)" "${BUILD_CACHE_RETENTION_DAYS}" "${cache_root}" >> "${BUILD_LOG}"
   local cutoff_epoch
   if ! cutoff_epoch="$(date -u -d "${BUILD_CACHE_RETENTION_DAYS} days ago" +%s 2>/dev/null)"; then
-    log_status "Docker cleanup" "Engine build cache retention failed" "${C_RED}"
+    log_status "Docker Cleanup" "Engine Build Cache Retention Failed" "${C_RED}"
     printf '[%s] Failed to compute Engine Buildx cache retention cutoff\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
     return 1
   fi
@@ -2103,11 +2175,11 @@ prune_expired_engine_build_cache_exports() {
     done
   done
   if [[ "${cleanup_failed}" -ne 0 ]]; then
-    log_status "Docker cleanup" "Engine build cache prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Engine Build Cache Prune Failed" "${C_RED}"
     printf '[%s] Failed to prune one or more Engine Buildx cache exports under %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
     return 1
   fi
-  log_status "Docker cleanup" "Engine build cache removed=${removed} retained=${retained}" "${C_GREEN}"
+  log_status "Docker Cleanup" "Engine Build Cache: Removed ${removed} cache export(s), retained ${retained} cache export(s)" "${C_GREEN}"
   printf '[%s] Engine Buildx cache retention complete: removed=%d retained=%d\n' "$(date +%FT%T)" "${removed}" "${retained}" >> "${BUILD_LOG}"
   return 0
 }
@@ -2115,25 +2187,24 @@ prune_expired_engine_build_cache_exports() {
 prune_engine_docker_storage() {
   local mode="$1"
   if ! engine_docker_cleanup_enabled; then
-    log_status "Docker cleanup" "Skipped" "${C_DIM}"
+    log_status "Docker Cleanup" "Skipped" "${C_DIM}"
     printf '[%s] Docker cleanup skipped because BOREALIS_SKIP_DOCKER_PRUNE is set\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
     return 0
   fi
 
   local cleanup_failed=0
-  log_status "Docker cleanup" "Pruning inactive images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Inactive Container Images" "${C_YELLOW}"
   if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
-    log_status "Docker cleanup" "Image prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Image Prune Failed" "${C_RED}"
   fi
 
   prune_stale_site_worker_images
   restore_required_engine_images "${mode}"
 
-  log_status "Docker cleanup" "Pruning builder cache" "${C_YELLOW}"
   if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
-    log_status "Docker cleanup" "Builder prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Builder Cache Prune Failed" "${C_RED}"
   fi
 
   if ! prune_expired_engine_build_cache_exports; then
@@ -2141,9 +2212,9 @@ prune_engine_docker_storage() {
   fi
 
   if [[ "${cleanup_failed}" -eq 0 ]]; then
-    log_status "Docker cleanup" "Complete" "${C_GREEN}"
+    log_status "Docker Cleanup" "Complete" "${C_GREEN}"
   else
-    log_status "Docker cleanup" "Completed with warnings" "${C_YELLOW}"
+    log_status "Docker Cleanup" "Completed With Warnings" "${C_YELLOW}"
   fi
 }
 
@@ -2625,7 +2696,9 @@ prepare_runtime() {
 deploy_engine() {
   local mode
   mode="$(normalize_mode "${1:-prod}")"
-  log_status "Engine deploy ${mode}" "Starting" "${C_BLUE}"
+  local network_mode
+  network_mode="$(resolve_engine_network_mode)"
+  log_deploy_header "${mode}" "${network_mode}"
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
@@ -2634,6 +2707,7 @@ deploy_engine() {
   write_image_manifest "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
+  log_section "Docker Housekeeping"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -2652,24 +2726,27 @@ deploy_engine() {
     mapfile -t target_services <<< "${target_service_lines}"
   fi
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "Already Up-to-Date" "${C_GREEN}"
+    log_status "Docker Compose" "Already Up-to-Date" "${C_GREEN}"
     write_deploy_manifest "${mode}" "skipped"
     prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
     log_webui_url
     return 0
   fi
   if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
+    log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
     compose_base up -d --no-deps --no-build "${target_services[@]}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
     log_webui_url
     return 0
   fi
-  log_status "Compose" "Reconciling Stack" "${C_YELLOW}"
+  log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
   compose_base up -d --no-build
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   prune_engine_docker_storage "${mode}"
+  log_section "Engine Deployment Complete"
   log_webui_url
 }
 

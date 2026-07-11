@@ -162,19 +162,27 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 18. Write `Engine/Deploy/deploy-manifest.json`.
 19. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports older than 7 days after successful reconciliation.
 
-Build order follows `Engine.sh` local build roles. `docker-proxy` is an external image and is not locally built.
+Build output follows `Engine.sh` service domains. `docker-proxy` is an external image and is not locally built.
 ```text
-api-backend
-job-scheduler
-traefik-edge
-postgres-db
-remote-desktop-guacd
-wireguard-tunnel
-site-worker
+[Frontend Services]
 webui-frontend
+
+[Backend Services]
+api-backend
+api-backend > job-scheduler
+api-backend > job-scheduler > site-worker-orchestrator
+site-worker
+remote-desktop-guacd
+
+[Networking Services]
+traefik-edge
+wireguard-tunnel
+
+[Database Services]
+postgres-db
 ```
 
-Build order is not the same as runtime dependency order.
+Build domains are not the same as runtime dependency order.
 
 ## Local Build Behavior
 Borealis-built Engine images are local in this pass. `docker-proxy` is pulled from GHCR as `ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`; no Borealis image push or GHCR workflow is used.
@@ -203,11 +211,15 @@ Build cache:
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
 
 Deploy output:
-- Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building Container Image]`.
-- Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
-- Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
+- Deploy starts with `Deploying Production [Public|Local] Borealis Engine:` or `Deploying Development [Public|Local] Borealis Engine:`, then prints the detected sizing `Profile`.
+- Terminal output groups image work into blue section dividers: `Frontend Services`, `Backend Services`, `Networking Services`, and `Database Services`.
+- Service rows use compact status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building Container Image]`.
+- Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
+- Database schema setup stays under `Database Services`.
+- Compose and image/cache pruning stay under `Docker Housekeeping`. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
+- Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.
+- Successful deploys finish with `Engine Deployment Complete`, then print `WebUI Accessible @ <public-base-url>`.
 - Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
-- Successful deploys print `WebUI Accessible @ <public-base-url>`.
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
 
 WebUI targets:
