@@ -579,7 +579,7 @@ build_section_images() {
     selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
     build_service_image "${service}" "${mode}"
     if [[ "${service}" == "job-scheduler" ]]; then
-      log_build_status "site-worker-orchestrator" "Image Ready" "${C_GREEN}"
+      log_build_status "site-worker-orchestrator" "Ready - Shared Image" "${C_GREEN}"
       printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
     fi
   done
@@ -1018,8 +1018,11 @@ stream_database_schema_output() {
 
 ensure_engine_database_schema() {
   local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
+  local schema_fifo=""
+  local schema_fifo_dir=""
   local schema_exit=0
   local schema_line
+  local schema_pid=""
   if [[ -z "${site_worker_image}" ]]; then
     site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
   fi
@@ -1034,9 +1037,11 @@ ensure_engine_database_schema() {
   refresh_compose_service_statuses postgres-db
 
   log_status "Database schema" "Preparing Engine tables" "${C_YELLOW}"
+  schema_fifo_dir="$(mktemp -d)"
+  schema_fifo="${schema_fifo_dir}/schema-output"
+  mkfifo "${schema_fifo}"
   set +o errexit
-  coproc SCHEMA_INIT {
-    docker run --rm \
+  docker run --rm \
     --network host \
     --env-file "${COMPOSE_ENV}" \
     -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
@@ -1045,13 +1050,14 @@ ensure_engine_database_schema() {
     "${site_worker_image}" \
     -u \
     -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))' \
-    2>&1
-  }
-  while IFS= read -r schema_line <&"${SCHEMA_INIT[0]}"; do
+    > "${schema_fifo}" 2>&1 &
+  schema_pid="$!"
+  while IFS= read -r schema_line; do
     handle_database_schema_output_line "${schema_line}"
-  done
-  wait "${SCHEMA_INIT_PID}"
+  done < "${schema_fifo}"
+  wait "${schema_pid}"
   schema_exit="$?"
+  rm -rf "${schema_fifo_dir}" || true
   set -o errexit
   if [[ "${schema_exit}" -ne 0 ]]; then
     log_status "Database schema" "Failed" "${C_RED}"
@@ -2525,7 +2531,7 @@ build_service_image() {
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
-  log_build_status "${service}" "Built" "${C_GREEN}"
+  log_build_status "${service}" "Ready - Image (Re)Built" "${C_GREEN}"
 }
 
 build_images() {
