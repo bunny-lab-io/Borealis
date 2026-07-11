@@ -216,7 +216,8 @@ Deploy output:
 - Service rows use compact status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building Container Image]`.
 - Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
 - Database schema setup stays under `Database Services`.
-- Compose and image/cache pruning stay under `Docker Housekeeping`. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
+- Compose status stays under `Service Reconciliation`. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
+- Image/cache pruning stays under `Docker Housekeeping`.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.
 - Successful deploys finish with `Engine Deployment Complete`, then print `WebUI Accessible @ <public-base-url>`.
 - Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.

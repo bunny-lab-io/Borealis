@@ -2707,7 +2707,7 @@ deploy_engine() {
   write_image_manifest "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
-  log_section "Docker Housekeeping"
+  log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -2728,6 +2728,7 @@ deploy_engine() {
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Docker Compose" "Already Up-to-Date" "${C_GREEN}"
     write_deploy_manifest "${mode}" "skipped"
+    log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
     log_section "Engine Deployment Complete"
     log_webui_url
@@ -2737,6 +2738,7 @@ deploy_engine() {
     log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
     compose_base up -d --no-deps --no-build "${target_services[@]}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
+    log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
     log_section "Engine Deployment Complete"
     log_webui_url
@@ -2745,6 +2747,7 @@ deploy_engine() {
   log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
   compose_base up -d --no-build
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
+  log_section "Docker Housekeeping"
   prune_engine_docker_storage "${mode}"
   log_section "Engine Deployment Complete"
   log_webui_url
