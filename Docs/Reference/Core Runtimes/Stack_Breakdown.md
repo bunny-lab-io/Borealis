@@ -211,16 +211,17 @@ Build cache:
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
 
 Deploy output:
-- Deploy starts with `Deploying Production [Public|Local] Borealis Engine:` or `Deploying Development [Public|Local] Borealis Engine:`, then prints the detected sizing `Profile`.
-- Terminal output groups image work into blue section dividers: `Frontend Services`, `Backend Services`, `Networking Services`, and `Database Services`.
-- Service rows use compact status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building Container Image]`.
+- `Engine.sh` renders a live ANSI deployment dashboard by default.
+- The dashboard title shows `Production` or `Development`, the Engine network mode, the detected sizing `Profile`, and the active build log path.
+- Service rows start as `Pending...` and update in place as deploy stages run.
+- Image work is grouped under `Frontend Services`, `Backend Services`, `Networking Services`, and `Database Services`.
+- Service rows use compact status values such as `Already Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Built`, `Starting`, `Running`, `Healthy`, `Reconciling Stack`, or `Complete`.
 - Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
 - Database schema setup stays under `Database Services`.
 - Compose status stays under `Service Reconciliation`. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Image/cache pruning stays under `Docker Housekeeping`.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.
-- Successful deploys finish with `Engine Deployment Complete`, then print `WebUI Accessible @ <public-base-url>`.
-- Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
+- Successful deploys finish with `Engine Deployment Complete`, then show the WebUI URL.
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
 
 WebUI targets:

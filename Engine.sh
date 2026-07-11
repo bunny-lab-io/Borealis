@@ -109,22 +109,260 @@ declare -A IMAGE_HASHES
 declare -A DOCKERFILES
 declare -A BUILD_CONTEXTS
 declare -A BUILD_STATUSES
+declare -A DASHBOARD_STATUS
+declare -A DASHBOARD_COLOR
+declare -A DASHBOARD_UPDATED
+declare -A DASHBOARD_ROW_SECTION
 CURRENT_BUILD_SELECTION=()
+DASHBOARD_ACTIVE=0
+DASHBOARD_CURSOR_HIDDEN=0
+DASHBOARD_MODE_LABEL=""
+DASHBOARD_NETWORK_LABEL=""
+DASHBOARD_PROFILE=""
+DASHBOARD_WEBUI_URL=""
+DASHBOARD_DYNAMIC_ROWS=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
 }
 
+dashboard_static_row() {
+  case "$1" in
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Database schema"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dashboard_row_section() {
+  case "$1" in
+    "webui-frontend")
+      printf '%s\n' "Frontend Services"
+      ;;
+    "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
+      printf '%s\n' "Backend Services"
+      ;;
+    "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
+      printf '%s\n' "Networking Services"
+      ;;
+    "postgres-db"|"Database schema"|"Profile")
+      printf '%s\n' "Database Services"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "Service Reconciliation"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "Docker Housekeeping"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "Engine Deployment Complete"
+      ;;
+    *)
+      printf '%s\n' "Runtime Events"
+      ;;
+  esac
+}
+
+dashboard_dynamic_row_present() {
+  local row="$1"
+  local candidate=""
+  for candidate in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
+    [[ "${candidate}" == "${row}" ]] && return 0
+  done
+  return 1
+}
+
+dashboard_ensure_row() {
+  local row="$1"
+  DASHBOARD_ROW_SECTION["${row}"]="$(dashboard_row_section "${row}")"
+  if dashboard_static_row "${row}" || dashboard_dynamic_row_present "${row}"; then
+    return 0
+  fi
+  DASHBOARD_DYNAMIC_ROWS+=("${row}")
+}
+
+dashboard_seed_rows() {
+  local row=""
+  for row in \
+    "webui-frontend" \
+    "api-backend" \
+    "api-backend > job-scheduler" \
+    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "site-worker" \
+    "remote-desktop-guacd" \
+    "docker-proxy" \
+    "traefik-edge" \
+    "wireguard-tunnel" \
+    "postgres-db" \
+    "Database schema" \
+    "Docker Compose" \
+    "Docker Cleanup" \
+    "WebUI Accessible"; do
+    dashboard_ensure_row "${row}"
+    DASHBOARD_STATUS["${row}"]="${DASHBOARD_STATUS[${row}]:-Pending...}"
+    DASHBOARD_COLOR["${row}"]="${DASHBOARD_COLOR[${row}]:-${C_DIM}}"
+    DASHBOARD_UPDATED["${row}"]="${DASHBOARD_UPDATED[${row}]:--}"
+  done
+}
+
+dashboard_start() {
+  local mode="$1"
+  local network_mode="$2"
+  DASHBOARD_ACTIVE=1
+  DASHBOARD_MODE_LABEL="$(deploy_mode_display_label "${mode}")"
+  DASHBOARD_NETWORK_LABEL="$(engine_network_mode_display_label "${network_mode}")"
+  dashboard_seed_rows
+  if [[ "${DASHBOARD_CURSOR_HIDDEN}" -eq 0 ]]; then
+    printf '\033[?25l'
+    DASHBOARD_CURSOR_HIDDEN=1
+  fi
+  dashboard_render
+}
+
+dashboard_finish() {
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_render
+  fi
+  if [[ "${DASHBOARD_CURSOR_HIDDEN}" -eq 1 ]]; then
+    printf '\033[?25h\n'
+    DASHBOARD_CURSOR_HIDDEN=0
+  fi
+  DASHBOARD_ACTIVE=0
+}
+
+dashboard_status_text() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_STATUS[${row}]:-Pending...}"
+}
+
+dashboard_status_color() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_COLOR[${row}]:-${C_DIM}}"
+}
+
+dashboard_updated_text() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_UPDATED[${row}]:--}"
+}
+
+dashboard_render_row() {
+  local row="$1"
+  local color
+  color="$(dashboard_status_color "${row}")"
+  printf '  %-56s %b%-64s%b %s\n' "${row}" "${color}${C_BOLD}" "$(dashboard_status_text "${row}")" "${C_RESET}" "$(dashboard_updated_text "${row}")"
+}
+
+dashboard_render_dynamic_rows_for_section() {
+  local section="$1"
+  local row=""
+  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
+    [[ "${DASHBOARD_ROW_SECTION[${row}]:-Runtime Events}" == "${section}" ]] || continue
+    dashboard_render_row "${row}"
+  done
+}
+
+dashboard_render_section() {
+  local section="$1"
+  shift || true
+  local rows=("$@")
+  local row=""
+  printf '\n%b[%s]%b\n' "${C_BLUE}${C_BOLD}" "${section}" "${C_RESET}"
+  printf '  %-56s %-64s %s\n' "Item" "Status" "Updated"
+  printf '  %-56s %-64s %s\n' "----" "------" "-------"
+  for row in "${rows[@]}"; do
+    dashboard_render_row "${row}"
+  done
+  dashboard_render_dynamic_rows_for_section "${section}"
+}
+
+dashboard_render_runtime_events() {
+  local has_events=0
+  local row=""
+  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
+    if [[ "${DASHBOARD_ROW_SECTION[${row}]:-Runtime Events}" == "Runtime Events" ]]; then
+      has_events=1
+      break
+    fi
+  done
+  [[ "${has_events}" -eq 1 ]] || return 0
+  dashboard_render_section "Runtime Events"
+}
+
+dashboard_render() {
+  [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
+  printf '\033[H\033[2J'
+  printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
+  printf 'Mode: %s [%s]\n' "${DASHBOARD_MODE_LABEL:-Production}" "${DASHBOARD_NETWORK_LABEL:-Public}"
+  if [[ -n "${DASHBOARD_PROFILE}" ]]; then
+    printf 'Profile: %s\n' "${DASHBOARD_PROFILE}"
+  else
+    printf 'Profile: Pending...\n'
+  fi
+  printf 'Log: %s\n' "${BUILD_LOG}"
+  dashboard_render_section "Frontend Services" \
+    "webui-frontend"
+  dashboard_render_section "Backend Services" \
+    "api-backend" \
+    "api-backend > job-scheduler" \
+    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "site-worker" \
+    "remote-desktop-guacd"
+  dashboard_render_section "Networking Services" \
+    "docker-proxy" \
+    "traefik-edge" \
+    "wireguard-tunnel"
+  dashboard_render_section "Database Services" \
+    "postgres-db" \
+    "Database schema"
+  dashboard_render_section "Service Reconciliation" \
+    "Docker Compose"
+  dashboard_render_section "Docker Housekeeping" \
+    "Docker Cleanup"
+  dashboard_render_section "Engine Deployment Complete" \
+    "WebUI Accessible"
+  dashboard_render_runtime_events
+}
+
+dashboard_update_status() {
+  local subject="$1"
+  local status="$2"
+  local color="$3"
+  dashboard_ensure_row "${subject}"
+  DASHBOARD_STATUS["${subject}"]="${status}"
+  DASHBOARD_COLOR["${subject}"]="${color}"
+  DASHBOARD_UPDATED["${subject}"]="$(date +%T)"
+  if [[ "${subject}" == "Profile" ]]; then
+    DASHBOARD_PROFILE="${status}"
+  fi
+  dashboard_render
+}
+
 log_status() {
   local subject="$1"
   local status="$2"
   local color="$3"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    if [[ "${subject}" == "Profile" ]]; then
+      DASHBOARD_PROFILE="${status}"
+      dashboard_render
+      return 0
+    fi
+    dashboard_update_status "${subject}" "${status}" "${color}"
+    return 0
+  fi
   printf '[%s] %s: %b[%s]%b\n' "$(date +%FT%T)" "${subject}" "${color}${C_BOLD}" "${status}" "${C_RESET}"
 }
 
 log_section() {
   local label="$1"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_render
+    return 0
+  fi
   printf '\n%b[%s]%b\n' "${C_BLUE}${C_BOLD}" "${label}" "${C_RESET}"
 }
 
@@ -138,6 +376,10 @@ deploy_mode_display_label() {
 log_deploy_header() {
   local mode="$1"
   local network_mode="$2"
+  dashboard_start "${mode}" "${network_mode}"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    return 0
+  fi
   printf '[%s] Deploying %s [%s] Borealis Engine:\n' "$(date +%FT%T)" "$(deploy_mode_display_label "${mode}")" "$(engine_network_mode_display_label "${network_mode}")"
 }
 
@@ -207,13 +449,24 @@ log_webui_url() {
   local public_base_url
   public_base_url="$(read_env_value BOREALIS_PUBLIC_BASE_URL)"
   [[ -n "${public_base_url}" ]] || return 0
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    DASHBOARD_WEBUI_URL="${public_base_url}"
+    dashboard_update_status "WebUI Accessible" "${public_base_url}" "${C_GREEN}"
+    return 0
+  fi
   printf '[%s] WebUI Accessible @ %b%s%b\n' "$(date +%FT%T)" "${C_BLUE}${C_BOLD}" "${public_base_url}" "${C_RESET}"
 }
 
 die() {
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_update_status "Error" "$*" "${C_RED}"
+    dashboard_finish
+  fi
   printf '[%s] %bERROR:%b %s\n' "$(date +%FT%T)" "${C_RED}${C_BOLD}" "${C_RESET}" "$*" >&2
   exit 1
 }
+
+trap dashboard_finish EXIT
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -521,6 +774,67 @@ container_health_status() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_name}" 2>/dev/null || true
 }
 
+dashboard_subject_for_service() {
+  case "$1" in
+    job-scheduler)
+      printf '%s\n' "api-backend > job-scheduler"
+      ;;
+    site-worker-orchestrator)
+      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+mark_compose_services_status() {
+  local status="$1"
+  local color="$2"
+  shift 2 || true
+  local service=""
+  for service in "$@"; do
+    log_status "$(dashboard_subject_for_service "${service}")" "${status}" "${color}"
+  done
+}
+
+refresh_compose_service_statuses() {
+  local services=("$@")
+  if [[ "${#services[@]}" -eq 0 ]]; then
+    services=("${SERVICE_ROLES[@]}")
+  fi
+  local service=""
+  for service in "${services[@]}"; do
+    local subject
+    local container_status
+    subject="$(dashboard_subject_for_service "${service}")"
+    container_status="$(container_health_status "borealis-engine-${service}")"
+    case "${container_status}" in
+      healthy)
+        log_status "${subject}" "Healthy" "${C_GREEN}"
+        ;;
+      running)
+        log_status "${subject}" "Running" "${C_GREEN}"
+        ;;
+      starting)
+        log_status "${subject}" "Starting" "${C_YELLOW}"
+        ;;
+      unhealthy)
+        log_status "${subject}" "Unhealthy" "${C_RED}"
+        ;;
+      exited|dead|removing|paused|restarting|created)
+        log_status "${subject}" "${container_status}" "${C_RED}"
+        ;;
+      "")
+        log_status "${subject}" "Missing" "${C_RED}"
+        ;;
+      *)
+        log_status "${subject}" "${container_status}" "${C_YELLOW}"
+        ;;
+    esac
+  done
+}
+
 wait_for_postgres_container() {
   local timeout_seconds="${1:-150}"
   local deadline=$((SECONDS + timeout_seconds))
@@ -545,10 +859,13 @@ ensure_engine_database_schema() {
   [[ -n "${site_worker_image}" ]] || die "Unable to resolve site-worker image for Engine database schema initialization."
 
   log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
+  log_status "postgres-db" "Starting" "${C_YELLOW}"
   compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
   if ! wait_for_postgres_container 150; then
+    log_status "postgres-db" "Failed" "${C_RED}"
     die "postgres-db did not become healthy for Engine database schema initialization. See ${BUILD_LOG}."
   fi
+  refresh_compose_service_statuses postgres-db
 
   log_status "Database schema" "Ensuring Engine tables" "${C_YELLOW}"
   if ! docker run --rm \
@@ -2030,7 +2347,7 @@ build_service_image() {
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
-  log_build_status "${service}" "Rebuilt" "${C_GREEN}"
+  log_build_status "${service}" "Built" "${C_GREEN}"
 }
 
 build_images() {
@@ -2727,6 +3044,7 @@ deploy_engine() {
   fi
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Docker Compose" "Already Up-to-Date" "${C_GREEN}"
+    refresh_compose_service_statuses
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -2736,7 +3054,13 @@ deploy_engine() {
   fi
   if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
     log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
-    compose_base up -d --no-deps --no-build "${target_services[@]}"
+    mark_compose_services_status "Starting" "${C_YELLOW}" "${target_services[@]}"
+    if ! compose_base up -d --no-deps --no-build "${target_services[@]}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Docker Compose" "Failed" "${C_RED}"
+      die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
+    fi
+    refresh_compose_service_statuses "${target_services[@]}"
+    log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -2745,7 +3069,13 @@ deploy_engine() {
     return 0
   fi
   log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
-  compose_base up -d --no-build
+  mark_compose_services_status "Starting" "${C_YELLOW}" "${SERVICE_ROLES[@]}"
+  if ! compose_base up -d --no-build >> "${BUILD_LOG}" 2>&1; then
+    log_status "Docker Compose" "Failed" "${C_RED}"
+    die "Docker Compose stack reconciliation failed. See ${BUILD_LOG}."
+  fi
+  refresh_compose_service_statuses
+  log_status "Docker Compose" "Reconciled Stack" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
   prune_engine_docker_storage "${mode}"
