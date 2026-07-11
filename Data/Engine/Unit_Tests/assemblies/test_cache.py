@@ -98,8 +98,9 @@ def test_cache_flush_marks_entries_clean(assembly_runtime) -> None:
 
 def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> None:
     db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+    progress: list[str] = []
 
-    database.initialise_engine_database(db_url)
+    database.initialise_engine_database(db_url, progress_callback=progress.append)
 
     db_manager = AssemblyDatabaseManager(
         database_url=db_url,
@@ -108,6 +109,10 @@ def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> Non
     for domain in AssemblyDomain:
         assert db_manager.load_all(domain) == []
     assert db_manager.load_official_catalog_state() == {}
+    assert "assemblies.official_assemblies" in progress
+    assert "activity_history" in progress
+    assert "devices" in progress
+    assert "job_scheduler_work_items" in progress
 
 
 def test_cache_worker_flushes_on_event(assembly_runtime) -> None:

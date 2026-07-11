@@ -14,7 +14,7 @@ import secrets
 from Data.Engine.db import dbapi as sqlite3
 from Data.Engine.db import get_database_manager
 import time
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from .assembly_management.databases import AssemblyDatabaseManager
 from . import database_migrations
@@ -26,7 +26,30 @@ def _generate_install_code() -> str:
     return "-".join(raw[i : i + 4] for i in range(0, len(raw), 4))
 
 
-def initialise_engine_database(database_url: str, *, logger: Optional[logging.Logger] = None) -> None:
+SchemaProgressCallback = Callable[[str], None]
+
+
+def _notify_schema_progress(progress_callback: Optional[SchemaProgressCallback], table_name: str) -> None:
+    if progress_callback is not None:
+        progress_callback(table_name)
+
+
+def _run_schema_step(
+    progress_callback: Optional[SchemaProgressCallback],
+    table_names: Sequence[str],
+    step: Callable[[], None],
+) -> None:
+    for table_name in table_names:
+        _notify_schema_progress(progress_callback, table_name)
+    step()
+
+
+def initialise_engine_database(
+    database_url: str,
+    *,
+    logger: Optional[logging.Logger] = None,
+    progress_callback: Optional[SchemaProgressCallback] = None,
+) -> None:
     """Ensure the Engine database has the required schema."""
 
     database_url = str(database_url or "").strip()
@@ -37,33 +60,87 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
 
     manager = get_database_manager(database_url, logger=logger)
     manager.ensure_schemas()
-    AssemblyDatabaseManager(database_url=database_url, logger=logger).initialise()
+    _run_schema_step(
+        progress_callback,
+        (
+            "assemblies.official_catalog_state",
+            "assemblies.official_assemblies",
+            "assemblies.community_assemblies",
+            "assemblies.user_created_assemblies",
+        ),
+        lambda: AssemblyDatabaseManager(database_url=database_url, logger=logger).initialise(),
+    )
     conn = sqlite3.connect(database_url)
     try:
-        _ensure_activity_history(conn, logger=logger)
-        _ensure_device_list_views(conn, logger=logger)
-        _ensure_sites(conn, logger=logger)
-        _apply_engine_migrations(conn, logger=logger)
+        _run_schema_step(progress_callback, ("activity_history",), lambda: _ensure_activity_history(conn, logger=logger))
+        _run_schema_step(progress_callback, ("device_list_views",), lambda: _ensure_device_list_views(conn, logger=logger))
+        _run_schema_step(progress_callback, ("sites", "device_sites"), lambda: _ensure_sites(conn, logger=logger))
+        _apply_engine_migrations(conn, logger=logger, progress_callback=progress_callback)
         _ensure_site_enrollment_codes(conn, logger=logger)
-        _ensure_users_table(conn, logger=logger)
-        _ensure_directory_services(conn, logger=logger)
-        _ensure_user_passkeys(conn, logger=logger)
-        _ensure_user_site_assignments(conn, logger=logger)
-        _ensure_ansible_recaps(conn, logger=logger)
-        _ensure_agent_service_accounts(conn, logger=logger)
-        _ensure_credentials(conn, logger=logger)
-        _ensure_github_token(conn, logger=logger)
-        _ensure_aegis_cipher_state(conn, logger=logger)
-        _ensure_device_filters(conn, logger=logger)
-        _ensure_device_filter_sites(conn, logger=logger)
-        _ensure_device_software_inventory(conn, logger=logger)
-        _ensure_device_patch_inventory(conn, logger=logger)
-        _ensure_patch_policy_tables(conn, logger=logger)
-        _ensure_metadata_fields(conn, logger=logger)
-        _ensure_scheduled_jobs(conn, logger=logger)
-        _ensure_scheduled_job_support_tables(conn, logger=logger)
-        ensure_job_scheduler_tables(conn)
-        _ensure_workflow_tables(conn, logger=logger)
+        _run_schema_step(progress_callback, ("users",), lambda: _ensure_users_table(conn, logger=logger))
+        _run_schema_step(
+            progress_callback,
+            ("directory_providers", "directory_provider_group_mappings", "directory_provider_site_mappings"),
+            lambda: _ensure_directory_services(conn, logger=logger),
+        )
+        _run_schema_step(progress_callback, ("user_passkeys",), lambda: _ensure_user_passkeys(conn, logger=logger))
+        _run_schema_step(progress_callback, ("user_site_assignments",), lambda: _ensure_user_site_assignments(conn, logger=logger))
+        _run_schema_step(progress_callback, ("ansible_play_recaps",), lambda: _ensure_ansible_recaps(conn, logger=logger))
+        _run_schema_step(progress_callback, ("agent_service_account",), lambda: _ensure_agent_service_accounts(conn, logger=logger))
+        _run_schema_step(progress_callback, ("credentials",), lambda: _ensure_credentials(conn, logger=logger))
+        _run_schema_step(progress_callback, ("github_token",), lambda: _ensure_github_token(conn, logger=logger))
+        _run_schema_step(progress_callback, ("aegis_cipher_state",), lambda: _ensure_aegis_cipher_state(conn, logger=logger))
+        _run_schema_step(progress_callback, ("device_filters",), lambda: _ensure_device_filters(conn, logger=logger))
+        _run_schema_step(progress_callback, ("device_filter_sites",), lambda: _ensure_device_filter_sites(conn, logger=logger))
+        _run_schema_step(progress_callback, ("device_software_inventory",), lambda: _ensure_device_software_inventory(conn, logger=logger))
+        _run_schema_step(progress_callback, ("device_patch_inventory",), lambda: _ensure_device_patch_inventory(conn, logger=logger))
+        _run_schema_step(
+            progress_callback,
+            (
+                "patch_catalog_entries",
+                "patch_policies",
+                "patch_policy_sites",
+                "patch_policy_targets",
+                "patch_policy_exclusions",
+                "patch_policy_rules",
+                "patch_policy_runs",
+                "patch_policy_device_state",
+                "patch_policy_audit",
+            ),
+            lambda: _ensure_patch_policy_tables(conn, logger=logger),
+        )
+        _run_schema_step(
+            progress_callback,
+            ("metadata_field_definitions", "device_metadata_fields"),
+            lambda: _ensure_metadata_fields(conn, logger=logger),
+        )
+        _run_schema_step(progress_callback, ("scheduled_jobs",), lambda: _ensure_scheduled_jobs(conn, logger=logger))
+        _run_schema_step(
+            progress_callback,
+            (
+                "scheduled_job_runs",
+                "scheduled_job_run_activity",
+                "scheduled_job_onboarding_targets",
+                "scheduled_job_onboarding_target_events",
+                "scheduled_job_run_targets",
+            ),
+            lambda: _ensure_scheduled_job_support_tables(conn, logger=logger),
+        )
+        _run_schema_step(
+            progress_callback,
+            (
+                "job_scheduler_work_items",
+                "job_scheduler_workers",
+                "job_scheduler_worker_routes",
+                "job_scheduler_service_snapshots",
+            ),
+            lambda: ensure_job_scheduler_tables(conn),
+        )
+        _run_schema_step(
+            progress_callback,
+            ("workflow_runs", "workflow_node_runs", "workflow_child_jobs", "workflow_webhooks"),
+            lambda: _ensure_workflow_tables(conn, logger=logger),
+        )
         conn.commit()
     except Exception as exc:  # pragma: no cover - defensive runtime guard
         if logger:
@@ -74,9 +151,14 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
         conn.close()
 
 
-def _apply_engine_migrations(conn: sqlite3.Connection, *, logger: Optional[logging.Logger]) -> None:
+def _apply_engine_migrations(
+    conn: sqlite3.Connection,
+    *,
+    logger: Optional[logging.Logger],
+    progress_callback: Optional[SchemaProgressCallback] = None,
+) -> None:
     try:
-        database_migrations.apply_all(conn)
+        database_migrations.apply_all(conn, progress_callback=progress_callback)
     except Exception as exc:
         try:
             conn.rollback()

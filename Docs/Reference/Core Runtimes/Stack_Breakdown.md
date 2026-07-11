@@ -213,7 +213,7 @@ Deploy output:
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
 - Service rows use compact status values such as `Already Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Built`, `Starting`, `Running`, `Running - Healthy`, `Reconciling Stack`, or `Complete`.
 - Shared build-artifact or image-reuse relationships appear only in transient status text. For example, the `Job Scheduler` row may show `[Shares API Backend Image] -> (Re)Building Container Image`, and the `Site Worker Orchestrator` row may show `[Shares Job Scheduler Image] -> Image Ready`. Runtime health updates later replace those sharing notes with `Starting`, `Running`, or `Running - Healthy`.
-- Database schema setup updates the `PostgreSQL DB` row, then the row returns to Docker health status after maintenance completes.
+- Database schema setup updates the `PostgreSQL DB` row with table-level progress such as `Ensuring table "devices" Exists`, writes each table progress line to `Engine/Deploy/build.log`, then returns the row to Docker health status after maintenance completes.
 - Compose status uses the `Reconciliation` domain. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Image/cache pruning uses the `Housekeeping` domain.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.

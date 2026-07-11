@@ -995,8 +995,31 @@ wait_for_postgres_container() {
   return 1
 }
 
+handle_database_schema_output_line() {
+  local line
+  local progress_prefix=$'BOREALIS_SCHEMA_PROGRESS\t'
+  local table_name
+  line="$1"
+  if [[ "${line}" == "${progress_prefix}"* ]]; then
+    table_name="${line#${progress_prefix}}"
+    log_status "Database schema" "Ensuring table \"${table_name}\" Exists" "${C_YELLOW}"
+    printf '[%s] Database schema: [Ensuring table "%s" Exists]\n' "$(date +%FT%T)" "${table_name}" >> "${BUILD_LOG}"
+  else
+    printf '%s\n' "${line}" >> "${BUILD_LOG}"
+  fi
+}
+
+stream_database_schema_output() {
+  local line
+  while IFS= read -r line; do
+    handle_database_schema_output_line "${line}"
+  done
+}
+
 ensure_engine_database_schema() {
   local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
+  local schema_exit=0
+  local schema_line
   if [[ -z "${site_worker_image}" ]]; then
     site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
   fi
@@ -1010,16 +1033,27 @@ ensure_engine_database_schema() {
   fi
   refresh_compose_service_statuses postgres-db
 
-  log_status "Database schema" "Ensuring Engine tables" "${C_YELLOW}"
-  if ! docker run --rm \
+  log_status "Database schema" "Preparing Engine tables" "${C_YELLOW}"
+  set +o errexit
+  coproc SCHEMA_INIT {
+    docker run --rm \
     --network host \
     --env-file "${COMPOSE_ENV}" \
     -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
     -v "${RUNTIME_ROOT}:/opt/Borealis/Engine" \
     --entrypoint python \
     "${site_worker_image}" \
-    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"])' \
-    >> "${BUILD_LOG}" 2>&1; then
+    -u \
+    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))' \
+    2>&1
+  }
+  while IFS= read -r schema_line <&"${SCHEMA_INIT[0]}"; do
+    handle_database_schema_output_line "${schema_line}"
+  done
+  wait "${SCHEMA_INIT_PID}"
+  schema_exit="$?"
+  set -o errexit
+  if [[ "${schema_exit}" -ne 0 ]]; then
     log_status "Database schema" "Failed" "${C_RED}"
     die "Engine database schema initialization failed. See ${BUILD_LOG}."
   fi
