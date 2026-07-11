@@ -955,7 +955,7 @@ refresh_compose_service_statuses() {
     container_status="$(container_health_status "borealis-engine-${service}")"
     case "${container_status}" in
       healthy)
-        log_status "${subject}" "Healthy" "${C_GREEN}"
+        log_status "${subject}" "Running - Healthy" "${C_GREEN}"
         ;;
       running)
         log_status "${subject}" "Running" "${C_GREEN}"
