@@ -121,9 +121,9 @@ DASHBOARD_NETWORK_LABEL=""
 DASHBOARD_PROFILE=""
 DASHBOARD_WEBUI_URL=""
 DASHBOARD_DOMAIN_WIDTH=16
-DASHBOARD_ITEM_WIDTH=56
-DASHBOARD_STATUS_WIDTH=30
-DASHBOARD_UPDATED_WIDTH=8
+DASHBOARD_ITEM_WIDTH=42
+DASHBOARD_STATUS_WIDTH=40
+DASHBOARD_UPDATED_WIDTH=18
 DASHBOARD_DYNAMIC_ROWS=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
@@ -133,7 +133,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Database schema"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -153,7 +153,7 @@ dashboard_row_section() {
     "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
       printf '%s\n' "Networking"
       ;;
-    "postgres-db"|"Database schema"|"Profile")
+    "postgres-db"|"Profile")
       printf '%s\n' "Database"
       ;;
     "Docker Compose")
@@ -202,7 +202,6 @@ dashboard_seed_rows() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "Database schema" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -254,6 +253,53 @@ dashboard_updated_text() {
   printf '%s\n' "${DASHBOARD_UPDATED[${row}]:--}"
 }
 
+dashboard_row_label() {
+  case "$1" in
+    "webui-frontend")
+      printf '%s\n' "WebUI Frontend"
+      ;;
+    "api-backend")
+      printf '%s\n' "API Backend"
+      ;;
+    "api-backend > job-scheduler")
+      printf '%s\n' "API Backend > Job Scheduler"
+      ;;
+    "api-backend > job-scheduler > site-worker-orchestrator")
+      printf '%s\n' "API Backend > Job Scheduler > Site Worker Orchestrator"
+      ;;
+    "site-worker")
+      printf '%s\n' "Site Worker"
+      ;;
+    "remote-desktop-guacd")
+      printf '%s\n' "Guacamole Remote Desktop"
+      ;;
+    "docker-proxy")
+      printf '%s\n' "Docker Proxy"
+      ;;
+    "traefik-edge")
+      printf '%s\n' "Traefik Reverse Proxy"
+      ;;
+    "wireguard-tunnel")
+      printf '%s\n' "WireGuard Server"
+      ;;
+    "postgres-db")
+      printf '%s\n' "PostgreSQL DB"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "Docker Compose"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "Docker Cleanup"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "WebUI Accessible"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
 dashboard_terminal_columns() {
   local cols="${COLUMNS:-}"
   if [[ -z "${cols}" ]] && command_exists tput; then
@@ -272,15 +318,19 @@ dashboard_compute_table_widths() {
   local cols
   cols="$(dashboard_terminal_columns)"
   DASHBOARD_DOMAIN_WIDTH=16
-  DASHBOARD_UPDATED_WIDTH=8
-  DASHBOARD_STATUS_WIDTH=30
-  DASHBOARD_ITEM_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_STATUS_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  DASHBOARD_UPDATED_WIDTH=18
+  DASHBOARD_ITEM_WIDTH=42
+  DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  if ((DASHBOARD_STATUS_WIDTH < 28)); then
+    DASHBOARD_STATUS_WIDTH=28
+    DASHBOARD_ITEM_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_STATUS_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  fi
   if ((DASHBOARD_ITEM_WIDTH < 28)); then
     DASHBOARD_ITEM_WIDTH=28
     DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
   fi
-  if ((DASHBOARD_STATUS_WIDTH < 18)); then
-    DASHBOARD_STATUS_WIDTH=18
+  if ((DASHBOARD_STATUS_WIDTH < 20)); then
+    DASHBOARD_STATUS_WIDTH=20
   fi
 }
 
@@ -315,7 +365,7 @@ dashboard_render_table_header() {
     "${DASHBOARD_DOMAIN_WIDTH}" "Domain" \
     "${DASHBOARD_ITEM_WIDTH}" "Item" \
     "${DASHBOARD_STATUS_WIDTH}" "Status" \
-    "${DASHBOARD_UPDATED_WIDTH}" "Updated"
+    "${DASHBOARD_UPDATED_WIDTH}" "Last Status Update"
   printf '  %-*s  %-*s  %-*s  %-*s\n' \
     "${DASHBOARD_DOMAIN_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_DOMAIN_WIDTH}")" \
     "${DASHBOARD_ITEM_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_ITEM_WIDTH}")" \
@@ -332,7 +382,7 @@ dashboard_render_row() {
   local updated
   color="$(dashboard_status_color "${row}")"
   domain="$(dashboard_fit_text "${DASHBOARD_ROW_SECTION[${row}]:-Events}" "${DASHBOARD_DOMAIN_WIDTH}")"
-  item="$(dashboard_fit_text "${row}" "${DASHBOARD_ITEM_WIDTH}")"
+  item="$(dashboard_fit_text "$(dashboard_row_label "${row}")" "${DASHBOARD_ITEM_WIDTH}")"
   status="$(dashboard_fit_text "$(dashboard_status_text "${row}")" "${DASHBOARD_STATUS_WIDTH}")"
   updated="$(dashboard_fit_text "$(dashboard_updated_text "${row}")" "${DASHBOARD_UPDATED_WIDTH}")"
   printf '  %-*s  %-*s  %b%-*s%b  %-*s\n' \
@@ -356,7 +406,6 @@ dashboard_render_table() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "Database schema" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -386,6 +435,9 @@ dashboard_update_status() {
   local subject="$1"
   local status="$2"
   local color="$3"
+  if [[ "${subject}" == "Database schema" ]]; then
+    subject="postgres-db"
+  fi
   dashboard_ensure_row "${subject}"
   DASHBOARD_STATUS["${subject}"]="${status}"
   DASHBOARD_COLOR["${subject}"]="${color}"
@@ -914,7 +966,6 @@ ensure_engine_database_schema() {
   [[ -n "${site_worker_image}" ]] || die "Unable to resolve site-worker image for Engine database schema initialization."
 
   log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
-  log_status "postgres-db" "Starting" "${C_YELLOW}"
   compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
   if ! wait_for_postgres_container 150; then
     log_status "postgres-db" "Failed" "${C_RED}"
@@ -936,6 +987,7 @@ ensure_engine_database_schema() {
     die "Engine database schema initialization failed. See ${BUILD_LOG}."
   fi
   log_status "Database schema" "Ready" "${C_GREEN}"
+  refresh_compose_service_statuses postgres-db
 }
 
 ensure_no_host_postgres_conflict() {

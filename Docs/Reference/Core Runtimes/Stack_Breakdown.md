@@ -165,15 +165,15 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 Build output follows `Engine.sh` service domains. `docker-proxy` is an external image and is not locally built.
 | Domain | Item |
 | --- | --- |
-| Frontend | `webui-frontend` |
-| Backend | `api-backend` |
-| Backend | `api-backend > job-scheduler` |
-| Backend | `api-backend > job-scheduler > site-worker-orchestrator` |
-| Backend | `site-worker` |
-| Backend | `remote-desktop-guacd` |
-| Networking | `traefik-edge` |
-| Networking | `wireguard-tunnel` |
-| Database | `postgres-db` |
+| Frontend | WebUI Frontend |
+| Backend | API Backend |
+| Backend | API Backend > Job Scheduler |
+| Backend | API Backend > Job Scheduler > Site Worker Orchestrator |
+| Backend | Site Worker |
+| Backend | Guacamole Remote Desktop |
+| Networking | Traefik Reverse Proxy |
+| Networking | WireGuard Server |
+| Database | PostgreSQL DB |
 
 Build domains are not the same as runtime dependency order.
 
@@ -207,11 +207,12 @@ Deploy output:
 - `Engine.sh` renders a live ANSI deployment dashboard by default.
 - The dashboard title shows `Production` or `Development`, the Engine network mode, the detected sizing `Profile`, and the active build log path.
 - Service rows start as `Pending...` and update in place as deploy stages run.
-- Service rows render in one table with `Domain`, `Item`, `Status`, and `Updated` columns.
+- Service rows render in one table with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
 - Domains include `Frontend`, `Backend`, `Networking`, `Database`, `Reconciliation`, `Housekeeping`, and `Complete`.
+- Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
 - Service rows use compact status values such as `Already Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Built`, `Starting`, `Running`, `Healthy`, `Reconciling Stack`, or `Complete`.
-- Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
-- Database schema setup uses the `Database` domain.
+- Shared build-artifact or image-reuse relationships use lineage labels. For example, `API Backend > Job Scheduler` means the scheduler image is being built from the shared Go API backend binary, and `API Backend > Job Scheduler > Site Worker Orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
+- Database schema setup updates the `PostgreSQL DB` row, then the row returns to Docker health status after maintenance completes.
 - Compose status uses the `Reconciliation` domain. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Image/cache pruning uses the `Housekeeping` domain.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.
