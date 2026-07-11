@@ -120,6 +120,10 @@ DASHBOARD_MODE_LABEL=""
 DASHBOARD_NETWORK_LABEL=""
 DASHBOARD_PROFILE=""
 DASHBOARD_WEBUI_URL=""
+DASHBOARD_DOMAIN_WIDTH=16
+DASHBOARD_ITEM_WIDTH=56
+DASHBOARD_STATUS_WIDTH=30
+DASHBOARD_UPDATED_WIDTH=8
 DASHBOARD_DYNAMIC_ROWS=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
@@ -141,28 +145,28 @@ dashboard_static_row() {
 dashboard_row_section() {
   case "$1" in
     "webui-frontend")
-      printf '%s\n' "Frontend Services"
+      printf '%s\n' "Frontend"
       ;;
     "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
-      printf '%s\n' "Backend Services"
+      printf '%s\n' "Backend"
       ;;
     "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
-      printf '%s\n' "Networking Services"
+      printf '%s\n' "Networking"
       ;;
     "postgres-db"|"Database schema"|"Profile")
-      printf '%s\n' "Database Services"
+      printf '%s\n' "Database"
       ;;
     "Docker Compose")
-      printf '%s\n' "Service Reconciliation"
+      printf '%s\n' "Reconciliation"
       ;;
     "Docker Cleanup")
-      printf '%s\n' "Docker Housekeeping"
+      printf '%s\n' "Housekeeping"
       ;;
     "WebUI Accessible")
-      printf '%s\n' "Engine Deployment Complete"
+      printf '%s\n' "Complete"
       ;;
     *)
-      printf '%s\n' "Runtime Events"
+      printf '%s\n' "Events"
       ;;
   esac
 }
@@ -220,6 +224,7 @@ dashboard_start() {
     printf '\033[?25l'
     DASHBOARD_CURSOR_HIDDEN=1
   fi
+  printf '\033[2J'
   dashboard_render
 }
 
@@ -249,52 +254,122 @@ dashboard_updated_text() {
   printf '%s\n' "${DASHBOARD_UPDATED[${row}]:--}"
 }
 
+dashboard_terminal_columns() {
+  local cols="${COLUMNS:-}"
+  if [[ -z "${cols}" ]] && command_exists tput; then
+    cols="$(tput cols 2>/dev/null || true)"
+  fi
+  if [[ ! "${cols}" =~ ^[0-9]+$ ]]; then
+    cols=120
+  fi
+  if ((cols < 80)); then
+    cols=80
+  fi
+  printf '%s\n' "${cols}"
+}
+
+dashboard_compute_table_widths() {
+  local cols
+  cols="$(dashboard_terminal_columns)"
+  DASHBOARD_DOMAIN_WIDTH=16
+  DASHBOARD_UPDATED_WIDTH=8
+  DASHBOARD_STATUS_WIDTH=30
+  DASHBOARD_ITEM_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_STATUS_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  if ((DASHBOARD_ITEM_WIDTH < 28)); then
+    DASHBOARD_ITEM_WIDTH=28
+    DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  fi
+  if ((DASHBOARD_STATUS_WIDTH < 18)); then
+    DASHBOARD_STATUS_WIDTH=18
+  fi
+}
+
+dashboard_fit_text() {
+  local value="$1"
+  local width="$2"
+  if ((width <= 0)); then
+    printf '%s\n' ""
+    return 0
+  fi
+  if ((${#value} <= width)); then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+  if ((width > 3)); then
+    printf '%s...\n' "${value:0:$((width - 3))}"
+  else
+    printf '%s\n' "${value:0:${width}}"
+  fi
+}
+
+dashboard_repeat_char() {
+  local char="$1"
+  local count="$2"
+  printf '%*s' "${count}" "" | tr ' ' "${char}"
+}
+
+dashboard_render_table_header() {
+  dashboard_compute_table_widths
+  printf '\n'
+  printf '  %-*s  %-*s  %-*s  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "Domain" \
+    "${DASHBOARD_ITEM_WIDTH}" "Item" \
+    "${DASHBOARD_STATUS_WIDTH}" "Status" \
+    "${DASHBOARD_UPDATED_WIDTH}" "Updated"
+  printf '  %-*s  %-*s  %-*s  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_DOMAIN_WIDTH}")" \
+    "${DASHBOARD_ITEM_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_ITEM_WIDTH}")" \
+    "${DASHBOARD_STATUS_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_STATUS_WIDTH}")" \
+    "${DASHBOARD_UPDATED_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_UPDATED_WIDTH}")"
+}
+
 dashboard_render_row() {
   local row="$1"
   local color
+  local domain
+  local item
+  local status
+  local updated
   color="$(dashboard_status_color "${row}")"
-  printf '  %-56s %b%-64s%b %s\n' "${row}" "${color}${C_BOLD}" "$(dashboard_status_text "${row}")" "${C_RESET}" "$(dashboard_updated_text "${row}")"
+  domain="$(dashboard_fit_text "${DASHBOARD_ROW_SECTION[${row}]:-Events}" "${DASHBOARD_DOMAIN_WIDTH}")"
+  item="$(dashboard_fit_text "${row}" "${DASHBOARD_ITEM_WIDTH}")"
+  status="$(dashboard_fit_text "$(dashboard_status_text "${row}")" "${DASHBOARD_STATUS_WIDTH}")"
+  updated="$(dashboard_fit_text "$(dashboard_updated_text "${row}")" "${DASHBOARD_UPDATED_WIDTH}")"
+  printf '  %-*s  %-*s  %b%-*s%b  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "${domain}" \
+    "${DASHBOARD_ITEM_WIDTH}" "${item}" \
+    "${color}${C_BOLD}" "${DASHBOARD_STATUS_WIDTH}" "${status}" "${C_RESET}" \
+    "${DASHBOARD_UPDATED_WIDTH}" "${updated}"
 }
 
-dashboard_render_dynamic_rows_for_section() {
-  local section="$1"
+dashboard_render_table() {
   local row=""
-  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
-    [[ "${DASHBOARD_ROW_SECTION[${row}]:-Runtime Events}" == "${section}" ]] || continue
+  dashboard_render_table_header
+  for row in \
+    "webui-frontend" \
+    "api-backend" \
+    "api-backend > job-scheduler" \
+    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "site-worker" \
+    "remote-desktop-guacd" \
+    "docker-proxy" \
+    "traefik-edge" \
+    "wireguard-tunnel" \
+    "postgres-db" \
+    "Database schema" \
+    "Docker Compose" \
+    "Docker Cleanup" \
+    "WebUI Accessible"; do
     dashboard_render_row "${row}"
   done
-}
-
-dashboard_render_section() {
-  local section="$1"
-  shift || true
-  local rows=("$@")
-  local row=""
-  printf '\n%b[%s]%b\n' "${C_BLUE}${C_BOLD}" "${section}" "${C_RESET}"
-  printf '  %-56s %-64s %s\n' "Item" "Status" "Updated"
-  printf '  %-56s %-64s %s\n' "----" "------" "-------"
-  for row in "${rows[@]}"; do
+  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
     dashboard_render_row "${row}"
   done
-  dashboard_render_dynamic_rows_for_section "${section}"
-}
-
-dashboard_render_runtime_events() {
-  local has_events=0
-  local row=""
-  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
-    if [[ "${DASHBOARD_ROW_SECTION[${row}]:-Runtime Events}" == "Runtime Events" ]]; then
-      has_events=1
-      break
-    fi
-  done
-  [[ "${has_events}" -eq 1 ]] || return 0
-  dashboard_render_section "Runtime Events"
 }
 
 dashboard_render() {
   [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
-  printf '\033[H\033[2J'
+  printf '\033[H'
   printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
   printf 'Mode: %s [%s]\n' "${DASHBOARD_MODE_LABEL:-Production}" "${DASHBOARD_NETWORK_LABEL:-Public}"
   if [[ -n "${DASHBOARD_PROFILE}" ]]; then
@@ -303,28 +378,8 @@ dashboard_render() {
     printf 'Profile: Pending...\n'
   fi
   printf 'Log: %s\n' "${BUILD_LOG}"
-  dashboard_render_section "Frontend Services" \
-    "webui-frontend"
-  dashboard_render_section "Backend Services" \
-    "api-backend" \
-    "api-backend > job-scheduler" \
-    "api-backend > job-scheduler > site-worker-orchestrator" \
-    "site-worker" \
-    "remote-desktop-guacd"
-  dashboard_render_section "Networking Services" \
-    "docker-proxy" \
-    "traefik-edge" \
-    "wireguard-tunnel"
-  dashboard_render_section "Database Services" \
-    "postgres-db" \
-    "Database schema"
-  dashboard_render_section "Service Reconciliation" \
-    "Docker Compose"
-  dashboard_render_section "Docker Housekeeping" \
-    "Docker Cleanup"
-  dashboard_render_section "Engine Deployment Complete" \
-    "WebUI Accessible"
-  dashboard_render_runtime_events
+  dashboard_render_table
+  printf '\033[J'
 }
 
 dashboard_update_status() {
