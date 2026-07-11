@@ -16,6 +16,7 @@ from Data.Engine.db import get_database_manager
 import time
 from typing import Optional, Sequence
 
+from .assembly_management.databases import AssemblyDatabaseManager
 from . import database_migrations
 from .services.job_scheduler.queue import ensure_job_scheduler_tables
 
@@ -36,6 +37,7 @@ def initialise_engine_database(database_url: str, *, logger: Optional[logging.Lo
 
     manager = get_database_manager(database_url, logger=logger)
     manager.ensure_schemas()
+    AssemblyDatabaseManager(database_url=database_url, logger=logger).initialise()
     conn = sqlite3.connect(database_url)
     try:
         _ensure_activity_history(conn, logger=logger)

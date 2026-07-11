@@ -961,7 +961,7 @@ export default function ServerInfo() {
     setConfirmAction({
       kind: "service_action",
       title: `${label} Service`,
-      subtitle: `Borealis will queue Engine.sh --service ${serviceKey} ${actionName}${action?.mode ? ` ${action.mode}` : ""}.`,
+      subtitle: `Borealis will queue a scoped ${actionName}${action?.mode ? ` ${action.mode}` : ""} action for ${serviceKey}.`,
       confirmLabel: label,
       payload: { row, action },
       message: `${label} ${row?.label || serviceKey}?`,

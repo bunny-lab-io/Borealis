@@ -17,7 +17,7 @@ Server Info is the admin dashboard for Engine runtime health. Use it to inspect 
 
 ## Run Service Actions
 
-Server Info can queue supported Engine service actions through the job scheduler. These are the same targeted operations as `Engine.sh --service ...`.
+Server Info can queue supported Engine service actions through the job scheduler. These are the same targeted operations as `Engine.sh --network-mode public|local --service ...`.
 
 Use service actions for focused restart, rebuild, reload, or WireGuard reconcile work. Use full Engine deploy when more than one component changed.
 
@@ -27,7 +27,7 @@ Admins can adjust:
 
 - Agent release channel targets.
 
-Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh deploy` tunes that value from the detected Engine deployment profile, and redeploys overwrite stale manual values.
+Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh --network-mode public|local deploy` tunes that value from the detected Engine sizing profile, and redeploys overwrite stale manual values.
 
 This value is active scheduled-lane work-item capacity per site worker, not raw device concurrency. Shared Ansible batches, scheduled workflows, scheduled jobs, and agent-maintenance items each consume scheduled slots while active according to their work-item shape.
 

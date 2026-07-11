@@ -268,6 +268,8 @@ func collectOverviewPublicEdgePayload() map[string]any {
 		"enabled":                  parseTruthy(os.Getenv("BOREALIS_PUBLIC_EDGE_ENABLED")),
 		"fqdn":                     fqdn,
 		"fqdn_aliases":             overviewFQDNAliases(fqdn),
+		"network_mode":             overviewEngineNetworkMode(),
+		"network_mode_label":       overviewEngineNetworkModeLabel(),
 		"deployment_profile":       deploymentProfile,
 		"deployment_profile_label": overviewEngineDeploymentProfileLabel(),
 		"server_ip_fallback":       serverIPFallback,
@@ -285,14 +287,48 @@ func collectOverviewPublicEdgePayload() map[string]any {
 }
 
 func overviewEngineDeploymentProfile() string {
+	if strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_NETWORK_MODE")) != "" {
+		if overviewEngineNetworkMode() == "local" {
+			return "internal-only"
+		}
+		return "externally-accessible"
+	}
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE")))
 	value = strings.ReplaceAll(value, "_", "-")
 	switch value {
-	case "internal-only", "internal", "local-only":
+	case "internal-only", "internal", "local", "local-only":
 		return "internal-only"
 	default:
 		return "externally-accessible"
 	}
+}
+
+func overviewEngineNetworkMode() string {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_NETWORK_MODE")))
+	value = strings.ReplaceAll(value, "_", "-")
+	switch value {
+	case "local", "local-edge", "site-local", "internal-only", "internal", "local-only", "private", "private-edge", "private-network":
+		return "local"
+	case "public", "public-edge", "internet", "internet-edge", "externally-accessible", "external", "public-facing":
+		return "public"
+	}
+	profile := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE")))
+	profile = strings.ReplaceAll(profile, "_", "-")
+	switch profile {
+	case "internal-only", "internal", "local", "local-only":
+		return "local"
+	}
+	return "public"
+}
+
+func overviewEngineNetworkModeLabel() string {
+	if value := strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_NETWORK_MODE_LABEL")); value != "" {
+		return value
+	}
+	if overviewEngineNetworkMode() == "local" {
+		return "Local"
+	}
+	return "Public"
 }
 
 func overviewEngineDeploymentProfileLabel() string {

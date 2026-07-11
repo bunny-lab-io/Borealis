@@ -40,7 +40,8 @@ REPO_REF="${BOREALIS_ENGINE_REF:-}"
 REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
 REPO_REF_EXPLICIT=0
 RELEASE_CHANNEL="${DEFAULT_RELEASE_CHANNEL}"
-ENGINE_DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-externally-accessible}"
+ENGINE_NETWORK_MODE="${BOREALIS_ENGINE_NETWORK_MODE:-}"
+ENGINE_DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-}"
 SYNC_REQUESTED=0
 DISTRO_ID="unknown"
 LAUNCH_ARGS=()
@@ -297,14 +298,20 @@ parse_launch_options() {
   LAUNCH_ARGS=()
   while (($#)); do
     case "$1" in
-      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--deployment-profile|--deployment_profile)
+      --install-dir|--repo-url|--ref|--branch|--repo-branch|--repo_branch|--release-channel|--release_channel|--network-mode|--network_mode|--deployment-profile|--deployment_profile)
         [[ $# -ge 2 ]] || die "Missing value for ${1}."
         case "$1" in
           --install-dir) INSTALL_DIR="$2" ;;
           --repo-url) REPO_URL="$2" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="$2" ;;
+          --network-mode|--network_mode)
+            ENGINE_NETWORK_MODE="$2"
+            export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+            ;;
           --deployment-profile|--deployment_profile)
             ENGINE_DEPLOYMENT_PROFILE="$2"
+            ENGINE_NETWORK_MODE="$(engine_network_mode_from_deployment_profile "${ENGINE_DEPLOYMENT_PROFILE}")"
+            export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
           --ref|--branch|--repo-branch|--repo_branch)
@@ -316,20 +323,26 @@ parse_launch_options() {
             ;;
         esac
         case "$1" in
-          --deployment-profile|--deployment_profile) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift 2
         ;;
-      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--deployment-profile=*|--deployment_profile=*)
+      --install-dir=*|--repo-url=*|--ref=*|--branch=*|--repo-branch=*|--repo_branch=*|--release-channel=*|--release_channel=*|--network-mode=*|--network_mode=*|--deployment-profile=*|--deployment_profile=*)
         local key="${1%%=*}"
         local value="${1#*=}"
         case "${key}" in
           --install-dir) INSTALL_DIR="${value}" ;;
           --repo-url) REPO_URL="${value}" ;;
           --release-channel|--release_channel) RELEASE_CHANNEL="${value}" ;;
+          --network-mode|--network_mode)
+            ENGINE_NETWORK_MODE="${value}"
+            export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+            ;;
           --deployment-profile|--deployment_profile)
             ENGINE_DEPLOYMENT_PROFILE="${value}"
+            ENGINE_NETWORK_MODE="$(engine_network_mode_from_deployment_profile "${ENGINE_DEPLOYMENT_PROFILE}")"
+            export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
             export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
             ;;
           --ref|--branch|--repo-branch|--repo_branch)
@@ -341,7 +354,7 @@ parse_launch_options() {
             ;;
         esac
         case "${key}" in
-          --deployment-profile|--deployment_profile) ;;
+          --network-mode|--network_mode|--deployment-profile|--deployment_profile) ;;
           *) SYNC_REQUESTED=1 ;;
         esac
         shift
@@ -760,18 +773,55 @@ prune_empty_legacy_runtime_paths() {
   done
 }
 
+normalize_engine_network_mode() {
+  local raw="${1:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    public|internet|internet-edge|public-edge|externally-accessible|external|public-facing)
+      printf '%s\n' "public"
+      ;;
+    local|local-edge|site-local|internal-only|internal|local-only|private|private-edge|private-network|on-prem|onprem)
+      printf '%s\n' "local"
+      ;;
+    *)
+      die "Unsupported Engine network mode '${1}'. Use public or local."
+      ;;
+  esac
+}
+
+engine_network_mode_display_label() {
+  case "$(normalize_engine_network_mode "$1")" in
+    local) printf '%s\n' "Local" ;;
+    *) printf '%s\n' "Public" ;;
+  esac
+}
+
+engine_deployment_profile_from_network_mode() {
+  case "$(normalize_engine_network_mode "$1")" in
+    local) printf '%s\n' "internal-only" ;;
+    *) printf '%s\n' "externally-accessible" ;;
+  esac
+}
+
+engine_network_mode_from_deployment_profile() {
+  case "$(normalize_engine_deployment_profile "$1")" in
+    internal-only) printf '%s\n' "local" ;;
+    *) printf '%s\n' "public" ;;
+  esac
+}
+
 normalize_engine_deployment_profile() {
   local raw="${1:-}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
   case "${raw}" in
-    ""|externally-accessible|external|public|public-facing)
+    externally-accessible|external|public|public-facing|internet|internet-edge|public-edge)
       printf '%s\n' "externally-accessible"
       ;;
-    internal-only|internal|local-only|private|on-prem|onprem)
+    internal-only|internal|local|local-only|local-edge|site-local|private|private-edge|private-network|on-prem|onprem)
       printf '%s\n' "internal-only"
       ;;
     *)
-      die "Unsupported Engine deployment profile '${1}'. Use externally-accessible or internal-only."
+      die "Unsupported Engine network mode '${1}'. Use public or local."
       ;;
   esac
 }
@@ -780,6 +830,50 @@ engine_deployment_profile_label() {
   case "$(normalize_engine_deployment_profile "$1")" in
     internal-only) printf '%s\n' "Internal-Only" ;;
     *) printf '%s\n' "Externally Accessible" ;;
+  esac
+}
+
+resolve_engine_network_mode() {
+  local candidate="${ENGINE_NETWORK_MODE:-}"
+  if [[ -z "${candidate}" && -n "${BOREALIS_ENGINE_NETWORK_MODE:-}" ]]; then
+    candidate="${BOREALIS_ENGINE_NETWORK_MODE}"
+  fi
+  if [[ -z "${candidate}" && -n "${ENGINE_DEPLOYMENT_PROFILE:-}" ]]; then
+    engine_network_mode_from_deployment_profile "${ENGINE_DEPLOYMENT_PROFILE}"
+    return 0
+  fi
+  if [[ -z "${candidate}" && -n "${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-}" ]]; then
+    engine_network_mode_from_deployment_profile "${BOREALIS_ENGINE_DEPLOYMENT_PROFILE}"
+    return 0
+  fi
+  [[ -n "${candidate}" ]] || return 1
+  normalize_engine_network_mode "${candidate}"
+}
+
+require_explicit_engine_network_mode() {
+  local network_mode
+  if ! network_mode="$(resolve_engine_network_mode)"; then
+    printf '[%s] %bWARNING:%b Engine network mode is required before deployment.\n' "$(date +%FT%T)" "${C_YELLOW}${C_BOLD}" "${C_RESET}" >&2
+    printf 'Choose one explicit mode:\n' >&2
+    printf '  sudo bash Engine.sh --network-mode public deploy prod\n' >&2
+    printf '  sudo bash Engine.sh --network-mode local deploy prod\n' >&2
+    printf 'Public mode uses public DNS and Let'\''s Encrypt. Local mode uses private DNS/VPN and Borealis local CA.\n' >&2
+    return 2
+  fi
+  ENGINE_NETWORK_MODE="${network_mode}"
+  ENGINE_DEPLOYMENT_PROFILE="$(engine_deployment_profile_from_network_mode "${network_mode}")"
+  export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
+}
+
+launch_requires_engine_network_mode() {
+  case "${1:-deploy}" in
+    ""|deploy|prod|production|dev|developer|--service)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
   esac
 }
 
@@ -1129,10 +1223,14 @@ resolve_host_timezone() {
 }
 
 resolve_traefik_trusted_proxy_ips() {
+  local engine_profile="${1:-${ENGINE_DEPLOYMENT_PROFILE:-}}"
+  engine_profile="$(normalize_engine_deployment_profile "${engine_profile}")"
   local existing
   existing="$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)"
   if [[ -n "${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}" ]]; then
     printf '%s\n' "${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS}"
+  elif [[ "${engine_profile}" == "internal-only" ]]; then
+    printf '%s\n' "${existing}"
   elif env_key_exists BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS; then
     printf '%s\n' "${existing}"
   elif [[ -t 0 ]]; then
@@ -1365,7 +1463,11 @@ write_compose_env() {
   local engine_profile="${5:-${ENGINE_DEPLOYMENT_PROFILE}}"
   local fqdn_aliases="${6:-${public_host}}"
   engine_profile="$(normalize_engine_deployment_profile "${engine_profile}")"
+  local engine_network_mode
+  local engine_network_mode_label
   local engine_profile_label
+  engine_network_mode="$(engine_network_mode_from_deployment_profile "${engine_profile}")"
+  engine_network_mode_label="$(engine_network_mode_display_label "${engine_network_mode}")"
   engine_profile_label="$(engine_deployment_profile_label "${engine_profile}")"
   local postgres_password
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
@@ -1442,6 +1544,8 @@ BOREALIS_PUBLIC_WIREGUARD_HOST=${public_host}
 BOREALIS_PUBLIC_WIREGUARD_PORT=30000
 BOREALIS_PUBLIC_HOSTNAME_ALIASES=${fqdn_aliases}
 BOREALIS_ENGINE_IP_FALLBACK=${engine_ip_fallback}
+BOREALIS_ENGINE_NETWORK_MODE=${engine_network_mode}
+BOREALIS_ENGINE_NETWORK_MODE_LABEL=${engine_network_mode_label}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE=${engine_profile}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL=${engine_profile_label}
 BOREALIS_ACME_EMAIL=${acme_email}
@@ -2415,6 +2519,8 @@ payload = {
     "engine_deployment_profile": {
         "id": env.get("BOREALIS_ENGINE_DEPLOYMENT_PROFILE", ""),
         "label": env.get("BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL", ""),
+        "network_mode": env.get("BOREALIS_ENGINE_NETWORK_MODE", ""),
+        "network_mode_label": env.get("BOREALIS_ENGINE_NETWORK_MODE_LABEL", ""),
         "fqdn_aliases": env.get("BOREALIS_PUBLIC_HOSTNAME_ALIASES", ""),
         "local_ca_enabled": env.get("BOREALIS_LOCAL_CA_ENABLED", "") in {"1", "true", "TRUE", "yes", "YES", "on", "ON"},
     },
@@ -2454,9 +2560,14 @@ prepare_runtime() {
   local acme_email
   local traefik_trusted_proxy_ips
   local engine_profile
+  local engine_network_mode
   local fqdn_aliases
-  engine_profile="$(normalize_engine_deployment_profile "${ENGINE_DEPLOYMENT_PROFILE}")"
+  engine_network_mode="$(resolve_engine_network_mode)"
+  ENGINE_NETWORK_MODE="${engine_network_mode}"
+  export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
+  engine_profile="$(engine_deployment_profile_from_network_mode "${engine_network_mode}")"
   ENGINE_DEPLOYMENT_PROFILE="${engine_profile}"
+  export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
   public_host="$(resolve_public_hostname)"
   fqdn_aliases="$(resolve_engine_hostname_aliases "${public_host}")"
   validate_engine_hostname_aliases "${fqdn_aliases}"
@@ -2466,7 +2577,7 @@ prepare_runtime() {
   else
     acme_email="$(resolve_acme_email)"
   fi
-  traefik_trusted_proxy_ips="$(resolve_traefik_trusted_proxy_ips)"
+  traefik_trusted_proxy_ips="$(resolve_traefik_trusted_proxy_ips "${engine_profile}")"
   write_compose_env "${mode}" "${public_host}" "${acme_email}" "${traefik_trusted_proxy_ips}" "${engine_profile}" "${fqdn_aliases}"
 }
 
@@ -2569,14 +2680,18 @@ service_action() {
 usage() {
   cat <<'EOF'
 Usage:
-  Engine.sh deploy [prod|dev]
-  Engine.sh --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
-  Engine.sh [--deployment-profile externally-accessible|internal-only] [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
+  Engine.sh --network-mode <public|local> deploy [prod|dev]
+  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }
 
 main() {
   parse_launch_options "$@"
+  local pending_command="${LAUNCH_ARGS[0]:-deploy}"
+  if launch_requires_engine_network_mode "${pending_command}"; then
+    require_explicit_engine_network_mode || exit $?
+  fi
   sync_and_reexec_if_needed
   set -- "${LAUNCH_ARGS[@]}"
   local command="${1:-deploy}"

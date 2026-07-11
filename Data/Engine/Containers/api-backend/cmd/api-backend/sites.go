@@ -798,6 +798,8 @@ func siteInstallMetadata(r *http.Request) map[string]any {
 	return map[string]any{
 		"public_base_url":          strings.TrimRight(baseURL, "/"),
 		"public_hostname":          hostname,
+		"network_mode":             overviewEngineNetworkMode(),
+		"network_mode_label":       overviewEngineNetworkModeLabel(),
 		"deployment_profile":       deploymentProfile,
 		"deployment_profile_label": overviewEngineDeploymentProfileLabel(),
 		"server_ip_fallback":       serverIPFallback,

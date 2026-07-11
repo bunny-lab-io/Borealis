@@ -255,7 +255,7 @@ func TestSchedulerManagerServiceActionUsesSchedulerImageForHelper(t *testing.T) 
 	if strings.Contains(joined, "borealis-engine/api-backend:test") {
 		t.Fatalf("helper should not use api-backend image:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
+	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--network-mode") || !strings.Contains(joined, "public") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
 		t.Fatalf("helper command missing Engine.sh service action:\n%s", joined)
 	}
 }

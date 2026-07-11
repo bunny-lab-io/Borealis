@@ -10,6 +10,8 @@ LOG_DIR="${SERVICE_ROOT}/logs"
 STATE_DIR="${SERVICE_ROOT}/state"
 HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
 HOSTNAME_ALIASES="${BOREALIS_PUBLIC_HOSTNAME_ALIASES:-${HOSTNAME}}"
+NETWORK_MODE="${BOREALIS_ENGINE_NETWORK_MODE:-public}"
+NETWORK_MODE_LABEL="${BOREALIS_ENGINE_NETWORK_MODE_LABEL:-Public}"
 DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-externally-accessible}"
 DEPLOYMENT_PROFILE_LABEL="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL:-Externally Accessible}"
 ACME_EMAIL="${BOREALIS_ACME_EMAIL:-}"
@@ -101,6 +103,8 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "fqdn_aliases": "${HOSTNAME_ALIASES}",
   "deployment_profile": "${DEPLOYMENT_PROFILE}",
   "deployment_profile_label": "${DEPLOYMENT_PROFILE_LABEL}",
+  "network_mode": "${NETWORK_MODE}",
+  "network_mode_label": "${NETWORK_MODE_LABEL}",
   "acme_email": "${ACME_EMAIL}",
   "local_ca_enabled": ${LOCAL_CA_ENABLED},
   "local_ca_cert_path": "${LOCAL_CA_CERT_PATH}",

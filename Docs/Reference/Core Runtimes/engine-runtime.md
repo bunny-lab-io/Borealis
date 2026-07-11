@@ -75,17 +75,16 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `wireguard-tunnel` owns constrained WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
 
     ### Launcher commands
-    - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.
-    - `Engine.sh --deployment-profile externally-accessible deploy prod`: public-DNS/ACME HTTPS edge profile.
-    - `Engine.sh --deployment-profile internal-only deploy prod`: private-DNS/local-CA HTTPS edge profile.
-    - Internal-Only deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when the Engine profile is Internal-Only.
-    - `Engine.sh deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
-    - `Engine.sh --service api-backend restart`: restart API container only.
-    - `Engine.sh --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
-    - `Engine.sh --service traefik-edge reload`: restart Traefik edge after config/env changes.
-    - `Engine.sh --service postgres-db restart`: restart PostgreSQL container.
-    - `Engine.sh --service remote-desktop-guacd restart`: restart guacd container.
-    - `Engine.sh --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
+    - `Engine.sh --network-mode public deploy prod`: production WebUI with public DNS and ACME/Let's Encrypt.
+    - `Engine.sh --network-mode local deploy prod`: production WebUI with private DNS/VPN reachability and Borealis local CA.
+    - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
+    - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
+    - `Engine.sh --network-mode public|local --service api-backend restart`: restart API container only.
+    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
+    - `Engine.sh --network-mode public|local --service traefik-edge reload`: restart Traefik edge after config/env changes.
+    - `Engine.sh --network-mode public|local --service postgres-db restart`: restart PostgreSQL container.
+    - `Engine.sh --network-mode public|local --service remote-desktop-guacd restart`: restart guacd container.
+    - `Engine.sh --network-mode public|local --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
 
     ### One-shot legacy migration helpers
     - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
@@ -124,8 +123,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
     ### PostgreSQL profile notes
-    - `Engine.sh deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
-    - `Engine.sh deploy` starts `postgres-db`, waits for health, and runs `Data.Engine.database.initialise_engine_database` from the current `site-worker` image before API/scheduler reconciliation.
+    - `Engine.sh --network-mode public|local deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - `Engine.sh --network-mode public|local deploy` starts `postgres-db`, waits for health, and runs `Data.Engine.database.initialise_engine_database` from the current `site-worker` image before API/scheduler reconciliation.
     - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
     - Site-worker scheduled-lane values are active work-item slots: Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.
     - Shared Ansible work items can target multiple hosts inside one slot. Individual Ansible work items target one host per slot.
@@ -169,9 +168,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
     #### Scope and runtime paths
     - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
-    - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
+    - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh --network-mode public|local deploy dev|prod` when source changes need to reach the running service.
     - Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
-    - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.
+    - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source and does not update git.
 
     #### Architecture
     - Runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` for production API endpoints. WebUI production/dev serving belongs to `webui-frontend`.

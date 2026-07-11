@@ -1101,7 +1101,7 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	}
 	image := schedulerServiceActionHelperImage()
 	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
-	commandParts := []string{"bash", "Engine.sh", "--service", serviceKey, actionName}
+	commandParts := []string{"bash", "Engine.sh", "--network-mode", overviewEngineNetworkMode(), "--service", serviceKey, actionName}
 	if actionMode != "" {
 		commandParts = append(commandParts, actionMode)
 	}

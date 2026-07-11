@@ -132,6 +132,30 @@ func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
 	}
 }
 
+func TestOverviewEngineNetworkModeMapsPublicAndLocal(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_NETWORK_MODE", "local")
+	if got := overviewEngineNetworkMode(); got != "local" {
+		t.Fatalf("network mode = %#v", got)
+	}
+	if got := overviewEngineNetworkModeLabel(); got != "Local" {
+		t.Fatalf("network mode label = %#v", got)
+	}
+	if got := overviewEngineDeploymentProfile(); got != "internal-only" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+
+	t.Setenv("BOREALIS_ENGINE_NETWORK_MODE", "public")
+	if got := overviewEngineNetworkMode(); got != "public" {
+		t.Fatalf("network mode = %#v", got)
+	}
+	if got := overviewEngineNetworkModeLabel(); got != "Public" {
+		t.Fatalf("network mode label = %#v", got)
+	}
+	if got := overviewEngineDeploymentProfile(); got != "externally-accessible" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+}
+
 func testOverviewCertificatePEM(t *testing.T, commonName string, notAfter time.Time) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
