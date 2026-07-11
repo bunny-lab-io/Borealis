@@ -51,6 +51,7 @@ fi
 SERVICE_ROLES=(
   "docker-proxy"
   "api-backend"
+  "site-worker-orchestrator"
   "job-scheduler"
   "webui-frontend"
   "traefik-edge"
@@ -67,6 +68,22 @@ BUILD_ROLES=(
   "wireguard-tunnel"
   "site-worker"
   "webui-frontend"
+)
+BUILD_SECTION_FRONTEND=(
+  "webui-frontend"
+)
+BUILD_SECTION_BACKEND=(
+  "api-backend"
+  "job-scheduler"
+  "site-worker"
+  "remote-desktop-guacd"
+)
+BUILD_SECTION_NETWORKING=(
+  "traefik-edge"
+  "wireguard-tunnel"
+)
+BUILD_SECTION_DATABASE=(
+  "postgres-db"
 )
 
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -92,17 +109,483 @@ declare -A IMAGE_HASHES
 declare -A DOCKERFILES
 declare -A BUILD_CONTEXTS
 declare -A BUILD_STATUSES
+declare -A DASHBOARD_STATUS
+declare -A DASHBOARD_COLOR
+declare -A DASHBOARD_UPDATED
+declare -A DASHBOARD_ROW_SECTION
+CURRENT_BUILD_SELECTION=()
+DASHBOARD_ACTIVE=0
+DASHBOARD_CURSOR_HIDDEN=0
+DASHBOARD_MODE_LABEL=""
+DASHBOARD_NETWORK_LABEL=""
+DASHBOARD_PROFILE=""
+DASHBOARD_WEBUI_URL=""
+DASHBOARD_DOMAIN_WIDTH=16
+DASHBOARD_ITEM_WIDTH=30
+DASHBOARD_STATUS_WIDTH=40
+DASHBOARD_UPDATED_WIDTH=30
+DASHBOARD_DYNAMIC_ROWS=()
 GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
   printf '[%s] %s\n' "$(date +%FT%T)" "$*"
 }
 
+dashboard_static_row() {
+  case "$1" in
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+dashboard_row_section() {
+  case "$1" in
+    "webui-frontend")
+      printf '%s\n' "Frontend"
+      ;;
+    "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
+      printf '%s\n' "Backend"
+      ;;
+    "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
+      printf '%s\n' "Networking"
+      ;;
+    "postgres-db"|"Profile")
+      printf '%s\n' "Database"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "Reconciliation"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "Housekeeping"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "Complete"
+      ;;
+    *)
+      printf '%s\n' "Events"
+      ;;
+  esac
+}
+
+dashboard_dynamic_row_present() {
+  local row="$1"
+  local candidate=""
+  for candidate in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
+    [[ "${candidate}" == "${row}" ]] && return 0
+  done
+  return 1
+}
+
+dashboard_ensure_row() {
+  local row="$1"
+  DASHBOARD_ROW_SECTION["${row}"]="$(dashboard_row_section "${row}")"
+  if dashboard_static_row "${row}" || dashboard_dynamic_row_present "${row}"; then
+    return 0
+  fi
+  DASHBOARD_DYNAMIC_ROWS+=("${row}")
+}
+
+dashboard_seed_rows() {
+  local row=""
+  for row in \
+    "webui-frontend" \
+    "api-backend" \
+    "api-backend > job-scheduler" \
+    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "site-worker" \
+    "remote-desktop-guacd" \
+    "docker-proxy" \
+    "traefik-edge" \
+    "wireguard-tunnel" \
+    "postgres-db" \
+    "Docker Compose" \
+    "Docker Cleanup" \
+    "WebUI Accessible"; do
+    dashboard_ensure_row "${row}"
+    DASHBOARD_STATUS["${row}"]="${DASHBOARD_STATUS[${row}]:-Pending...}"
+    DASHBOARD_COLOR["${row}"]="${DASHBOARD_COLOR[${row}]:-${C_DIM}}"
+    DASHBOARD_UPDATED["${row}"]="${DASHBOARD_UPDATED[${row}]:--}"
+  done
+}
+
+dashboard_start() {
+  local mode="$1"
+  local network_mode="$2"
+  DASHBOARD_ACTIVE=1
+  DASHBOARD_MODE_LABEL="$(deploy_mode_display_label "${mode}")"
+  DASHBOARD_NETWORK_LABEL="$(engine_network_mode_display_label "${network_mode}")"
+  dashboard_seed_rows
+  if [[ "${DASHBOARD_CURSOR_HIDDEN}" -eq 0 ]]; then
+    printf '\033[?25l'
+    DASHBOARD_CURSOR_HIDDEN=1
+  fi
+  printf '\033[2J'
+  dashboard_render
+}
+
+dashboard_finish() {
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_render
+  fi
+  if [[ "${DASHBOARD_CURSOR_HIDDEN}" -eq 1 ]]; then
+    printf '\033[?25h\n'
+    DASHBOARD_CURSOR_HIDDEN=0
+  fi
+  DASHBOARD_ACTIVE=0
+}
+
+dashboard_status_text() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_STATUS[${row}]:-Pending...}"
+}
+
+dashboard_status_color() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_COLOR[${row}]:-${C_DIM}}"
+}
+
+dashboard_updated_text() {
+  local row="$1"
+  printf '%s\n' "${DASHBOARD_UPDATED[${row}]:--}"
+}
+
+dashboard_day_suffix() {
+  local day="$1"
+  case $((day % 100)) in
+    11|12|13)
+      printf '%s\n' "th"
+      return 0
+      ;;
+  esac
+  case $((day % 10)) in
+    1) printf '%s\n' "st" ;;
+    2) printf '%s\n' "nd" ;;
+    3) printf '%s\n' "rd" ;;
+    *) printf '%s\n' "th" ;;
+  esac
+}
+
+dashboard_human_timestamp() {
+  local day
+  local month
+  local suffix
+  local timestamp
+  local time
+  local year
+  timestamp="$(LC_TIME=C date '+%B|%-d|%Y|%-I:%M%p')"
+  IFS='|' read -r month day year time <<< "${timestamp}"
+  suffix="$(dashboard_day_suffix "${day}")"
+  printf '%s %s%s %s @ %s\n' "${month}" "${day}" "${suffix}" "${year}" "${time}"
+}
+
+dashboard_row_label() {
+  case "$1" in
+    "webui-frontend")
+      printf '%s\n' "WebUI Frontend"
+      ;;
+    "api-backend")
+      printf '%s\n' "API Backend"
+      ;;
+    "api-backend > job-scheduler")
+      printf '%s\n' "Job Scheduler"
+      ;;
+    "api-backend > job-scheduler > site-worker-orchestrator")
+      printf '%s\n' "Site Worker Orchestrator"
+      ;;
+    "site-worker")
+      printf '%s\n' "Site Worker"
+      ;;
+    "remote-desktop-guacd")
+      printf '%s\n' "Guacamole Remote Desktop"
+      ;;
+    "docker-proxy")
+      printf '%s\n' "Docker Proxy"
+      ;;
+    "traefik-edge")
+      printf '%s\n' "Traefik Reverse Proxy"
+      ;;
+    "wireguard-tunnel")
+      printf '%s\n' "WireGuard Server"
+      ;;
+    "postgres-db")
+      printf '%s\n' "PostgreSQL DB"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "Docker Compose"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "Docker Cleanup"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "WebUI Accessible"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+dashboard_terminal_columns() {
+  local cols="${COLUMNS:-}"
+  if [[ -z "${cols}" ]] && command_exists tput; then
+    cols="$(tput cols 2>/dev/null || true)"
+  fi
+  if [[ ! "${cols}" =~ ^[0-9]+$ ]]; then
+    cols=120
+  fi
+  if ((cols < 80)); then
+    cols=80
+  fi
+  printf '%s\n' "${cols}"
+}
+
+dashboard_compute_table_widths() {
+  local cols
+  cols="$(dashboard_terminal_columns)"
+  DASHBOARD_DOMAIN_WIDTH=16
+  DASHBOARD_UPDATED_WIDTH=30
+  DASHBOARD_ITEM_WIDTH=30
+  DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  if ((DASHBOARD_STATUS_WIDTH < 28)); then
+    DASHBOARD_STATUS_WIDTH=28
+    DASHBOARD_ITEM_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_STATUS_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  fi
+  if ((DASHBOARD_ITEM_WIDTH < 24)); then
+    DASHBOARD_ITEM_WIDTH=24
+    DASHBOARD_STATUS_WIDTH=$((cols - DASHBOARD_DOMAIN_WIDTH - DASHBOARD_ITEM_WIDTH - DASHBOARD_UPDATED_WIDTH - 10))
+  fi
+  if ((DASHBOARD_STATUS_WIDTH < 20)); then
+    DASHBOARD_STATUS_WIDTH=20
+  fi
+}
+
+dashboard_fit_text() {
+  local value="$1"
+  local width="$2"
+  if ((width <= 0)); then
+    printf '%s\n' ""
+    return 0
+  fi
+  if ((${#value} <= width)); then
+    printf '%s\n' "${value}"
+    return 0
+  fi
+  if ((width > 3)); then
+    printf '%s...\n' "${value:0:$((width - 3))}"
+  else
+    printf '%s\n' "${value:0:${width}}"
+  fi
+}
+
+dashboard_repeat_char() {
+  local char="$1"
+  local count="$2"
+  printf '%*s' "${count}" "" | tr ' ' "${char}"
+}
+
+dashboard_render_table_header() {
+  dashboard_compute_table_widths
+  printf '\n'
+  printf '  %-*s  %-*s  %-*s  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "Domain" \
+    "${DASHBOARD_ITEM_WIDTH}" "Item" \
+    "${DASHBOARD_STATUS_WIDTH}" "Status" \
+    "${DASHBOARD_UPDATED_WIDTH}" "Last Status Update"
+  printf '  %-*s  %-*s  %-*s  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_DOMAIN_WIDTH}")" \
+    "${DASHBOARD_ITEM_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_ITEM_WIDTH}")" \
+    "${DASHBOARD_STATUS_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_STATUS_WIDTH}")" \
+    "${DASHBOARD_UPDATED_WIDTH}" "$(dashboard_repeat_char '-' "${DASHBOARD_UPDATED_WIDTH}")"
+}
+
+dashboard_render_row() {
+  local row="$1"
+  local color
+  local domain
+  local item
+  local status
+  local updated
+  color="$(dashboard_status_color "${row}")"
+  domain="$(dashboard_fit_text "${DASHBOARD_ROW_SECTION[${row}]:-Events}" "${DASHBOARD_DOMAIN_WIDTH}")"
+  item="$(dashboard_fit_text "$(dashboard_row_label "${row}")" "${DASHBOARD_ITEM_WIDTH}")"
+  status="$(dashboard_fit_text "$(dashboard_status_text "${row}")" "${DASHBOARD_STATUS_WIDTH}")"
+  updated="$(dashboard_fit_text "$(dashboard_updated_text "${row}")" "${DASHBOARD_UPDATED_WIDTH}")"
+  printf '  %-*s  %-*s  %b%-*s%b  %-*s\n' \
+    "${DASHBOARD_DOMAIN_WIDTH}" "${domain}" \
+    "${DASHBOARD_ITEM_WIDTH}" "${item}" \
+    "${color}${C_BOLD}" "${DASHBOARD_STATUS_WIDTH}" "${status}" "${C_RESET}" \
+    "${DASHBOARD_UPDATED_WIDTH}" "${updated}"
+}
+
+dashboard_render_table() {
+  local row=""
+  dashboard_render_table_header
+  for row in \
+    "webui-frontend" \
+    "api-backend" \
+    "api-backend > job-scheduler" \
+    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "site-worker" \
+    "remote-desktop-guacd" \
+    "docker-proxy" \
+    "traefik-edge" \
+    "wireguard-tunnel" \
+    "postgres-db" \
+    "Docker Compose" \
+    "Docker Cleanup" \
+    "WebUI Accessible"; do
+    dashboard_render_row "${row}"
+  done
+  for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
+    dashboard_render_row "${row}"
+  done
+}
+
+dashboard_render() {
+  [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
+  printf '\033[H'
+  printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
+  printf 'Mode: %s [%s]\n' "${DASHBOARD_MODE_LABEL:-Production}" "${DASHBOARD_NETWORK_LABEL:-Public}"
+  if [[ -n "${DASHBOARD_PROFILE}" ]]; then
+    printf 'Profile: %s\n' "${DASHBOARD_PROFILE}"
+  else
+    printf 'Profile: Pending...\n'
+  fi
+  printf 'Log: %s\n' "${BUILD_LOG}"
+  dashboard_render_table
+  printf '\033[J'
+}
+
+dashboard_update_status() {
+  local subject="$1"
+  local status="$2"
+  local color="$3"
+  if [[ "${subject}" == "Database schema" ]]; then
+    subject="postgres-db"
+  fi
+  dashboard_ensure_row "${subject}"
+  if [[ "${DASHBOARD_STATUS[${subject}]:-}" == "${status}" && "${DASHBOARD_COLOR[${subject}]:-}" == "${color}" ]]; then
+    return 0
+  fi
+  DASHBOARD_STATUS["${subject}"]="${status}"
+  DASHBOARD_COLOR["${subject}"]="${color}"
+  DASHBOARD_UPDATED["${subject}"]="$(dashboard_human_timestamp)"
+  if [[ "${subject}" == "Profile" ]]; then
+    DASHBOARD_PROFILE="${status}"
+  fi
+  dashboard_render
+}
+
 log_status() {
   local subject="$1"
   local status="$2"
   local color="$3"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    if [[ "${subject}" == "Profile" ]]; then
+      DASHBOARD_PROFILE="${status}"
+      dashboard_render
+      return 0
+    fi
+    dashboard_update_status "${subject}" "${status}" "${color}"
+    return 0
+  fi
   printf '[%s] %s: %b[%s]%b\n' "$(date +%FT%T)" "${subject}" "${color}${C_BOLD}" "${status}" "${C_RESET}"
+}
+
+log_section() {
+  local label="$1"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_render
+    return 0
+  fi
+  printf '\n%b[%s]%b\n' "${C_BLUE}${C_BOLD}" "${label}" "${C_RESET}"
+}
+
+deploy_mode_display_label() {
+  case "$(normalize_mode "$1")" in
+    dev) printf '%s\n' "Development" ;;
+    *) printf '%s\n' "Production" ;;
+  esac
+}
+
+log_deploy_header() {
+  local mode="$1"
+  local network_mode="$2"
+  dashboard_start "${mode}" "${network_mode}"
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    return 0
+  fi
+  printf '[%s] Deploying %s [%s] Borealis Engine:\n' "$(date +%FT%T)" "$(deploy_mode_display_label "${mode}")" "$(engine_network_mode_display_label "${network_mode}")"
+}
+
+build_status_subject() {
+  local service="$1"
+  case "${service}" in
+    job-scheduler)
+      printf '%s\n' "api-backend > job-scheduler"
+      ;;
+    site-worker-orchestrator)
+      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
+      ;;
+    *)
+      printf '%s\n' "${service}"
+      ;;
+  esac
+}
+
+log_build_status() {
+  local service="$1"
+  local status="$2"
+  local color="$3"
+  case "${service}" in
+    job-scheduler)
+      status="[Shares API Backend Image] -> ${status}"
+      ;;
+    site-worker-orchestrator)
+      status="[Shares Job Scheduler Image] -> ${status}"
+      ;;
+  esac
+  log_status "$(build_status_subject "${service}")" "${status}" "${color}"
+}
+
+selected_build_role_present() {
+  local needle="$1"
+  shift || true
+  local candidate=""
+  for candidate in "$@"; do
+    [[ "${candidate}" == "${needle}" ]] && return 0
+  done
+  return 1
+}
+
+build_section_images() {
+  local mode="$1"
+  local label="$2"
+  shift 2
+  local section_services=("$@")
+  local service=""
+  local has_selected=0
+  for service in "${section_services[@]}"; do
+    if selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}"; then
+      has_selected=1
+      break
+    fi
+  done
+  [[ "${has_selected}" -eq 1 ]] || return 0
+
+  log_section "${label}"
+  for service in "${section_services[@]}"; do
+    selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
+    build_service_image "${service}" "${mode}"
+    if [[ "${service}" == "job-scheduler" ]]; then
+      log_build_status "site-worker-orchestrator" "Ready - Shared Image" "${C_GREEN}"
+      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
+    fi
+  done
 }
 
 log_detail() {
@@ -113,13 +596,24 @@ log_webui_url() {
   local public_base_url
   public_base_url="$(read_env_value BOREALIS_PUBLIC_BASE_URL)"
   [[ -n "${public_base_url}" ]] || return 0
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    DASHBOARD_WEBUI_URL="${public_base_url}"
+    dashboard_update_status "WebUI Accessible" "${public_base_url}" "${C_GREEN}"
+    return 0
+  fi
   printf '[%s] WebUI Accessible @ %b%s%b\n' "$(date +%FT%T)" "${C_BLUE}${C_BOLD}" "${public_base_url}" "${C_RESET}"
 }
 
 die() {
+  if [[ "${DASHBOARD_ACTIVE}" -eq 1 ]]; then
+    dashboard_update_status "Error" "$*" "${C_RED}"
+    dashboard_finish
+  fi
   printf '[%s] %bERROR:%b %s\n' "$(date +%FT%T)" "${C_RED}${C_BOLD}" "${C_RESET}" "$*" >&2
   exit 1
 }
+
+trap dashboard_finish EXIT
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -427,6 +921,100 @@ container_health_status() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_name}" 2>/dev/null || true
 }
 
+dashboard_subject_for_service() {
+  case "$1" in
+    job-scheduler)
+      printf '%s\n' "api-backend > job-scheduler"
+      ;;
+    site-worker-orchestrator)
+      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+refresh_compose_service_statuses() {
+  local services=("$@")
+  if [[ "${#services[@]}" -eq 0 ]]; then
+    services=("${SERVICE_ROLES[@]}")
+  fi
+  local service=""
+  for service in "${services[@]}"; do
+    local subject
+    local container_status
+    subject="$(dashboard_subject_for_service "${service}")"
+    container_status="$(container_health_status "borealis-engine-${service}")"
+    case "${container_status}" in
+      healthy)
+        log_status "${subject}" "Running - Healthy" "${C_GREEN}"
+        ;;
+      running)
+        log_status "${subject}" "Running" "${C_GREEN}"
+        ;;
+      starting)
+        log_status "${subject}" "Starting" "${C_YELLOW}"
+        ;;
+      unhealthy)
+        log_status "${subject}" "Unhealthy" "${C_RED}"
+        ;;
+      exited|dead|removing|paused|restarting|created)
+        log_status "${subject}" "${container_status}" "${C_RED}"
+        ;;
+      "")
+        log_status "${subject}" "Missing" "${C_RED}"
+        ;;
+      *)
+        log_status "${subject}" "${container_status}" "${C_YELLOW}"
+        ;;
+    esac
+  done
+}
+
+compose_service_status_is_transient() {
+  case "$1" in
+    ""|created|restarting|starting)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+wait_for_compose_services_to_settle() {
+  local timeout_seconds="$1"
+  shift
+  local services=("$@")
+  if [[ "${#services[@]}" -eq 0 ]]; then
+    services=("${SERVICE_ROLES[@]}")
+  fi
+  local deadline=$((SECONDS + timeout_seconds))
+  local service=""
+  local status=""
+  local pending=0
+  while true; do
+    refresh_compose_service_statuses "${services[@]}"
+    pending=0
+    for service in "${services[@]}"; do
+      status="$(container_health_status "borealis-engine-${service}")"
+      if compose_service_status_is_transient "${status}"; then
+        pending=1
+      fi
+    done
+    if [[ "${pending}" -eq 0 ]]; then
+      refresh_compose_service_statuses "${services[@]}"
+      return 0
+    fi
+    if ((SECONDS >= deadline)); then
+      printf '[%s] Compose service status settle timed out after %ss for services: %s\n' "$(date +%FT%T)" "${timeout_seconds}" "${services[*]}" >> "${BUILD_LOG}"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
 wait_for_postgres_container() {
   local timeout_seconds="${1:-150}"
   local deadline=$((SECONDS + timeout_seconds))
@@ -443,8 +1031,34 @@ wait_for_postgres_container() {
   return 1
 }
 
+handle_database_schema_output_line() {
+  local line
+  local progress_prefix=$'BOREALIS_SCHEMA_PROGRESS\t'
+  local table_name
+  line="$1"
+  if [[ "${line}" == "${progress_prefix}"* ]]; then
+    table_name="${line#${progress_prefix}}"
+    log_status "Database schema" "Ensuring Table \"${table_name}\" Exists" "${C_YELLOW}"
+    printf '[%s] Database schema: [Ensuring Table "%s" Exists]\n' "$(date +%FT%T)" "${table_name}" >> "${BUILD_LOG}"
+  else
+    printf '%s\n' "${line}" >> "${BUILD_LOG}"
+  fi
+}
+
+stream_database_schema_output() {
+  local line
+  while IFS= read -r line; do
+    handle_database_schema_output_line "${line}"
+  done
+}
+
 ensure_engine_database_schema() {
   local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
+  local schema_fifo=""
+  local schema_fifo_dir=""
+  local schema_exit=0
+  local schema_line
+  local schema_pid=""
   if [[ -z "${site_worker_image}" ]]; then
     site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
   fi
@@ -453,23 +1067,40 @@ ensure_engine_database_schema() {
   log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
   compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
   if ! wait_for_postgres_container 150; then
+    log_status "postgres-db" "Failed" "${C_RED}"
     die "postgres-db did not become healthy for Engine database schema initialization. See ${BUILD_LOG}."
   fi
+  refresh_compose_service_statuses postgres-db
 
-  log_status "Database schema" "Ensuring Engine tables" "${C_YELLOW}"
-  if ! docker run --rm \
+  log_status "Database schema" "Preparing Engine tables" "${C_YELLOW}"
+  schema_fifo_dir="$(mktemp -d)"
+  schema_fifo="${schema_fifo_dir}/schema-output"
+  mkfifo "${schema_fifo}"
+  set +o errexit
+  docker run --rm \
     --network host \
     --env-file "${COMPOSE_ENV}" \
     -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
     -v "${RUNTIME_ROOT}:/opt/Borealis/Engine" \
     --entrypoint python \
     "${site_worker_image}" \
-    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"])' \
-    >> "${BUILD_LOG}" 2>&1; then
+    -u \
+    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))' \
+    > "${schema_fifo}" 2>&1 &
+  schema_pid="$!"
+  while IFS= read -r schema_line; do
+    handle_database_schema_output_line "${schema_line}"
+  done < "${schema_fifo}"
+  wait "${schema_pid}"
+  schema_exit="$?"
+  rm -rf "${schema_fifo_dir}" || true
+  set -o errexit
+  if [[ "${schema_exit}" -ne 0 ]]; then
     log_status "Database schema" "Failed" "${C_RED}"
     die "Engine database schema initialization failed. See ${BUILD_LOG}."
   fi
   log_status "Database schema" "Ready" "${C_GREEN}"
+  refresh_compose_service_statuses postgres-db
 }
 
 ensure_no_host_postgres_conflict() {
@@ -664,6 +1295,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
+    "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
@@ -1518,7 +2150,7 @@ write_compose_env() {
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
-    log_status "Deployment Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
+    log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
 
   cat > "${RUNTIME_ENV}" <<EOF
@@ -1623,6 +2255,7 @@ BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
 BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
+BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
@@ -1819,7 +2452,7 @@ prepare_service_build_artifacts() {
         printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
         return 0
       fi
-      log_status "${service}" "Building Go binary" "${C_YELLOW}"
+      log_build_status "${service}" "Building Go binary" "${C_YELLOW}"
       BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
         "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1
       GO_API_BACKEND_BINARY_PREPARED=1
@@ -1850,7 +2483,7 @@ build_service_image() {
   previous="$(previous_image_hash "${service}")"
   previous_tag="$(previous_image_tag "${service}")"
   if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-    log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+    log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
     printf '[%s] %s unchanged as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
     return 0
   fi
@@ -1859,7 +2492,7 @@ build_service_image() {
     legacy_hash="$(compute_service_hash "${service}" "${mode}" "legacy")"
     if [[ "${previous}" == "${legacy_hash}" ]] && docker image inspect "${previous_tag}" >/dev/null 2>&1; then
       docker tag "${previous_tag}" "${tag}"
-      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after hash normalization; retagged %s as %s\n' "$(date +%FT%T)" "${service}" "${previous_tag}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
@@ -1874,12 +2507,12 @@ build_service_image() {
     IMAGE_HASHES["${service}"]="${image_hash}"
     IMAGE_TAGS["${service}"]="${tag}"
     if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after artifact preparation as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
   fi
-  log_status "${service}" "(Re)Building" "${C_YELLOW}"
+  log_build_status "${service}" "(Re)Building Container Image" "${C_YELLOW}"
   {
     printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
     local build_args=(
@@ -1934,7 +2567,7 @@ build_service_image() {
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
-  log_status "${service}" "Rebuilt" "${C_GREEN}"
+  log_build_status "${service}" "Ready - Image (Re)Built" "${C_GREEN}"
 }
 
 build_images() {
@@ -1949,8 +2582,13 @@ build_images() {
   GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${selected[@]}"; do
     validate_build_role "${service}"
-    build_service_image "${service}" "${mode}"
   done
+  CURRENT_BUILD_SELECTION=("${selected[@]}")
+  build_section_images "${mode}" "Frontend Services" "${BUILD_SECTION_FRONTEND[@]}"
+  build_section_images "${mode}" "Backend Services" "${BUILD_SECTION_BACKEND[@]}"
+  build_section_images "${mode}" "Networking Services" "${BUILD_SECTION_NETWORKING[@]}"
+  build_section_images "${mode}" "Database Services" "${BUILD_SECTION_DATABASE[@]}"
+  CURRENT_BUILD_SELECTION=()
 }
 
 engine_docker_cleanup_enabled() {
@@ -1973,7 +2611,7 @@ prune_stale_site_worker_images() {
       | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
   )
   ((${#stale_images[@]} > 0)) || return 0
-  log_status "Docker cleanup" "Pruning stale site-worker images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Stale Site Worker Images" "${C_YELLOW}"
   local image=""
   for image in "${stale_images[@]}"; do
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
@@ -1995,7 +2633,7 @@ restore_required_engine_images() {
   done
   ((${#missing_services[@]} > 0)) || return 0
 
-  log_status "Docker cleanup" "Restoring required images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Restoring Required Container Images" "${C_YELLOW}"
   GO_API_BACKEND_BINARY_PREPARED=0
   for service in "${missing_services[@]}"; do
     build_service_image "${service}" "${mode}"
@@ -2005,11 +2643,11 @@ restore_required_engine_images() {
 prune_expired_engine_build_cache_exports() {
   local cache_root="${DEPLOY_DIR}/cache/buildkit"
   [[ -d "${cache_root}" ]] || return 0
-  log_status "Docker cleanup" "Pruning Engine build cache >${BUILD_CACHE_RETENTION_DAYS}d" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Engine Build Cache >${BUILD_CACHE_RETENTION_DAYS}d" "${C_YELLOW}"
   printf '[%s] Pruning Engine Buildx cache exports older than %d days from %s\n' "$(date +%FT%T)" "${BUILD_CACHE_RETENTION_DAYS}" "${cache_root}" >> "${BUILD_LOG}"
   local cutoff_epoch
   if ! cutoff_epoch="$(date -u -d "${BUILD_CACHE_RETENTION_DAYS} days ago" +%s 2>/dev/null)"; then
-    log_status "Docker cleanup" "Engine build cache retention failed" "${C_RED}"
+    log_status "Docker Cleanup" "Engine Build Cache Retention Failed" "${C_RED}"
     printf '[%s] Failed to compute Engine Buildx cache retention cutoff\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
     return 1
   fi
@@ -2074,11 +2712,11 @@ prune_expired_engine_build_cache_exports() {
     done
   done
   if [[ "${cleanup_failed}" -ne 0 ]]; then
-    log_status "Docker cleanup" "Engine build cache prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Engine Build Cache Prune Failed" "${C_RED}"
     printf '[%s] Failed to prune one or more Engine Buildx cache exports under %s\n' "$(date +%FT%T)" "${cache_root}" >> "${BUILD_LOG}"
     return 1
   fi
-  log_status "Docker cleanup" "Engine build cache removed=${removed} retained=${retained}" "${C_GREEN}"
+  log_status "Docker Cleanup" "Engine Build Cache: Removed ${removed} cache export(s), retained ${retained} cache export(s)" "${C_GREEN}"
   printf '[%s] Engine Buildx cache retention complete: removed=%d retained=%d\n' "$(date +%FT%T)" "${removed}" "${retained}" >> "${BUILD_LOG}"
   return 0
 }
@@ -2086,25 +2724,24 @@ prune_expired_engine_build_cache_exports() {
 prune_engine_docker_storage() {
   local mode="$1"
   if ! engine_docker_cleanup_enabled; then
-    log_status "Docker cleanup" "Skipped" "${C_DIM}"
+    log_status "Docker Cleanup" "Skipped" "${C_DIM}"
     printf '[%s] Docker cleanup skipped because BOREALIS_SKIP_DOCKER_PRUNE is set\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
     return 0
   fi
 
   local cleanup_failed=0
-  log_status "Docker cleanup" "Pruning inactive images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Inactive Container Images" "${C_YELLOW}"
   if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
-    log_status "Docker cleanup" "Image prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Image Prune Failed" "${C_RED}"
   fi
 
   prune_stale_site_worker_images
   restore_required_engine_images "${mode}"
 
-  log_status "Docker cleanup" "Pruning builder cache" "${C_YELLOW}"
   if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
-    log_status "Docker cleanup" "Builder prune failed" "${C_RED}"
+    log_status "Docker Cleanup" "Builder Cache Prune Failed" "${C_RED}"
   fi
 
   if ! prune_expired_engine_build_cache_exports; then
@@ -2112,9 +2749,9 @@ prune_engine_docker_storage() {
   fi
 
   if [[ "${cleanup_failed}" -eq 0 ]]; then
-    log_status "Docker cleanup" "Complete" "${C_GREEN}"
+    log_status "Docker Cleanup" "Complete" "${C_GREEN}"
   else
-    log_status "Docker cleanup" "Completed with warnings" "${C_YELLOW}"
+    log_status "Docker Cleanup" "Completed With Warnings" "${C_YELLOW}"
   fi
 }
 
@@ -2208,8 +2845,12 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
+    printf '%s\n' site-worker-orchestrator
+  fi
   if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
     printf '%s\n' job-scheduler
+    printf '%s\n' site-worker-orchestrator
   fi
 }
 
@@ -2282,7 +2923,8 @@ def image_records() -> dict[str, dict[str, str]]:
     data = json.loads(image_path.read_text(encoding="utf-8"))
     records = {}
     for service in services:
-        record = (data.get("services") or {}).get(service) or {}
+        manifest_service = "job-scheduler" if service == "site-worker-orchestrator" else service
+        record = (data.get("services") or {}).get(manifest_service) or {}
         records[service] = {
             "image": record.get("image") or "",
             "hash": record.get("hash") or "",
@@ -2446,6 +3088,7 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
 services = [
     "docker-proxy",
     "api-backend",
+    "site-worker-orchestrator",
     "job-scheduler",
     "webui-frontend",
     "traefik-edge",
@@ -2466,6 +3109,12 @@ if image_path.is_file():
         service_images[service] = {
             "image": record.get("image") or "",
             "hash": record.get("hash") or "",
+        }
+    if "site-worker-orchestrator" in allowed_services:
+        scheduler_record = (image_data.get("services") or {}).get("job-scheduler") or {}
+        service_images["site-worker-orchestrator"] = {
+            "image": scheduler_record.get("image") or "",
+            "hash": scheduler_record.get("hash") or "",
         }
 
 env = env_values(env_file)
@@ -2584,7 +3233,9 @@ prepare_runtime() {
 deploy_engine() {
   local mode
   mode="$(normalize_mode "${1:-prod}")"
-  log_status "Engine deploy ${mode}" "Starting" "${C_BLUE}"
+  local network_mode
+  network_mode="$(resolve_engine_network_mode)"
+  log_deploy_header "${mode}" "${network_mode}"
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
@@ -2593,6 +3244,7 @@ deploy_engine() {
   write_image_manifest "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
+  log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -2611,24 +3263,41 @@ deploy_engine() {
     mapfile -t target_services <<< "${target_service_lines}"
   fi
   if deploy_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "Already Up-to-Date" "${C_GREEN}"
+    log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
+    refresh_compose_service_statuses
     write_deploy_manifest "${mode}" "skipped"
+    log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
     log_webui_url
     return 0
   fi
   if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
-    compose_base up -d --no-deps --no-build "${target_services[@]}"
+    log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
+    if ! compose_base up -d --no-deps --no-build "${target_services[@]}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Docker Compose" "Failed" "${C_RED}"
+      die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
+    fi
+    wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
+    log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
+    log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
     log_webui_url
     return 0
   fi
-  log_status "Compose" "Reconciling Stack" "${C_YELLOW}"
-  compose_base up -d --no-build
+  log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
+  if ! compose_base up -d --no-build >> "${BUILD_LOG}" 2>&1; then
+    log_status "Docker Compose" "Failed" "${C_RED}"
+    die "Docker Compose stack reconciliation failed. See ${BUILD_LOG}."
+  fi
+  wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
+  log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
+  log_section "Docker Housekeeping"
   prune_engine_docker_storage "${mode}"
+  log_section "Engine Deployment Complete"
   log_webui_url
 }
 
@@ -2653,7 +3322,11 @@ service_action() {
       compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
-      build_images "${mode}" "${service}"
+      local build_service="${service}"
+      if [[ "${service}" == "site-worker-orchestrator" ]]; then
+        build_service="job-scheduler"
+      fi
+      build_images "${mode}" "${build_service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
@@ -2681,7 +3354,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

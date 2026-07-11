@@ -273,7 +273,7 @@ def test_register_worker_creates_active_route_record(tmp_path: Path, monkeypatch
         assert route["upstream_scheme"] == "http"
         assert route["upstream_host"] == "127.0.0.1"
         assert route["upstream_port"] == 0
-        assert route["metadata"]["lifecycle_owner"] == "job-scheduler"
+        assert route["metadata"]["lifecycle_owner"] == "site-worker-orchestrator"
         assert route["metadata"]["route_kind"] == "site_worker"
 
         active = active_worker_route_for_site(conn, site_id=7)

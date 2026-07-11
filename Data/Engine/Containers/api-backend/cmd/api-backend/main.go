@@ -59,6 +59,21 @@ func main() {
 		return
 	}
 
+	if siteWorkerOrchestratorHealthcheckMode() {
+		if err := runSiteWorkerOrchestratorHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("site-worker orchestrator healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if siteWorkerOrchestratorMode() {
+		if err := runSiteWorkerOrchestrator(rootCtx, cfg); err != nil {
+			log.Fatalf("site-worker orchestrator exited: %v", err)
+		}
+		return
+	}
+
 	if schedulerManagerMode() {
 		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
 			log.Fatalf("Go job-scheduler manager exited: %v", err)
@@ -182,39 +197,66 @@ func main() {
 }
 
 func schedulerManagerMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "job-scheduler" || role == "scheduler-manager" {
-		return true
+	if explicitHealthcheckArgMode() {
+		return false
 	}
-	if len(os.Args) > 1 {
-		arg := strings.ToLower(strings.TrimSpace(os.Args[1]))
-		return arg == "job-scheduler" || arg == "scheduler-manager"
+	role := processRoleValue()
+	if role != "" {
+		return textInSet(role, "job-scheduler", "scheduler-manager")
 	}
-	return false
+	return processArgMatches("job-scheduler", "scheduler-manager")
 }
 
 func apiHealthcheckMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "api-healthcheck" || role == "api-backend-healthcheck" {
+	if processArgMatches("api-healthcheck", "api-backend-healthcheck") {
 		return true
 	}
+	return processRoleMatches("api-healthcheck", "api-backend-healthcheck")
+}
+
+func schedulerHealthcheckMode() bool {
+	if processArgMatches("job-scheduler-healthcheck", "scheduler-healthcheck") {
+		return true
+	}
+	return processRoleMatches("job-scheduler-healthcheck", "scheduler-healthcheck")
+}
+
+func processRoleMatches(allowed ...string) bool {
+	role := processRoleValue()
+	if role == "" {
+		return false
+	}
+	return textInSet(role, allowed...)
+}
+
+func processRoleValue() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+}
+
+func processArgMatches(allowed ...string) bool {
 	for _, arg := range os.Args[1:] {
 		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "api-healthcheck" || normalized == "api-backend-healthcheck" {
+		if textInSet(normalized, allowed...) {
 			return true
 		}
 	}
 	return false
 }
 
-func schedulerHealthcheckMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck" {
-		return true
-	}
-	for _, arg := range os.Args[1:] {
-		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "job-scheduler-healthcheck" || normalized == "scheduler-healthcheck" {
+func explicitHealthcheckArgMode() bool {
+	return processArgMatches(
+		"api-healthcheck",
+		"api-backend-healthcheck",
+		"job-scheduler-healthcheck",
+		"scheduler-healthcheck",
+		"site-worker-orchestrator-healthcheck",
+		"worker-orchestrator-healthcheck",
+	)
+}
+
+func textInSet(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
 			return true
 		}
 	}

@@ -13,7 +13,7 @@ from __future__ import annotations
 from Data.Engine.db import dbapi as sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from .auth import device_purge_state
 
@@ -21,21 +21,54 @@ from .auth import device_purge_state
 DEVICE_TABLE = "devices"
 
 
-def apply_all(conn: sqlite3.Connection) -> None:
+SchemaProgressCallback = Callable[[str], None]
+
+
+def _notify_schema_progress(progress_callback: Optional[SchemaProgressCallback], table_name: str) -> None:
+    if progress_callback is not None:
+        progress_callback(table_name)
+
+
+def _run_schema_step(
+    progress_callback: Optional[SchemaProgressCallback],
+    table_names: Sequence[str],
+    step: Callable[[], None],
+) -> None:
+    for table_name in table_names:
+        _notify_schema_progress(progress_callback, table_name)
+    step()
+
+
+def apply_all(
+    conn: sqlite3.Connection,
+    *,
+    progress_callback: Optional[SchemaProgressCallback] = None,
+) -> None:
     """
     Run all known schema migrations against the provided DB-API connection.
     """
 
-    _ensure_devices_table(conn)
-    _ensure_device_aux_tables(conn)
-    _ensure_device_vpn_config_table(conn)
-    _ensure_device_vpn_ip_lease_table(conn)
-    _ensure_refresh_token_table(conn)
-    _ensure_device_approval_table(conn)
-    _ensure_enrollment_code_failure_table(conn)
-    _ensure_watchdog_tables(conn)
-    _ensure_software_icon_assets_table(conn)
-    device_purge_state.ensure_table(conn)
+    _run_schema_step(progress_callback, ("devices",), lambda: _ensure_devices_table(conn))
+    _run_schema_step(progress_callback, ("device_keys",), lambda: _ensure_device_aux_tables(conn))
+    _run_schema_step(progress_callback, ("device_vpn_config",), lambda: _ensure_device_vpn_config_table(conn))
+    _run_schema_step(progress_callback, ("device_vpn_ip_leases",), lambda: _ensure_device_vpn_ip_lease_table(conn))
+    _run_schema_step(progress_callback, ("refresh_tokens",), lambda: _ensure_refresh_token_table(conn))
+    _run_schema_step(progress_callback, ("device_approvals",), lambda: _ensure_device_approval_table(conn))
+    _run_schema_step(progress_callback, ("enrollment_code_failures",), lambda: _ensure_enrollment_code_failure_table(conn))
+    _run_schema_step(
+        progress_callback,
+        (
+            "watchdogs",
+            "watchdog_sites",
+            "watchdog_targets",
+            "watchdog_device_overrides",
+            "watchdog_incidents",
+            "watchdog_device_state",
+        ),
+        lambda: _ensure_watchdog_tables(conn),
+    )
+    _run_schema_step(progress_callback, ("software_icon_assets",), lambda: _ensure_software_icon_assets_table(conn))
+    _run_schema_step(progress_callback, ("device_purge_barriers",), lambda: device_purge_state.ensure_table(conn))
 
     conn.commit()
 

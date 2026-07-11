@@ -28,6 +28,7 @@ var composeServiceSpecs = []struct {
 }{
 	{"docker-proxy", "Docker Proxy"},
 	{"api-backend", "API Backend"},
+	{"site-worker-orchestrator", "Site Worker Orchestrator"},
 	{"job-scheduler", "Job Scheduler"},
 	{"webui-frontend", "WebUI Frontend"},
 	{"traefik-edge", "Traefik Edge"},

@@ -9,8 +9,6 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -215,19 +213,30 @@ func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	}
 }
 
-func TestSchedulerManagerServiceActionUsesSchedulerImageForHelper(t *testing.T) {
-	tmp := t.TempDir()
-	capturePath := filepath.Join(tmp, "docker-args.txt")
-	dockerPath := filepath.Join(tmp, "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(capturePath) + "\nprintf 'helper-id\\n'\n"
-	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BOREALIS_DOCKER_BIN", dockerPath)
-	t.Setenv("BOREALIS_API_BACKEND_IMAGE", "borealis-engine/api-backend:test")
-	t.Setenv("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:test")
+func TestSchedulerManagerServiceActionUsesOrchestrator(t *testing.T) {
+	var received orchestratorServiceActionRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/services/action" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
+			t.Fatalf("unexpected internal token %q", got)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"queued": true})
+	}))
+	defer server.Close()
 
-	manager := &goSchedulerManager{projectRoot: "/opt/Borealis"}
+	manager := &goSchedulerManager{
+		secret: []byte("test-secret"),
+		orchestrator: &siteWorkerOrchestratorClient{
+			baseURL:    server.URL,
+			token:      goInternalToken([]byte("test-secret")),
+			httpClient: server.Client(),
+		},
+	}
 	err := manager.runServiceAction(context.Background(), map[string]any{
 		"service_key": "webui-frontend",
 		"action":      map[string]any{"action": "restart"},
@@ -235,28 +244,8 @@ func TestSchedulerManagerServiceActionUsesSchedulerImageForHelper(t *testing.T) 
 	if err != nil {
 		t.Fatalf("run service action: %v", err)
 	}
-	raw, err := os.ReadFile(capturePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	joined := "\n" + strings.Join(args, "\n") + "\n"
-	for _, expected := range []string{
-		"\nrun\n",
-		"\n--entrypoint\n",
-		"\n/bin/bash\n",
-		"\nborealis-engine/job-scheduler:test\n",
-		"\n-lc\n",
-	} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
-		}
-	}
-	if strings.Contains(joined, "borealis-engine/api-backend:test") {
-		t.Fatalf("helper should not use api-backend image:\n%s", joined)
-	}
-	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--network-mode") || !strings.Contains(joined, "public") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
-		t.Fatalf("helper command missing Engine.sh service action:\n%s", joined)
+	if received.ServiceKey != "webui-frontend" || received.Action != "restart" {
+		t.Fatalf("unexpected orchestrator payload %+v", received)
 	}
 }
 

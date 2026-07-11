@@ -60,18 +60,21 @@ services:
     environment:
       BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
       BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
+      BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
       BOREALIS_JOB_SCHEDULER_GUID: job-scheduler
       BOREALIS_JOB_SCHEDULER_CONTAINER_NAME: borealis-engine-job-scheduler
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator/run:/opt/Borealis/Engine/Services/site-worker-orchestrator/run
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
-      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       api-backend:
+        condition: service_healthy
+      site-worker-orchestrator:
         condition: service_healthy
       postgres-db:
         condition: service_healthy
@@ -81,6 +84,35 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  site-worker-orchestrator:
+    image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}
+    container_name: borealis-engine-site-worker-orchestrator
+    network_mode: host
+    restart: unless-stopped
+    env_file:
+      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    environment:
+      BOREALIS_PROCESS_ROLE: site-worker-orchestrator
+      BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
+      BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
+      BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
+    volumes:
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator:/opt/Borealis/Engine/Services/site-worker-orchestrator
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      api-backend:
+        condition: service_healthy
+      postgres-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "borealis-site-worker-orchestrator-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   webui-frontend:
     image: ${BOREALIS_WEBUI_FRONTEND_IMAGE:-borealis-engine/webui-frontend:local}

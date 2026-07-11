@@ -248,12 +248,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     ### Server Info and Logs
     - `GET /api/server/time` (Operator Session) - server clock.
     - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
-    - `GET /api/server/workers` (Admin) - active and recent `job-scheduler` site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, and optional Docker inspect size metadata when Docker metadata is available.
+    - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
     - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.
     - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
-    - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
+    - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler`; Docker-backed execution is handed to `site-worker-orchestrator` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
     - `GET /api/server/logs` (Admin) - list logs and retention.
