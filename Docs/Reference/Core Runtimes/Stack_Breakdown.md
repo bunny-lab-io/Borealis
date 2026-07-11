@@ -19,12 +19,13 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 | `remote-desktop-guacd` | `borealis-engine-remote-desktop-guacd` | VNC-only Apache Guacamole guacd runtime | `127.0.0.1:4822` |
 | `webui-frontend` | `borealis-engine-webui-frontend` | Production static WebUI or dev Vite HMR | `127.0.0.1:8000` |
 | `api-backend` | `borealis-engine-api-backend` | Go API backend, live operator sessions, VNC session broker, workflow/runtime APIs | `127.0.0.1:5000` |
-| `job-scheduler` | `borealis-engine-job-scheduler` | Go scheduler-manager mode from the api-backend binary, scheduled tick loop, Postgres work leases, service actions, ephemeral site-worker lifecycle | Internal only |
+| `site-worker-orchestrator` | `borealis-engine-site-worker-orchestrator` | Protected Docker boundary for site-worker containers and allowlisted Engine service actions | Unix socket |
+| `job-scheduler` | `borealis-engine-job-scheduler` | Go scheduler-manager mode from the api-backend binary, scheduled tick loop, Postgres work leases, service action queueing, and site-worker reconciliation | Internal only |
 | `traefik-edge` | `borealis-engine-traefik-edge` | Public HTTP/HTTPS edge, ACME, UI/API/Socket.IO/VNC routing | `80`, `443`, health `127.0.0.1:8082` |
 
 Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
 
-`job-scheduler` owns `/var/run/docker.sock` for controlled service actions and site-worker lifecycle. `api-backend` does not mount Docker socket in container mode; it reads container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then falls back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
+`site-worker-orchestrator` is the only write boundary with `/var/run/docker.sock`. `job-scheduler` talks to it over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` using the Engine internal HMAC token. `api-backend` and `job-scheduler` do not mount the Docker socket in container mode. They read container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then fall back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, `borealis.created_by=site-worker-orchestrator`, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -82,7 +83,7 @@ Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wiregu
 Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info and Sites read status through `docker-proxy` or job-scheduler snapshots, and service actions are queued for `job-scheduler` execution.
+`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket in container mode; Server Info and Sites read status through `docker-proxy` or job-scheduler snapshots, and service actions are queued for `job-scheduler` to hand to `site-worker-orchestrator`.
 
 `docker-proxy`:
 ```text
@@ -91,6 +92,15 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 ```
 
 The proxy grants only Docker container read APIs, including status and site-worker stats, and denies POST operations. Do not expose `2375` beyond loopback.
+
+`site-worker-orchestrator`:
+```text
+Engine/Services/api-backend -> /opt/Borealis/Engine/Services/api-backend
+Engine/Services/site-worker-orchestrator -> /opt/Borealis/Engine/Services/site-worker-orchestrator
+/var/run/docker.sock -> /var/run/docker.sock
+```
+
+The orchestrator listens only on the Unix socket path from `BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET`. It accepts strict JSON requests signed with `X-Borealis-Internal-Token`, launches only images allowed by `BOREALIS_SITE_WORKER_IMAGE` plus optional `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`, and rejects arbitrary Docker privileges, devices, capabilities, namespaces, command overrides, and environment overrides. Server Info does not expose an operator restart action for this service.
 
 `postgres-db`:
 ```text
@@ -180,7 +190,7 @@ Build cache:
 - Successful Buildx builds write a full `mode=max` cache export for the service, and successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and delete whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
-- `job-scheduler` uses an Alpine runtime image with the Go scheduler mode, Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
+- `job-scheduler` and `site-worker-orchestrator` use the same Alpine scheduler image. `job-scheduler` runs the queue/reconcile mode without Docker socket access. `site-worker-orchestrator` runs the Docker-boundary mode with Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
 - `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags separately.
@@ -223,12 +233,14 @@ wireguard-tunnel: service_healthy
 remote-desktop-guacd: service_healthy
 ```
 8. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
-9. `traefik-edge` waits for:
+9. `site-worker-orchestrator` waits for `api-backend` and `postgres-db`, owns the Docker socket, and must answer its Unix-socket healthcheck.
+10. `job-scheduler` waits for `api-backend`, `postgres-db`, and `site-worker-orchestrator`.
+11. `traefik-edge` waits for:
 ```text
 api-backend: service_healthy
 webui-frontend: service_healthy
 ```
-10. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
+12. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
 
 Traefik is the public edge. API and WebUI stay on loopback behind Traefik.
 
@@ -329,7 +341,7 @@ bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 
 Generic service syntax:
 ```sh
-bash Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+bash Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
 ```
 
 Action support:
@@ -340,7 +352,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` launches a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` asks `site-worker-orchestrator` to launch a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately. Server Info does not expose an operator restart action for `site-worker-orchestrator`.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.

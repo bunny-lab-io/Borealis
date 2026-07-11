@@ -51,6 +51,7 @@ fi
 SERVICE_ROLES=(
   "docker-proxy"
   "api-backend"
+  "site-worker-orchestrator"
   "job-scheduler"
   "webui-frontend"
   "traefik-edge"
@@ -664,6 +665,7 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
+    "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
@@ -1623,6 +1625,7 @@ BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
 BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
+BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
@@ -2208,8 +2211,12 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
+    printf '%s\n' site-worker-orchestrator
+  fi
   if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
     printf '%s\n' job-scheduler
+    printf '%s\n' site-worker-orchestrator
   fi
 }
 
@@ -2282,7 +2289,8 @@ def image_records() -> dict[str, dict[str, str]]:
     data = json.loads(image_path.read_text(encoding="utf-8"))
     records = {}
     for service in services:
-        record = (data.get("services") or {}).get(service) or {}
+        manifest_service = "job-scheduler" if service == "site-worker-orchestrator" else service
+        record = (data.get("services") or {}).get(manifest_service) or {}
         records[service] = {
             "image": record.get("image") or "",
             "hash": record.get("hash") or "",
@@ -2446,6 +2454,7 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
 services = [
     "docker-proxy",
     "api-backend",
+    "site-worker-orchestrator",
     "job-scheduler",
     "webui-frontend",
     "traefik-edge",
@@ -2466,6 +2475,12 @@ if image_path.is_file():
         service_images[service] = {
             "image": record.get("image") or "",
             "hash": record.get("hash") or "",
+        }
+    if "site-worker-orchestrator" in allowed_services:
+        scheduler_record = (image_data.get("services") or {}).get("job-scheduler") or {}
+        service_images["site-worker-orchestrator"] = {
+            "image": scheduler_record.get("image") or "",
+            "hash": scheduler_record.get("hash") or "",
         }
 
 env = env_values(env_file)
@@ -2653,7 +2668,11 @@ service_action() {
       compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
-      build_images "${mode}" "${service}"
+      local build_service="${service}"
+      if [[ "${service}" == "site-worker-orchestrator" ]]; then
+        build_service="job-scheduler"
+      fi
+      build_images "${mode}" "${build_service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
@@ -2681,7 +2700,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

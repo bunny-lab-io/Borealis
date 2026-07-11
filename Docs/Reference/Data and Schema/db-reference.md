@@ -898,7 +898,7 @@ finally:
     - Purpose: Scheduler-owned route registry for active and recently terminal site-worker routes.
     - Columns: `worker_guid`, `site_id`, `container_name`, `route_name`, `route_path_prefix`, `route_file_path`, `upstream_scheme`, `upstream_host`, `upstream_port`, `status`, `generation`, `metadata_json`, `created_at`, `updated_at`, `retired_at`.
     - Used by:
-    - `job-scheduler` site-worker spawn, Docker reconcile, lost-worker detection, and worker-history pruning.
+    - `job-scheduler` site-worker route reconciliation, orchestrator-backed Docker reconcile, lost-worker detection, and worker-history pruning.
     - Future remote-operation session brokering that needs a stable worker route lookup without Docker inspection.
     - Notes:
     - `worker_guid` is the primary key and matches `job_scheduler_workers.worker_guid`.
@@ -914,7 +914,7 @@ finally:
     - `/api/server/overview` and `/api/server/services` fallback service rows.
     - Task-scheduler Compose reconciliation.
     - Notes:
-    - `api-backend` reads this table only for display. Docker-backed service actions are queued into `job_scheduler_work_items` and executed by `job-scheduler`.
+    - `api-backend` reads this table only for display. Docker-backed service actions are queued into `job_scheduler_work_items`; `job-scheduler` claims them and asks `site-worker-orchestrator` to execute the allowlisted Docker work.
 
     #### `credentials`
     - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

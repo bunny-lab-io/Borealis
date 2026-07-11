@@ -44,12 +44,13 @@ const (
 )
 
 type goSchedulerManager struct {
-	cfg         gatewayConfig
-	store       *postgresOperatorStore
-	secret      []byte
-	apiBase     string
-	projectRoot string
-	httpClient  *http.Client
+	cfg          gatewayConfig
+	store        *postgresOperatorStore
+	secret       []byte
+	apiBase      string
+	projectRoot  string
+	httpClient   *http.Client
+	orchestrator *siteWorkerOrchestratorClient
 }
 
 type schedulerWorkItem struct {
@@ -93,12 +94,13 @@ func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
 		return err
 	}
 	manager := &goSchedulerManager{
-		cfg:         cfg,
-		store:       pgStore,
-		secret:      []byte(secret),
-		apiBase:     strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
-		projectRoot: envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		cfg:          cfg,
+		store:        pgStore,
+		secret:       []byte(secret),
+		apiBase:      strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
+		projectRoot:  envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		orchestrator: newSiteWorkerOrchestratorClient([]byte(secret)),
 	}
 	return manager.run(ctx)
 }
@@ -207,6 +209,17 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 			log.Printf("failed to refresh service snapshots: %v", err)
 		}
 	}
+}
+
+func (m *goSchedulerManager) orchestratorClient() (*siteWorkerOrchestratorClient, error) {
+	if m.orchestrator != nil {
+		return m.orchestrator, nil
+	}
+	if len(m.secret) == 0 {
+		return nil, errors.New("site-worker orchestrator token unavailable")
+	}
+	m.orchestrator = newSiteWorkerOrchestratorClient(m.secret)
+	return m.orchestrator, nil
 }
 
 func (m *goSchedulerManager) ensureTables(ctx context.Context) error {
@@ -1095,38 +1108,18 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	if serviceKey == "site-worker" && actionName == "recreate" {
 		return m.runSiteWorkerRecreate(ctx, action)
 	}
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
-		return errors.New("docker CLI unavailable")
-	}
-	image := schedulerServiceActionHelperImage()
-	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
-	commandParts := []string{"bash", "Engine.sh", "--network-mode", overviewEngineNetworkMode(), "--service", serviceKey, actionName}
-	if actionMode != "" {
-		commandParts = append(commandParts, actionMode)
-	}
-	shellCommand := "sleep 2; " + shellJoin(commandParts)
-	args := []string{
-		"run", "--rm", "-d", "--name", helperName, "--network", "host",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock",
-		"-v", fmt.Sprintf("%s:%s", m.projectRoot, m.projectRoot),
-		"-w", m.projectRoot,
-		"--entrypoint", "/bin/bash",
-		image, "-lc", shellCommand,
-	}
-	out, err := exec.CommandContext(ctx, dockerBin, args...).CombinedOutput()
+	client, err := m.orchestratorClient()
 	if err != nil {
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		return err
 	}
-	log.Printf("queued service action helper=%s service=%s action=%s", strings.TrimSpace(string(out)), serviceKey, actionName)
+	if err := client.runServiceAction(ctx, serviceKey, map[string]any{"action": actionName, "mode": actionMode}); err != nil {
+		return err
+	}
+	log.Printf("queued service action via site-worker orchestrator service=%s action=%s", serviceKey, actionName)
 	return nil
 }
 
 func (m *goSchedulerManager) runSiteWorkerRecreate(ctx context.Context, action map[string]any) error {
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
-		return errors.New("docker CLI unavailable")
-	}
 	workerGUID := cleanText(action["worker_guid"])
 	containerName := cleanText(action["container_name"])
 	if containerName == "" && workerGUID != "" {
@@ -1135,36 +1128,12 @@ func (m *goSchedulerManager) runSiteWorkerRecreate(ctx context.Context, action m
 	if containerName == "" {
 		return errors.New("site-worker recreate payload missing container name")
 	}
-	out, err := exec.CommandContext(ctx, dockerBin, "inspect", containerName).CombinedOutput()
+	client, err := m.orchestratorClient()
 	if err != nil {
-		if strings.Contains(string(out), "No such") && strings.HasPrefix(containerName, "site-worker-") {
-			return nil
-		}
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
-	}
-	var inspected []map[string]any
-	if err := json.Unmarshal(out, &inspected); err != nil {
 		return err
 	}
-	record := map[string]any{}
-	if len(inspected) > 0 {
-		record = inspected[0]
-	}
-	labels := mapStringAny(nestedMap(record, "Config")["Labels"])
-	role := strings.ToLower(cleanText(labels["borealis.role"]))
-	labelGUID := cleanText(labels["borealis.worker_guid"])
-	if role != "site-worker" && !strings.HasPrefix(containerName, "site-worker-") {
-		return fmt.Errorf("refusing to stop non-site-worker container %s", containerName)
-	}
-	if workerGUID != "" && labelGUID != "" && workerGUID != labelGUID {
-		return fmt.Errorf("site-worker guid mismatch for %s", containerName)
-	}
-	out, err = exec.CommandContext(ctx, dockerBin, "stop", containerName).CombinedOutput()
-	if err != nil {
-		if strings.Contains(string(out), "No such") {
-			return nil
-		}
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+	if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
+		return err
 	}
 	log.Printf("site-worker recreate stopped container=%s worker_guid=%s", containerName, workerGUID)
 	return nil
@@ -1483,64 +1452,22 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 	if err := m.upsertWorker(ctx, workerGUID, containerName, siteID, schedulerWorkerStatusStarting, []string{}, nil, remoteOpsPort, metadata); err != nil {
 		return err
 	}
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-		return errors.New("docker CLI unavailable")
-	}
-	image := schedulerDesiredSiteWorkerImage()
-	apiRoot := filepath.Join(m.projectRoot, "Engine", "Services", "api-backend")
-	for _, path := range []string{
-		filepath.Join(apiRoot, "cache"),
-		filepath.Join(apiRoot, "logs", "site-workers"),
-		filepath.Join(m.projectRoot, "Engine", "Services", "traefik-edge", "config"),
-	} {
-		_ = os.MkdirAll(path, 0o755)
-	}
-	args := []string{
-		"run", "--rm", "-d", "--name", containerName, "--network", "host",
-		"--label", "borealis.role=site-worker",
-		"--label", fmt.Sprintf("borealis.site_id=%d", siteID),
-		"--label", "borealis.worker_guid=" + workerGUID,
-		"--label", fmt.Sprintf("borealis.remote_ops_port=%d", remoteOpsPort),
-		"--label", fmt.Sprintf("borealis.remote_desktop_port=%d", remoteDesktopPort),
-		"--label", "borealis.site_worker_image=" + image,
-		"--label", "borealis.created_by=job-scheduler",
-	}
-	envFile := schedulerComposeEnvFile(m.projectRoot)
-	if fileExists(envFile) {
-		args = append(args, "--env-file", envFile)
-	}
-	args = append(args,
-		"-e", "BOREALIS_SITE_WORKER_GUID="+workerGUID,
-		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_SITE_ID=%d", siteID),
-		"-e", "BOREALIS_SITE_WORKER_CONTAINER_NAME="+containerName,
-		"-e", "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST=127.0.0.1",
-		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT=%d", remoteOpsPort),
-		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT=%d", remoteDesktopPort),
-		"-e", "BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE="+schedulerSiteWorkerSocketIOAsyncMode(),
-		"-e", "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=300",
-		"-e", "BOREALIS_INTERNAL_API_BASE_URL="+m.apiBase,
-		"-e", fmt.Sprintf("BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s.log", workerGUID),
-		"-e", fmt.Sprintf("BOREALIS_ERROR_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s-error.log", workerGUID),
-		"-e", fmt.Sprintf("BOREALIS_API_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s-api.log", workerGUID),
-		"-e", fmt.Sprintf("BOREALIS_VPN_TUNNEL_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s-vpn.log", workerGUID),
-	)
-	if explicit := strings.TrimSpace(os.Getenv("BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY")); explicit != "" {
-		args = append(args, "-e", "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY="+explicit)
-	}
-	args = append(args,
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/logs/site-workers", filepath.Join(apiRoot, "logs", "site-workers")),
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/traefik-edge/config", filepath.Join(m.projectRoot, "Engine", "Services", "traefik-edge", "config")),
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/secrets:ro", filepath.Join(apiRoot, "secrets")),
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/config:ro", filepath.Join(apiRoot, "config")),
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/cache", filepath.Join(apiRoot, "cache")),
-		image,
-	)
-	out, err := exec.CommandContext(ctx, dockerBin, args...).CombinedOutput()
+	client, err := m.orchestratorClient()
 	if err != nil {
 		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-		return fmt.Errorf("failed to launch %s: %s", containerName, strings.TrimSpace(string(out)))
+		return err
+	}
+	image := schedulerDesiredSiteWorkerImage()
+	if err := client.launchSiteWorker(ctx, orchestratorLaunchRequest{
+		WorkerGUID:        workerGUID,
+		SiteID:            siteID,
+		ContainerName:     containerName,
+		Image:             image,
+		RemoteOpsPort:     remoteOpsPort,
+		RemoteDesktopPort: remoteDesktopPort,
+	}); err != nil {
+		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+		return fmt.Errorf("failed to launch %s: %w", containerName, err)
 	}
 	log.Printf("launched %s for site_id=%d", containerName, siteID)
 	return nil
@@ -1563,9 +1490,14 @@ func (m *goSchedulerManager) activeWorkerForSite(ctx context.Context, siteID int
 }
 
 func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
-	snapshots, err := schedulerDockerSiteWorkerSnapshots(ctx)
+	client, err := m.orchestratorClient()
 	if err != nil {
-		log.Printf("site-worker docker reconcile skipped: %v", err)
+		log.Printf("site-worker orchestrator reconcile skipped: %v", err)
+		return nil
+	}
+	snapshots, err := client.listSiteWorkers(ctx)
+	if err != nil {
+		log.Printf("site-worker orchestrator reconcile skipped: %v", err)
 		return nil
 	}
 	desiredImage := schedulerDesiredSiteWorkerImage()
@@ -1597,7 +1529,7 @@ func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
 		}
 		containerName := firstText(cleanText(snapshot["container_name"]), "site-worker-"+workerGUID)
 		if !schedulerSiteWorkerImageMatches(snapshot, desiredImage) {
-			if err := schedulerStopContainer(ctx, containerName); err != nil {
+			if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
 				log.Printf("failed to stop stale site-worker container=%s worker_guid=%s: %v", containerName, workerGUID, err)
 			} else {
 				log.Printf("stopped stale site-worker container=%s worker_guid=%s image=%s desired=%s", containerName, workerGUID, cleanText(snapshot["configured_image"]), desiredImage)
@@ -1606,7 +1538,7 @@ func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
 			continue
 		}
 		if existing := liveSites[siteID]; existing != "" {
-			if err := schedulerStopContainer(ctx, containerName); err != nil {
+			if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
 				log.Printf("failed to stop duplicate site-worker container=%s worker_guid=%s site_id=%d: %v", containerName, workerGUID, siteID, err)
 			} else {
 				log.Printf("stopped duplicate site-worker container=%s worker_guid=%s site_id=%d kept_worker_guid=%s", containerName, workerGUID, siteID, existing)
@@ -1853,22 +1785,14 @@ func (m *goSchedulerManager) markMissingWorkersLost(ctx context.Context, live []
 }
 
 func (m *goSchedulerManager) refreshServiceSnapshots(ctx context.Context) error {
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
+	client, err := m.orchestratorClient()
+	if err != nil {
 		return nil
 	}
-	composeFile := filepath.Join(m.projectRoot, "Data", "Engine", "Containers", "compose.yaml")
-	envFile := schedulerComposeEnvFile(m.projectRoot)
-	if !fileExists(composeFile) || !fileExists(envFile) {
+	snapshots, err := client.serviceSnapshots(ctx)
+	if err != nil {
 		return nil
 	}
-	projectName := envDefault("BOREALIS_COMPOSE_PROJECT_NAME", "borealis-engine")
-	args := []string{"compose", "--project-name", projectName, "--env-file", envFile, "-f", composeFile, "ps", "--format", "json"}
-	out, err := exec.CommandContext(ctx, dockerBin, args...).Output()
-	if err != nil || len(bytes.TrimSpace(out)) == 0 {
-		return nil
-	}
-	snapshots := parseDockerComposePS(out)
 	if len(snapshots) == 0 {
 		return nil
 	}
@@ -2503,7 +2427,7 @@ func schedulerBuildRoute(workerGUID, containerName string, siteID int64, upstrea
 		routeDir = filepath.Join(envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"), "Engine", "Services", "traefik-edge", "config", "dynamic")
 	}
 	routeMetadata := copyMap(metadata)
-	routeMetadata["lifecycle_owner"] = "job-scheduler"
+	routeMetadata["lifecycle_owner"] = "site-worker-orchestrator"
 	routeMetadata["route_kind"] = "site_worker"
 	routeMetadata["worker_guid"] = workerGUID
 	return schedulerRoute{

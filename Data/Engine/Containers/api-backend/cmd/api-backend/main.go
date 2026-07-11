@@ -59,6 +59,21 @@ func main() {
 		return
 	}
 
+	if siteWorkerOrchestratorHealthcheckMode() {
+		if err := runSiteWorkerOrchestratorHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("site-worker orchestrator healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if siteWorkerOrchestratorMode() {
+		if err := runSiteWorkerOrchestrator(rootCtx, cfg); err != nil {
+			log.Fatalf("site-worker orchestrator exited: %v", err)
+		}
+		return
+	}
+
 	if schedulerManagerMode() {
 		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
 			log.Fatalf("Go job-scheduler manager exited: %v", err)
@@ -183,8 +198,8 @@ func main() {
 
 func schedulerManagerMode() bool {
 	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "job-scheduler" || role == "scheduler-manager" {
-		return true
+	if role != "" {
+		return role == "job-scheduler" || role == "scheduler-manager"
 	}
 	if len(os.Args) > 1 {
 		arg := strings.ToLower(strings.TrimSpace(os.Args[1]))
@@ -195,8 +210,8 @@ func schedulerManagerMode() bool {
 
 func apiHealthcheckMode() bool {
 	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "api-healthcheck" || role == "api-backend-healthcheck" {
-		return true
+	if role != "" {
+		return role == "api-healthcheck" || role == "api-backend-healthcheck"
 	}
 	for _, arg := range os.Args[1:] {
 		normalized := strings.ToLower(strings.TrimSpace(arg))
@@ -209,8 +224,8 @@ func apiHealthcheckMode() bool {
 
 func schedulerHealthcheckMode() bool {
 	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck" {
-		return true
+	if role != "" {
+		return role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck"
 	}
 	for _, arg := range os.Args[1:] {
 		normalized := strings.ToLower(strings.TrimSpace(arg))

@@ -1022,6 +1022,18 @@ func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 		t.Fatalf("expected scheduler-healthcheck role to select healthcheck only")
 	}
 
+	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator")
+	os.Args = []string{"api-backend", "job-scheduler"}
+	if !siteWorkerOrchestratorMode() || schedulerManagerMode() || schedulerHealthcheckMode() || siteWorkerOrchestratorHealthcheckMode() {
+		t.Fatalf("expected site-worker-orchestrator role to select orchestrator mode")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator-healthcheck")
+	os.Args = []string{"api-backend"}
+	if siteWorkerOrchestratorMode() || !siteWorkerOrchestratorHealthcheckMode() || schedulerManagerMode() {
+		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select orchestrator healthcheck only")
+	}
+
 	t.Setenv("BOREALIS_PROCESS_ROLE", "")
 	os.Args = []string{"api-backend", "api-healthcheck"}
 	if schedulerManagerMode() || schedulerHealthcheckMode() || !apiHealthcheckMode() {

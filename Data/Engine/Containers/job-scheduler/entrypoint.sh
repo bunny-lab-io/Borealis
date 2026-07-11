@@ -33,5 +33,6 @@ export BOREALIS_WIREGUARD_LOG_FILE="${BOREALIS_WIREGUARD_LOG_FILE:-${BOREALIS_VP
 export BOREALIS_INTERNAL_API_BASE_URL="${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}"
 
 cd /opt/Borealis
-export BOREALIS_PROCESS_ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
-exec /usr/local/bin/borealis-api-backend-go job-scheduler
+ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
+export BOREALIS_PROCESS_ROLE="${ROLE}"
+exec /usr/local/bin/borealis-api-backend-go "${ROLE}"
