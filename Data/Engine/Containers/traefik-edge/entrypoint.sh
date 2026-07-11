@@ -9,7 +9,16 @@ CORE_DYNAMIC_CONFIG_PATH="${BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH:-${DYNAMIC_CONF
 LOG_DIR="${SERVICE_ROOT}/logs"
 STATE_DIR="${SERVICE_ROOT}/state"
 HOSTNAME="${BOREALIS_PUBLIC_HOSTNAME:-localhost}"
+HOSTNAME_ALIASES="${BOREALIS_PUBLIC_HOSTNAME_ALIASES:-${HOSTNAME}}"
+NETWORK_MODE="${BOREALIS_ENGINE_NETWORK_MODE:-public}"
+NETWORK_MODE_LABEL="${BOREALIS_ENGINE_NETWORK_MODE_LABEL:-Public}"
+DEPLOYMENT_PROFILE="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE:-externally-accessible}"
+DEPLOYMENT_PROFILE_LABEL="${BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL:-Externally Accessible}"
 ACME_EMAIL="${BOREALIS_ACME_EMAIL:-}"
+LOCAL_CA_ENABLED="${BOREALIS_LOCAL_CA_ENABLED:-0}"
+LOCAL_CA_CERT_PATH="${BOREALIS_LOCAL_CA_CERT_PATH:-}"
+LOCAL_TLS_CERT_PATH="${BOREALIS_LOCAL_TLS_CERT_PATH:-}"
+LOCAL_TLS_KEY_PATH="${BOREALIS_LOCAL_TLS_KEY_PATH:-}"
 WEBUI_UPSTREAM_PORT="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
 HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
@@ -45,6 +54,34 @@ EOF
   IFS="${old_ifs}"
 }
 
+build_host_rule() {
+  raw_hosts="${HOSTNAME},${HOSTNAME_ALIASES}"
+  host_args=""
+  seen_hosts=","
+  old_ifs="${IFS}"
+  IFS=','
+  for raw_host in ${raw_hosts}; do
+    host="$(printf '%s' "${raw_host}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\.$//')"
+    [ -n "${host}" ] || continue
+    case "${host}" in
+      *\`*|*\"*|*"'"*|*[[:space:]]*) continue ;;
+    esac
+    case "${seen_hosts}" in
+      *",${host},"*) continue ;;
+    esac
+    seen_hosts="${seen_hosts}${host},"
+    if [ -n "${host_args}" ]; then
+      host_args="${host_args},"
+    fi
+    host_args="${host_args}\`${host}\`"
+  done
+  IFS="${old_ifs}"
+  if [ -z "${host_args}" ]; then
+    host_args="\`${HOSTNAME}\`"
+  fi
+  printf 'Host(%s)' "${host_args}"
+}
+
 apply_dynamic_config_permissions() {
   if [ "$(id -u 2>/dev/null || printf '1')" = "0" ] \
     && printf '%s' "${RUNTIME_OWNER_UID}" | grep -Eq '^[0-9]+$' \
@@ -63,7 +100,16 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
 {
   "enabled": true,
   "fqdn": "${HOSTNAME}",
+  "fqdn_aliases": "${HOSTNAME_ALIASES}",
+  "deployment_profile": "${DEPLOYMENT_PROFILE}",
+  "deployment_profile_label": "${DEPLOYMENT_PROFILE_LABEL}",
+  "network_mode": "${NETWORK_MODE}",
+  "network_mode_label": "${NETWORK_MODE_LABEL}",
   "acme_email": "${ACME_EMAIL}",
+  "local_ca_enabled": ${LOCAL_CA_ENABLED},
+  "local_ca_cert_path": "${LOCAL_CA_CERT_PATH}",
+  "local_tls_cert_path": "${LOCAL_TLS_CERT_PATH}",
+  "local_tls_key_path": "${LOCAL_TLS_KEY_PATH}",
   "public_base_url": "${BOREALIS_PUBLIC_BASE_URL:-https://${HOSTNAME}}",
   "public_vnc_path": "${BOREALIS_PUBLIC_VNC_PATH:-/remote-desktop/vnc}",
   "public_wireguard_host": "${BOREALIS_PUBLIC_WIREGUARD_HOST:-${HOSTNAME}}",
@@ -116,7 +162,14 @@ accessLog:
   filePath: "${LOG_DIR}/traefik-access.log"
 EOF
 
-if [ -n "${ACME_EMAIL}" ] && [ "${HOSTNAME}" != "localhost" ]; then
+if [ "${DEPLOYMENT_PROFILE}" = "internal-only" ] && [ "${LOCAL_CA_ENABLED}" = "1" ]; then
+  if [ ! -s "${LOCAL_TLS_CERT_PATH}" ] || [ ! -s "${LOCAL_TLS_KEY_PATH}" ]; then
+    echo "Internal-Only profile requires local TLS certificate and key." >&2
+    exit 1
+  fi
+  TLS_BLOCK="      tls: {}"
+  TLS_STATIC_BLOCK="tls:\n  stores:\n    default:\n      defaultCertificate:\n        certFile: \"${LOCAL_TLS_CERT_PATH}\"\n        keyFile: \"${LOCAL_TLS_KEY_PATH}\""
+elif [ -n "${ACME_EMAIL}" ] && [ "${HOSTNAME}" != "localhost" ]; then
   cat >> "${CONFIG_DIR}/traefik.yml" <<EOF
 certificatesResolvers:
   letsencrypt:
@@ -127,11 +180,16 @@ certificatesResolvers:
         entryPoint: web
 EOF
   TLS_BLOCK="      tls:\n        certResolver: letsencrypt"
+  TLS_STATIC_BLOCK=""
 else
   TLS_BLOCK="      tls: {}"
+  TLS_STATIC_BLOCK=""
 fi
 
+HOST_RULE="$(build_host_rule)"
+
 cat > "${CORE_DYNAMIC_CONFIG_PATH}" <<EOF
+$(printf "%b\n" "${TLS_STATIC_BLOCK}")
 http:
   middlewares:
     redirect-to-https:
@@ -142,28 +200,28 @@ http:
     borealis-http:
       entryPoints:
         - web
-      rule: "Host(\`${HOSTNAME}\`) && !PathPrefix(\`/.well-known/acme-challenge/\`)"
+      rule: "${HOST_RULE} && !PathPrefix(\`/.well-known/acme-challenge/\`)"
       middlewares:
         - redirect-to-https
       service: noop@internal
     borealis-api:
       entryPoints:
         - websecure
-      rule: "Host(\`${HOSTNAME}\`) && (PathPrefix(\`/api\`) || PathPrefix(\`/socket.io\`))"
+      rule: "${HOST_RULE} && (PathPrefix(\`/api\`) || PathPrefix(\`/socket.io\`))"
       service: borealis-api
       priority: 100
 $(printf "%b" "${TLS_BLOCK}")
     borealis-vnc:
       entryPoints:
         - websecure
-      rule: "Host(\`${HOSTNAME}\`) && PathPrefix(\`${BOREALIS_PUBLIC_VNC_PATH:-/remote-desktop/vnc}\`)"
+      rule: "${HOST_RULE} && PathPrefix(\`${BOREALIS_PUBLIC_VNC_PATH:-/remote-desktop/vnc}\`)"
       service: borealis-vnc
       priority: 90
 $(printf "%b" "${TLS_BLOCK}")
     borealis-webui:
       entryPoints:
         - websecure
-      rule: "Host(\`${HOSTNAME}\`)"
+      rule: "${HOST_RULE}"
       service: borealis-webui
       priority: 10
 $(printf "%b" "${TLS_BLOCK}")

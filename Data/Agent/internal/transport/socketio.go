@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,21 +50,45 @@ type Client struct {
 	stateMu     sync.RWMutex
 	connected   bool
 	timeout     time.Duration
+	tlsConfig   *tls.Config
+	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
 const defaultNamespaceConnectTimeout = 45 * time.Second
 
-func NewClient(baseURL string, headers map[string]string) *Client {
+type Option func(*Client)
+
+func WithTLSConfig(tlsConfig *tls.Config) Option {
+	return func(c *Client) {
+		if tlsConfig != nil {
+			c.tlsConfig = tlsConfig.Clone()
+		}
+	}
+}
+
+func WithDialContext(dialContext func(context.Context, string, string) (net.Conn, error)) Option {
+	return func(c *Client) {
+		if dialContext != nil {
+			c.dialContext = dialContext
+		}
+	}
+}
+
+func NewClient(baseURL string, headers map[string]string, opts ...Option) *Client {
 	copiedHeaders := map[string]string{}
 	for key, value := range headers {
 		copiedHeaders[key] = value
 	}
-	return &Client{
+	client := &Client{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		headers:  copiedHeaders,
 		handlers: map[string]Handler{},
 		timeout:  defaultNamespaceConnectTimeout,
 	}
+	for _, opt := range opts {
+		opt(client)
+	}
+	return client
 }
 
 func (c *Client) On(event string, handler Handler) {
@@ -98,6 +123,12 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 	}
 	dialer := websocket.Dialer{HandshakeTimeout: 30 * time.Second}
+	if c.tlsConfig != nil {
+		dialer.TLSClientConfig = c.tlsConfig.Clone()
+	}
+	if c.dialContext != nil {
+		dialer.NetDialContext = c.dialContext
+	}
 	conn, _, err := dialer.DialContext(ctx, wsURL, header)
 	if err != nil {
 		return err

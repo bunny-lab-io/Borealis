@@ -7,6 +7,9 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -103,6 +106,57 @@ func TestEnrollmentHandshake(t *testing.T) {
 	}
 	if client.RemoteOpsBaseURL() != server.URL+"/_borealis/site-workers/worker-agent-route" {
 		t.Fatalf("remote ops base url mismatch: %q", client.RemoteOpsBaseURL())
+	}
+}
+
+func TestDialContextForConfigFallsBackToServerIP(t *testing.T) {
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.test"
+	cfg.ServerIPFallback = "192.168.3.251"
+	dialContext := DialContextForConfig(cfg)
+	if dialContext == nil {
+		t.Fatal("dial context missing")
+	}
+
+	var addresses []string
+	wrapped := dialContextWithIPFallback(
+		func(ctx context.Context, network string, address string) (net.Conn, error) {
+			addresses = append(addresses, address)
+			if len(addresses) == 1 {
+				return nil, errors.New("primary failed")
+			}
+			left, right := net.Pipe()
+			t.Cleanup(func() { _ = right.Close() })
+			return left, nil
+		},
+		"borealis.example.test",
+		"192.168.3.251",
+	)
+	conn, err := wrapped(context.Background(), "tcp", "borealis.example.test:443")
+	if err != nil {
+		t.Fatalf("fallback dial failed: %v", err)
+	}
+	_ = conn.Close()
+	if len(addresses) != 2 || addresses[0] != "borealis.example.test:443" || addresses[1] != "192.168.3.251:443" {
+		t.Fatalf("dial addresses = %#v", addresses)
+	}
+}
+
+func TestDialContextForConfigSkipsFallbackForOtherHosts(t *testing.T) {
+	var addresses []string
+	wrapped := dialContextWithIPFallback(
+		func(ctx context.Context, network string, address string) (net.Conn, error) {
+			addresses = append(addresses, address)
+			return nil, errors.New("primary failed")
+		},
+		"borealis.example.test",
+		"192.168.3.251",
+	)
+	if _, err := wrapped(context.Background(), "tcp", "github.com:443"); err == nil {
+		t.Fatal("unrelated host dial unexpectedly succeeded")
+	}
+	if len(addresses) != 1 || addresses[0] != "github.com:443" {
+		t.Fatalf("dial addresses = %#v", addresses)
 	}
 }
 
@@ -298,6 +352,45 @@ func TestRemoteOpsRouteNeedsRefreshHonorsAge(t *testing.T) {
 	client.mu.Unlock()
 	if !client.RemoteOpsRouteNeedsRefresh(time.Minute) {
 		t.Fatal("stale site-worker route did not require refresh")
+	}
+}
+
+func TestHTTPClientUsesTrustedEngineCA(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ok" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer access" {
+			t.Fatalf("missing authorization")
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, agentconfig.FileName)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	cfg := agentconfig.Default()
+	cfg.ServerURL = server.URL
+	cfg.Trust.EngineCAPEM = string(certPEM)
+	cfg.Agent.GUID = "GUID"
+	cfg.Tokens.AccessToken = "access"
+	cfg.Tokens.AccessExpiresAt = time.Now().Add(time.Hour).Unix()
+	cfg.Tokens.RefreshToken = "refresh"
+	if err := agentconfig.Save(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(path, &cfg, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]string
+	if _, err := client.GetJSON(context.Background(), "/ok", &payload); err != nil {
+		t.Fatalf("trusted CA request failed: %v", err)
+	}
+	if payload["status"] != "ok" {
+		t.Fatalf("payload = %#v", payload)
 	}
 }
 

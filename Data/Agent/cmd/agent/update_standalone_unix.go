@@ -48,7 +48,26 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 		return err
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
+		if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
+			return err
+		}
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if strings.TrimSpace(options.ServerIPFallback) != "" {
+		if err := agentconfig.ValidateServerIPFallback(options.ServerIPFallback); err != nil {
+			return err
+		}
+		cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(options.ServerIPFallback)
+	}
+	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
+		if err != nil {
+			return err
+		}
+		cfg.Trust.EngineCAPEM = pemText
+	}
+	if strings.TrimSpace(options.TrustedEngineCAPEM) != "" {
+		cfg.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
@@ -153,7 +172,7 @@ func fetchLinuxUpdateManifest(ctx context.Context, client *auth.Client, installe
 	for key, value := range client.AuthHeaders() {
 		req.Header.Set(key, value)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.HTTPClient().Do(req)
 	if err != nil {
 		return linuxUpdateManifest{}, err
 	}
@@ -228,7 +247,7 @@ func resolveEngineRepoRefSHA(ctx context.Context, client *auth.Client, branch st
 	for key, value := range client.AuthHeaders() {
 		req.Header.Set(key, value)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.HTTPClient().Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -337,7 +356,7 @@ func downloadLinuxUpdateArtifact(ctx context.Context, client *auth.Client, rawUR
 			req.Header.Set(key, value)
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.HTTPClient().Do(req)
 	if err != nil {
 		return err
 	}

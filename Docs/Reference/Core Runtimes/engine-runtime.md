@@ -41,6 +41,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine/` is generated runtime state. Do not edit it directly.
     - Deploy state lives in `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
     - Service state lives in `Engine/Services/<role>/` with only directories used by that service.
+    - Traefik ACME state lives under `Engine/Services/traefik-edge/state/acme.json` for Externally Accessible deployments. Internal-Only deployments store Borealis local CA material under `Engine/Services/traefik-edge/state/local-ca/` and managed leaf material under `Engine/Services/traefik-edge/state/local-certs/`.
     - Logs live under `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
     - Ansible runtime lives under `Engine/Services/api-backend/cache/Ansible/`.
     - TLS and signing certificates live under `Engine/Services/api-backend/secrets/Certificates/`.
@@ -51,6 +52,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `api-backend` uses `alpine:3.24` with `ca-certificates`, `git`, and `tzdata`; Python dependencies, Docker CLI plugins, OCR tooling, and WireGuard command-line tools are not installed in this container. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
     - `job-scheduler` uses `alpine:3.24` with Bash, Python 3, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`; Docker Buildx is not installed in this container.
     - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
+    - Server overview and Sites install metadata expose deployment profile, FQDN aliases, certificate mode, local CA fingerprint/expiry, local CA base64 PEM, and `server_ip_fallback` for Internal-Only Agent install commands.
+    - Internal-Only Engine IP fallback metadata is normalized by `Data/Engine/Containers/api-backend/cmd/api-backend/engine_ip_fallback.go` and sourced from `BOREALIS_ENGINE_IP_FALLBACK`.
     - Mode inputs affect image hashes only for services with mode-specific build targets. Today that means `webui-frontend`; DB, guacd, WireGuard, Traefik, and API images do not rebuild merely because the operator switches `prod`/`dev`.
     - Docker Buildx cache is stored as timestamped full `mode=max` exports under `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` when usable; plain Docker build remains the fallback.
     - After successful deploy or service rebuild reconciliation, `Engine.sh` prunes inactive Docker images, clears Docker builder cache, and deletes whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip cleanup.
@@ -66,20 +69,22 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, Docker-backed service actions, and `site-worker-<uuid>` lifecycle. It owns the host Docker socket in container mode.
     - Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
     - `webui-frontend` serves the production WebUI or Vite HMR on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
-    - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME storage, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
+    - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME or Borealis local CA TLS identity, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
     - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
     - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
     - `wireguard-tunnel` owns constrained WireGuard command execution, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, the `borealis-wg` interface, and the Unix control socket under `Engine/Services/wireguard-tunnel/run/control.sock`.
 
     ### Launcher commands
-    - `Engine.sh deploy` or `Engine.sh deploy prod`: production WebUI.
-    - `Engine.sh deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
-    - `Engine.sh --service api-backend restart`: restart API container only.
-    - `Engine.sh --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
-    - `Engine.sh --service traefik-edge reload`: restart Traefik edge after config/env changes.
-    - `Engine.sh --service postgres-db restart`: restart PostgreSQL container.
-    - `Engine.sh --service remote-desktop-guacd restart`: restart guacd container.
-    - `Engine.sh --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
+    - `Engine.sh --network-mode public deploy prod`: production WebUI with public DNS and ACME/Let's Encrypt.
+    - `Engine.sh --network-mode local deploy prod`: production WebUI with private DNS/VPN reachability and Borealis local CA.
+    - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
+    - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
+    - `Engine.sh --network-mode public|local --service api-backend restart`: restart API container only.
+    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
+    - `Engine.sh --network-mode public|local --service traefik-edge reload`: restart Traefik edge after config/env changes.
+    - `Engine.sh --network-mode public|local --service postgres-db restart`: restart PostgreSQL container.
+    - `Engine.sh --network-mode public|local --service remote-desktop-guacd restart`: restart guacd container.
+    - `Engine.sh --network-mode public|local --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
 
     ### One-shot legacy migration helpers
     - `Data/Engine/Containers/sterilize-systemd-runtime.sh`: migration-only helper that stops/removes legacy Borealis systemd units, disables host PostgreSQL units, best-effort removes old `borealis-wg` state, dumps the legacy `borealis` database when reachable, and renames `Engine/` to `Engine.old/`.
@@ -118,7 +123,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.
 
     ### PostgreSQL profile notes
-    - `Engine.sh deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - `Engine.sh --network-mode public|local deploy` detects vCPU and RAM on every deploy/redeploy, selects the lower CPU/RAM profile rank, and writes profile metadata into `Engine/Deploy/compose.env`.
+    - `Engine.sh --network-mode public|local deploy` starts `postgres-db`, waits for health, and runs `Data.Engine.database.initialise_engine_database` from the current `site-worker` image before API/scheduler reconciliation.
     - Profile tuning owns Engine DB pool values, PostgreSQL startup settings, and `BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY`.
     - Site-worker scheduled-lane values are active work-item slots: Homelab `5`, Small Business `8`, MSP / Production `12`, and Enterprise `16`. Enterprise Clustered remains docs-only at `16` per node.
     - Shared Ansible work items can target multiple hosts inside one slot. Individual Ansible work items target one host per slot.
@@ -162,9 +168,9 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
     #### Scope and runtime paths
     - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
-    - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh deploy dev|prod` when source changes need to reach the running service.
+    - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh --network-mode public|local deploy dev|prod` when source changes need to reach the running service.
     - Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
-    - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh deploy` uses existing on-disk source and does not update git.
+    - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source and does not update git.
 
     #### Architecture
     - Runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` for production API endpoints. WebUI production/dev serving belongs to `webui-frontend`.

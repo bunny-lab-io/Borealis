@@ -367,6 +367,7 @@ def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Pat
     dynamic_dir = tmp_path / "dynamic"
     monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))
     monkeypatch.setenv("BOREALIS_PUBLIC_HOSTNAME", "engine.example.test")
+    monkeypatch.setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.example.test,alias.example.test")
     conn = _connect_queue_db(tmp_path)
     try:
         route = upsert_worker_route(
@@ -392,6 +393,7 @@ def test_worker_route_upsert_writes_and_removes_traefik_route_file(tmp_path: Pat
         assert route_file.exists()
         route_text = route_file.read_text(encoding="utf-8")
         assert "borealis-site-worker-worker-route-file" in route_text
+        assert "Host(`engine.example.test`,`alias.example.test`)" in route_text
         assert "PathPrefix(`/_borealis/site-workers/worker-route-file`)" in route_text
         assert "PathPrefix(`/_borealis/site-workers/worker-route-file/remote-desktop/vnc`)" in route_text
         assert 'url: "http://127.0.0.1:58123"' in route_text

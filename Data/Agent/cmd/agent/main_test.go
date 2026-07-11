@@ -35,10 +35,12 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	}
 
 	err := persistInstallConfig(agentruntime.Options{
-		ConfigPath:     configPath,
-		ServerURL:      "https://borealis.example.com/",
-		EnrollmentCode: "CODE",
-		RepoRef:        "feature/linux-install",
+		ConfigPath:         configPath,
+		ServerURL:          "https://borealis.example.com/",
+		ServerIPFallback:   "192.168.3.251",
+		EnrollmentCode:     "CODE",
+		RepoRef:            "feature/linux-install",
+		TrustedEngineCAB64: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tDQpBUUlEDQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0t",
 	})
 	if err != nil {
 		t.Fatalf("persistInstallConfig failed: %v", err)
@@ -50,8 +52,14 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	if loaded.ServerURL != "https://borealis.example.com" {
 		t.Fatalf("server_url = %q", loaded.ServerURL)
 	}
+	if loaded.ServerIPFallback != "192.168.3.251" {
+		t.Fatalf("server_ip_fallback = %q", loaded.ServerIPFallback)
+	}
 	if loaded.EnrollmentCode != "CODE" {
 		t.Fatalf("enrollment_code = %q", loaded.EnrollmentCode)
+	}
+	if loaded.Trust.EngineCAPEM != "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----\n" {
+		t.Fatalf("engine_ca_pem = %q", loaded.Trust.EngineCAPEM)
 	}
 	if loaded.Agent.Branch != "feature/linux-install" {
 		t.Fatalf("branch = %q", loaded.Agent.Branch)
@@ -68,6 +76,31 @@ func TestPersistInstallConfigRewritesAgentJSONWithFlatReleaseChannel(t *testing.
 	}
 	if strings.Contains(string(rewritten), "\n  \"release_channel\"") {
 		t.Fatalf("flat release_channel survived rewrite: %s", string(rewritten))
+	}
+}
+
+func TestPersistInstallConfigRejectsRawIPServerURL(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+	if err := persistInstallConfig(agentruntime.Options{
+		ConfigPath:     configPath,
+		ServerURL:      "https://192.0.2.10",
+		EnrollmentCode: "CODE",
+	}); err == nil {
+		t.Fatal("raw IP server URL accepted")
+	}
+}
+
+func TestPersistInstallConfigRejectsInvalidServerIPFallback(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+	if err := persistInstallConfig(agentruntime.Options{
+		ConfigPath:       configPath,
+		ServerURL:        "https://borealis.example.com",
+		ServerIPFallback: "https://192.168.3.251",
+		EnrollmentCode:   "CODE",
+	}); err == nil {
+		t.Fatal("invalid server IP fallback accepted")
 	}
 }
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import sys
 from dataclasses import asdict, dataclass
@@ -113,6 +114,22 @@ def _split_trusted_ips(value: Any) -> list[str]:
     return ips
 
 
+def _split_hostnames(primary: str, aliases: Any) -> list[str]:
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for raw in [primary, *_normalize_text(aliases).replace("\n", ",").split(",")]:
+        host = _normalize_text(raw).lower().rstrip(".")
+        if not host or host in seen or re.search(r"[`\"'\s]", host):
+            continue
+        hosts.append(host)
+        seen.add(host)
+    return hosts or ["localhost"]
+
+
+def _host_rule(primary: str, aliases: Any) -> str:
+    return "Host(" + ",".join(f"`{host}`" for host in _split_hostnames(primary, aliases)) + ")"
+
+
 def _traefik_trusted_ip_lists() -> tuple[list[str], list[str]]:
     trusted_proxy_ips = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS"))
     forwarded_headers = _split_trusted_ips(os.environ.get("BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS"))
@@ -210,6 +227,7 @@ class LetsEncryptSettings:
     traefik_static_config_path: str
     traefik_dynamic_config_path: str
     logs_directory: str
+    fqdn_aliases: str = ""
 
     @property
     def public_hostname(self) -> str:
@@ -280,6 +298,12 @@ def load_settings(
     settings = LetsEncryptSettings(
         enabled=_parse_bool(raw.get("enabled"), default=defaults.enabled),
         fqdn=fqdn,
+        fqdn_aliases=",".join(
+            _split_hostnames(
+                fqdn,
+                raw.get("fqdn_aliases") or os.environ.get("BOREALIS_PUBLIC_HOSTNAME_ALIASES"),
+            )
+        ),
         acme_email=_normalize_text(raw.get("acme_email")) or defaults.acme_email,
         public_base_url=_normalize_base_url(raw.get("public_base_url"), fqdn=fqdn, https_port=https_port),
         public_vnc_path=_normalize_path(raw.get("public_vnc_path"), default=defaults.public_vnc_path, ensure_leading_slash=True),
@@ -318,6 +342,7 @@ def _render_runtime_env(settings: LetsEncryptSettings) -> str:
         "BOREALIS_PUBLIC_EDGE_ENABLED": "1" if settings.enabled else "0",
         "BOREALIS_PUBLIC_BASE_URL": settings.public_base_url,
         "BOREALIS_PUBLIC_HOSTNAME": settings.public_hostname,
+        "BOREALIS_PUBLIC_HOSTNAME_ALIASES": settings.fqdn_aliases,
         "BOREALIS_PUBLIC_HTTPS_PORT": str(settings.https_port),
         "BOREALIS_PUBLIC_HTTP_PORT": str(settings.http_port),
         "BOREALIS_PUBLIC_VNC_PATH": settings.public_vnc_path,
@@ -395,6 +420,7 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
     vite_url = f"http://{DEFAULT_VITE_UPSTREAM_HOST}:{DEFAULT_VITE_UPSTREAM_PORT}"
     challenge_path = DEFAULT_ACME_CHALLENGE_PATH
     dev_ui_proxy_enabled = _dev_ui_proxy_enabled()
+    host_rule = _host_rule(settings.public_hostname, settings.fqdn_aliases)
     router_lines = [
         "http:",
         "  middlewares:",
@@ -406,14 +432,14 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
         "    borealis-http:",
         "      entryPoints:",
         "        - web",
-        f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{challenge_path}`)"',
+        f'      rule: "{host_rule} && !PathPrefix(`{challenge_path}`)"',
         "      middlewares:",
         "        - redirect-to-https",
         "      service: noop@internal",
         "    borealis-vnc:",
         "      entryPoints:",
         "        - websecure",
-        f'      rule: "Host(`{settings.public_hostname}`) && PathPrefix(`{settings.public_vnc_path}`)"',
+        f'      rule: "{host_rule} && PathPrefix(`{settings.public_vnc_path}`)"',
         "      service: borealis-vnc",
         "      priority: 100",
         "      tls:",
@@ -425,7 +451,7 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
                 "    borealis-engine-api:",
                 "      entryPoints:",
                 "        - websecure",
-                f'      rule: "Host(`{settings.public_hostname}`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
+                f'      rule: "{host_rule} && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
                 "      service: borealis-engine",
                 "      priority: 90",
                 "      tls:",
@@ -433,7 +459,7 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
                 "    borealis-ui-dev:",
                 "      entryPoints:",
                 "        - websecure",
-                f'      rule: "Host(`{settings.public_hostname}`)"',
+                f'      rule: "{host_rule}"',
                 "      service: borealis-vite",
                 "      priority: 10",
                 "      tls:",
@@ -446,7 +472,7 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
                 "    borealis-https:",
                 "      entryPoints:",
                 "        - websecure",
-                f'      rule: "Host(`{settings.public_hostname}`) && !PathPrefix(`{settings.public_vnc_path}`)"',
+                f'      rule: "{host_rule} && !PathPrefix(`{settings.public_vnc_path}`)"',
                 "      service: borealis-engine",
                 "      priority: 10",
                 "      tls:",

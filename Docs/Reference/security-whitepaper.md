@@ -7,7 +7,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 ## Executive Summary
 
 - Borealis is self-hosted: operators own the Engine host, network exposure, DNS, certificates, backups, and account lifecycle.
-- Agents connect outbound to the Engine over public CA validated HTTPS and Borealis-managed WireGuard. Endpoint inbound exposure is not required for normal remote operations.
+- Agents connect outbound to the Engine over CA-validated HTTPS and Borealis-managed WireGuard. Externally Accessible deployments use public CA validation; Internal-Only deployments use a Borealis local CA plus normal hostname validation. Internal-Only agents may use a persisted Engine IP fallback as a route hint, but the Engine FQDN remains the TLS identity. Endpoint inbound exposure is not required for normal remote operations.
 - Device trust starts with operator-approved enrollment, device-generated Ed25519 identity, short-lived access tokens, hashed refresh tokens, and device status checks.
 - Operator trust is protected by Aegis Cipher, MFA by default, WebAuthn passkeys, RBAC, site scoping, and strict session invalidation.
 - Script and automation delivery is signed by the Engine. Agents verify signatures before execution.
@@ -60,7 +60,7 @@ The Engine host is the security root for Borealis. Operators should protect host
 
 ### Public Edge
 
-Traefik owns public HTTP/HTTPS, ACME state, UI/API routing, Socket.IO routing, and VNC WebSocket routing. Browser and agent trust use normal public CA and hostname validation. Internal Engine APIs stay behind the edge on loopback.
+Traefik owns HTTP/HTTPS, certificate state, UI/API routing, Socket.IO routing, and VNC WebSocket routing. Externally Accessible browser and agent trust use normal public CA and hostname validation. Internal-Only trust uses a Borealis local CA distributed to agents through install commands and to browsers through operator-managed trust stores. Agent IP fallback changes only the TCP dial address after normal FQDN connection fails; HTTP host, TLS SNI, and certificate hostname validation still use the Engine FQDN. Internal Engine APIs stay behind the edge on loopback.
 
 ### Device Enrollment
 
@@ -86,7 +86,7 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 
 ### Engine Edge and Bootstrap
 
-- Borealis renders Traefik and Let's Encrypt runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`.
+- Borealis renders Traefik runtime state under `Engine/Services/traefik-edge/state/` and `Engine/Services/traefik-edge/config/`. Let's Encrypt state is used for Externally Accessible deployments; Borealis local CA and leaf certificate state is used for Internal-Only deployments.
 - Internal engine-only material such as WireGuard keys, code-signing keys, Aegis state, and auth secrets stays under Engine service runtime paths.
 - First deployment follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
 - Later Engine restarts follow `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
@@ -121,6 +121,7 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 - Supported Windows agent traffic is owned by the SYSTEM runtime.
 - Per-session helpers do not enroll, do not store Engine tokens, and communicate with the local SYSTEM broker over local IPC.
 - Agent API and Socket.IO calls flow through the Go auth client, which refreshes tokens before retrying authenticated calls.
+- Internal-Only `server_ip_fallback` is a route hint, not a trust anchor. Agents still require the configured Engine FQDN and trusted CA validation for HTTPS. Linux WireGuard setup may rewrite the local endpoint to the fallback IP after FQDN DNS failure; WireGuard server public key validation still authenticates the tunnel peer.
 - Script payloads are rejected when signature verification fails.
 - Agent logs bootstrap, enrollment, token refresh, role health, and signature events under `Agent/Logs`.
 
@@ -177,7 +178,7 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 
 - Keep Engine host patched, backed up, and firewalled.
 - Expose only required public ports: HTTP/HTTPS for Traefik and UDP WireGuard for remote operations.
-- Use a real public FQDN with valid public CA certificates for agents and browsers.
+- Use a real FQDN for agents and browsers. Externally Accessible deployments need public DNS and public CA certificates. Internal-Only deployments should use private DNS, Borealis local CA distribution to agents, and browser trust store installation for operators. Agents without private DNS can use the generated IP fallback while preserving FQDN TLS validation.
 - Keep Aegis Cipher recoverable by trusted administrators.
 - Require MFA for operators and prefer passkeys where possible.
 - Use RBAC and site scoping so operators see only devices they own.
@@ -295,8 +296,8 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
         Note over Operator,Engine: Human-controlled code binds enrollment to expected device
 
         SYS->>Engine: Initiate TLS session
-        Engine-->>SYS: Present public CA trusted certificate
-        Note over SYS,Engine: Public CA validation plus hostname checks stop common MITM paths
+        Engine-->>SYS: Present CA-trusted certificate
+        Note over SYS,Engine: Public or Borealis local CA validation plus hostname checks stop common MITM paths
 
         SYS->>SYS: Generate Ed25519 identity key pair
         Note right of SYS: Private key stored in protected agent.json

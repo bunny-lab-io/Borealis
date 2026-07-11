@@ -1945,9 +1945,12 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var payload struct {
-		Sites          []map[string]any `json:"sites"`
-		PublicBaseURL  string           `json:"public_base_url"`
-		PublicHostname string           `json:"public_hostname"`
+		Sites                  []map[string]any `json:"sites"`
+		PublicBaseURL          string           `json:"public_base_url"`
+		PublicHostname         string           `json:"public_hostname"`
+		DeploymentProfile      string           `json:"deployment_profile"`
+		DeploymentProfileLabel string           `json:"deployment_profile_label"`
+		EngineCARequired       bool             `json:"engine_ca_required"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -1958,8 +1961,44 @@ func TestSiteListHandlerReturnsSitesAndPublicMetadata(t *testing.T) {
 	if payload.PublicBaseURL != "https://borealis.example.test" || payload.PublicHostname != "borealis.example.test" {
 		t.Fatalf("unexpected public metadata %+v", payload)
 	}
+	if payload.DeploymentProfile != "externally-accessible" || payload.DeploymentProfileLabel != "Externally Accessible" || payload.EngineCARequired {
+		t.Fatalf("unexpected deployment metadata %+v", payload)
+	}
 	if store.siteProfile.Username != "operator" {
 		t.Fatalf("expected operator profile, got %+v", store.siteProfile)
+	}
+}
+
+func TestSiteInstallMetadataIncludesInternalCA(t *testing.T) {
+	root := t.TempDir()
+	caPath := filepath.Join(root, "local-ca.crt")
+	caPEM := testOverviewCertificatePEM(t, "Borealis Local Engine CA", time.Now().Add(365*24*time.Hour))
+	if err := os.WriteFile(caPath, caPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE", "internal-only")
+	t.Setenv("BOREALIS_LOCAL_CA_ENABLED", "1")
+	t.Setenv("BOREALIS_LOCAL_CA_CERT_PATH", caPath)
+	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.internal.example")
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.internal.example")
+	t.Setenv("BOREALIS_ENGINE_IP_FALLBACK", "192.168.3.251")
+
+	payload := siteInstallMetadata(nil)
+	if got := payload["deployment_profile"]; got != "internal-only" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+	if got := payload["engine_ca_required"]; got != true {
+		t.Fatalf("engine CA required = %#v", got)
+	}
+	if got := payload["server_ip_fallback"]; got != "192.168.3.251" {
+		t.Fatalf("server IP fallback = %#v", got)
+	}
+	engineCA, ok := payload["engine_ca"].(map[string]any)
+	if !ok {
+		t.Fatalf("engine CA payload missing: %#v", payload["engine_ca"])
+	}
+	if engineCA["pem_b64"] != base64.StdEncoding.EncodeToString(caPEM) {
+		t.Fatalf("engine CA pem_b64 missing: %#v", engineCA)
 	}
 }
 

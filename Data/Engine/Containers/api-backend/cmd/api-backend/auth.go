@@ -153,7 +153,18 @@ func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
 	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)
-	return &postgresOperatorStore{db: db}, func() { _ = db.Close() }, nil
+	store := &postgresOperatorStore{db: db}
+	bootstrapTimeout := cfg.DBConnectTimeout + 15*time.Second
+	if bootstrapTimeout < 15*time.Second {
+		bootstrapTimeout = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bootstrapTimeout)
+	defer cancel()
+	if err := store.ensureAssemblyTables(ctx); err != nil {
+		_ = db.Close()
+		return nil, func() {}, fmt.Errorf("failed to ensure assembly tables: %w", err)
+	}
+	return store, func() { _ = db.Close() }, nil
 }
 
 func normalizePostgresDriverURL(cfg gatewayConfig) string {

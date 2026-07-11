@@ -57,10 +57,10 @@ If the outer proxy is itself behind another load balancer or proxy, configure th
 Deploy examples:
 ```sh
 # Rebuild when the traefik-edge image source changed.
-BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --service traefik-edge rebuild prod
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --network-mode public --service traefik-edge rebuild prod
 
 # Reload is enough for later env-only trust list changes.
-BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --service traefik-edge reload prod
+BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.5.29/32 bash Engine.sh --network-mode public --service traefik-edge reload prod
 ```
 
 Validate with:
@@ -104,7 +104,7 @@ Engine/Services/postgres-db/run   -> /var/run/borealis
 Engine/Services/traefik-edge -> /opt/Borealis/Engine/Services/traefik-edge
 ```
 
-Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory.
+Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory. Externally Accessible deployments store ACME state in `state/acme.json`; Internal-Only deployments store Borealis local CA and leaf certificate material under `state/local-ca/` and `state/local-certs/`.
 
 `remote-desktop-guacd`:
 ```text
@@ -130,7 +130,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 `Engine.sh` seeds `Engine/Services/webui-frontend/data/web-interface/` from committed WebUI source when the runtime copy is missing. It does not overwrite an existing runtime copy during normal deploys, so dev-mode Vite HMR edits survive rebuilds. Set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` before deploy to discard and reseed the runtime WebUI source from committed source.
 
 ## Deploy Order
-`Engine.sh deploy [prod|dev]` performs these phases:
+`Engine.sh --network-mode public|local deploy [prod|dev]` performs these phases:
 
 1. Parse launch options.
 2. If repo/release/branch options were supplied, sync the repository and re-exec installed `Engine.sh`.
@@ -139,8 +139,8 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 5. Create service runtime tree under `Engine/Services/`.
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
-8. Resolve public hostname and ACME email.
-9. Detect deployment profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
+8. Resolve Engine FQDN, network mode, and certificate mode. Public resolves ACME email; Local generates or renews Borealis local CA/leaf certificate material.
+9. Detect sizing profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
 10. Compute service input hashes from each service's declared source, Dockerfile, build context, target mode, and dependency inputs.
 11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
 12. Write `Engine/Deploy/image-manifest.json`.
@@ -187,7 +187,7 @@ Build cache:
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
-- `compose.env` carries image tags, stable env-file paths, deployment profile metadata, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
+- `compose.env` carries image tags, stable env-file paths, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
@@ -208,33 +208,34 @@ WebUI targets:
 Compose dependency order:
 
 1. `postgres-db`, `wireguard-tunnel`, `remote-desktop-guacd`, and `webui-frontend` can start independently.
-2. `postgres-db` must pass healthcheck:
+2. `Engine.sh --network-mode public|local deploy` starts `postgres-db` first and runs one-shot Engine schema setup from the current `site-worker` image before API or scheduler reconciliation.
+3. `postgres-db` must pass healthcheck:
 ```text
 pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
-3. `wireguard-tunnel` must create the Unix control socket.
-4. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
-5. `webui-frontend` must serve `/` on `127.0.0.1:8000` in prod and dev.
-6. `api-backend` waits for:
+4. `wireguard-tunnel` must create the Unix control socket.
+5. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
+6. `webui-frontend` must serve `/` on `127.0.0.1:8000` in prod and dev.
+7. `api-backend` waits for:
 ```text
 postgres-db: service_healthy
 wireguard-tunnel: service_healthy
 remote-desktop-guacd: service_healthy
 ```
-7. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
-8. `traefik-edge` waits for:
+8. `api-backend` must return HTTP `200` from `http://127.0.0.1:5000/health`.
+9. `traefik-edge` waits for:
 ```text
 api-backend: service_healthy
 webui-frontend: service_healthy
 ```
-9. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
+10. `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
 
 Traefik is the public edge. API and WebUI stay on loopback behind Traefik.
 
 ## Production vs Dev Mode
 Production mode:
 ```sh
-bash Engine.sh deploy prod
+bash Engine.sh --network-mode local deploy prod
 ```
 
 Production behavior:
@@ -244,7 +245,7 @@ Production behavior:
 
 Dev mode:
 ```sh
-bash Engine.sh deploy dev
+bash Engine.sh --network-mode local deploy dev
 ```
 
 Dev behavior:
@@ -256,79 +257,79 @@ Dev behavior:
 
 Default deploy mode:
 ```sh
-bash Engine.sh deploy
+bash Engine.sh --network-mode local deploy
 ```
 
 Equivalent to:
 ```sh
-bash Engine.sh deploy prod
+bash Engine.sh --network-mode local deploy prod
 ```
 
 ## Main Operator Commands
 Deploy or redeploy production:
 ```sh
 cd /opt/Borealis
-bash Engine.sh deploy prod
+bash Engine.sh --network-mode local deploy prod
 ```
 
 Deploy or redeploy dev:
 ```sh
 cd /opt/Borealis
-bash Engine.sh deploy dev
+bash Engine.sh --network-mode local deploy dev
 ```
 
 Branch install or redeploy from raw launcher:
 ```sh
-curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --repo-branch feature/containerize-all-borealis-services deploy prod
+curl -fsSL https://raw.githubusercontent.com/bunny-lab-io/Borealis/refs/heads/main/Engine.sh | sudo bash -s -- --network-mode local --repo-branch feature/containerize-all-borealis-services deploy prod
 ```
 
 Update from a cloned checkout:
 ```sh
 git pull --ff-only
-bash Engine.sh deploy prod
+bash Engine.sh --network-mode local deploy prod
 ```
 
-Use `deploy dev` instead of `deploy prod` for development Engine stacks.
+Use `deploy dev` instead of `deploy prod` for development Engine stacks. Use `--network-mode public` instead of `local` for public/MSP-friendly Engines.
 
 ## Service Commands
 Restart API backend:
 ```sh
-bash Engine.sh --service api-backend restart
+bash Engine.sh --network-mode local --service api-backend restart
 ```
 
 Rebuild WebUI frontend in production mode:
 ```sh
-bash Engine.sh --service webui-frontend rebuild prod
+bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 ```
 
 Rebuild WebUI frontend in dev mode:
 ```sh
-bash Engine.sh --service webui-frontend rebuild dev
+bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 ```
 
 Reload Traefik edge:
 ```sh
-bash Engine.sh --service traefik-edge reload
+bash Engine.sh --network-mode local --service traefik-edge reload
 ```
 
 Restart PostgreSQL:
 ```sh
-bash Engine.sh --service postgres-db restart
+bash Engine.sh --network-mode local --service postgres-db restart
 ```
 
 Restart guacd:
 ```sh
-bash Engine.sh --service remote-desktop-guacd restart
+bash Engine.sh --network-mode local --service remote-desktop-guacd restart
 ```
 
 Reconcile WireGuard tunnel state:
 ```sh
-bash Engine.sh --service wireguard-tunnel reconcile
+bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 ```
 
 Generic service syntax:
 ```sh
-bash Engine.sh --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+bash Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
 ```
 
 Action support:
@@ -473,42 +474,42 @@ Engine/Services/remote-desktop-guacd/logs/guacd.log
 ## Common Scenarios
 API code changed:
 ```sh
-bash Engine.sh --service api-backend rebuild prod
+bash Engine.sh --network-mode local --service api-backend rebuild prod
 ```
 
 WebUI code changed, production:
 ```sh
-bash Engine.sh --service webui-frontend rebuild prod
+bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 ```
 
 WebUI code changed, dev/HMR:
 ```sh
-bash Engine.sh --service webui-frontend rebuild dev
+bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 ```
 
 Traefik config changed:
 ```sh
-bash Engine.sh --service traefik-edge reload
+bash Engine.sh --network-mode local --service traefik-edge reload
 ```
 
 Database stuck or unhealthy:
 ```sh
-bash Engine.sh --service postgres-db restart
+bash Engine.sh --network-mode local --service postgres-db restart
 docker compose --project-name borealis-engine --env-file /opt/Borealis/Engine/Deploy/compose.env -f /opt/Borealis/Data/Engine/Containers/compose.yaml ps postgres-db
 ```
 
 WireGuard peers look stale:
 ```sh
-bash Engine.sh --service wireguard-tunnel reconcile
+bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 ```
 
 Full safe redeploy:
 ```sh
-bash Engine.sh deploy prod
+bash Engine.sh --network-mode local deploy prod
 ```
 
 ## Operational Notes
-- `Engine.sh deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
+- `Engine.sh --network-mode public|local deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
 - Unchanged image hashes skip Docker builds.
 - Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
 - Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
@@ -639,8 +640,8 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     - Edit Docker/Compose source under `Data/Engine/Containers/`.
     - Do not edit generated runtime under `Engine/` except when reading logs/manifests.
-    - Use `Engine.sh deploy prod|dev` for full stack deployment.
-    - Use `Engine.sh --service ...` for scoped service actions.
+    - Use `Engine.sh --network-mode public|local deploy prod|dev` for full stack deployment.
+    - Use `Engine.sh --network-mode public|local --service ...` for scoped service actions.
     - Validate launcher syntax after changing shell scripts:
     ```sh
     bash -n Engine.sh

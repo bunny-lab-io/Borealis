@@ -2,17 +2,31 @@
 Use this page when updating an existing Borealis Engine host from the Git repository.
 
 !!! info "Expected path"
-    Run these commands from the Engine host. They pull current staging files and redeploy the production container stack.
+    Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install.
 
-```sh
-cd /opt/Borealis
+=== "Public"
 
-# Pull down changed Engine staging files.
-git pull --ff-only
+    ```sh
+    cd /opt/Borealis
 
-# Redeploy updated Engine containers.
-./Engine.sh deploy prod
-```
+    # Pull down changed Engine staging files.
+    git pull --ff-only
+
+    # Redeploy updated Engine containers.
+    ./Engine.sh --network-mode public deploy prod
+    ```
+
+=== "Local"
+
+    ```sh
+    cd /opt/Borealis
+
+    # Pull down changed Engine staging files.
+    git pull --ff-only
+
+    # Redeploy updated Engine containers.
+    ./Engine.sh --network-mode local deploy prod
+    ```
 
 !!! warning "Local changes"
     `git pull --ff-only` stops if local files changed. Review those changes before updating so Engine deployment does not mix local edits with upstream changes.
@@ -20,11 +34,21 @@ git pull --ff-only
 ??? note "Optional: Development Redeploy"
     Use development mode only when testing WebUI or Engine changes interactively.
 
-    ```sh
-    cd /opt/Borealis
-    git pull --ff-only
-    ./Engine.sh deploy dev
-    ```
+    === "Public"
+
+        ```sh
+        cd /opt/Borealis
+        git pull --ff-only
+        ./Engine.sh --network-mode public deploy dev
+        ```
+
+    === "Local"
+
+        ```sh
+        cd /opt/Borealis
+        git pull --ff-only
+        ./Engine.sh --network-mode local deploy dev
+        ```
 
 ??? example "Detailed Codex Breakdown"
 
@@ -37,6 +61,6 @@ git pull --ff-only
 
     ### Runtime behavior
 
-    - `Engine.sh deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, and runs Docker Compose under the Borealis project name.
+    - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, and runs Docker Compose under the Borealis project name.
     - Production mode serves the static WebUI from the WebUI frontend container and routes public traffic through Traefik.
     - Development mode keeps the same stack shape but runs the WebUI through Vite/HMR behind Traefik.

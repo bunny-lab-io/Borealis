@@ -2,23 +2,23 @@
 Use service-scoped commands when troubleshooting one Engine component without redeploying the full Borealis stack.
 
 !!! info "When to use these"
-    These commands are useful after config edits, WebUI rebuilds, Traefik routing changes, or WireGuard tunnel issues. Use the normal Engine update path when you want to pull and redeploy the entire platform.
+    These commands are useful after config edits, WebUI rebuilds, Traefik routing changes, or WireGuard tunnel issues. Use the same `--network-mode` value used during install. Use the normal Engine update path when you want to pull and redeploy the entire platform.
 
 ```sh
 # Restart the API backend container.
-./Engine.sh --service api-backend restart
+./Engine.sh --network-mode local --service api-backend restart
 
 # Rebuild the WebUI frontend container in production mode.
-./Engine.sh --service webui-frontend rebuild prod
+./Engine.sh --network-mode local --service webui-frontend rebuild prod
 
 # Rebuild the WebUI frontend container in development mode.
-./Engine.sh --service webui-frontend rebuild dev
+./Engine.sh --network-mode local --service webui-frontend rebuild dev
 
 # Reload Traefik edge configuration.
-./Engine.sh --service traefik-edge reload
+./Engine.sh --network-mode local --service traefik-edge reload
 
 # Reconcile WireGuard tunnel state to fix agent tunnel connections.
-./Engine.sh --service wireguard-tunnel reconcile
+./Engine.sh --network-mode local --service wireguard-tunnel reconcile
 ```
 
 !!! warning "Service commands are targeted"

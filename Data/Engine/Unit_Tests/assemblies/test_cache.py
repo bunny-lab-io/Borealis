@@ -15,6 +15,7 @@ from typing import Iterator, Tuple
 
 import pytest
 
+from Data.Engine import database
 from Data.Engine.assembly_management.databases import AssemblyDatabaseManager
 from Data.Engine.assembly_management.models import AssemblyDomain
 from Data.Engine.assembly_management.bootstrap import AssemblyCache
@@ -93,6 +94,20 @@ def test_cache_flush_marks_entries_clean(assembly_runtime) -> None:
     assert snapshot[guid]["is_dirty"] == "false"
     persisted = db_manager.load_all(AssemblyDomain.USER)
     assert any(item.assembly_guid == guid for item in persisted)
+
+
+def test_engine_database_initialisation_creates_assembly_tables(tmp_path) -> None:
+    db_url = f"sqlite:///{(tmp_path / 'engine.sqlite3').as_posix()}"
+
+    database.initialise_engine_database(db_url)
+
+    db_manager = AssemblyDatabaseManager(
+        database_url=db_url,
+        logger=logging.getLogger("test.assemblies.db"),
+    )
+    for domain in AssemblyDomain:
+        assert db_manager.load_all(domain) == []
+    assert db_manager.load_official_catalog_state() == {}
 
 
 def test_cache_worker_flushes_on_event(assembly_runtime) -> None:

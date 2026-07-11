@@ -34,9 +34,12 @@ var defaultRepoRef = "main"
 
 type cliOptions struct {
 	ServerURL          string
+	ServerIPFallback   string
 	SiteEnrollmentCode string
 	RepoRef            string
 	ReleaseChannel     string
+	TrustedEngineCAPEM string
+	TrustedEngineCAB64 string
 	Uninstall          bool
 	Verbose            bool
 }
@@ -44,11 +47,14 @@ type cliOptions struct {
 type BootstrapConfig struct {
 	InstallDir          string `json:"install_dir"`
 	ServerURL           string `json:"server_url"`
+	ServerIPFallback    string `json:"server_ip_fallback"`
 	SiteEnrollmentCode  string `json:"site_enrollment_code"`
 	LegacyEnrollment    string `json:"enrollment_code"`
 	RepoURL             string `json:"repo_url"`
 	RepoRef             string `json:"repo_ref"`
 	ReleaseChannel      string `json:"release_channel"`
+	TrustedEngineCAPEM  string `json:"trusted_engine_ca_pem"`
+	TrustedEngineCAB64  string `json:"trusted_engine_ca_b64"`
 	PayloadPath         string `json:"agent_bundle_path"`
 	PayloadSHA256       string `json:"agent_bundle_sha256"`
 	ManifestPath        string `json:"manifest_path"`
@@ -83,6 +89,12 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.ServerURL = strings.TrimSpace(args[i])
+		case "--server-ip-fallback":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--server-ip-fallback requires value")
+			}
+			i++
+			opts.ServerIPFallback = strings.TrimSpace(args[i])
 		case "--site-enrollment-code":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
 				return opts, errors.New("--site-enrollment-code requires value")
@@ -101,6 +113,18 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.ReleaseChannel = strings.TrimSpace(args[i])
+		case "--trusted-engine-ca-pem":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--trusted-engine-ca-pem requires value")
+			}
+			i++
+			opts.TrustedEngineCAPEM = strings.TrimSpace(args[i])
+		case "--trusted-engine-ca-b64":
+			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
+				return opts, errors.New("--trusted-engine-ca-b64 requires value")
+			}
+			i++
+			opts.TrustedEngineCAB64 = strings.TrimSpace(args[i])
 		case "-uninstall":
 			opts.Uninstall = true
 		case "-verbose", "--verbose":
@@ -134,6 +158,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	if cli.ServerURL != "" {
 		cfg.ServerURL = cli.ServerURL
 	}
+	if cli.ServerIPFallback != "" {
+		cfg.ServerIPFallback = cli.ServerIPFallback
+	}
 	if cli.SiteEnrollmentCode != "" {
 		cfg.SiteEnrollmentCode = cli.SiteEnrollmentCode
 	}
@@ -142,6 +169,12 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	}
 	if cli.ReleaseChannel != "" {
 		cfg.ReleaseChannel = cli.ReleaseChannel
+	}
+	if cli.TrustedEngineCAB64 != "" {
+		cfg.TrustedEngineCAB64 = cli.TrustedEngineCAB64
+	}
+	if cli.TrustedEngineCAPEM != "" {
+		cfg.TrustedEngineCAPEM = cli.TrustedEngineCAPEM
 	}
 	if cli.Verbose {
 		cfg.Verbose = true
@@ -152,6 +185,12 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 
 	mergeStoredBootstrapInputs(&cfg)
 	normalizeBootstrapConfig(&cfg)
+	if err := normalizeBootstrapServerIPFallback(&cfg); err != nil {
+		return cfg, err
+	}
+	if err := normalizeBootstrapTrustedCA(&cfg); err != nil {
+		return cfg, err
+	}
 	return cfg, nil
 }
 
@@ -200,6 +239,9 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	if strings.TrimSpace(incoming.ServerURL) != "" {
 		base.ServerURL = incoming.ServerURL
 	}
+	if strings.TrimSpace(incoming.ServerIPFallback) != "" {
+		base.ServerIPFallback = incoming.ServerIPFallback
+	}
 	if strings.TrimSpace(incoming.SiteEnrollmentCode) != "" {
 		base.SiteEnrollmentCode = incoming.SiteEnrollmentCode
 	}
@@ -214,6 +256,12 @@ func mergeBootstrapConfig(base *BootstrapConfig, incoming BootstrapConfig) {
 	}
 	if strings.TrimSpace(incoming.ReleaseChannel) != "" {
 		base.ReleaseChannel = incoming.ReleaseChannel
+	}
+	if strings.TrimSpace(incoming.TrustedEngineCAB64) != "" {
+		base.TrustedEngineCAB64 = incoming.TrustedEngineCAB64
+	}
+	if strings.TrimSpace(incoming.TrustedEngineCAPEM) != "" {
+		base.TrustedEngineCAPEM = incoming.TrustedEngineCAPEM
 	}
 	if strings.TrimSpace(incoming.PayloadPath) != "" {
 		base.PayloadPath = incoming.PayloadPath
@@ -303,6 +351,34 @@ func normalizeBootstrapConfig(cfg *BootstrapConfig) {
 	if cfg.NonInteractive {
 		cfg.Interactive = false
 	}
+}
+
+func normalizeBootstrapServerIPFallback(cfg *BootstrapConfig) error {
+	if cfg == nil || strings.TrimSpace(cfg.ServerIPFallback) == "" {
+		return nil
+	}
+	if err := agentconfig.ValidateServerIPFallback(cfg.ServerIPFallback); err != nil {
+		return err
+	}
+	cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
+	return nil
+}
+
+func normalizeBootstrapTrustedCA(cfg *BootstrapConfig) error {
+	if cfg == nil {
+		return nil
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(cfg.TrustedEngineCAB64)
+		if err != nil {
+			return err
+		}
+		cfg.TrustedEngineCAPEM = pemText
+	}
+	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
+		cfg.TrustedEngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
+	}
+	return nil
 }
 
 func mergeStoredBootstrapInputs(cfg *BootstrapConfig) {

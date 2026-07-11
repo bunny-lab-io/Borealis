@@ -65,10 +65,14 @@ func (e fmError) Error() string {
 func New(authClient *auth.Client, hostname string) *Manager {
 	tempRoot := filepath.Join(os.TempDir(), "Borealis", "file_management")
 	_ = os.MkdirAll(tempRoot, 0o700)
+	httpClient := &http.Client{Timeout: 15 * time.Minute}
+	if authClient != nil {
+		httpClient = authClient.HTTPClientWithTimeout(15 * time.Minute)
+	}
 	return &Manager{
 		authClient:    authClient,
 		hostname:      strings.TrimSpace(hostname),
-		httpClient:    &http.Client{Timeout: 15 * time.Minute},
+		httpClient:    httpClient,
 		tempRoot:      tempRoot,
 		listenerReady: true,
 	}

@@ -313,6 +313,68 @@ func TestLinuxStartSessionWritesConfigAndRunsWgQuick(t *testing.T) {
 	}
 }
 
+func TestLinuxStartSessionUsesServerIPFallbackWhenWireGuardCannotResolveEndpoint(t *testing.T) {
+	manager := testManager(t)
+	manager.serverHost = "borealis.example.com"
+	manager.serverIPFallback = "192.168.3.251"
+	session, err := manager.buildSession(testPayload(time.Now().Add(time.Hour).Unix()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wgUpEndpoints []string
+	manager.runner = func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+		if name == "wg-quick" && len(args) > 0 && args[0] == "up" {
+			configBytes, err := os.ReadFile(manager.configPathForPlatform())
+			if err != nil {
+				t.Fatal(err)
+			}
+			configText := string(configBytes)
+			wgUpEndpoints = append(wgUpEndpoints, endpointLine(configText))
+			if strings.Contains(configText, "Endpoint = borealis.example.com:30000") {
+				return commandResult{ExitCode: 1, Stderr: "Name or service not known: `borealis.example.com:30000'\nConfiguration parsing error"}, nil
+			}
+			if strings.Contains(configText, "Endpoint = 192.168.3.251:30000") {
+				return commandResult{ExitCode: 0}, nil
+			}
+			return commandResult{ExitCode: 1, Stderr: "unexpected endpoint"}, nil
+		}
+		return commandResult{ExitCode: 0}, nil
+	}
+
+	if err := manager.startSession(context.Background(), session); err != nil {
+		t.Fatalf("startSession returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(manager.configPathForPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	configText := string(configBytes)
+	if !strings.Contains(configText, "Endpoint = 192.168.3.251:30000") {
+		t.Fatalf("config did not use server_ip_fallback:\n%s", configText)
+	}
+	if manager.lastAppliedEndpoint != "192.168.3.251:30000" {
+		t.Fatalf("unexpected applied endpoint: %s", manager.lastAppliedEndpoint)
+	}
+	expected := []string{"Endpoint = borealis.example.com:30000", "Endpoint = 192.168.3.251:30000"}
+	if strings.Join(wgUpEndpoints, "|") != strings.Join(expected, "|") {
+		t.Fatalf("unexpected wg-quick endpoint attempts: %#v", wgUpEndpoints)
+	}
+}
+
+func TestWireGuardServerIPFallbackRequiresEngineHostMatch(t *testing.T) {
+	manager := testManager(t)
+	manager.serverHost = "borealis.example.com"
+	manager.serverIPFallback = "192.168.3.251"
+
+	if endpoint, ok := manager.wireGuardFallbackEndpoint("borealis.example.com:30000"); !ok || endpoint != "192.168.3.251:30000" {
+		t.Fatalf("expected fallback endpoint, got endpoint=%q ok=%v", endpoint, ok)
+	}
+	if endpoint, ok := manager.wireGuardFallbackEndpoint("other.example.com:30000"); ok || endpoint != "" {
+		t.Fatalf("unexpected fallback endpoint for unrelated host endpoint=%q ok=%v", endpoint, ok)
+	}
+}
+
 func TestNotifyReadyPostsPayloadAndReportsStatus(t *testing.T) {
 	manager := testManager(t)
 	authClient := &fakeAuthClient{agentID: "agent-1"}
@@ -392,4 +454,13 @@ func containsCall(calls []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func endpointLine(configText string) string {
+	for _, line := range strings.Split(configText, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "Endpoint = ") {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
 }

@@ -92,7 +92,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If Borealis feels slow, this command is the fastest way to distinguish normal pooled connections from sessions that are holding transactions open too long.
 
 ## Engine Tuning Profiles
-- Container deployments auto-detect the Engine host profile during every `Engine.sh deploy` and redeploy.
+- Container deployments auto-detect the Engine host sizing profile during every `Engine.sh --network-mode public|local deploy` and redeploy.
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
 - The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled work-item slots into `Engine/Deploy/compose.env`.
@@ -255,6 +255,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Runtime state: `Engine/Services/postgres-db/state`.
 - Compose environment: `Engine/Deploy/compose.env`.
 - Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
+- Engine deploy starts `postgres-db` and runs schema setup before API and scheduler containers reconcile. Schema setup covers both `engine.*` runtime tables and `assemblies.*` catalog tables, so operators do not need a separate first-run schema command.
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
 - Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
@@ -306,6 +307,7 @@ finally:
 
     ### Source map
 
+    - Deploy-time schema caller: `Engine.sh`
     - Runtime schema setup: `Data/Engine/Containers/api-backend/data/database.py`
     - Startup migrations: `Data/Engine/Containers/api-backend/data/database_migrations.py`
     - Scheduler database behavior: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go` and `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_execution.go`
@@ -1091,6 +1093,7 @@ finally:
     - `source_repo`, `source_path`, and `source_version` track Aurora provenance for official assemblies.
     - `content_hash` stores the Engine-computed canonical SHA-256 used for update detection.
     - The bundled official snapshot is versioned under `Data/Engine/Containers/api-backend/data/Official_Assemblies/` as a seed snapshot and synced into `assemblies.official_assemblies` on startup.
+    - Deploy-time schema setup and Go API startup both ensure the active `assemblies.*` tables exist before `/api/assemblies`, quick jobs, scheduled jobs, workflows, or watchdog remediation read them.
 
     ### `assemblies.official_catalog_state`
     - Status: Active.

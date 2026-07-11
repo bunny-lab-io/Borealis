@@ -7,7 +7,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Service modes: SYSTEM/root plus same-binary helper mode. Windows CURRENTUSER tracks long-lived helper sentinels per active desktop session and executes signed quick jobs through SYSTEM-brokered `CreateProcessAsUser`. Linux CURRENTUSER reports unsupported until ported.
 - Role system: compiled Go role registry under `Data/Agent/internal/roles`.
 - Networking: SYSTEM/root runtime owns REST to Engine APIs plus the single Socket.IO connection.
-- Security: Ed25519 identity keys, public CA + hostname validation for the Engine FQDN, signed script payloads, and `agent.json` token/key storage.
+- Security: Ed25519 identity keys, public CA or Borealis local CA + hostname validation for the Engine FQDN, signed script payloads, and `agent.json` token/key storage.
 
 ## Role Catalog (Go v1)
 - `internal/roles/system_context` - SYSTEM/root quick-job router and script execution for signed `quick_job_run` payloads.
@@ -28,7 +28,7 @@ Describe the Borealis agent runtime, its roles, service modes, and how it commun
 - Installed configuration file: `agent.json` beside `Agent.exe`.
 - WireGuard runtime configuration file: `wireguard.conf` beside `Agent.exe`/`Agent`, generated from Engine tunnel material.
 - Startup cleanup removes `Temp` under the Agent install root so onboarding payload/state files do not persist after service start.
-- `agent.json` stores `schema_version`, `server_url`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `agent.log_retention_days`, `agent.state`, `agent.liveness`, `agent.dependency_state`, Ed25519 keys, access/refresh tokens, and Engine script-signing trust material.
+- `agent.json` stores `schema_version`, `server_url`, optional `server_ip_fallback`, `enrollment_code`, `agent.guid`, `agent.agent_id`, `agent.branch`, `agent.installed_build_id`, `agent.log_retention_days`, `agent.state`, `agent.liveness`, `agent.dependency_state`, Ed25519 keys, access/refresh tokens, optional Internal-Only Engine CA PEM, and Engine script-signing trust material.
 - `metadata-queue.json` sits beside `agent.json` only while local CLI metadata updates are pending. It stores queued field updates as base64 `value`, `modified_at`, and `source`; Engine acknowledgement removes delivered entries.
 - Windows protection: ACL hardening is deferred in the current Go migration branch; files inherit permissions from `C:\Borealis`.
 - Linux protection: root-owned `0600` file with `0700` parent directory.
@@ -88,6 +88,7 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
 
     ### Networking and authentication
     - All REST calls flow through the Go auth client in `Data/Agent/internal/auth`.
+    - Internal-Only agents can persist `server_ip_fallback` as a bare IP route hint. Windows and Linux REST, update, file-transfer, software-override, and Socket.IO connections first try the Engine FQDN normally; if that TCP dial fails, the Agent dials the fallback IP while keeping the FQDN as HTTP host, TLS SNI, and certificate hostname. Linux WireGuard setup first applies the Engine FQDN endpoint, then rewrites only the local WireGuard endpoint to `server_ip_fallback:<port>` when `wg-quick up` fails because DNS cannot resolve the Engine FQDN.
     - `EnsureAuthenticated` handles identity generation, enrollment, approval polling, and token refresh.
     - Socket.IO is used by the SYSTEM runtime for:
       - `quick_job_run` dispatch (system jobs plus broker-backed current-user jobs).
@@ -189,9 +190,9 @@ Use [Agent CLI Flags](agent-cli-flags.md) for Windows `Agent.exe` and Linux `Age
     #### Security
     - Generates device-wide Ed25519 keys on first launch and stores PKCS8/SPKI base64 in `agent.json`.
     - Refresh/access tokens are stored in `agent.json` and bound to the device identity plus Engine-issued token state; mismatches force re-enrollment.
-    - REST and Socket.IO traffic use the public Engine FQDN with normal CA + hostname validation.
+    - REST and Socket.IO traffic use the Engine FQDN with normal CA + hostname validation. Internal-Only installs persist the Borealis local CA PEM in `agent.json` and append it to the system trust pool. Internal-Only installs can also persist `server_ip_fallback`; this changes HTTPS TCP dial targets only after normal FQDN connection fails. On Linux, it also lets the WireGuard role rewrite the endpoint to the fallback IP only after FQDN resolution fails during `wg-quick up`.
     - Validates script payloads with backend-issued Ed25519 signatures before execution.
-    - Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
+    - Outbound-only; API/WebSocket calls flow through the Go auth client for proactive refresh. The Agent never uses `InsecureSkipVerify`; local CA trust still requires FQDN SAN match. Logs bootstrap, enrollment, token refresh, and signature events under `Logs/Agent/`.
     - Helper processes inherit no Borealis token state and rely on the local SYSTEM broker for job delivery.
 
     #### Reverse VPN tunnels

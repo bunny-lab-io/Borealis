@@ -28,15 +28,18 @@ import (
 )
 
 type Options struct {
-	ConfigPath     string
-	ServerURL      string
-	EnrollmentCode string
-	RepoRef        string
-	ReleaseChannel string
-	ServiceMode    string
-	BuildID        string
-	Once           bool
-	Verbose        bool
+	ConfigPath         string
+	ServerURL          string
+	ServerIPFallback   string
+	EnrollmentCode     string
+	RepoRef            string
+	ReleaseChannel     string
+	ServiceMode        string
+	TrustedEngineCAPEM string
+	TrustedEngineCAB64 string
+	BuildID            string
+	Once               bool
+	Verbose            bool
 }
 
 type Agent struct {
@@ -90,7 +93,26 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 		return nil, err
 	}
 	if strings.TrimSpace(options.ServerURL) != "" {
+		if err := agentconfig.ValidateServerURLForEnrollment(options.ServerURL); err != nil {
+			return nil, err
+		}
 		cfg.ServerURL = agentconfig.NormalizeServerURL(options.ServerURL)
+	}
+	if strings.TrimSpace(options.ServerIPFallback) != "" {
+		if err := agentconfig.ValidateServerIPFallback(options.ServerIPFallback); err != nil {
+			return nil, err
+		}
+		cfg.ServerIPFallback = agentconfig.NormalizeServerIPFallback(options.ServerIPFallback)
+	}
+	if strings.TrimSpace(options.TrustedEngineCAB64) != "" {
+		pemText, err := agentconfig.DecodeEngineCAB64(options.TrustedEngineCAB64)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Trust.EngineCAPEM = pemText
+	}
+	if strings.TrimSpace(options.TrustedEngineCAPEM) != "" {
+		cfg.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(options.TrustedEngineCAPEM)
 	}
 	if strings.TrimSpace(options.EnrollmentCode) != "" {
 		cfg.EnrollmentCode = strings.TrimSpace(options.EnrollmentCode)
@@ -323,7 +345,7 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 	}
 	a.logger.Printf("socket connecting route=%s", socketBaseURL)
 	headers := a.authClient.AuthHeaders()
-	socket := transport.NewClient(socketBaseURL, headers)
+	socket := transport.NewClient(socketBaseURL, headers, transport.WithTLSConfig(a.authClient.TLSConfig()), transport.WithDialContext(a.authClient.DialContext()))
 	socket.OnActivity(a.recordConnectedSocketActivity)
 	role := systemcontext.New(socket, a.authClient, a.dispatcher)
 	role.Hostname = a.hostname

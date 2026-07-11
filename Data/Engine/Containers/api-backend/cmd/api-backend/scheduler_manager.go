@@ -1101,7 +1101,7 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	}
 	image := schedulerServiceActionHelperImage()
 	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
-	commandParts := []string{"bash", "Engine.sh", "--service", serviceKey, actionName}
+	commandParts := []string{"bash", "Engine.sh", "--network-mode", overviewEngineNetworkMode(), "--service", serviceKey, actionName}
 	if actionMode != "" {
 		commandParts = append(commandParts, actionMode)
 	}
@@ -2557,6 +2557,7 @@ func schedulerWriteRouteFile(route schedulerRoute) error {
 
 func schedulerRouteYAML(route schedulerRoute) string {
 	hostname := firstText(strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")), "localhost")
+	hostRule := schedulerPublicHostRule(hostname)
 	stripName := route.RouteName + "-strip"
 	upstreamURL := fmt.Sprintf("%s://%s:%d", route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort)
 	tlsLines := schedulerRouteTLSLines(hostname)
@@ -2585,7 +2586,7 @@ func schedulerRouteYAML(route schedulerRoute) string {
 		"    "+route.RouteName+":",
 		"      entryPoints:",
 		"        - websecure",
-		fmt.Sprintf("      rule: \"Host(`%s`) && PathPrefix(`%s`)\"", hostname, route.RoutePath),
+		fmt.Sprintf("      rule: \"%s && PathPrefix(`%s`)\"", hostRule, route.RoutePath),
 		"      middlewares:",
 		"        - "+stripName,
 		"      service: "+route.RouteName,
@@ -2597,7 +2598,7 @@ func schedulerRouteYAML(route schedulerRoute) string {
 			"    "+guacamoleRouteName+":",
 			"      entryPoints:",
 			"        - websecure",
-			fmt.Sprintf("      rule: \"Host(`%s`) && PathPrefix(`%s`)\"", hostname, guacamoleRoutePath),
+			fmt.Sprintf("      rule: \"%s && PathPrefix(`%s`)\"", hostRule, guacamoleRoutePath),
 			"      middlewares:",
 			"        - "+stripName,
 			"      service: "+guacamoleRouteName,
@@ -2622,6 +2623,31 @@ func schedulerRouteYAML(route schedulerRoute) string {
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
+}
+
+func schedulerPublicHostRule(primary string) string {
+	rawHosts := []string{primary}
+	if aliases := strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES")); aliases != "" {
+		rawHosts = append(rawHosts, strings.Split(strings.ReplaceAll(aliases, "\n", ","), ",")...)
+	}
+	seen := map[string]bool{}
+	hosts := []string{}
+	for _, raw := range rawHosts {
+		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(raw)), ".")
+		if host == "" || seen[host] || strings.ContainsAny(host, "`\"' \t\r\n") {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	if len(hosts) == 0 {
+		hosts = []string{"localhost"}
+	}
+	parts := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		parts = append(parts, "`"+host+"`")
+	}
+	return "Host(" + strings.Join(parts, ",") + ")"
 }
 
 func schedulerRouteTLSLines(hostname string) []string {

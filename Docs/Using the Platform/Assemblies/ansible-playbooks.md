@@ -27,7 +27,7 @@ Ansible playbook assemblies run from the Linux Engine against remote devices ove
 5. Select credential or service account path where applicable.
 6. Save.
 
-New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. The Site Worker Scheduled Tasks value is the visible throttle for scheduled Ansible execution. `Engine.sh deploy` tunes that value from the detected Engine deployment profile.
+New Ansible jobs default to individual execution so each target gets separate status, output, and timeout handling. The Site Worker Scheduled Tasks value is the visible throttle for scheduled Ansible execution. `Engine.sh --network-mode public|local deploy` tunes that value from the detected Engine sizing profile.
 
 The Site Worker Scheduled Tasks value limits active scheduled work items, not raw devices. Shared Ansible mode uses one work-item slot for a site batch and lets Ansible process the hosts inside that batch. Individual mode uses one work-item slot per target while active.
 

@@ -78,6 +78,84 @@ func TestCollectOverviewPublicEdgePayloadReadsTraefikACMECertificate(t *testing.
 	}
 }
 
+func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "Engine", "Services", "traefik-edge", "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(stateDir, "local-ca.crt")
+	leafPath := filepath.Join(stateDir, "leaf.crt")
+	caPEM := testOverviewCertificatePEM(t, "Borealis Local Engine CA", time.Now().Add(365*24*time.Hour))
+	leafPEM := testOverviewCertificatePEM(t, "borealis.internal.example", time.Now().Add(90*24*time.Hour))
+	if err := os.WriteFile(caPath, caPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leafPath, leafPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("BOREALIS_PROJECT_ROOT", root)
+	t.Setenv("BOREALIS_ENGINE_DEPLOYMENT_PROFILE", "internal-only")
+	t.Setenv("BOREALIS_LOCAL_CA_ENABLED", "1")
+	t.Setenv("BOREALIS_LOCAL_CA_CERT_PATH", caPath)
+	t.Setenv("BOREALIS_LOCAL_TLS_CERT_PATH", leafPath)
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.internal.example")
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.internal.example,borealis.internal.example")
+	t.Setenv("BOREALIS_PUBLIC_BASE_URL", "https://borealis.internal.example")
+	t.Setenv("BOREALIS_ENGINE_IP_FALLBACK", "192.168.3.251")
+
+	payload := collectOverviewPublicEdgePayload()
+	if got := payload["deployment_profile"]; got != "internal-only" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+	if got := payload["certificate_mode"]; got != "local_ca" {
+		t.Fatalf("certificate mode = %#v", got)
+	}
+	if got := payload["server_ip_fallback"]; got != "192.168.3.251" {
+		t.Fatalf("server IP fallback = %#v", got)
+	}
+	certificates, ok := payload["certificates"].([]any)
+	if !ok || len(certificates) != 1 {
+		t.Fatalf("expected one local certificate row, got %#v", payload["certificates"])
+	}
+	row := certificates[0].(map[string]any)
+	if got := row["source"]; got != "traefik_local_ca" {
+		t.Fatalf("expected local certificate source, got %#v", got)
+	}
+	localCA := payload["local_ca"].(map[string]any)
+	if localCA["pem_b64"] != base64.StdEncoding.EncodeToString(caPEM) {
+		t.Fatalf("local CA pem_b64 missing: %#v", localCA)
+	}
+	if got := localCA["installable"]; got != true {
+		t.Fatalf("local CA should be installable, got %#v", got)
+	}
+}
+
+func TestOverviewEngineNetworkModeMapsPublicAndLocal(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_NETWORK_MODE", "local")
+	if got := overviewEngineNetworkMode(); got != "local" {
+		t.Fatalf("network mode = %#v", got)
+	}
+	if got := overviewEngineNetworkModeLabel(); got != "Local" {
+		t.Fatalf("network mode label = %#v", got)
+	}
+	if got := overviewEngineDeploymentProfile(); got != "internal-only" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+
+	t.Setenv("BOREALIS_ENGINE_NETWORK_MODE", "public")
+	if got := overviewEngineNetworkMode(); got != "public" {
+		t.Fatalf("network mode = %#v", got)
+	}
+	if got := overviewEngineNetworkModeLabel(); got != "Public" {
+		t.Fatalf("network mode label = %#v", got)
+	}
+	if got := overviewEngineDeploymentProfile(); got != "externally-accessible" {
+		t.Fatalf("deployment profile = %#v", got)
+	}
+}
+
 func testOverviewCertificatePEM(t *testing.T, commonName string, notAfter time.Time) []byte {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

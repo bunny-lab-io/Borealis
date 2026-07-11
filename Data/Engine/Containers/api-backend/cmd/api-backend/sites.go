@@ -786,9 +786,25 @@ func siteInstallMetadata(r *http.Request) map[string]any {
 		}
 		baseURL = scheme + "://" + netloc
 	}
+	deploymentProfile := overviewEngineDeploymentProfile()
+	localCAPayload := collectOverviewLocalCAPayload()
+	engineCARequired := deploymentProfile == "internal-only"
+	var engineCA any
+	serverIPFallback := ""
+	if engineCARequired {
+		engineCA = localCAPayload
+		serverIPFallback = overviewEngineIPFallback()
+	}
 	return map[string]any{
-		"public_base_url": strings.TrimRight(baseURL, "/"),
-		"public_hostname": hostname,
+		"public_base_url":          strings.TrimRight(baseURL, "/"),
+		"public_hostname":          hostname,
+		"network_mode":             overviewEngineNetworkMode(),
+		"network_mode_label":       overviewEngineNetworkModeLabel(),
+		"deployment_profile":       deploymentProfile,
+		"deployment_profile_label": overviewEngineDeploymentProfileLabel(),
+		"server_ip_fallback":       serverIPFallback,
+		"engine_ca_required":       engineCARequired,
+		"engine_ca":                engineCA,
 	}
 }
 

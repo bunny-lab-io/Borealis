@@ -178,6 +178,23 @@ func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
 	}
 }
 
+func TestSchedulerManagerRouteYAMLIncludesHostnameAliases(t *testing.T) {
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "engine.example.test")
+	t.Setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.example.test,alias.example.test")
+	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
+
+	content := schedulerRouteYAML(route)
+
+	for _, expected := range []string{
+		"Host(`engine.example.test`,`alias.example.test`) && PathPrefix(`/_borealis/site-workers/worker-1`)",
+		"Host(`engine.example.test`,`alias.example.test`) && PathPrefix(`/_borealis/site-workers/worker-1/remote-desktop/vnc`)",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("route yaml missing %q:\n%s", expected, content)
+		}
+	}
+}
+
 func TestSchedulerManagerSiteWorkerImageMatch(t *testing.T) {
 	if !schedulerSiteWorkerImageMatches(map[string]any{"configured_image": "site-worker:new"}, "site-worker:new") {
 		t.Fatalf("expected configured image to match")
@@ -238,7 +255,7 @@ func TestSchedulerManagerServiceActionUsesSchedulerImageForHelper(t *testing.T) 
 	if strings.Contains(joined, "borealis-engine/api-backend:test") {
 		t.Fatalf("helper should not use api-backend image:\n%s", joined)
 	}
-	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
+	if !strings.Contains(joined, "Engine.sh") || !strings.Contains(joined, "--network-mode") || !strings.Contains(joined, "public") || !strings.Contains(joined, "--service") || !strings.Contains(joined, "webui-frontend") || !strings.Contains(joined, "restart") {
 		t.Fatalf("helper command missing Engine.sh service action:\n%s", joined)
 	}
 }

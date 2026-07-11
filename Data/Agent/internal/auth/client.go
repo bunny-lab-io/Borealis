@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	cryptoRand "crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -51,6 +55,10 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	httpClient, err := HTTPClientForConfig(*cfg, 30*time.Second)
+	if err != nil {
+		return nil, err
+	}
 	identity, changed, err := LoadOrCreateIdentity(cfg)
 	if err != nil {
 		return nil, err
@@ -65,7 +73,7 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 		configPath:  configPath,
 		cfg:         cfg,
 		identity:    identity,
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		httpClient:  httpClient,
 		serviceMode: NormalizeServiceMode(serviceMode),
 		hostname:    hostname,
 	}
@@ -73,6 +81,95 @@ func NewClient(configPath string, cfg *agentconfig.AgentConfig, serviceMode stri
 		opt(client)
 	}
 	return client, nil
+}
+
+func TLSConfigFromConfig(cfg agentconfig.AgentConfig) (*tls.Config, error) {
+	caPEM := agentconfig.NormalizeEngineCAPEM(cfg.Trust.EngineCAPEM)
+	if caPEM == "" {
+		return nil, nil
+	}
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if !pool.AppendCertsFromPEM([]byte(caPEM)) {
+		return nil, fmt.Errorf("trusted engine CA PEM is invalid")
+	}
+	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, nil
+}
+
+func HTTPClientForConfig(cfg agentconfig.AgentConfig, timeout time.Duration) (*http.Client, error) {
+	transport, err := HTTPTransportForConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Timeout: timeout, Transport: transport}, nil
+}
+
+func HTTPTransportForConfig(cfg agentconfig.AgentConfig) (*http.Transport, error) {
+	tlsConfig, err := TLSConfigFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if tlsConfig != nil {
+		transport.TLSClientConfig = tlsConfig
+	}
+	if dialContext := DialContextForConfig(cfg); dialContext != nil {
+		transport.DialContext = dialContext
+	}
+	return transport, nil
+}
+
+func DialContextForConfig(cfg agentconfig.AgentConfig) func(context.Context, string, string) (net.Conn, error) {
+	fallbackIP := agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
+	if fallbackIP == "" {
+		return nil
+	}
+	serverHost := serverURLHostname(cfg.ServerURL)
+	if serverHost == "" {
+		return nil
+	}
+	baseDialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	return dialContextWithIPFallback(baseDialer.DialContext, serverHost, fallbackIP)
+}
+
+type dialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+func dialContextWithIPFallback(dial dialContextFunc, serverHost string, fallbackIP string) dialContextFunc {
+	normalizedHost := normalizeDialHost(serverHost)
+	normalizedIP := agentconfig.NormalizeServerIPFallback(fallbackIP)
+	if dial == nil || normalizedHost == "" || normalizedIP == "" {
+		return nil
+	}
+	return func(ctx context.Context, network string, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err == nil {
+			return conn, nil
+		}
+		host, port, splitErr := net.SplitHostPort(address)
+		if splitErr != nil || normalizeDialHost(host) != normalizedHost || strings.TrimSpace(port) == "" {
+			return nil, err
+		}
+		fallbackAddress := net.JoinHostPort(normalizedIP, port)
+		fallbackConn, fallbackErr := dial(ctx, network, fallbackAddress)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("dial %s failed: %w; server_ip_fallback %s failed: %v", address, err, fallbackAddress, fallbackErr)
+		}
+		return fallbackConn, nil
+	}
+}
+
+func serverURLHostname(value string) string {
+	parsed, err := url.Parse(agentconfig.NormalizeServerURL(value))
+	if err != nil {
+		return ""
+	}
+	return normalizeDialHost(parsed.Hostname())
+}
+
+func normalizeDialHost(value string) string {
+	return strings.Trim(strings.ToLower(strings.TrimSpace(value)), ".")
 }
 
 func NormalizeServiceMode(value string) string {
@@ -117,6 +214,35 @@ func (c *Client) Config() agentconfig.AgentConfig {
 
 func (c *Client) Identity() Identity {
 	return c.identity
+}
+
+func (c *Client) TLSConfig() *tls.Config {
+	cfg := c.Config()
+	tlsConfig, err := TLSConfigFromConfig(cfg)
+	if err != nil {
+		return nil
+	}
+	return tlsConfig
+}
+
+func (c *Client) HTTPClient() *http.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.httpClient
+}
+
+func (c *Client) HTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	cfg := c.Config()
+	httpClient, err := HTTPClientForConfig(cfg, timeout)
+	if err != nil {
+		return &http.Client{Timeout: timeout}
+	}
+	return httpClient
+}
+
+func (c *Client) DialContext() func(context.Context, string, string) (net.Conn, error) {
+	cfg := c.Config()
+	return DialContextForConfig(cfg)
 }
 
 func (c *Client) BaseURL() string {
