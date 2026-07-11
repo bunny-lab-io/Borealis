@@ -1953,6 +1953,10 @@ build_images() {
   for service in "${selected[@]}"; do
     validate_build_role "${service}"
     build_service_image "${service}" "${mode}"
+    if [[ "${service}" == "job-scheduler" ]]; then
+      log_status "site-worker-orchestrator" "Uses job-scheduler image" "${C_GREEN}"
+      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
+    fi
   done
 }
 

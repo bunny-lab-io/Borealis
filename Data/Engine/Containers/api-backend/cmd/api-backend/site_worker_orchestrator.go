@@ -56,31 +56,21 @@ type orchestratorServiceActionRequest struct {
 }
 
 func siteWorkerOrchestratorMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+	if explicitHealthcheckArgMode() {
+		return false
+	}
+	role := processRoleValue()
 	if role != "" {
-		return role == "site-worker-orchestrator" || role == "worker-orchestrator"
+		return textInSet(role, "site-worker-orchestrator", "worker-orchestrator")
 	}
-	for _, arg := range os.Args[1:] {
-		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "site-worker-orchestrator" || normalized == "worker-orchestrator" {
-			return true
-		}
-	}
-	return false
+	return processArgMatches("site-worker-orchestrator", "worker-orchestrator")
 }
 
 func siteWorkerOrchestratorHealthcheckMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role != "" {
-		return role == "site-worker-orchestrator-healthcheck" || role == "worker-orchestrator-healthcheck"
+	if processArgMatches("site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck") {
+		return true
 	}
-	for _, arg := range os.Args[1:] {
-		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "site-worker-orchestrator-healthcheck" || normalized == "worker-orchestrator-healthcheck" {
-			return true
-		}
-	}
-	return false
+	return processRoleMatches("site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck")
 }
 
 func runSiteWorkerOrchestrator(ctx context.Context, cfg gatewayConfig) error {

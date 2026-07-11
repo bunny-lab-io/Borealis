@@ -197,39 +197,66 @@ func main() {
 }
 
 func schedulerManagerMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+	if explicitHealthcheckArgMode() {
+		return false
+	}
+	role := processRoleValue()
 	if role != "" {
-		return role == "job-scheduler" || role == "scheduler-manager"
+		return textInSet(role, "job-scheduler", "scheduler-manager")
 	}
-	if len(os.Args) > 1 {
-		arg := strings.ToLower(strings.TrimSpace(os.Args[1]))
-		return arg == "job-scheduler" || arg == "scheduler-manager"
-	}
-	return false
+	return processArgMatches("job-scheduler", "scheduler-manager")
 }
 
 func apiHealthcheckMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role != "" {
-		return role == "api-healthcheck" || role == "api-backend-healthcheck"
+	if processArgMatches("api-healthcheck", "api-backend-healthcheck") {
+		return true
 	}
+	return processRoleMatches("api-healthcheck", "api-backend-healthcheck")
+}
+
+func schedulerHealthcheckMode() bool {
+	if processArgMatches("job-scheduler-healthcheck", "scheduler-healthcheck") {
+		return true
+	}
+	return processRoleMatches("job-scheduler-healthcheck", "scheduler-healthcheck")
+}
+
+func processRoleMatches(allowed ...string) bool {
+	role := processRoleValue()
+	if role == "" {
+		return false
+	}
+	return textInSet(role, allowed...)
+}
+
+func processRoleValue() string {
+	return strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
+}
+
+func processArgMatches(allowed ...string) bool {
 	for _, arg := range os.Args[1:] {
 		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "api-healthcheck" || normalized == "api-backend-healthcheck" {
+		if textInSet(normalized, allowed...) {
 			return true
 		}
 	}
 	return false
 }
 
-func schedulerHealthcheckMode() bool {
-	role := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_PROCESS_ROLE")))
-	if role != "" {
-		return role == "job-scheduler-healthcheck" || role == "scheduler-healthcheck"
-	}
-	for _, arg := range os.Args[1:] {
-		normalized := strings.ToLower(strings.TrimSpace(arg))
-		if normalized == "job-scheduler-healthcheck" || normalized == "scheduler-healthcheck" {
+func explicitHealthcheckArgMode() bool {
+	return processArgMatches(
+		"api-healthcheck",
+		"api-backend-healthcheck",
+		"job-scheduler-healthcheck",
+		"scheduler-healthcheck",
+		"site-worker-orchestrator-healthcheck",
+		"worker-orchestrator-healthcheck",
+	)
+}
+
+func textInSet(value string, allowed ...string) bool {
+	for _, item := range allowed {
+		if value == item {
 			return true
 		}
 	}
