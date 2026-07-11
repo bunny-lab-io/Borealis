@@ -262,10 +262,10 @@ dashboard_row_label() {
       printf '%s\n' "API Backend"
       ;;
     "api-backend > job-scheduler")
-      printf '%s\n' "API Backend > Job Scheduler"
+      printf '%s\n' "Job Scheduler"
       ;;
     "api-backend > job-scheduler > site-worker-orchestrator")
-      printf '%s\n' "API Backend > Job Scheduler > Site Worker Orchestrator"
+      printf '%s\n' "Site Worker Orchestrator"
       ;;
     "site-worker")
       printf '%s\n' "Site Worker"
@@ -509,6 +509,14 @@ log_build_status() {
   local service="$1"
   local status="$2"
   local color="$3"
+  case "${service}" in
+    job-scheduler)
+      status="[Shares API Backend Image] -> ${status}"
+      ;;
+    site-worker-orchestrator)
+      status="[Shares Job Scheduler Image] -> ${status}"
+      ;;
+  esac
   log_status "$(build_status_subject "${service}")" "${status}" "${color}"
 }
 
@@ -542,7 +550,7 @@ build_section_images() {
     selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
     build_service_image "${service}" "${mode}"
     if [[ "${service}" == "job-scheduler" ]]; then
-      log_build_status "site-worker-orchestrator" "Uses Shared Parent Container Image" "${C_GREEN}"
+      log_build_status "site-worker-orchestrator" "Image Ready" "${C_GREEN}"
       printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
     fi
   done

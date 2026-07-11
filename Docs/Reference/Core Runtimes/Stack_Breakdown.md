@@ -167,8 +167,8 @@ Build output follows `Engine.sh` service domains. `docker-proxy` is an external 
 | --- | --- |
 | Frontend | WebUI Frontend |
 | Backend | API Backend |
-| Backend | API Backend > Job Scheduler |
-| Backend | API Backend > Job Scheduler > Site Worker Orchestrator |
+| Backend | Job Scheduler |
+| Backend | Site Worker Orchestrator |
 | Backend | Site Worker |
 | Backend | Guacamole Remote Desktop |
 | Networking | Traefik Reverse Proxy |
@@ -211,7 +211,7 @@ Deploy output:
 - Domains include `Frontend`, `Backend`, `Networking`, `Database`, `Reconciliation`, `Housekeeping`, and `Complete`.
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
 - Service rows use compact status values such as `Already Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Built`, `Starting`, `Running`, `Healthy`, `Reconciling Stack`, or `Complete`.
-- Shared build-artifact or image-reuse relationships use lineage labels. For example, `API Backend > Job Scheduler` means the scheduler image is being built from the shared Go API backend binary, and `API Backend > Job Scheduler > Site Worker Orchestrator: [Uses Shared Parent Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
+- Shared build-artifact or image-reuse relationships appear only in transient status text. For example, the `Job Scheduler` row may show `[Shares API Backend Image] -> (Re)Building Container Image`, and the `Site Worker Orchestrator` row may show `[Shares Job Scheduler Image] -> Image Ready`. Runtime health updates later replace those sharing notes with `Starting`, `Running`, or `Healthy`.
 - Database schema setup updates the `PostgreSQL DB` row, then the row returns to Docker health status after maintenance completes.
 - Compose status uses the `Reconciliation` domain. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Image/cache pruning uses the `Housekeeping` domain.
