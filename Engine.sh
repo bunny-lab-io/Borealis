@@ -106,6 +106,28 @@ log_status() {
   printf '[%s] %s: %b[%s]%b\n' "$(date +%FT%T)" "${subject}" "${color}${C_BOLD}" "${status}" "${C_RESET}"
 }
 
+build_status_subject() {
+  local service="$1"
+  case "${service}" in
+    job-scheduler)
+      printf '%s\n' "api-backend > job-scheduler"
+      ;;
+    site-worker-orchestrator)
+      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
+      ;;
+    *)
+      printf '%s\n' "${service}"
+      ;;
+  esac
+}
+
+log_build_status() {
+  local service="$1"
+  local status="$2"
+  local color="$3"
+  log_status "$(build_status_subject "${service}")" "${status}" "${color}"
+}
+
 log_detail() {
   printf '[%s] %b%s%b\n' "$(date +%FT%T)" "${C_DIM}" "$*" "${C_RESET}"
 }
@@ -1822,7 +1844,7 @@ prepare_service_build_artifacts() {
         printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
         return 0
       fi
-      log_status "${service}" "Building Go binary" "${C_YELLOW}"
+      log_build_status "${service}" "Building Go binary" "${C_YELLOW}"
       BOREALIS_GO_API_BACKEND_OUTPUT_ROOT="${SCRIPT_DIR}/Data/Engine/Containers/api-backend/dist" \
         "${SCRIPT_DIR}/Data/Engine/Containers/api-backend/build-api-backend.sh" >> "${BUILD_LOG}" 2>&1
       GO_API_BACKEND_BINARY_PREPARED=1
@@ -1853,7 +1875,7 @@ build_service_image() {
   previous="$(previous_image_hash "${service}")"
   previous_tag="$(previous_image_tag "${service}")"
   if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-    log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+    log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
     printf '[%s] %s unchanged as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
     return 0
   fi
@@ -1862,7 +1884,7 @@ build_service_image() {
     legacy_hash="$(compute_service_hash "${service}" "${mode}" "legacy")"
     if [[ "${previous}" == "${legacy_hash}" ]] && docker image inspect "${previous_tag}" >/dev/null 2>&1; then
       docker tag "${previous_tag}" "${tag}"
-      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after hash normalization; retagged %s as %s\n' "$(date +%FT%T)" "${service}" "${previous_tag}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
@@ -1877,12 +1899,12 @@ build_service_image() {
     IMAGE_HASHES["${service}"]="${image_hash}"
     IMAGE_TAGS["${service}"]="${tag}"
     if [[ "${previous}" == "${image_hash}" ]] && docker image inspect "${tag}" >/dev/null 2>&1; then
-      log_status "${service}" "Already Up-to-Date" "${C_GREEN}"
+      log_build_status "${service}" "Already Up-to-Date" "${C_GREEN}"
       printf '[%s] %s unchanged after artifact preparation as %s; build skipped\n' "$(date +%FT%T)" "${service}" "${tag}" >> "${BUILD_LOG}"
       return 0
     fi
   fi
-  log_status "${service}" "(Re)Building" "${C_YELLOW}"
+  log_build_status "${service}" "(Re)Building Container Image" "${C_YELLOW}"
   {
     printf '[%s] Building %s as %s\n' "$(date +%FT%T)" "${service}" "${tag}"
     local build_args=(
@@ -1937,7 +1959,7 @@ build_service_image() {
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
-  log_status "${service}" "Rebuilt" "${C_GREEN}"
+  log_build_status "${service}" "Rebuilt" "${C_GREEN}"
 }
 
 build_images() {
@@ -1954,7 +1976,7 @@ build_images() {
     validate_build_role "${service}"
     build_service_image "${service}" "${mode}"
     if [[ "${service}" == "job-scheduler" ]]; then
-      log_status "site-worker-orchestrator" "Uses job-scheduler image" "${C_GREEN}"
+      log_build_status "site-worker-orchestrator" "Uses Shared Container Image" "${C_GREEN}"
       printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
     fi
   done

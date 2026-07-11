@@ -203,7 +203,8 @@ Build cache:
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
 
 Deploy output:
-- Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building]`.
+- Terminal output uses compact service status lines such as `<timestamp> <service>: [Already Up-to-Date]` or `<timestamp> <service>: [(Re)Building Container Image]`.
+- Shared build-artifact or image-reuse relationships use lineage labels. For example, `api-backend > job-scheduler` means the scheduler image is being built from the shared Go API backend binary, and `api-backend > job-scheduler > site-worker-orchestrator: [Uses Shared Container Image]` means the orchestrator service reuses the scheduler image instead of building a separate image.
 - Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied.
 - Color is enabled only for interactive terminals. Set `NO_COLOR=1` to disable it.
 - Successful deploys print `WebUI Accessible @ <public-base-url>`.
