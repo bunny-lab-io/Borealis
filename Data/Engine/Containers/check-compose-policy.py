@@ -144,7 +144,7 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             if not user_is_root:
                 fail(f"{name} must remain explicit root exception")
         elif user_is_root:
-            fail(f"{name} must run as non-root runtime owner")
+            fail(f"{name} must run as a non-root runtime user")
 
         cap_add = as_string_set(service.get("cap_add"))
         allowed_cap_add = CAP_ADD_ALLOWLIST.get(name, set())

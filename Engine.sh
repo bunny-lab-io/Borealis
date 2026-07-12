@@ -39,6 +39,8 @@ ENGINE_RUNTIME_USER="${BOREALIS_ENGINE_RUNTIME_USER:-borealis-engine}"
 ENGINE_RUNTIME_GROUP="${BOREALIS_ENGINE_RUNTIME_GROUP:-borealis-engine}"
 ENGINE_RUNTIME_UID="${BOREALIS_ENGINE_RUNTIME_UID:-64646}"
 ENGINE_RUNTIME_GID="${BOREALIS_ENGINE_RUNTIME_GID:-64646}"
+POSTGRES_RUNTIME_UID="${BOREALIS_POSTGRES_RUNTIME_UID:-}"
+POSTGRES_RUNTIME_GID="${BOREALIS_POSTGRES_RUNTIME_GID:-}"
 REPO_URL="${BOREALIS_ENGINE_REPO_URL:-${DEFAULT_REPO_URL}}"
 REPO_REF="${BOREALIS_ENGINE_REF:-}"
 REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
@@ -1333,6 +1335,26 @@ resolve_runtime_owner_gid() {
   fi
 }
 
+resolve_postgres_runtime_uid() {
+  if [[ -n "${POSTGRES_RUNTIME_UID}" ]]; then
+    printf '%s\n' "${POSTGRES_RUNTIME_UID}"
+    return 0
+  fi
+  local pg_version="${RUNTIME_ROOT}/Services/postgres-db/state/PG_VERSION"
+  if [[ -e "${pg_version}" ]]; then
+    stat -c '%u' "${pg_version}" 2>/dev/null && return 0
+  fi
+  printf '%s\n' "999"
+}
+
+resolve_postgres_runtime_gid() {
+  if [[ -n "${POSTGRES_RUNTIME_GID}" ]]; then
+    printf '%s\n' "${POSTGRES_RUNTIME_GID}"
+    return 0
+  fi
+  resolve_runtime_owner_gid
+}
+
 apply_traefik_dynamic_config_permissions() {
   local dynamic_dir="${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic"
   local owner_uid
@@ -1348,15 +1370,19 @@ apply_traefik_dynamic_config_permissions() {
 apply_runtime_service_ownership() {
   local owner_uid
   local owner_gid
+  local postgres_uid
+  local postgres_gid
   owner_uid="$(resolve_runtime_owner_uid)"
   owner_gid="$(resolve_runtime_owner_gid)"
+  postgres_uid="$(resolve_postgres_runtime_uid)"
+  postgres_gid="$(resolve_postgres_runtime_gid)"
   [[ "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]] || return 0
+  [[ "${postgres_uid}" =~ ^[0-9]+$ && "${postgres_gid}" =~ ^[0-9]+$ ]] || return 0
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
 
   local path
   for path in \
     "${RUNTIME_ROOT}/Services/api-backend" \
-    "${RUNTIME_ROOT}/Services/postgres-db" \
     "${RUNTIME_ROOT}/Services/traefik-edge" \
     "${RUNTIME_ROOT}/Services/webui-frontend" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd" \
@@ -1364,6 +1390,25 @@ apply_runtime_service_ownership() {
     "${RUNTIME_ROOT}/Services/wireguard-tunnel"; do
     [[ -e "${path}" ]] || continue
     chown -R "${owner_uid}:${owner_gid}" "${path}" 2>/dev/null || true
+  done
+
+  if [[ -d "${RUNTIME_ROOT}/Services/postgres-db" ]]; then
+    chown "${owner_uid}:${owner_gid}" "${RUNTIME_ROOT}/Services/postgres-db" 2>/dev/null || true
+  fi
+  if [[ -d "${RUNTIME_ROOT}/Services/postgres-db/state" ]]; then
+    if [[ -e "${RUNTIME_ROOT}/Services/postgres-db/state/PG_VERSION" ]]; then
+      chown "${postgres_uid}:${postgres_gid}" "${RUNTIME_ROOT}/Services/postgres-db/state" 2>/dev/null || true
+    else
+      chown -R "${postgres_uid}:${postgres_gid}" "${RUNTIME_ROOT}/Services/postgres-db/state" 2>/dev/null || true
+    fi
+    chmod 0700 "${RUNTIME_ROOT}/Services/postgres-db/state" 2>/dev/null || true
+  fi
+  for path in \
+    "${RUNTIME_ROOT}/Services/postgres-db/logs" \
+    "${RUNTIME_ROOT}/Services/postgres-db/run"; do
+    [[ -e "${path}" ]] || continue
+    chown -R "${postgres_uid}:${postgres_gid}" "${path}" 2>/dev/null || true
+    chmod 0775 "${path}" 2>/dev/null || true
   done
 
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets" 2>/dev/null || true
@@ -2392,6 +2437,8 @@ write_compose_env() {
   local traefik_proxy_protocol_trusted_ips
   local runtime_owner_uid
   local runtime_owner_gid
+  local postgres_runtime_uid
+  local postgres_runtime_gid
   local docker_socket_gid
   local host_timezone
   local webui_memory_limit
@@ -2424,6 +2471,10 @@ write_compose_env() {
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
   validate_numeric_id "BOREALIS_ENGINE_RUNTIME_OWNER_UID" "${runtime_owner_uid}"
   validate_numeric_id "BOREALIS_ENGINE_RUNTIME_OWNER_GID" "${runtime_owner_gid}"
+  postgres_runtime_uid="$(resolve_postgres_runtime_uid)"
+  postgres_runtime_gid="$(resolve_postgres_runtime_gid)"
+  validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_UID" "${postgres_runtime_uid}"
+  validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_GID" "${postgres_runtime_gid}"
   docker_socket_gid="$(resolve_docker_socket_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
   webui_memory_limit="${PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT}"
@@ -2445,6 +2496,8 @@ BOREALIS_ENGINE_RUNTIME_USER=${ENGINE_RUNTIME_USER}
 BOREALIS_ENGINE_RUNTIME_GROUP=${ENGINE_RUNTIME_GROUP}
 BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
 BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
+BOREALIS_POSTGRES_RUNTIME_UID=${postgres_runtime_uid}
+BOREALIS_POSTGRES_RUNTIME_GID=${postgres_runtime_gid}
 BOREALIS_DOCKER_SOCKET_PATH=${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}
 BOREALIS_DOCKER_SOCKET_GID=${docker_socket_gid}
 BOREALIS_ENGINE_MODE=production
