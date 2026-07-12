@@ -18,7 +18,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     .\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "SITE-CODE"
     ```
 
-    Windows downloaded `Agent.exe` enters bootstrap mode when no runtime flag is present. Bootstrap mode stages the runtime under `C:\Borealis`, reconciles Windows support dependencies, writes `agent.json`, creates the `BorealisAgent` service, and creates AutoUpdater and Watchdog scheduled tasks. If Borealis is already installed, the command performs an in-place redeploy: it stops Borealis-managed services, tasks, and processes, replaces `Agent.exe`, preserves existing identity and trust data in `agent.json`, and starts the service again.
+    Windows downloaded `Agent.exe` enters bootstrap mode when no runtime flag is present. Bootstrap mode stages the runtime under `C:\Borealis`, reconciles Windows support dependencies, writes `agent.json`, creates the `BorealisAgent` service, and creates AutoUpdater and Watchdog scheduled tasks. If Borealis is already installed, the command performs an in-place redeploy: it stops Borealis-managed services, tasks, and processes, replaces `Agent.exe`, preserves existing identity and trust data in `agent.json`, and starts the service again. If Windows still holds the old binary open, bootstrap stages a deferred replacement and retries after the old process exits.
 
 === "Linux"
 

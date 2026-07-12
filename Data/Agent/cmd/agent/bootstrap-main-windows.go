@@ -171,7 +171,8 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	logger.Tracef("Install/redeploy sequence start.")
 	logger.Stepf("Stopping Existing Borealis Components.")
 	quiesceBorealisManagedComponents(cfg, logger)
-	if err := copySelfToInstallRoot(cfg, logger); err != nil {
+	deferredReplacement, err := copySelfToInstallRoot(cfg, logger)
+	if err != nil {
 		return err
 	}
 	logger.Stepf("(Re)Installing Agent Support Dependencies.")
@@ -191,6 +192,13 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	logger.Stepf("Creating Agent Service And Support Tasks.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
+	}
+	if deferredReplacement != nil {
+		logger.Stepf("Scheduling Deferred Agent Replacement.")
+		if err := deferredReplacement.Schedule(cfg, logger); err != nil {
+			return err
+		}
+		writeTimeline(cfg, "running", "Deferred Agent Replacement Scheduled", "Existing Agent.exe was locked; replacement will complete after the old process exits.", 0)
 	}
 	logger.Tracef("Agent service and support tasks ready.")
 	writeState(cfg, "pending_approval", 0, "Agent.exe completed; device approval pending operator action.")
