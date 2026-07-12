@@ -645,7 +645,7 @@ getent_field() {
   local database="$1"
   local key="$2"
   local field="$3"
-  getent "${database}" "${key}" 2>/dev/null | awk -F: -v field="${field}" '{print $field; exit}'
+  getent "${database}" "${key}" 2>/dev/null | awk -F: -v field="${field}" '{print $field; exit}' || true
 }
 
 ensure_engine_runtime_identity() {
@@ -2935,6 +2935,16 @@ prune_stale_site_worker_images() {
   log_status "Docker Cleanup" "Pruning Stale Site Worker Images" "${C_YELLOW}"
   local image=""
   for image in "${stale_images[@]}"; do
+    local referencing_containers=""
+    referencing_containers="$(docker container ls -a --filter "ancestor=${image}" --format '{{.ID}}' 2>>"${BUILD_LOG}" || true)"
+    if [[ -n "${referencing_containers}" ]]; then
+      printf '[%s] Retaining stale site-worker image %s because container(s) still reference it: %s\n' \
+        "$(date +%FT%T)" \
+        "${image}" \
+        "$(printf '%s' "${referencing_containers}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')" \
+        >> "${BUILD_LOG}"
+      continue
+    fi
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
       printf '[%s] Failed to remove stale site-worker image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
     fi
