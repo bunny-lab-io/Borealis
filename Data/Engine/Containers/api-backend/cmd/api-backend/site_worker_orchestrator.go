@@ -330,6 +330,14 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 	}
 	args := []string{
 		"run", "--rm", "-d", "--name", containerName, "--network", "host",
+		"--user", schedulerRuntimeUserSpec(),
+		"--security-opt", "no-new-privileges:true",
+		"--cap-drop", "ALL",
+		"--read-only",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
+		"--memory", schedulerResourceEnv("BOREALIS_SITE_WORKER_MEMORY_LIMIT", "256m"),
+		"--cpus", schedulerResourceEnv("BOREALIS_SITE_WORKER_CPU_LIMIT", "1.00"),
+		"--pids-limit", schedulerResourceEnv("BOREALIS_SITE_WORKER_PIDS_LIMIT", "128"),
 		"--label", "borealis.role=site-worker",
 		"--label", fmt.Sprintf("borealis.site_id=%d", siteID),
 		"--label", "borealis.worker_guid=" + workerGUID,
@@ -352,6 +360,7 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 		"-e", "BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE="+schedulerSiteWorkerSocketIOAsyncMode(),
 		"-e", "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=300",
 		"-e", "BOREALIS_INTERNAL_API_BASE_URL="+envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"),
+		"-e", "HOME=/tmp",
 		"-e", fmt.Sprintf("BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s.log", workerGUID),
 		"-e", fmt.Sprintf("BOREALIS_ERROR_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s-error.log", workerGUID),
 		"-e", fmt.Sprintf("BOREALIS_API_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s-api.log", workerGUID),
@@ -490,7 +499,15 @@ func (o *siteWorkerOrchestrator) runServiceAction(ctx context.Context, req orche
 	shellCommand := "sleep 2; " + shellJoin(commandParts)
 	args := []string{
 		"run", "--rm", "-d", "--name", helperName, "--network", "host",
-		"-v", "/var/run/docker.sock:/var/run/docker.sock",
+		"--security-opt", "no-new-privileges:true",
+		"--cap-drop", "ALL",
+		"--read-only",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
+		"--memory", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"),
+		"--cpus", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT", "1.00"),
+		"--pids-limit", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT", "160"),
+		"-e", "HOME=/tmp",
+		"-v", schedulerResourceEnv("BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock")+":/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", o.projectRoot, o.projectRoot),
 		"-w", o.projectRoot,
 		"--entrypoint", "/bin/bash",
@@ -502,6 +519,33 @@ func (o *siteWorkerOrchestrator) runServiceAction(ctx context.Context, req orche
 	}
 	log.Printf("site-worker orchestrator queued service action helper=%s service=%s action=%s", strings.TrimSpace(string(out)), serviceKey, actionName)
 	return nil
+}
+
+func schedulerResourceEnv(name string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+func schedulerRuntimeUserSpec() string {
+	uid := schedulerRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_UID", "64646")
+	gid := schedulerRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", "64646")
+	return uid + ":" + gid
+}
+
+func schedulerRuntimeIDEnv(name string, fallback string) string {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" || value == "0" {
+		return fallback
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return fallback
+		}
+	}
+	return value
 }
 
 func (o *siteWorkerOrchestrator) serviceSnapshots(ctx context.Context) ([]map[string]any, error) {

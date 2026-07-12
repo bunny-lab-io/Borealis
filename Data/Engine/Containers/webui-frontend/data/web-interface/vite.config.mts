@@ -20,6 +20,7 @@ const hmrConfig = usePublicEdge && publicHostname
   : undefined;
 
 export default defineConfig({
+  cacheDir: process.env.BOREALIS_WEBUI_VITE_CACHE_DIR || '/tmp/borealis-vite-cache',
   plugins: [react()],
   esbuild: {
     target: "es2022",

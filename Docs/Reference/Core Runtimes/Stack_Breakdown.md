@@ -25,7 +25,19 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 
 Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
 
-`site-worker-orchestrator` is the only write boundary with `/var/run/docker.sock`. `job-scheduler` talks to it over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` using the Engine internal HMAC token. `api-backend` and `job-scheduler` do not mount the Docker socket in container mode. They read container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then fall back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, `borealis.created_by=site-worker-orchestrator`, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
+`site-worker-orchestrator` is the only write boundary with `/var/run/docker.sock`. `job-scheduler` talks to it over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` using the Engine internal HMAC token. `api-backend` and `job-scheduler` do not mount the Docker socket in container mode. They read container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then fall back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, `borealis.created_by=site-worker-orchestrator`, non-root user, `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, PID/memory/CPU caps, read-only Engine secret/config mounts, and a default idle timeout of 300 seconds.
+
+## Least-Privilege Runtime
+`Engine.sh` creates or repairs a `borealis-engine` system user/group with stable numeric IDs and writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID:GID` into `Engine/Deploy/compose.env`. It also detects the host Docker socket GID as `BOREALIS_DOCKER_SOCKET_GID` so only socket-owning services get explicit supplemental group access.
+
+Default Compose policy:
+- `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `docker-proxy` run as `borealis-engine`.
+- All Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
+- `traefik-edge` adds only `NET_BIND_SERVICE` for ports `80` and `443`.
+- `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, and resource limits.
+- `docker-proxy` has read-only Docker socket access. `site-worker-orchestrator` has write Docker socket access. No other static service mounts the Docker socket.
+
+Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API and WireGuard secret files.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -87,7 +99,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 
 `docker-proxy`:
 ```text
-/var/run/docker.sock -> /var/run/docker.sock:ro
+${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock} -> /var/run/docker.sock:ro
 127.0.0.1:2375 -> 2375
 ```
 
@@ -97,10 +109,10 @@ The proxy grants only Docker container read APIs, including status and site-work
 ```text
 Engine/Services/api-backend -> /opt/Borealis/Engine/Services/api-backend
 Engine/Services/site-worker-orchestrator -> /opt/Borealis/Engine/Services/site-worker-orchestrator
-/var/run/docker.sock -> /var/run/docker.sock
+${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock} -> /var/run/docker.sock
 ```
 
-The orchestrator listens only on the Unix socket path from `BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET`. It accepts strict JSON requests signed with `X-Borealis-Internal-Token`, launches only images allowed by `BOREALIS_SITE_WORKER_IMAGE` plus optional `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`, and rejects arbitrary Docker privileges, devices, capabilities, namespaces, command overrides, and environment overrides. Server Info does not expose an operator restart action for this service.
+The orchestrator listens only on the Unix socket path from `BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET`. It accepts strict JSON requests signed with `X-Borealis-Internal-Token`, launches only images allowed by `BOREALIS_SITE_WORKER_IMAGE` plus optional `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`, adds non-root/read-only/resource-limit Docker flags itself, and rejects arbitrary Docker privileges, devices, capabilities, namespaces, command overrides, and environment overrides. Server Info does not expose an operator restart action for this service.
 
 `postgres-db`:
 ```text
@@ -146,7 +158,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 2. If repo/release/branch options were supplied, sync the repository and re-exec installed `Engine.sh`.
 3. Install or verify Engine dependencies.
 4. Check for host PostgreSQL conflict on `127.0.0.1:5432`.
-5. Create service runtime tree under `Engine/Services/`.
+5. Create or repair `borealis-engine` runtime identity, then create service runtime tree under `Engine/Services/`.
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
 8. Resolve Engine FQDN, network mode, and certificate mode. Public resolves ACME email; Local generates or renews Borealis local CA/leaf certificate material.
@@ -198,7 +210,7 @@ Build cache:
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
-- `compose.env` carries image tags, stable env-file paths, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
+- `compose.env` carries image tags, stable env-file paths, runtime UID/GID, Docker socket GID, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, profile-managed resource caps, and site-worker scheduled work-item slots.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
@@ -363,7 +375,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` asks `site-worker-orchestrator` to launch a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately. Server Info does not expose an operator restart action for `site-worker-orchestrator`.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` asks `site-worker-orchestrator` to launch a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately. The helper is a documented root/Docker-socket exception because it runs `Engine.sh` service actions, but it still uses `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, and resource limits. Server Info does not expose an operator restart action for `site-worker-orchestrator`.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.
@@ -621,6 +633,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     Engine/Services/traefik-edge/state
     Engine/Services/webui-frontend/data/web-interface
     Engine/Services/remote-desktop-guacd/logs
+    Engine/Services/site-worker-orchestrator/run
     Engine/Services/wireguard-tunnel/config
     Engine/Services/wireguard-tunnel/logs
     Engine/Services/wireguard-tunnel/secrets
@@ -668,6 +681,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     - Validate launcher syntax after changing shell scripts:
     ```sh
     bash -n Engine.sh
-    docker compose -f Data/Engine/Containers/compose.yaml config
+    docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
+    python3 Data/Engine/Containers/check-compose-policy.py
     ```
     - Update this page when adding a service, port, volume, service action, or load-order dependency.

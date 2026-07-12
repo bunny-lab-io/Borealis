@@ -35,6 +35,10 @@ DEFAULT_RELEASE_CHANNEL="${BOREALIS_ENGINE_RELEASE_CHANNEL:-unstable}"
 DEFAULT_STABLE_REF="${BOREALIS_ENGINE_STABLE_REF:-}"
 DEFAULT_UNSTABLE_REF="${BOREALIS_ENGINE_UNSTABLE_REF:-${DEFAULT_REPO_REF}}"
 INSTALL_DIR="${BOREALIS_INSTALL_DIR:-${DEFAULT_INSTALL_DIR}}"
+ENGINE_RUNTIME_USER="${BOREALIS_ENGINE_RUNTIME_USER:-borealis-engine}"
+ENGINE_RUNTIME_GROUP="${BOREALIS_ENGINE_RUNTIME_GROUP:-borealis-engine}"
+ENGINE_RUNTIME_UID="${BOREALIS_ENGINE_RUNTIME_UID:-64646}"
+ENGINE_RUNTIME_GID="${BOREALIS_ENGINE_RUNTIME_GID:-64646}"
 REPO_URL="${BOREALIS_ENGINE_REPO_URL:-${DEFAULT_REPO_URL}}"
 REPO_REF="${BOREALIS_ENGINE_REF:-}"
 REPO_CHECKOUT_BRANCH="${BOREALIS_ENGINE_CHECKOUT_BRANCH:-}"
@@ -629,6 +633,77 @@ run_privileged() {
     return $?
   fi
   return 1
+}
+
+validate_numeric_id() {
+  local label="$1"
+  local value="$2"
+  [[ "${value}" =~ ^[0-9]+$ && "${value}" -gt 0 && "${value}" -lt 65535 ]] || die "${label} must be a numeric id from 1 through 65534."
+}
+
+getent_field() {
+  local database="$1"
+  local key="$2"
+  local field="$3"
+  getent "${database}" "${key}" 2>/dev/null | awk -F: -v field="${field}" '{print $field; exit}'
+}
+
+ensure_engine_runtime_identity() {
+  validate_numeric_id "BOREALIS_ENGINE_RUNTIME_UID" "${ENGINE_RUNTIME_UID}"
+  validate_numeric_id "BOREALIS_ENGINE_RUNTIME_GID" "${ENGINE_RUNTIME_GID}"
+
+  local existing_group_gid
+  existing_group_gid="$(getent_field group "${ENGINE_RUNTIME_GROUP}" 3)"
+  if [[ -n "${existing_group_gid}" && "${existing_group_gid}" != "${ENGINE_RUNTIME_GID}" ]]; then
+    die "Group ${ENGINE_RUNTIME_GROUP} exists with gid ${existing_group_gid}; expected ${ENGINE_RUNTIME_GID}."
+  fi
+  local existing_gid_group
+  existing_gid_group="$(getent group 2>/dev/null | awk -F: -v gid="${ENGINE_RUNTIME_GID}" '$3 == gid {print $1; exit}')"
+  if [[ -n "${existing_gid_group}" && "${existing_gid_group}" != "${ENGINE_RUNTIME_GROUP}" ]]; then
+    die "gid ${ENGINE_RUNTIME_GID} already belongs to ${existing_gid_group}; set a free Borealis runtime id before deploy."
+  fi
+  if [[ -z "${existing_group_gid}" ]]; then
+    run_privileged groupadd --system --gid "${ENGINE_RUNTIME_GID}" "${ENGINE_RUNTIME_GROUP}" \
+      || die "Failed to create ${ENGINE_RUNTIME_GROUP} runtime group."
+  fi
+
+  local existing_user_uid
+  existing_user_uid="$(getent_field passwd "${ENGINE_RUNTIME_USER}" 3)"
+  if [[ -n "${existing_user_uid}" && "${existing_user_uid}" != "${ENGINE_RUNTIME_UID}" ]]; then
+    die "User ${ENGINE_RUNTIME_USER} exists with uid ${existing_user_uid}; expected ${ENGINE_RUNTIME_UID}."
+  fi
+  local existing_uid_user
+  existing_uid_user="$(getent passwd 2>/dev/null | awk -F: -v uid="${ENGINE_RUNTIME_UID}" '$3 == uid {print $1; exit}')"
+  if [[ -n "${existing_uid_user}" && "${existing_uid_user}" != "${ENGINE_RUNTIME_USER}" ]]; then
+    die "uid ${ENGINE_RUNTIME_UID} already belongs to ${existing_uid_user}; set a free Borealis runtime id before deploy."
+  fi
+  if [[ -z "${existing_user_uid}" ]]; then
+    local nologin_shell="/usr/sbin/nologin"
+    if [[ ! -x "${nologin_shell}" ]]; then
+      nologin_shell="/sbin/nologin"
+    fi
+    if [[ ! -x "${nologin_shell}" ]]; then
+      nologin_shell="/bin/false"
+    fi
+    run_privileged useradd \
+      --system \
+      --uid "${ENGINE_RUNTIME_UID}" \
+      --gid "${ENGINE_RUNTIME_GROUP}" \
+      --home-dir /nonexistent \
+      --no-create-home \
+      --shell "${nologin_shell}" \
+      "${ENGINE_RUNTIME_USER}" \
+      || die "Failed to create ${ENGINE_RUNTIME_USER} runtime user."
+  fi
+}
+
+resolve_docker_socket_gid() {
+  local docker_socket="${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
+  if [[ -S "${docker_socket}" || -e "${docker_socket}" ]]; then
+    stat -c '%g' "${docker_socket}" 2>/dev/null || printf '0\n'
+    return 0
+  fi
+  printf '0\n'
 }
 
 detect_distro() {
@@ -1241,20 +1316,20 @@ generate_secret() {
 resolve_runtime_owner_uid() {
   if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-}" ]]; then
     printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_UID}"
-  elif [[ -n "${SUDO_UID:-}" ]]; then
-    printf '%s\n' "${SUDO_UID}"
+  elif getent passwd "${ENGINE_RUNTIME_USER}" >/dev/null 2>&1; then
+    getent_field passwd "${ENGINE_RUNTIME_USER}" 3
   else
-    id -u
+    printf '%s\n' "${ENGINE_RUNTIME_UID}"
   fi
 }
 
 resolve_runtime_owner_gid() {
   if [[ -n "${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-}" ]]; then
     printf '%s\n' "${BOREALIS_ENGINE_RUNTIME_OWNER_GID}"
-  elif [[ -n "${SUDO_GID:-}" ]]; then
-    printf '%s\n' "${SUDO_GID}"
+  elif getent group "${ENGINE_RUNTIME_GROUP}" >/dev/null 2>&1; then
+    getent_field group "${ENGINE_RUNTIME_GROUP}" 3
   else
-    id -g
+    printf '%s\n' "${ENGINE_RUNTIME_GID}"
   fi
 }
 
@@ -1268,6 +1343,38 @@ apply_traefik_dynamic_config_permissions() {
     chown "${owner_uid}:${owner_gid}" "${dynamic_dir}" 2>/dev/null || true
   fi
   chmod 0775 "${dynamic_dir}" 2>/dev/null || true
+}
+
+apply_runtime_service_ownership() {
+  local owner_uid
+  local owner_gid
+  owner_uid="$(resolve_runtime_owner_uid)"
+  owner_gid="$(resolve_runtime_owner_gid)"
+  [[ "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]] || return 0
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
+
+  local path
+  for path in \
+    "${RUNTIME_ROOT}/Services/api-backend" \
+    "${RUNTIME_ROOT}/Services/postgres-db" \
+    "${RUNTIME_ROOT}/Services/traefik-edge" \
+    "${RUNTIME_ROOT}/Services/webui-frontend" \
+    "${RUNTIME_ROOT}/Services/remote-desktop-guacd" \
+    "${RUNTIME_ROOT}/Services/site-worker-orchestrator" \
+    "${RUNTIME_ROOT}/Services/wireguard-tunnel"; do
+    [[ -e "${path}" ]] || continue
+    chown -R "${owner_uid}:${owner_gid}" "${path}" 2>/dev/null || true
+  done
+
+  chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets" 2>/dev/null || true
+  chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" 2>/dev/null || true
+  chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates" 2>/dev/null || true
+  chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" 2>/dev/null || true
+  find "${RUNTIME_ROOT}/Services/api-backend/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
+    -type f -exec chmod go-rwx {} + 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
 ensure_service_tree() {
@@ -1301,7 +1408,8 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
   apply_traefik_dynamic_config_permissions
-  chmod 0777 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
+  apply_runtime_service_ownership
 }
 
 seed_webui_runtime_source() {
@@ -1920,6 +2028,15 @@ format_pg_memory_mib() {
   printf '%sMB\n' "${mib}"
 }
 
+format_docker_memory_mib() {
+  local mib="$1"
+  if (( mib >= 1024 && mib % 1024 == 0 )); then
+    printf '%sg\n' "$((mib / 1024))"
+    return 0
+  fi
+  printf '%sm\n' "${mib}"
+}
+
 detect_host_vcpu() {
   local count=""
   if command_exists nproc; then
@@ -2077,6 +2194,160 @@ load_profile_tuning() {
       PROFILE_POSTGRES_EFFECTIVE_IO_CONCURRENCY=16
       ;;
   esac
+
+  local postgres_extra_mib
+  case "${profile_rank}" in
+    3)
+      postgres_extra_mib=8192
+      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="256m"
+      PROFILE_DOCKER_PROXY_CPU_LIMIT="1.00"
+      PROFILE_DOCKER_PROXY_PIDS_LIMIT=128
+      PROFILE_API_BACKEND_MEMORY_LIMIT="3g"
+      PROFILE_API_BACKEND_CPU_LIMIT="6.00"
+      PROFILE_API_BACKEND_PIDS_LIMIT=512
+      PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="2g"
+      PROFILE_JOB_SCHEDULER_CPU_LIMIT="3.00"
+      PROFILE_JOB_SCHEDULER_PIDS_LIMIT=512
+      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="2g"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="3.00"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=512
+      PROFILE_SITE_WORKER_MEMORY_LIMIT="512m"
+      PROFILE_SITE_WORKER_CPU_LIMIT="2.00"
+      PROFILE_SITE_WORKER_PIDS_LIMIT=128
+      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="3g"
+      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="6.00"
+      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=512
+      PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="1g"
+      PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.50"
+      PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="3g"
+      PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT="4.00"
+      PROFILE_WEBUI_FRONTEND_PIDS_LIMIT=384
+      PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT="2g"
+      PROFILE_TRAEFIK_EDGE_CPU_LIMIT="4.00"
+      PROFILE_TRAEFIK_EDGE_PIDS_LIMIT=384
+      PROFILE_POSTGRES_DB_CPU_LIMIT="6.00"
+      PROFILE_POSTGRES_DB_PIDS_LIMIT=512
+      PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT="2g"
+      PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT="4.00"
+      PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=384
+      PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT="1g"
+      PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT="2.00"
+      PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT=64
+      ;;
+    2)
+      postgres_extra_mib=4096
+      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="192m"
+      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.75"
+      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
+      PROFILE_API_BACKEND_MEMORY_LIMIT="2g"
+      PROFILE_API_BACKEND_CPU_LIMIT="4.00"
+      PROFILE_API_BACKEND_PIDS_LIMIT=384
+      PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="1g"
+      PROFILE_JOB_SCHEDULER_CPU_LIMIT="2.00"
+      PROFILE_JOB_SCHEDULER_PIDS_LIMIT=384
+      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="1g"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="2.00"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=384
+      PROFILE_SITE_WORKER_MEMORY_LIMIT="512m"
+      PROFILE_SITE_WORKER_CPU_LIMIT="1.50"
+      PROFILE_SITE_WORKER_PIDS_LIMIT=128
+      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="2g"
+      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="4.00"
+      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=384
+      PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="768m"
+      PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.00"
+      PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="2g"
+      PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT="3.00"
+      PROFILE_WEBUI_FRONTEND_PIDS_LIMIT=256
+      PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT="1g"
+      PROFILE_TRAEFIK_EDGE_CPU_LIMIT="2.00"
+      PROFILE_TRAEFIK_EDGE_PIDS_LIMIT=256
+      PROFILE_POSTGRES_DB_CPU_LIMIT="4.00"
+      PROFILE_POSTGRES_DB_PIDS_LIMIT=384
+      PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT="1g"
+      PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT="2.00"
+      PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=256
+      PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT="512m"
+      PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT="2.00"
+      PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT=64
+      ;;
+    1)
+      postgres_extra_mib=2048
+      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
+      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
+      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
+      PROFILE_API_BACKEND_MEMORY_LIMIT="1g"
+      PROFILE_API_BACKEND_CPU_LIMIT="2.00"
+      PROFILE_API_BACKEND_PIDS_LIMIT=256
+      PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="512m"
+      PROFILE_JOB_SCHEDULER_CPU_LIMIT="1.50"
+      PROFILE_JOB_SCHEDULER_PIDS_LIMIT=256
+      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="512m"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="1.50"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=256
+      PROFILE_SITE_WORKER_MEMORY_LIMIT="384m"
+      PROFILE_SITE_WORKER_CPU_LIMIT="1.00"
+      PROFILE_SITE_WORKER_PIDS_LIMIT=128
+      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="1g"
+      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="2.00"
+      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=256
+      PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="512m"
+      PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.00"
+      PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="1536m"
+      PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT="2.00"
+      PROFILE_WEBUI_FRONTEND_PIDS_LIMIT=192
+      PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT="512m"
+      PROFILE_TRAEFIK_EDGE_CPU_LIMIT="1.50"
+      PROFILE_TRAEFIK_EDGE_PIDS_LIMIT=192
+      PROFILE_POSTGRES_DB_CPU_LIMIT="2.00"
+      PROFILE_POSTGRES_DB_PIDS_LIMIT=256
+      PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT="512m"
+      PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT="1.00"
+      PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=128
+      PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT="256m"
+      PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT="1.00"
+      PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT=64
+      ;;
+    *)
+      postgres_extra_mib=512
+      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
+      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
+      PROFILE_DOCKER_PROXY_PIDS_LIMIT=64
+      PROFILE_API_BACKEND_MEMORY_LIMIT="512m"
+      PROFILE_API_BACKEND_CPU_LIMIT="1.50"
+      PROFILE_API_BACKEND_PIDS_LIMIT=160
+      PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="256m"
+      PROFILE_JOB_SCHEDULER_CPU_LIMIT="1.00"
+      PROFILE_JOB_SCHEDULER_PIDS_LIMIT=160
+      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="256m"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="1.00"
+      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=160
+      PROFILE_SITE_WORKER_MEMORY_LIMIT="256m"
+      PROFILE_SITE_WORKER_CPU_LIMIT="1.00"
+      PROFILE_SITE_WORKER_PIDS_LIMIT=128
+      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="512m"
+      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="1.00"
+      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=160
+      PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="256m"
+      PROFILE_WEBUI_FRONTEND_CPU_LIMIT="0.50"
+      PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="1g"
+      PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT="2.00"
+      PROFILE_WEBUI_FRONTEND_PIDS_LIMIT=128
+      PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT="256m"
+      PROFILE_TRAEFIK_EDGE_CPU_LIMIT="1.00"
+      PROFILE_TRAEFIK_EDGE_PIDS_LIMIT=128
+      PROFILE_POSTGRES_DB_CPU_LIMIT="1.50"
+      PROFILE_POSTGRES_DB_PIDS_LIMIT=256
+      PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT="256m"
+      PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT="1.00"
+      PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=64
+      PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT="128m"
+      PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT="1.00"
+      PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT=64
+      ;;
+  esac
+
+  PROFILE_POSTGRES_DB_MEMORY_LIMIT="$(format_docker_memory_mib "$((shared_mib + postgres_extra_mib))")"
   PROFILE_POSTGRES_SHARED_BUFFERS="$(format_pg_memory_mib "${shared_mib}")"
   PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE="$(format_pg_memory_mib "${cache_mib}")"
   PROFILE_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR="0.02"
@@ -2121,7 +2392,10 @@ write_compose_env() {
   local traefik_proxy_protocol_trusted_ips
   local runtime_owner_uid
   local runtime_owner_gid
+  local docker_socket_gid
   local host_timezone
+  local webui_memory_limit
+  local webui_cpu_limit
   local engine_ip_fallback=""
   local local_ca_enabled=0
   local local_ca_cert=""
@@ -2148,7 +2422,16 @@ write_compose_env() {
   host_timezone="$(resolve_host_timezone)"
   runtime_owner_uid="$(resolve_runtime_owner_uid)"
   runtime_owner_gid="$(resolve_runtime_owner_gid)"
+  validate_numeric_id "BOREALIS_ENGINE_RUNTIME_OWNER_UID" "${runtime_owner_uid}"
+  validate_numeric_id "BOREALIS_ENGINE_RUNTIME_OWNER_GID" "${runtime_owner_gid}"
+  docker_socket_gid="$(resolve_docker_socket_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
+  webui_memory_limit="${PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT}"
+  webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_CPU_LIMIT}"
+  if [[ "${mode}" == "dev" ]]; then
+    webui_memory_limit="${PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT}"
+    webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT}"
+  fi
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
@@ -2158,8 +2441,12 @@ BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 BOREALIS_RUNTIME_ENV_FILE=${RUNTIME_ENV}
 BOREALIS_WEBUI_ENV_FILE=${WEBUI_ENV}
+BOREALIS_ENGINE_RUNTIME_USER=${ENGINE_RUNTIME_USER}
+BOREALIS_ENGINE_RUNTIME_GROUP=${ENGINE_RUNTIME_GROUP}
 BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
 BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
+BOREALIS_DOCKER_SOCKET_PATH=${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}
+BOREALIS_DOCKER_SOCKET_GID=${docker_socket_gid}
 BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
 BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
@@ -2205,6 +2492,40 @@ BOREALIS_DEPLOYMENT_MEMORY_RANK=${PROFILE_MEMORY_RANK}
 BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
+
+BOREALIS_DOCKER_PROXY_MEMORY_LIMIT=${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-${PROFILE_DOCKER_PROXY_MEMORY_LIMIT}}
+BOREALIS_DOCKER_PROXY_CPU_LIMIT=${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-${PROFILE_DOCKER_PROXY_CPU_LIMIT}}
+BOREALIS_DOCKER_PROXY_PIDS_LIMIT=${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-${PROFILE_DOCKER_PROXY_PIDS_LIMIT}}
+BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
+BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
+BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
+BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT=${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-${PROFILE_JOB_SCHEDULER_MEMORY_LIMIT}}
+BOREALIS_JOB_SCHEDULER_CPU_LIMIT=${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-${PROFILE_JOB_SCHEDULER_CPU_LIMIT}}
+BOREALIS_JOB_SCHEDULER_PIDS_LIMIT=${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-${PROFILE_JOB_SCHEDULER_PIDS_LIMIT}}
+BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT}}
+BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT}}
+BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT}}
+BOREALIS_SITE_WORKER_MEMORY_LIMIT=${BOREALIS_SITE_WORKER_MEMORY_LIMIT:-${PROFILE_SITE_WORKER_MEMORY_LIMIT}}
+BOREALIS_SITE_WORKER_CPU_LIMIT=${BOREALIS_SITE_WORKER_CPU_LIMIT:-${PROFILE_SITE_WORKER_CPU_LIMIT}}
+BOREALIS_SITE_WORKER_PIDS_LIMIT=${BOREALIS_SITE_WORKER_PIDS_LIMIT:-${PROFILE_SITE_WORKER_PIDS_LIMIT}}
+BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT}}
+BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT}}
+BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT}}
+BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT=${BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT:-${webui_memory_limit}}
+BOREALIS_WEBUI_FRONTEND_CPU_LIMIT=${BOREALIS_WEBUI_FRONTEND_CPU_LIMIT:-${webui_cpu_limit}}
+BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT=${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-${PROFILE_WEBUI_FRONTEND_PIDS_LIMIT}}
+BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT=${BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT:-${PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT}}
+BOREALIS_TRAEFIK_EDGE_CPU_LIMIT=${BOREALIS_TRAEFIK_EDGE_CPU_LIMIT:-${PROFILE_TRAEFIK_EDGE_CPU_LIMIT}}
+BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT=${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-${PROFILE_TRAEFIK_EDGE_PIDS_LIMIT}}
+BOREALIS_POSTGRES_DB_MEMORY_LIMIT=${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-${PROFILE_POSTGRES_DB_MEMORY_LIMIT}}
+BOREALIS_POSTGRES_DB_CPU_LIMIT=${BOREALIS_POSTGRES_DB_CPU_LIMIT:-${PROFILE_POSTGRES_DB_CPU_LIMIT}}
+BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POSTGRES_DB_PIDS_LIMIT}}
+BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT}}
+BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT}}
+BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT}}
+BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT}}
+BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT}}
+BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT}}
 
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
@@ -3201,6 +3522,7 @@ validate_build_role() {
 
 prepare_runtime() {
   local mode="$1"
+  ensure_engine_runtime_identity
   ensure_service_tree
   seed_webui_runtime_source
   prune_empty_legacy_runtime_paths

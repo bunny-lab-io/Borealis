@@ -1,12 +1,26 @@
 name: ${BOREALIS_COMPOSE_PROJECT_NAME:-borealis-engine}
 
+x-borealis-hardened-service: &borealis-hardened-service
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+
 services:
   docker-proxy:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
     container_name: borealis-engine-docker-proxy
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
+    group_add:
+      - "${BOREALIS_DOCKER_SOCKET_GID:-0}"
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
+    mem_limit: ${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-128m}
+    cpus: "${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-0.50}"
+    pids_limit: ${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-64}
     environment:
       CONTAINERS: "1"
       POST: "0"
@@ -14,17 +28,23 @@ services:
     ports:
       - "127.0.0.1:2375:2375"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
 
   api-backend:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_API_BACKEND_IMAGE:-borealis-engine/api-backend:local}
     container_name: borealis-engine-api-backend
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_API_BACKEND_MEMORY_LIMIT:-512m}
+    cpus: "${BOREALIS_API_BACKEND_CPU_LIMIT:-1.50}"
+    pids_limit: ${BOREALIS_API_BACKEND_PIDS_LIMIT:-160}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     environment:
       BOREALIS_SCHEDULED_JOBS_START_LOOP: "0"
+      HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
@@ -51,10 +71,15 @@ services:
       start_period: 30s
 
   job-scheduler:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}
     container_name: borealis-engine-job-scheduler
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-256m}
+    cpus: "${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-1.00}"
+    pids_limit: ${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-160}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     environment:
@@ -63,6 +88,7 @@ services:
       BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
       BOREALIS_JOB_SCHEDULER_GUID: job-scheduler
       BOREALIS_JOB_SCHEDULER_CONTAINER_NAME: borealis-engine-job-scheduler
+      HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
@@ -86,10 +112,17 @@ services:
       start_period: 20s
 
   site-worker-orchestrator:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}
     container_name: borealis-engine-site-worker-orchestrator
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
+    group_add:
+      - "${BOREALIS_DOCKER_SOCKET_GID:-0}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT:-256m}
+    cpus: "${BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT:-1.00}"
+    pids_limit: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT:-160}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     environment:
@@ -97,11 +130,12 @@ services:
       BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
       BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
       BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
+      HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator:/opt/Borealis/Engine/Services/site-worker-orchestrator
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
       api-backend:
         condition: service_healthy
@@ -115,12 +149,20 @@ services:
       start_period: 10s
 
   webui-frontend:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_WEBUI_FRONTEND_IMAGE:-borealis-engine/webui-frontend:local}
     container_name: borealis-engine-webui-frontend
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT:-256m}
+    cpus: "${BOREALIS_WEBUI_FRONTEND_CPU_LIMIT:-0.50}"
+    pids_limit: ${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-128}
     env_file:
       - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
+    environment:
+      BOREALIS_WEBUI_VITE_CACHE_DIR: /tmp/borealis-vite-cache
+      HOME: /tmp
     volumes:
       - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src
       - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public
@@ -137,12 +179,21 @@ services:
       start_period: 20s
 
   traefik-edge:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_TRAEFIK_EDGE_IMAGE:-borealis-engine/traefik-edge:local}
     container_name: borealis-engine-traefik-edge
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    cap_add:
+      - NET_BIND_SERVICE
+    mem_limit: ${BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT:-256m}
+    cpus: "${BOREALIS_TRAEFIK_EDGE_CPU_LIMIT:-1.00}"
+    pids_limit: ${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-128}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    environment:
+      HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge:/opt/Borealis/Engine/Services/traefik-edge
     depends_on:
@@ -158,10 +209,18 @@ services:
       start_period: 10s
 
   postgres-db:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_POSTGRES_DB_IMAGE:-borealis-engine/postgres-db:local}
     container_name: borealis-engine-postgres-db
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-1536m}
+    cpus: "${BOREALIS_POSTGRES_DB_CPU_LIMIT:-1.50}"
+    pids_limit: ${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-256}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=32m,uid=${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646},gid=${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646},mode=0775
     command:
       - postgres
       - -c
@@ -222,12 +281,19 @@ services:
       start_period: 20s
 
   remote-desktop-guacd:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE:-borealis-engine/remote-desktop-guacd:local}
     container_name: borealis-engine-remote-desktop-guacd
     network_mode: host
+    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
+    mem_limit: ${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-256m}
+    cpus: "${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-1.00}"
+    pids_limit: ${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-64}
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
+    environment:
+      HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/remote-desktop-guacd/logs:/opt/borealis/logs
     healthcheck:
@@ -238,15 +304,18 @@ services:
       start_period: 10s
 
   wireguard-tunnel:
+    <<: *borealis-hardened-service
     image: ${BOREALIS_WIREGUARD_TUNNEL_IMAGE:-borealis-engine/wireguard-tunnel:local}
     container_name: borealis-engine-wireguard-tunnel
     network_mode: host
+    user: "0:0"
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    mem_limit: ${BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT:-128m}
+    cpus: "${BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT:-1.00}"
+    pids_limit: ${BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT:-64}
     devices:
       - /dev/net/tun:/dev/net/tun
     env_file:

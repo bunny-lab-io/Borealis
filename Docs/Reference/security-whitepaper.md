@@ -43,7 +43,8 @@ This page starts with a plain-language security posture summary for evaluators, 
 ### Runtime and Container Boundaries
 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
-- Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests.
+- Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
+- Most Engine containers run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits.
 - WireGuard runtime uses explicit network capabilities, `/dev/net/tun`, and `no-new-privileges` instead of full privileged container mode.
 
 ### Monitoring, Audit, and Recovery
@@ -277,10 +278,10 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
     - `wireGuardRuntime.ensureLinuxFirewallLocked` always creates deterministic `BOREALIS-WG-INPUT` and `BOREALIS-WG-FWD` chains. No environment flag disables those firewall chains.
     - Engine-side WireGuard firewall chains drop invalid packets, accept only established/related return traffic, drop new agent-originated host ingress over the tunnel, drop agent-to-agent forwarding, and drop agent-originated forwarding toward other networks.
     - `wireguard-tunnel/control_server.py` rejects arbitrary privileged commands. It only accepts expected WireGuard listener, peer, interface, route, and Borealis firewall command shapes under service-local config and secret paths.
-    - `wireguard-tunnel` uses host networking, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`; it does not run with Compose `privileged: true`.
+    - `wireguard-tunnel` is the root container exception. It uses host networking, `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, and `no-new-privileges`; it does not run with Compose `privileged: true`.
     - `deviceAllowsRemoteAccess` blocks non-active device status for `/api/agent/vpn/ensure`, `/api/agent/vpn/ready`, `/api/agent/vnc/ensure`, `/api/tunnel/connect`, `/api/tunnel/status`, `/api/tunnel/active`, `/api/remote-ops/session`, worker-backed process/quick-run/maintenance dispatch, and scheduled target materialization.
     - Site-worker socket authentication rejects quarantined, revoked, and decommissioned devices before registering host-service sockets or file-transfer agent sessions.
-    - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They do not mount `/var/run/docker.sock`; only `site-worker-orchestrator` owns the host Docker socket, and `job-scheduler` reaches it through an Engine-internal Unix socket with HMAC authentication.
+    - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They run as the `borealis-engine` runtime owner with `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, PID/memory/CPU caps, and no `/var/run/docker.sock` mount. Only `site-worker-orchestrator` owns write access to the host Docker socket, and `job-scheduler` reaches it through an Engine-internal Unix socket with HMAC authentication.
 
     ### Enrollment workflow
 

@@ -1,0 +1,31 @@
+name: Engine Container Policy
+
+on:
+  pull_request:
+    paths:
+      - "Engine.sh"
+      - "Data/Engine/Containers/**"
+      - ".github/workflows/engine-container-policy.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "Engine.sh"
+      - "Data/Engine/Containers/**"
+      - ".github/workflows/engine-container-policy.yml"
+
+jobs:
+  compose-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate Engine.sh syntax
+        run: bash -n Engine.sh
+
+      - name: Render Engine Compose config
+        run: docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
+
+      - name: Check Engine container policy
+        run: python3 Data/Engine/Containers/check-compose-policy.py

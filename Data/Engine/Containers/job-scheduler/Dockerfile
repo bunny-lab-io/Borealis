@@ -1,12 +1,17 @@
 FROM alpine:3.24
 
+ARG BOREALIS_ENGINE_RUNTIME_UID=64646
+ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+
 RUN apk add --no-cache \
         bash \
         ca-certificates \
         docker-cli \
         docker-cli-compose \
         python3 \
-        tzdata
+        tzdata \
+    && addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
+    && adduser -S -D -H -u "${BOREALIS_ENGINE_RUNTIME_UID}" -G borealis-engine -s /sbin/nologin borealis-engine
 
 WORKDIR /opt/Borealis
 

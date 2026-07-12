@@ -102,10 +102,19 @@ func TestSiteWorkerOrchestratorLaunchBuildsSafeDockerPayload(t *testing.T) {
 	for _, expected := range []string{
 		"\nrun\n",
 		"\n--network\nhost\n",
+		"\n--user\n64646:64646\n",
+		"\n--security-opt\nno-new-privileges:true\n",
+		"\n--cap-drop\nALL\n",
+		"\n--read-only\n",
+		"\n--tmpfs\n/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777\n",
+		"\n--memory\n256m\n",
+		"\n--cpus\n1.00\n",
+		"\n--pids-limit\n128\n",
 		"\n--label\nborealis.role=site-worker\n",
 		"\n--label\nborealis.site_id=7\n",
 		"\n--label\nborealis.worker_guid=worker-safe\n",
 		"\n--label\nborealis.created_by=site-worker-orchestrator\n",
+		"\n-e\nHOME=/tmp\n",
 		"\nborealis-engine/site-worker:test\n",
 	} {
 		if !strings.Contains(joined, expected) {
@@ -171,9 +180,29 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := "\n" + strings.Join(strings.Split(strings.TrimSpace(string(raw)), "\n"), "\n") + "\n"
-	for _, expected := range []string{"\nborealis-engine/job-scheduler:test\n", "Engine.sh", "--service", "webui-frontend", "rebuild", "prod"} {
+	for _, expected := range []string{
+		"\n--security-opt\nno-new-privileges:true\n",
+		"\n--cap-drop\nALL\n",
+		"\n--read-only\n",
+		"\n--tmpfs\n/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777\n",
+		"\n--memory\n512m\n",
+		"\n--cpus\n1.00\n",
+		"\n--pids-limit\n160\n",
+		"\n-e\nHOME=/tmp\n",
+		"\nborealis-engine/job-scheduler:test\n",
+		"Engine.sh",
+		"--service",
+		"webui-frontend",
+		"rebuild",
+		"prod",
+	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
+		}
+	}
+	for _, forbidden := range []string{"\n--privileged\n", "\n--device\n", "\n--cap-add\n", "\n--pid\n", "\n--ipc\n"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("service action helper contains forbidden docker option %q:\n%s", forbidden, joined)
 		}
 	}
 	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild"}); err == nil {
@@ -194,7 +223,7 @@ func TestComposeJobSchedulerDoesNotMountDockerSocket(t *testing.T) {
 		t.Fatalf("job-scheduler must not mount Docker socket:\n%s", schedulerBlock)
 	}
 	orchestratorBlock := composeServiceBlock(string(content), "site-worker-orchestrator")
-	if !strings.Contains(orchestratorBlock, "/var/run/docker.sock:/var/run/docker.sock") {
+	if !strings.Contains(orchestratorBlock, "BOREALIS_DOCKER_SOCKET_PATH") || !strings.Contains(orchestratorBlock, ":/var/run/docker.sock") {
 		t.Fatalf("site-worker-orchestrator should own Docker socket mount:\n%s", orchestratorBlock)
 	}
 }
