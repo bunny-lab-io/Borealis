@@ -37,7 +37,7 @@ func runBootstrapConsole(cli cliOptions) int {
 
 func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	startedAt := time.Now()
-	logger.Stepf("Running Agent Bootstrap.")
+	logger.Stepf("Agent Bootstrap Process Started.")
 	logger.Marker("__BOREALIS_AGENT_EXE_STARTED__=1")
 	logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + currentHostname())
 	logBootstrapConfigSummary(cfg, logger)
@@ -55,7 +55,6 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		return 0
 	}
 
-	logger.Stepf("Preparing Bootstrap Runtime.")
 	logger.Tracef("Acquiring bootstrap mutex.")
 	release, acquired, err := acquireBootstrapMutex()
 	if err != nil {
@@ -83,7 +82,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	logger.Tracef("Bootstrap directories ready.")
 	cleanupStaleAgentUpdateBinary(cfg, logger)
 
-	logger.Stepf("Checking Existing Agent Installation.")
+	logger.Stepf("Checking for Existing Agent.")
 	health := assessInstallHealth(cfg, logger)
 	if health.Hostname != "" {
 		logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + health.Hostname)
@@ -140,7 +139,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Tracef("Bootstrap completed action=%s duration=%s exit_code=73", action, time.Since(startedAt).Round(time.Millisecond))
 		return 73
 	case actionDeploy:
-		logger.Stepf("Installing Or Repairing Borealis Agent.")
+		logger.Stepf("(Re)Deploying Agent.")
 		logger.Tracef("Deploy/redeploy path starting.")
 		if health.Exists {
 			logger.Marker("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
@@ -169,27 +168,26 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
-	logger.Stepf("Stopping Existing Borealis Components.")
+	logger.Stepf("Stopping Existing Agent Services (If Applicable).")
 	quiesceBorealisManagedComponents(cfg, logger)
 	deferredReplacement, err := copySelfToInstallRoot(cfg, logger)
 	if err != nil {
 		return err
 	}
-	logger.Stepf("(Re)Installing Agent Support Dependencies.")
+	logger.Stepf("(Re)Installing Agent Dependencies.")
 	if err := ensureAgentDependencies(cfg, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent support dependencies ready.")
 	writeTimeline(cfg, "running", "Configuring Agent Runtime", "Writing Go Agent configuration.", 1)
-	logger.Stepf("Reconciling Remote Access Services.")
 	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-	logger.Stepf("Writing Agent Configuration.")
+	logger.Stepf("(Re)Writing Agent Configuration.")
 	if err := writeGoAgentConfig(cfg, logger); err != nil {
 		return err
 	}
 	stampBootstrapInstalledBuildID(cfg, logger)
 	logger.Tracef("Agent agent.json ready.")
-	logger.Stepf("Creating Agent Service And Support Tasks.")
+	logger.Stepf("Registering Services and Scheduled Tasks.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
 	}
@@ -203,7 +201,7 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	logger.Tracef("Agent service and support tasks ready.")
 	writeState(cfg, "pending_approval", 0, "Agent.exe completed; device approval pending operator action.")
 	writeTimeline(cfg, "running", "Agent Ready and Awaiting Approval", "Agent.exe completed; device approval pending operator action.", 0)
-	logger.Stepf("Agent Ready And Awaiting Approval.")
+	logger.Stepf("Agent Bootstrap Process Complete.")
 	logger.Tracef("Install/redeploy sequence complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
 }
