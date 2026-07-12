@@ -23,19 +23,25 @@ const (
 	windowsInstallPath        = `C:\Borealis\Agent.exe`
 )
 
-func ResetInstallForFreshDeploy(exePath string) error {
+func PrepareInstallForFreshDeploy(exePath string) error {
 	root := filepath.Dir(windowsInstallPath)
 	if isPathInside(exePath, root) {
 		return nil
 	}
-	_ = UninstallService()
-	_ = exec.Command("sc.exe", "stop", "BorealisAgentUltraVNC").Run()
-	_ = exec.Command("sc.exe", "delete", "BorealisAgentUltraVNC").Run()
-	_ = exec.Command("sc.exe", "stop", "BorealisWireGuardTunnel").Run()
-	_ = exec.Command("sc.exe", "delete", "BorealisWireGuardTunnel").Run()
-	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", "Borealis").Run()
-	_ = exec.Command("wireguard.exe", "/uninstalltunnelservice", "borealis-wg").Run()
-	return os.RemoveAll(root)
+	_ = exec.Command("schtasks.exe", "/End", "/TN", WindowsUpdaterTaskName).Run()
+	_ = exec.Command("schtasks.exe", "/End", "/TN", WindowsWatchdogTaskName).Run()
+	for _, serviceName := range []string{
+		WindowsServiceName,
+		"BorealisAgentUltraVNC",
+		"WireGuardManager",
+		"BorealisWireGuardTunnel",
+		"WireGuardTunnel$wireguard",
+		"WireGuardTunnel$Borealis",
+		"WireGuardTunnel$borealis-wg",
+	} {
+		_ = exec.Command("sc.exe", "stop", serviceName).Run()
+	}
+	return nil
 }
 
 func PrepareServiceExecutable(exePath string) (string, error) {
@@ -141,23 +147,38 @@ func deleteTask(name string) {
 }
 
 func copyFile(source string, destination string) error {
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return err
+	}
 	input, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer input.Close()
-	output, err := os.OpenFile(destination, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+	temp := destination + ".tmp"
+	output, err := os.OpenFile(temp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
 		return err
 	}
 	if _, err := io.Copy(output, input); err != nil {
 		_ = output.Close()
+		_ = os.Remove(temp)
 		return err
 	}
 	if err := output.Close(); err != nil {
+		_ = os.Remove(temp)
 		return err
 	}
-	return os.Chmod(destination, 0o755)
+	if err := os.Chmod(temp, 0o755); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	_ = os.Remove(destination)
+	if err := os.Rename(temp, destination); err != nil {
+		_ = os.Remove(temp)
+		return err
+	}
+	return nil
 }
 
 func samePath(left string, right string) bool {

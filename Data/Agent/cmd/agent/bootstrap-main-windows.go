@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 func runBootstrapConsole(cli cliOptions) int {
@@ -20,13 +19,9 @@ func runBootstrapConsole(cli cliOptions) int {
 		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
-	if shouldResetForFreshBootstrap(cfg) {
+	if shouldValidateFreshBootstrap(cfg) {
 		if err := validateFreshBootstrap(cfg); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
-			return 1
-		}
-		if err := resetInstallRootForFreshBootstrap(cfg); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "reset install root: %v\n", err)
 			return 1
 		}
 	}
@@ -42,7 +37,7 @@ func runBootstrapConsole(cli cliOptions) int {
 
 func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	startedAt := time.Now()
-	logger.Stepf("Running Agent Bootstrap.")
+	logger.Stepf("Agent Bootstrap Process Started.")
 	logger.Marker("__BOREALIS_AGENT_EXE_STARTED__=1")
 	logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + currentHostname())
 	logBootstrapConfigSummary(cfg, logger)
@@ -60,7 +55,6 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		return 0
 	}
 
-	logger.Stepf("Preparing Bootstrap Runtime.")
 	logger.Tracef("Acquiring bootstrap mutex.")
 	release, acquired, err := acquireBootstrapMutex()
 	if err != nil {
@@ -88,7 +82,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 	logger.Tracef("Bootstrap directories ready.")
 	cleanupStaleAgentUpdateBinary(cfg, logger)
 
-	logger.Stepf("Checking Existing Agent Installation.")
+	logger.Stepf("Checking for Existing Agent.")
 	health := assessInstallHealth(cfg, logger)
 	if health.Hostname != "" {
 		logger.Marker("__BOREALIS_ONBOARDING_HOSTNAME__=" + health.Hostname)
@@ -145,7 +139,7 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 		logger.Tracef("Bootstrap completed action=%s duration=%s exit_code=73", action, time.Since(startedAt).Round(time.Millisecond))
 		return 73
 	case actionDeploy:
-		logger.Stepf("Installing Or Repairing Borealis Agent.")
+		logger.Stepf("(Re)Deploying Agent.")
 		logger.Tracef("Deploy/redeploy path starting.")
 		if health.Exists {
 			logger.Marker("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
@@ -174,36 +168,72 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
-	logger.Stepf("Cleaning Up Existing Agent Processes.")
-	logger.Tracef("Stopping stale Borealis-owned processes before staging runtime.")
-	stopBorealisProcesses(cfg, logger)
-	if err := copySelfToInstallRoot(cfg, logger); err != nil {
+	logger.Stepf("Stopping Existing Agent Services (If Applicable).")
+	quiesceBorealisManagedComponents(cfg, logger)
+	deferredReplacement, err := copySelfToInstallRoot(cfg, logger)
+	if err != nil {
 		return err
 	}
-	logger.Stepf("(Re)Installing Agent Support Dependencies.")
+	logger.Stepf("(Re)Installing Agent Dependencies.")
 	if err := ensureAgentDependencies(cfg, logger); err != nil {
 		return err
 	}
 	logger.Tracef("Agent support dependencies ready.")
 	writeTimeline(cfg, "running", "Configuring Agent Runtime", "Writing Go Agent configuration.", 1)
-	logger.Stepf("Reconciling Remote Access Services.")
 	reconcileUltraVNCServiceAfterRuntimeStage(cfg, logger)
-	logger.Stepf("Writing Agent Configuration.")
+	logger.Stepf("(Re)Writing Agent Configuration.")
 	if err := writeGoAgentConfig(cfg, logger); err != nil {
 		return err
 	}
 	stampBootstrapInstalledBuildID(cfg, logger)
 	logger.Tracef("Agent agent.json ready.")
-	logger.Stepf("Creating Agent Service And Support Tasks.")
+	logger.Stepf("Registering Services and Scheduled Tasks.")
 	if err := ensureAgentTasks(cfg, logger); err != nil {
 		return err
+	}
+	if deferredReplacement != nil {
+		logger.Stepf("Scheduling Deferred Agent Replacement.")
+		if err := deferredReplacement.Schedule(cfg, logger); err != nil {
+			return err
+		}
+		writeTimeline(cfg, "running", "Deferred Agent Replacement Scheduled", "Existing Agent.exe was locked; replacement will complete after the old process exits.", 0)
 	}
 	logger.Tracef("Agent service and support tasks ready.")
 	writeState(cfg, "pending_approval", 0, "Agent.exe completed; device approval pending operator action.")
 	writeTimeline(cfg, "running", "Agent Ready and Awaiting Approval", "Agent.exe completed; device approval pending operator action.", 0)
-	logger.Stepf("Agent Ready And Awaiting Approval.")
+	logger.Stepf("Agent Bootstrap Process Complete.")
 	logger.Tracef("Install/redeploy sequence complete duration=%s.", time.Since(startedAt).Round(time.Millisecond))
 	return nil
+}
+
+func quiesceBorealisManagedComponents(cfg BootstrapConfig, logger *BootstrapLogger) {
+	logger.Tracef("Graceful component quiesce starting before runtime replacement.")
+	writeTimeline(cfg, "running", "Stopping Existing Borealis Components", "Stopping Agent service, support tasks, and Borealis-managed helper services before replacement.", 1)
+	for _, taskName := range []string{legacyAgentTaskName, agentUpdaterTaskName, agentWatchdogTaskName} {
+		info := queryScheduledTask(taskName)
+		if info.Exists {
+			logger.Tracef("Scheduled task detected before redeploy: name=%s state=%s", taskName, info.State)
+			logger.Marker("__BOREALIS_ONBOARDING_TASK_DETECTED__=" + taskName)
+		}
+		stopScheduledTask(taskName, logger)
+	}
+	for _, serviceName := range []string{
+		agentruntime.WindowsServiceName,
+		ultraVNCServiceName,
+		wireGuardManagerServiceName,
+		"BorealisWireGuardTunnel",
+		"WireGuardTunnel$wireguard",
+		"WireGuardTunnel$Borealis",
+		"WireGuardTunnel$borealis-wg",
+	} {
+		if state, exists := queryServiceState(serviceName); exists {
+			logger.Tracef("Service detected before redeploy: name=%s state=%s", serviceName, state)
+			logger.Marker("__BOREALIS_ONBOARDING_SERVICE_DETECTED__=" + serviceName)
+		}
+		stopServiceAndWait(serviceName, 30*time.Second, logger)
+	}
+	stopBorealisProcesses(cfg, logger)
+	logger.Tracef("Graceful component quiesce complete.")
 }
 
 func stampBootstrapInstalledBuildID(cfg BootstrapConfig, logger *BootstrapLogger) {
@@ -228,8 +258,8 @@ func stampBootstrapInstalledBuildID(cfg BootstrapConfig, logger *BootstrapLogger
 	}
 }
 
-func shouldResetForFreshBootstrap(cfg BootstrapConfig) bool {
-	return !cfg.Uninstall && (strings.TrimSpace(cfg.ServerURL) != "" || strings.TrimSpace(cfg.SiteEnrollmentCode) != "" || strings.TrimSpace(cfg.RepoRef) != "")
+func shouldValidateFreshBootstrap(cfg BootstrapConfig) bool {
+	return !cfg.Uninstall && cfg.DeployIntent
 }
 
 func validateFreshBootstrap(cfg BootstrapConfig) error {
@@ -240,42 +270,4 @@ func validateFreshBootstrap(cfg BootstrapConfig) error {
 		return err
 	}
 	return nil
-}
-
-func resetInstallRootForFreshBootstrap(cfg BootstrapConfig) error {
-	exe, err := os.Executable()
-	if err == nil && pathInsideInstallRoot(exe, cfg.InstallDir) {
-		return nil
-	}
-	for _, taskName := range []string{legacyAgentTaskName, agentUpdaterTaskName, agentWatchdogTaskName} {
-		_ = exec.Command("schtasks.exe", "/End", "/TN", taskName).Run()
-		_ = exec.Command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
-	}
-	for _, serviceName := range []string{
-		"BorealisAgent",
-		"BorealisAgentUltraVNC",
-		"BorealisWireGuardTunnel",
-		"WireGuardTunnel$Borealis",
-		"WireGuardTunnel$borealis-wg",
-	} {
-		_ = exec.Command("sc.exe", "stop", serviceName).Run()
-		_ = exec.Command("sc.exe", "delete", serviceName).Run()
-	}
-	return removePathWithRetries(cfg.InstallDir, 10, time.Second, nil)
-}
-
-func pathInsideInstallRoot(path string, installDir string) bool {
-	pathAbs, pathErr := filepath.Abs(path)
-	rootAbs, rootErr := filepath.Abs(installDir)
-	if pathErr == nil {
-		path = pathAbs
-	}
-	if rootErr == nil {
-		installDir = rootAbs
-	}
-	rel, err := filepath.Rel(filepath.Clean(installDir), filepath.Clean(path))
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

@@ -25,3 +25,25 @@ func TestDeferredReplacementScriptRunsValidationThroughExeShim(t *testing.T) {
 		t.Fatalf("deferred script does not mark failed update and restart service on failure")
 	}
 }
+
+func TestDeferredRedeployReplacementScriptDoesNotRequireUpdateFinalize(t *testing.T) {
+	script := deferredRedeployReplacementScript(
+		BootstrapConfig{InstallDir: `C:\Borealis`},
+		`C:\Borealis\Agent.exe.redeploy`,
+		`C:\Borealis\Agent.exe`,
+		"sha256",
+	)
+	for _, want := range []string{
+		"Deferred redeploy replacement starting",
+		"Invoke-PendingAgentValidation",
+		"Ensure-AgentServiceRunning",
+		"--install-service --config-path",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("deferred redeploy script missing %q", want)
+		}
+	}
+	if strings.Contains(script, "--finalize-update") || strings.Contains(script, "Mark-AgentUpdateFailed") {
+		t.Fatalf("redeploy script should not use update finalization state")
+	}
+}

@@ -104,6 +104,53 @@ func TestPersistInstallConfigRejectsInvalidServerIPFallback(t *testing.T) {
 	}
 }
 
+func TestPersistInstallConfigPreservesExistingIdentityAndTrust(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://old.example.com"
+	cfg.EnrollmentCode = "OLD-CODE"
+	cfg.Agent.GUID = "device-guid"
+	cfg.Agent.AgentID = "agent-id"
+	cfg.Identity.PrivateKeyPKCS8B64 = "private-key"
+	cfg.Identity.PublicKeySPKIB64 = "public-key"
+	cfg.Tokens.AccessToken = "access-token"
+	cfg.Tokens.AccessExpiresAt = 123456
+	cfg.Tokens.RefreshToken = "refresh-token"
+	cfg.Trust.ServerSigningKeySPKIB64 = "server-signing-key"
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := persistInstallConfig(agentruntime.Options{
+		ConfigPath:     configPath,
+		ServerURL:      "https://borealis.example.com",
+		EnrollmentCode: "NEW-CODE",
+	}); err != nil {
+		t.Fatalf("persistInstallConfig failed: %v", err)
+	}
+
+	loaded, err := agentconfig.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ServerURL != "https://borealis.example.com" || loaded.EnrollmentCode != "NEW-CODE" {
+		t.Fatalf("install inputs not updated: server=%q enrollment=%q", loaded.ServerURL, loaded.EnrollmentCode)
+	}
+	if loaded.Agent.GUID != "device-guid" || loaded.Agent.AgentID != "agent-id" {
+		t.Fatalf("agent identity changed: guid=%q id=%q", loaded.Agent.GUID, loaded.Agent.AgentID)
+	}
+	if loaded.Identity.PrivateKeyPKCS8B64 != "private-key" || loaded.Identity.PublicKeySPKIB64 != "public-key" {
+		t.Fatalf("device keypair changed: %#v", loaded.Identity)
+	}
+	if loaded.Tokens.AccessToken != "access-token" || loaded.Tokens.RefreshToken != "refresh-token" || loaded.Tokens.AccessExpiresAt != 123456 {
+		t.Fatalf("tokens changed: %#v", loaded.Tokens)
+	}
+	if loaded.Trust.ServerSigningKeySPKIB64 != "server-signing-key" {
+		t.Fatalf("server signing trust changed: %q", loaded.Trust.ServerSigningKeySPKIB64)
+	}
+}
+
 func TestValidateAgentConfigAcceptsFutureFields(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, agentconfig.FileName)

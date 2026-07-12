@@ -24,6 +24,12 @@ type windowsProcessInfo struct {
 	CommandLine    string `json:"CommandLine"`
 }
 
+type deferredAgentReplacement struct {
+	Pending        string
+	Destination    string
+	ExpectedSHA256 string
+}
+
 func acquireBootstrapMutex() (func(), bool, error) {
 	name, err := windows.UTF16PtrFromString(`Global\BorealisAgentBootstrapper`)
 	if err != nil {
@@ -263,22 +269,202 @@ func ensureBootstrapDirs(cfg BootstrapConfig) error {
 	return nil
 }
 
-func copySelfToInstallRoot(cfg BootstrapConfig, logger *BootstrapLogger) error {
+func copySelfToInstallRoot(cfg BootstrapConfig, logger *BootstrapLogger) (*deferredAgentReplacement, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	destination := filepath.Join(cfg.InstallDir, "Agent.exe")
 	logger.Tracef("Agent.exe self-stage check: source=%s destination=%s same_path=%t", exe, destination, samePath(exe, destination))
 	if samePath(exe, destination) {
 		logger.Tracef("Agent.exe already running from install root.")
+		return nil, nil
+	}
+	expectedSHA256, err := sha256File(exe)
+	if err != nil {
+		return nil, err
+	}
+	pending := destination + ".redeploy"
+	if err := copyFile(exe, pending); err != nil {
+		return nil, err
+	}
+	if err := verifyFileSHA256(pending, expectedSHA256); err != nil {
+		_ = os.Remove(pending)
+		return nil, err
+	}
+	if fileExists(agentConfigPath(cfg.InstallDir)) {
+		if err := validateAgentUpdateCandidate(cfg, pending, "redeploy", logger); err != nil {
+			_ = os.Remove(pending)
+			return nil, err
+		}
+	}
+	if err := copyFile(pending, destination); err != nil {
+		logger.Warnf("Agent.exe direct replacement deferred: %v", err)
+		logger.Marker("__BOREALIS_ONBOARDING_DEFERRED_REPLACEMENT__=1")
+		return &deferredAgentReplacement{
+			Pending:        pending,
+			Destination:    destination,
+			ExpectedSHA256: expectedSHA256,
+		}, nil
+	}
+	if err := verifyFileSHA256(destination, expectedSHA256); err != nil {
+		return nil, err
+	}
+	_ = os.Remove(pending)
+	logger.Infof("Agent.exe staged at %s sha256=%s", destination, expectedSHA256)
+	return nil, nil
+}
+
+func (r *deferredAgentReplacement) Schedule(cfg BootstrapConfig, logger *BootstrapLogger) error {
+	if r == nil {
 		return nil
 	}
-	if err := copyFile(exe, destination); err != nil {
+	if logger != nil {
+		logger.Tracef("Scheduling deferred Agent redeploy replacement: pending=%s destination=%s expected_sha256=%s", r.Pending, r.Destination, r.ExpectedSHA256)
+	}
+	script := deferredRedeployReplacementScript(cfg, r.Pending, r.Destination, r.ExpectedSHA256)
+	cmd := exec.Command(
+		"powershell.exe",
+		"-NoProfile",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-EncodedCommand",
+		encodePowerShellCommand(script),
+	)
+	if err := cmd.Start(); err != nil {
 		return err
 	}
-	logger.Infof("Agent.exe staged at %s", destination)
-	return nil
+	return cmd.Process.Release()
+}
+
+func deferredRedeployReplacementScript(cfg BootstrapConfig, pending string, destination string, expectedSHA256 string) string {
+	logPath := filepath.Join(cfg.InstallDir, "Logs", "Agent", "bootstrap.log")
+	configPath := agentConfigPath(cfg.InstallDir)
+	return fmt.Sprintf(`
+$ErrorActionPreference = 'Continue'
+$logPath = %s
+$pending = %s
+$destination = %s
+$configPath = %s
+$installDir = %s
+$expectedSha256 = %s
+$agentServiceName = %s
+$validateExe = $pending + ".validate.exe"
+$tasks = @(%s, %s, %s)
+$services = @(%s, %s, %s, %s, %s, %s, %s)
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logPath) | Out-Null
+function Write-BootstrapLog([string]$message) {
+  Add-Content -LiteralPath $logPath -Value ("[{0}] {1}" -f (Get-Date).ToString("s"), $message)
+}
+function Stop-BorealisComponents {
+  foreach ($task in $tasks) {
+    schtasks.exe /End /TN $task *> $null
+  }
+  foreach ($service in $services) {
+    sc.exe stop $service *> $null
+  }
+  Start-Sleep -Milliseconds 750
+  try {
+    $installPrefix = $installDir.ToLowerInvariant()
+    while ($installPrefix.EndsWith('\') -or $installPrefix.EndsWith('/')) {
+      $installPrefix = $installPrefix.Substring(0, $installPrefix.Length - 1)
+    }
+    $installPrefix = $installPrefix + '\'
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.ExecutablePath -and
+        $_.ExecutablePath.ToLowerInvariant().StartsWith($installPrefix)
+      } |
+      ForEach-Object {
+        Write-BootstrapLog ("Stopping Borealis process pid={0} path={1}" -f $_.ProcessId, $_.ExecutablePath)
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+      }
+  } catch {
+    Write-BootstrapLog ("Process cleanup skipped: " + $_.Exception.Message)
+  }
+}
+function Invoke-PendingAgentValidation {
+  Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath $pending -Destination $validateExe -Force -ErrorAction Stop
+  try {
+    $validateOutput = & $validateExe --validate-config --config-path $configPath 2>&1
+    foreach ($line in $validateOutput) { Write-BootstrapLog ("validate-pending: " + $line) }
+    if ($LASTEXITCODE -ne 0) {
+      throw "pending Agent.exe rejected current agent.json with exit $LASTEXITCODE"
+    }
+  } finally {
+    Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+  }
+}
+function Ensure-AgentServiceRunning {
+  $installOutput = & $destination --install-service --config-path $configPath 2>&1
+  foreach ($line in $installOutput) { Write-BootstrapLog ("install-service: " + $line) }
+  if ($LASTEXITCODE -ne 0) {
+    Write-BootstrapLog "install-service exited $LASTEXITCODE."
+  }
+  for ($attempt = 1; $attempt -le 15; $attempt++) {
+    try { Start-Service -Name $agentServiceName -ErrorAction SilentlyContinue } catch {}
+    $service = Get-CimInstance Win32_Service -Filter ("Name='{0}'" -f $agentServiceName) -ErrorAction SilentlyContinue
+    $state = if ($service) { [string]$service.State } else { "" }
+    Write-BootstrapLog "Service verification attempt $attempt state=$state."
+    if ($state -eq "Running") { return $true }
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+Write-BootstrapLog "Deferred redeploy replacement starting. pending=$pending destination=$destination expected_sha256=$expectedSha256"
+Start-Sleep -Seconds 3
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+  try {
+    if (!(Test-Path -LiteralPath $pending)) {
+      if ((Test-Path -LiteralPath $destination) -and (((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()) -eq $expectedSha256)) {
+        Write-BootstrapLog "Pending binary already applied."
+        if (!(Ensure-AgentServiceRunning)) { throw "service did not reach Running after existing replacement" }
+        exit 0
+      }
+      throw "pending binary missing"
+    }
+    Invoke-PendingAgentValidation
+    Stop-BorealisComponents
+    Move-Item -LiteralPath $pending -Destination $destination -Force -ErrorAction Stop
+    $actualSha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $expectedSha256) {
+      throw "hash mismatch actual=$actualSha256 expected=$expectedSha256"
+    }
+    if (!(Ensure-AgentServiceRunning)) {
+      throw "service did not reach Running after replacement"
+    }
+    Write-BootstrapLog "Deferred redeploy replacement complete."
+    exit 0
+  } catch {
+    Write-BootstrapLog ("Attempt $attempt failed: " + $_.Exception.Message)
+    Start-Sleep -Seconds 2
+  }
+}
+Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $validateExe -Force -ErrorAction SilentlyContinue
+Write-BootstrapLog "Deferred redeploy replacement failed after all attempts; staged replacement removed."
+exit 1
+`,
+		powershellSingleQuoted(logPath),
+		powershellSingleQuoted(pending),
+		powershellSingleQuoted(destination),
+		powershellSingleQuoted(configPath),
+		powershellSingleQuoted(cfg.InstallDir),
+		powershellSingleQuoted(strings.ToLower(strings.TrimSpace(expectedSHA256))),
+		powershellSingleQuoted("BorealisAgent"),
+		powershellSingleQuoted(legacyAgentTaskName),
+		powershellSingleQuoted(agentUpdaterTaskName),
+		powershellSingleQuoted(agentWatchdogTaskName),
+		powershellSingleQuoted("BorealisAgent"),
+		powershellSingleQuoted(ultraVNCServiceName),
+		powershellSingleQuoted(wireGuardManagerServiceName),
+		powershellSingleQuoted("BorealisWireGuardTunnel"),
+		powershellSingleQuoted("WireGuardTunnel$wireguard"),
+		powershellSingleQuoted("WireGuardTunnel$Borealis"),
+		powershellSingleQuoted("WireGuardTunnel$borealis-wg"),
+	)
 }
 
 func removePathWithRetries(path string, attempts int, delay time.Duration, logger *BootstrapLogger) error {

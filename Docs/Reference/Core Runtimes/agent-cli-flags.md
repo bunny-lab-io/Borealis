@@ -18,7 +18,7 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     .\Agent.exe --server-url "https://borealis.example.com" --site-enrollment-code "SITE-CODE"
     ```
 
-    Windows downloaded `Agent.exe` enters bootstrap mode when no runtime flag is present. Bootstrap mode stages the runtime under `C:\Borealis`, reconciles Windows support dependencies, writes `agent.json`, creates the `BorealisAgent` service, and creates AutoUpdater and Watchdog scheduled tasks.
+    Windows downloaded `Agent.exe` enters bootstrap mode when no runtime flag is present. Bootstrap mode stages the runtime under `C:\Borealis`, reconciles Windows support dependencies, writes `agent.json`, creates the `BorealisAgent` service, and creates AutoUpdater and Watchdog scheduled tasks. If Borealis is already installed, the command performs an in-place redeploy: it stops Borealis-managed services, tasks, and processes, replaces `Agent.exe`, preserves existing identity and trust data in `agent.json`, and starts the service again. If Windows still holds the old binary open, bootstrap stages a deferred replacement and retries after the old process exits.
 
 === "Linux"
 
@@ -27,11 +27,11 @@ Use these commands for normal operator work. Replace URLs, enrollment codes, and
     sudo ./Agent --server-url "https://borealis.example.com" --site-enrollment-code "SITE-CODE"
     ```
 
-    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service.
+    Linux uses the normal runtime parser. Supplying `--server-url` and `--site-enrollment-code` implies service install, stages the runtime under `/opt/Borealis/Agent/Agent`, writes `agent.json`, creates systemd units, and starts the Agent service. If Borealis is already installed, the command stops Borealis-managed systemd units and the WireGuard interface, preserves existing identity and trust data in `agent.json`, replaces the runtime binary, and starts the service again.
 
 !!! warning
 
-    Fresh install inputs can reset stale local Agent state. Always provide both `--server-url` and `--site-enrollment-code` when installing or re-enrolling a device.
+    Install and re-deploy inputs preserve existing Agent identity when `agent.json` is present. Always provide both `--server-url` and `--site-enrollment-code` when installing or re-enrolling a device.
 
 !!! info "Internal-Only Engine"
 
@@ -128,7 +128,7 @@ Downloaded Windows `Agent.exe` uses bootstrap mode unless one of the runtime fla
 | Argument | Use | Notes |
 | --- | --- | --- |
 | `--server-url <url>` | Engine public URL for install, re-deploy, or repair. | Fresh bootstrap requires this with `--site-enrollment-code`. |
-| `--site-enrollment-code <code>` | Site enrollment code. | Required for fresh bootstrap. `--enrollment-code` is not accepted by Windows bootstrap mode. |
+| `--site-enrollment-code <code>` | Site enrollment code. | Required for fresh bootstrap. `--enrollment-code` is accepted as an alias. |
 | `--trusted-engine-ca-b64 <base64-pem>` | Borealis local CA bundle for Internal-Only Engine installs. | Stored in `agent.json` as `trust.engine_ca_pem`. |
 | `--trusted-engine-ca-pem <pem>` | Borealis local CA PEM for Internal-Only Engine installs. | Prefer `--trusted-engine-ca-b64` for copied commands. |
 | `--repo-ref <ref>` | Git branch, tag, or commit used for source/unstable bootstrap payloads. | Non-`main` refs default the release channel to `unstable`. |
@@ -177,7 +177,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
 ## Exit Behavior
 
 - `--metadata` returns `0` when get/set succeeds, `1` for runtime/API errors, and `2` for bad usage.
-- Windows bootstrap returns `0` when install or uninstall completes, and `73` when an existing Agent is already enrolled or repaired.
+- Windows bootstrap returns `0` when install, explicit re-deploy, or uninstall completes. It returns `73` only when no explicit re-deploy input was supplied and an existing Agent is already enrolled or repaired.
 - `--validate-config`, `--update-check`, `--watchdog-check`, `--install-service`, and `--uninstall-service` return nonzero when their local operation fails.
 
 ??? example "Detailed Codex Breakdown"
@@ -208,7 +208,7 @@ These flags are parsed by the cross-platform Agent runtime. On Windows, passing 
     - Windows has two argument surfaces. If no runtime flag from `hasRuntimeFlag()` is present, `Agent.exe` runs bootstrap mode and accepts only the Windows bootstrap arguments. If a runtime flag is present, it skips bootstrap and uses the standard Go `flag` parser. Windows bootstrap mode accepts `--server-ip-fallback` so WebUI install commands can persist Internal-Only route metadata without switching into runtime flag mode.
     - Linux has one argument surface: the standard Go `flag` parser in `main.go`.
     - `--server-url` or `--site-enrollment-code` implies `--install-service` in the runtime parser. `--repo-ref` alone does not imply install-service.
-    - Fresh install detection treats `--server-url`, `--site-enrollment-code`/`--enrollment-code`, or `--repo-ref` as fresh-deploy intent, but validation requires both server URL and enrollment code before wiping stale install state.
+    - Fresh install detection treats `--server-url` or `--site-enrollment-code`/`--enrollment-code` as fresh-deploy intent. Validation requires both server URL and enrollment code before service installation starts. Re-deploy stops Borealis-managed components and preserves existing `agent.json` identity/trust state instead of wiping the install root.
     - Fresh install and runtime server URL overrides require an Engine FQDN. Raw IPs and `localhost` are rejected before enrollment config is written.
     - `--server-ip-fallback` stores a bare non-loopback IP as `server_ip_fallback`. REST, update, file-transfer, software-override, and Socket.IO connections first try the FQDN normally. If that TCP dial fails, they connect to the fallback IP while keeping the original FQDN as the HTTP host and TLS SNI name. Linux WireGuard setup first tries the Engine-provided FQDN endpoint and rewrites the local `wireguard.conf` endpoint to the fallback IP only when `wg-quick up` reports endpoint DNS resolution failure.
     - `--trusted-engine-ca-b64` decodes and stores the Borealis local CA PEM in `agent.json` at `trust.engine_ca_pem`. The Go auth client appends that CA to the system trust pool for REST and Socket.IO without disabling hostname validation.

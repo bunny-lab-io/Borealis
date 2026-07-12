@@ -82,10 +82,22 @@ func assessInstallHealth(cfg BootstrapConfig, logger *BootstrapLogger) InstallHe
 }
 
 func decideBootstrapAction(cfg BootstrapConfig, health InstallHealth, logger *BootstrapLogger) bootstrapAction {
-	logger.Tracef("Decision inputs: missing_inputs=%v agent_exe=%t service_exists=%t service_running=%t service_started=%t engine_valid=%t", missingBootstrapInputs(cfg), health.AgentExeExists, health.ServiceExists, health.ServiceRunning, health.ServiceStarted, health.EngineValid)
-	if health.Exists {
+	missing := missingBootstrapInputs(cfg)
+	if logger != nil {
+		logger.Tracef("Decision inputs: missing_inputs=%v deploy_intent=%t agent_exe=%t service_exists=%t service_running=%t service_started=%t engine_valid=%t", missing, cfg.DeployIntent, health.AgentExeExists, health.ServiceExists, health.ServiceRunning, health.ServiceStarted, health.EngineValid)
+	}
+	if health.Exists && logger != nil {
 		logger.Marker("__BOREALIS_ONBOARDING_EXISTING_AGENT_DETECTED__=1")
 		writeTimeline(cfg, "running", "Existing Agent Detected", "Existing Borealis Agent installation detected.", 1)
+	}
+	if cfg.DeployIntent {
+		if len(missing) > 0 {
+			return actionMissingInput
+		}
+		if logger != nil {
+			logger.Tracef("Explicit deploy input supplied; treating existing Agent as in-place redeploy target.")
+		}
+		return actionDeploy
 	}
 	if health.AgentExeExists && health.ServiceExists && health.ServiceRunning && health.EngineValid {
 		return actionAlreadyHealthy
@@ -93,7 +105,7 @@ func decideBootstrapAction(cfg BootstrapConfig, health InstallHealth, logger *Bo
 	if health.AgentExeExists && health.ServiceExists && health.ServiceStarted && health.EngineValid {
 		return actionRepairOnly
 	}
-	if len(missingBootstrapInputs(cfg)) > 0 {
+	if len(missing) > 0 {
 		return actionMissingInput
 	}
 	return actionDeploy
