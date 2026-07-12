@@ -34,8 +34,9 @@ Default Compose policy:
 - `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, `traefik-edge`, `remote-desktop-guacd`, and `docker-proxy` run as `borealis-engine`.
 - `postgres-db` runs as the official PostgreSQL non-root UID by default so existing database state under `Engine/Services/postgres-db/state` keeps compatible ownership. `Engine.sh` writes that UID into `BOREALIS_POSTGRES_RUNTIME_UID` and uses the Borealis runtime group for shared host-side access.
 - All Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
+- `docker-proxy` also gets tmpfs `/run` for HAProxy pid state under a read-only root filesystem.
 - `traefik-edge` adds only `NET_BIND_SERVICE` for ports `80` and `443`.
-- `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, and resource limits.
+- `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, a writable service-local run directory for its control socket, and resource limits.
 - `docker-proxy` has read-only Docker socket access. `site-worker-orchestrator` has write Docker socket access. No other static service mounts the Docker socket.
 
 Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, and PostgreSQL database state.

@@ -1417,6 +1417,7 @@ apply_runtime_service_ownership() {
   chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/api-backend/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     -type f -exec chmod go-rwx {} + 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/run" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true

@@ -21,6 +21,9 @@ services:
     mem_limit: ${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-128m}
     cpus: "${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-0.50}"
     pids_limit: ${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-64}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /run:rw,noexec,nosuid,nodev,size=16m,uid=${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646},gid=${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646},mode=0775
     environment:
       CONTAINERS: "1"
       POST: "0"
