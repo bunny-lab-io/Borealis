@@ -152,8 +152,8 @@ func run() int {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				return 1
 			}
-			if err := agentruntime.ResetInstallForFreshDeploy(exePath); err != nil {
-				fmt.Fprintf(os.Stderr, "reset install root: %v\n", err)
+			if err := agentruntime.PrepareInstallForFreshDeploy(exePath); err != nil {
+				fmt.Fprintf(os.Stderr, "prepare install root: %v\n", err)
 				return 1
 			}
 		}

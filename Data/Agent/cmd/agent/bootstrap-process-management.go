@@ -274,10 +274,33 @@ func copySelfToInstallRoot(cfg BootstrapConfig, logger *BootstrapLogger) error {
 		logger.Tracef("Agent.exe already running from install root.")
 		return nil
 	}
-	if err := copyFile(exe, destination); err != nil {
+	expectedSHA256, err := sha256File(exe)
+	if err != nil {
 		return err
 	}
-	logger.Infof("Agent.exe staged at %s", destination)
+	pending := destination + ".redeploy"
+	if err := copyFile(exe, pending); err != nil {
+		return err
+	}
+	if err := verifyFileSHA256(pending, expectedSHA256); err != nil {
+		_ = os.Remove(pending)
+		return err
+	}
+	if fileExists(agentConfigPath(cfg.InstallDir)) {
+		if err := validateAgentUpdateCandidate(cfg, pending, "redeploy", logger); err != nil {
+			_ = os.Remove(pending)
+			return err
+		}
+	}
+	if err := copyFile(pending, destination); err != nil {
+		_ = os.Remove(pending)
+		return err
+	}
+	if err := verifyFileSHA256(destination, expectedSHA256); err != nil {
+		return err
+	}
+	_ = os.Remove(pending)
+	logger.Infof("Agent.exe staged at %s sha256=%s", destination, expectedSHA256)
 	return nil
 }
 

@@ -73,6 +73,7 @@ type BootstrapConfig struct {
 	Interactive         bool   `json:"-"`
 	ConfigPath          string `json:"-"`
 	ResolvedPayloadRoot string `json:"-"`
+	DeployIntent        bool   `json:"-"`
 }
 
 func parseCLI(args []string) (cliOptions, error) {
@@ -95,9 +96,9 @@ func parseCLI(args []string) (cliOptions, error) {
 			}
 			i++
 			opts.ServerIPFallback = strings.TrimSpace(args[i])
-		case "--site-enrollment-code":
+		case "--site-enrollment-code", "--enrollment-code":
 			if i+1 >= len(args) || strings.TrimSpace(args[i+1]) == "" {
-				return opts, errors.New("--site-enrollment-code requires value")
+				return opts, errors.New(arg + " requires value")
 			}
 			i++
 			opts.SiteEnrollmentCode = strings.TrimSpace(args[i])
@@ -141,6 +142,7 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 	cfg.Uninstall = cli.Uninstall
 	cfg.Verbose = cli.Verbose
 	cfg.Interactive = !serviceMode && isInteractiveConsole()
+	deployIntent := cli.ServerURL != "" || cli.SiteEnrollmentCode != "" || cli.RepoRef != "" || cli.ReleaseChannel != ""
 	if serviceMode {
 		cfg.NonInteractive = true
 	}
@@ -150,6 +152,9 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 		fileCfg, err := readBootstrapConfigFile(configPath)
 		if err != nil {
 			return cfg, err
+		}
+		if bootstrapConfigHasDeployIntent(fileCfg) {
+			deployIntent = true
 		}
 		mergeBootstrapConfig(&cfg, fileCfg)
 		cfg.ConfigPath = configPath
@@ -185,6 +190,7 @@ func loadBootstrapConfig(cli cliOptions, serviceMode bool) (BootstrapConfig, err
 
 	mergeStoredBootstrapInputs(&cfg)
 	normalizeBootstrapConfig(&cfg)
+	cfg.DeployIntent = deployIntent
 	if err := normalizeBootstrapServerIPFallback(&cfg); err != nil {
 		return cfg, err
 	}
@@ -201,6 +207,16 @@ func defaultBootstrapConfig() BootstrapConfig {
 		RepoRef:        defaultRepoRef,
 		TimeoutSeconds: defaultTimeoutSeconds,
 	}
+}
+
+func bootstrapConfigHasDeployIntent(cfg BootstrapConfig) bool {
+	return strings.TrimSpace(cfg.ServerURL) != "" ||
+		strings.TrimSpace(cfg.SiteEnrollmentCode) != "" ||
+		strings.TrimSpace(cfg.LegacyEnrollment) != "" ||
+		strings.TrimSpace(cfg.PayloadPath) != "" ||
+		strings.TrimSpace(cfg.ManifestPath) != "" ||
+		strings.TrimSpace(cfg.RepoRef) != "" ||
+		strings.TrimSpace(cfg.ReleaseChannel) != ""
 }
 
 func discoverBootstrapConfigPath(installDir string) string {

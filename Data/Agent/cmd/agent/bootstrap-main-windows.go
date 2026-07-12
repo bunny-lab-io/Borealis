@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
 	agentconfig "github.com/bunny-lab-io/borealis/go-agent/internal/config"
+	agentruntime "github.com/bunny-lab-io/borealis/go-agent/internal/runtime"
 )
 
 func runBootstrapConsole(cli cliOptions) int {
@@ -20,13 +19,9 @@ func runBootstrapConsole(cli cliOptions) int {
 		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
-	if shouldResetForFreshBootstrap(cfg) {
+	if shouldValidateFreshBootstrap(cfg) {
 		if err := validateFreshBootstrap(cfg); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
-			return 1
-		}
-		if err := resetInstallRootForFreshBootstrap(cfg); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "reset install root: %v\n", err)
 			return 1
 		}
 	}
@@ -174,9 +169,8 @@ func runBootstrap(cfg BootstrapConfig, logger *BootstrapLogger) int {
 func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
 	logger.Tracef("Install/redeploy sequence start.")
-	logger.Stepf("Cleaning Up Existing Agent Processes.")
-	logger.Tracef("Stopping stale Borealis-owned processes before staging runtime.")
-	stopBorealisProcesses(cfg, logger)
+	logger.Stepf("Stopping Existing Borealis Components.")
+	quiesceBorealisManagedComponents(cfg, logger)
 	if err := copySelfToInstallRoot(cfg, logger); err != nil {
 		return err
 	}
@@ -206,6 +200,36 @@ func installOrRedeployAgent(cfg BootstrapConfig, logger *BootstrapLogger) error 
 	return nil
 }
 
+func quiesceBorealisManagedComponents(cfg BootstrapConfig, logger *BootstrapLogger) {
+	logger.Tracef("Graceful component quiesce starting before runtime replacement.")
+	writeTimeline(cfg, "running", "Stopping Existing Borealis Components", "Stopping Agent service, support tasks, and Borealis-managed helper services before replacement.", 1)
+	for _, taskName := range []string{legacyAgentTaskName, agentUpdaterTaskName, agentWatchdogTaskName} {
+		info := queryScheduledTask(taskName)
+		if info.Exists {
+			logger.Tracef("Scheduled task detected before redeploy: name=%s state=%s", taskName, info.State)
+			logger.Marker("__BOREALIS_ONBOARDING_TASK_DETECTED__=" + taskName)
+		}
+		stopScheduledTask(taskName, logger)
+	}
+	for _, serviceName := range []string{
+		agentruntime.WindowsServiceName,
+		ultraVNCServiceName,
+		wireGuardManagerServiceName,
+		"BorealisWireGuardTunnel",
+		"WireGuardTunnel$wireguard",
+		"WireGuardTunnel$Borealis",
+		"WireGuardTunnel$borealis-wg",
+	} {
+		if state, exists := queryServiceState(serviceName); exists {
+			logger.Tracef("Service detected before redeploy: name=%s state=%s", serviceName, state)
+			logger.Marker("__BOREALIS_ONBOARDING_SERVICE_DETECTED__=" + serviceName)
+		}
+		stopServiceAndWait(serviceName, 30*time.Second, logger)
+	}
+	stopBorealisProcesses(cfg, logger)
+	logger.Tracef("Graceful component quiesce complete.")
+}
+
 func stampBootstrapInstalledBuildID(cfg BootstrapConfig, logger *BootstrapLogger) {
 	if !agentconfig.UsesUnstableReleaseChannel(cfg.ReleaseChannel) {
 		return
@@ -228,8 +252,8 @@ func stampBootstrapInstalledBuildID(cfg BootstrapConfig, logger *BootstrapLogger
 	}
 }
 
-func shouldResetForFreshBootstrap(cfg BootstrapConfig) bool {
-	return !cfg.Uninstall && (strings.TrimSpace(cfg.ServerURL) != "" || strings.TrimSpace(cfg.SiteEnrollmentCode) != "" || strings.TrimSpace(cfg.RepoRef) != "")
+func shouldValidateFreshBootstrap(cfg BootstrapConfig) bool {
+	return !cfg.Uninstall && cfg.DeployIntent
 }
 
 func validateFreshBootstrap(cfg BootstrapConfig) error {
@@ -240,42 +264,4 @@ func validateFreshBootstrap(cfg BootstrapConfig) error {
 		return err
 	}
 	return nil
-}
-
-func resetInstallRootForFreshBootstrap(cfg BootstrapConfig) error {
-	exe, err := os.Executable()
-	if err == nil && pathInsideInstallRoot(exe, cfg.InstallDir) {
-		return nil
-	}
-	for _, taskName := range []string{legacyAgentTaskName, agentUpdaterTaskName, agentWatchdogTaskName} {
-		_ = exec.Command("schtasks.exe", "/End", "/TN", taskName).Run()
-		_ = exec.Command("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
-	}
-	for _, serviceName := range []string{
-		"BorealisAgent",
-		"BorealisAgentUltraVNC",
-		"BorealisWireGuardTunnel",
-		"WireGuardTunnel$Borealis",
-		"WireGuardTunnel$borealis-wg",
-	} {
-		_ = exec.Command("sc.exe", "stop", serviceName).Run()
-		_ = exec.Command("sc.exe", "delete", serviceName).Run()
-	}
-	return removePathWithRetries(cfg.InstallDir, 10, time.Second, nil)
-}
-
-func pathInsideInstallRoot(path string, installDir string) bool {
-	pathAbs, pathErr := filepath.Abs(path)
-	rootAbs, rootErr := filepath.Abs(installDir)
-	if pathErr == nil {
-		path = pathAbs
-	}
-	if rootErr == nil {
-		installDir = rootAbs
-	}
-	rel, err := filepath.Rel(filepath.Clean(installDir), filepath.Clean(path))
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !filepath.IsAbs(rel) && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

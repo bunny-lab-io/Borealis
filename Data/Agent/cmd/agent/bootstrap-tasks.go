@@ -27,11 +27,8 @@ func runBootstrapWindowsService(cli cliOptions) int {
 	if err != nil {
 		return 2
 	}
-	if shouldResetForFreshBootstrap(cfg) {
+	if shouldValidateFreshBootstrap(cfg) {
 		if err := validateFreshBootstrap(cfg); err != nil {
-			return 1
-		}
-		if err := resetInstallRootForFreshBootstrap(cfg); err != nil {
 			return 1
 		}
 	}

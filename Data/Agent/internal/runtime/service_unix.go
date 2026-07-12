@@ -20,7 +20,7 @@ const (
 	linuxWatchdogTimerName   = "borealis-agent-watchdog.timer"
 )
 
-func ResetInstallForFreshDeploy(exePath string) error {
+func PrepareInstallForFreshDeploy(exePath string) error {
 	root := filepath.Clean("/opt/Borealis")
 	if isPathInside(filepath.Clean(exePath), root) {
 		return nil
@@ -30,16 +30,8 @@ func ResetInstallForFreshDeploy(exePath string) error {
 	_ = exec.Command("systemctl", "stop", linuxUpdaterServiceName).Run()
 	_ = exec.Command("systemctl", "stop", linuxWatchdogTimerName).Run()
 	_ = exec.Command("systemctl", "stop", linuxWatchdogServiceName).Run()
-	_ = exec.Command("systemctl", "disable", linuxServiceName).Run()
-	_ = exec.Command("systemctl", "disable", linuxUpdaterTimerName).Run()
-	_ = exec.Command("systemctl", "disable", linuxWatchdogTimerName).Run()
-	_ = os.Remove("/etc/systemd/system/" + linuxServiceName)
-	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterServiceName)
-	_ = os.Remove("/etc/systemd/system/" + linuxUpdaterTimerName)
-	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogServiceName)
-	_ = os.Remove("/etc/systemd/system/" + linuxWatchdogTimerName)
-	_ = exec.Command("systemctl", "daemon-reload").Run()
-	return os.RemoveAll(root)
+	_ = exec.Command("wg-quick", "down", filepath.Join(root, "Agent", "wireguard.conf")).Run()
+	return nil
 }
 
 func PrepareServiceExecutable(exePath string) (string, error) {

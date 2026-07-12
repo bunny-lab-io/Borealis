@@ -15,3 +15,21 @@ func TestRuntimeFlagsUseServiceAndWatchdog(t *testing.T) {
 		t.Fatal("--system-service should not be accepted")
 	}
 }
+
+func TestExplicitDeployIntentForcesRedeployInsteadOfHealthySkip(t *testing.T) {
+	cfg := BootstrapConfig{
+		ServerURL:          "https://borealis.example.com",
+		SiteEnrollmentCode: "CODE",
+		DeployIntent:       true,
+	}
+	health := InstallHealth{
+		Exists:         true,
+		AgentExeExists: true,
+		ServiceExists:  true,
+		ServiceRunning: true,
+		EngineValid:    true,
+	}
+	if action := decideBootstrapAction(cfg, health, nil); action != actionDeploy {
+		t.Fatalf("action = %s, want %s", action, actionDeploy)
+	}
+}
