@@ -39,6 +39,9 @@ const PROCESS_REFRESH_COUNTS = {
   normal: "5s",
   quiet: "15s",
 };
+const PROCESS_INITIAL_EMPTY_RETRY_LIMIT = 3;
+const PROCESS_INITIAL_EMPTY_RETRY_DELAY_MS = 1200;
+const PROCESS_COLLECTING_MESSAGE = "Collecting Active Process Data...";
 const AUTO_SIZE_COLUMNS = ["username", "cpu_percent", "memory_percent", "disk_bytes_per_second", "network_bytes_per_second"];
 const NAME_LINK_COLOR = "#58a6ff";
 const LOW_SIGNAL_CPU_PERCENT = 0.5;
@@ -748,6 +751,8 @@ export default function ProcessManagement({ device }) {
   const gridApiRef = useRef(null);
   const inFlightRef = useRef(false);
   const previousLiveProcessRowsRef = useRef(new Map());
+  const emptyInitialRetryCountRef = useRef(0);
+  const collectingRetryTimerRef = useRef(null);
 
   const hostname = useMemo(() => getHostname(device), [device]);
   const [processRows, setProcessRows] = useState([]);
@@ -759,6 +764,7 @@ export default function ProcessManagement({ device }) {
   const [sortModel, setSortModel] = useState([{ colId: "cpu_percent", sort: "desc" }]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [collectingInitialSnapshot, setCollectingInitialSnapshot] = useState(false);
   const [error, setError] = useState("");
   const [actionBusy, setActionBusy] = useState("");
   const [contextMenuState, setContextMenuState] = useState(null);
@@ -857,6 +863,15 @@ export default function ProcessManagement({ device }) {
     }
   }, [visibleRows.length]);
 
+  const clearCollectingRetry = useCallback(() => {
+    if (collectingRetryTimerRef.current && typeof window !== "undefined") {
+      window.clearTimeout(collectingRetryTimerRef.current);
+    }
+    collectingRetryTimerRef.current = null;
+    emptyInitialRetryCountRef.current = 0;
+    setCollectingInitialSnapshot(false);
+  }, []);
+
   const applyProcessPayload = useCallback((payload = {}) => {
     const rows = Array.isArray(payload?.processes) ? payload.processes.map((row, index) => normalizeProcessRow(row, index)) : [];
     const liveRowsById = new Map(rows.map((row) => [row.id, row]).filter(([id]) => Boolean(id)));
@@ -900,13 +915,16 @@ export default function ProcessManagement({ device }) {
     async ({ silent = false } = {}) => {
       if (!hostname || inFlightRef.current) return;
       inFlightRef.current = true;
+      let keepInitialLoading = false;
+      let retryDelayMs = 0;
       if (!silent) {
         setLoading(true);
       } else {
         setRefreshing(true);
       }
       try {
-        const maxAgeSeconds = Math.max(0.25, effectiveRefreshIntervalMs / 1000);
+        const initialSnapshotWanted = !previousLiveProcessRowsRef.current.size;
+        const maxAgeSeconds = initialSnapshotWanted ? 0.25 : Math.max(0.25, effectiveRefreshIntervalMs / 1000);
         const response = await fetch(
           `/api/device/processes/${encodeURIComponent(hostname)}?max_age_seconds=${encodeURIComponent(maxAgeSeconds)}`,
           {
@@ -917,19 +935,46 @@ export default function ProcessManagement({ device }) {
         if (!response.ok) {
           throw new Error(normalizeText(payload?.message) || normalizeText(payload?.error) || `HTTP ${response.status}`);
         }
+        const payloadRows = Array.isArray(payload?.processes) ? payload.processes : [];
+        const collectionState = normalizeText(payload?.collection_state).toLowerCase();
+        const emptyInitialSnapshot =
+          payloadRows.length === 0 && !previousLiveProcessRowsRef.current.size && collectionState !== "ready";
+        const shouldRetryEmptyInitial =
+          !silent && emptyInitialSnapshot && emptyInitialRetryCountRef.current < PROCESS_INITIAL_EMPTY_RETRY_LIMIT;
         applyProcessPayload(payload);
+        if (shouldRetryEmptyInitial) {
+          emptyInitialRetryCountRef.current += 1;
+          setCollectingInitialSnapshot(true);
+          keepInitialLoading = true;
+          retryDelayMs = Math.max(
+            500,
+            Math.min(3000, coerceNumber(payload?.retry_after_ms, PROCESS_INITIAL_EMPTY_RETRY_DELAY_MS))
+          );
+        } else if (payloadRows.length > 0 || !silent) {
+          clearCollectingRetry();
+        }
       } catch (err) {
+        clearCollectingRetry();
         setError(String(err?.message || err || "Failed to load processes."));
       } finally {
         inFlightRef.current = false;
         if (!silent) {
-          setLoading(false);
+          setLoading(keepInitialLoading);
         } else {
           setRefreshing(false);
         }
+        if (retryDelayMs && typeof window !== "undefined") {
+          if (collectingRetryTimerRef.current) {
+            window.clearTimeout(collectingRetryTimerRef.current);
+          }
+          collectingRetryTimerRef.current = window.setTimeout(() => {
+            collectingRetryTimerRef.current = null;
+            void loadProcesses({ silent: false });
+          }, retryDelayMs);
+        }
       }
     },
-    [applyProcessPayload, effectiveRefreshIntervalMs, hostname]
+    [applyProcessPayload, clearCollectingRetry, effectiveRefreshIntervalMs, hostname]
   );
 
   const toggleProcessExpansion = useCallback((row) => {
@@ -1367,15 +1412,24 @@ export default function ProcessManagement({ device }) {
   );
 
   useEffect(() => {
+    return () => {
+      if (collectingRetryTimerRef.current && typeof window !== "undefined") {
+        window.clearTimeout(collectingRetryTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setProcessRows([]);
     setTerminatedProcessRows(new Map());
     previousLiveProcessRowsRef.current = new Map();
+    clearCollectingRetry();
     setReportedAt(0);
     setExpandedPids(new Set());
     setSelectedProcessId("");
     setError("");
     setLoading(Boolean(hostname));
-  }, [hostname]);
+  }, [clearCollectingRetry, hostname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1549,7 +1603,24 @@ export default function ProcessManagement({ device }) {
             <Typography variant="caption" sx={{ display: "block", color: "rgba(203,213,225,0.78)", textAlign: "right" }}>
               {formatUpdatedAt(reportedAt)}
             </Typography>
-            {refreshing ? (
+            {collectingInitialSnapshot ? (
+              <Typography
+                variant="caption"
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  color: "#dbeafe",
+                  border: "1px solid rgba(125,211,252,0.24)",
+                  borderRadius: 999,
+                  px: 0.7,
+                  py: 0.18,
+                  background: "rgba(15,23,42,0.72)",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {PROCESS_COLLECTING_MESSAGE}
+              </Typography>
+            ) : refreshing ? (
               <Typography
                 variant="caption"
                 sx={{
@@ -1570,7 +1641,7 @@ export default function ProcessManagement({ device }) {
         </Stack>
       </Stack>
 
-      {(loading || actionBusy) && (
+      {(loading || collectingInitialSnapshot || actionBusy) && (
         <LinearProgress
           sx={{
             borderRadius: 999,
@@ -1667,7 +1738,7 @@ export default function ProcessManagement({ device }) {
               toggleProcessExpansion(event.data);
             }
           }}
-          overlayNoRowsTemplate="<span>No processes reported.</span>"
+          overlayNoRowsTemplate={`<span>${loading || collectingInitialSnapshot ? PROCESS_COLLECTING_MESSAGE : "No processes reported."}</span>`}
         />
       </GridShell>
 

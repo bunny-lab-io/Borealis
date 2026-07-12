@@ -130,8 +130,56 @@ func TestDeviceProcessListHandlerCallsWorkerAndReturnsProcesses(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("response decode failed: %v", err)
 	}
-	if payload["agent_socket"] != true || payload["count"].(float64) != 1 || payload["refresh_interval_ms"].(float64) != 5000 {
+	if payload["agent_socket"] != true || payload["collection_state"] != "ready" || payload["count"].(float64) != 1 || payload["refresh_interval_ms"].(float64) != 5000 {
 		t.Fatalf("unexpected process response %#v", payload)
+	}
+}
+
+func TestDeviceProcessListHandlerMarksEmptySnapshotCollecting(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/remote-ops/host-service/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"registered": true})
+		case "/remote-ops/host-service/call":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"called": true,
+				"response": map[string]any{
+					"ok":                  true,
+					"reported_at":         1700000003,
+					"refresh_interval_ms": 5000,
+					"processes":           []map[string]any{},
+				},
+			})
+		default:
+			t.Fatalf("unexpected worker path %s", r.URL.Path)
+		}
+	}))
+	defer worker.Close()
+	store := &fakeProcessStore{
+		profile: operatorProfile{Username: "operator", Role: "Admin"},
+		snapshot: deviceProcessContext{
+			Hostname: "LAB-OPERATOR-01",
+			AgentID:  "LAB-OPERATOR-01_SYSTEM",
+			Route:    routeForTestWorker(t, worker.URL),
+		},
+	}
+	mux := http.NewServeMux()
+	registerProcessRoutes(mux, processTestAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/device/processes/LAB-OPERATOR-01", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("response decode failed: %v", err)
+	}
+	if payload["collection_state"] != "collecting" || payload["count"].(float64) != 0 || payload["retry_after_ms"].(float64) != processCollectingRetryAfterMS {
+		t.Fatalf("unexpected empty snapshot response %#v", payload)
 	}
 }
 

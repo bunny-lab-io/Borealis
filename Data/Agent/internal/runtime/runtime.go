@@ -218,6 +218,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.waitAuthenticated(ctx); err != nil {
 		return err
 	}
+	if a.processes != nil {
+		a.processes.Start(ctx)
+	}
 	if a.services != nil {
 		a.services.Start(ctx)
 	}
