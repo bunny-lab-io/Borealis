@@ -60,6 +60,45 @@ func TestListUsesFreshSnapshotCache(t *testing.T) {
 	}
 }
 
+func TestListRetriesEmptySnapshotBeforeReturning(t *testing.T) {
+	manager := New("test-host")
+	calls := 0
+	manager.collector = func(context.Context, map[string]rateCounter, map[string]rateCounter) (Snapshot, map[string]rateCounter, map[string]rateCounter, error) {
+		calls++
+		if calls == 1 {
+			return Snapshot{
+				ReportedAt:        1700000100,
+				RefreshIntervalMS: int(refreshIntervalSeconds * 1000),
+				Processes:         []Process{},
+			}, map[string]rateCounter{}, map[string]rateCounter{}, nil
+		}
+		return Snapshot{
+			ReportedAt:        1700000101,
+			RefreshIntervalMS: int(refreshIntervalSeconds * 1000),
+			Processes: []Process{
+				{ID: "123:1", PID: 123, Name: "ready-process"},
+			},
+		}, map[string]rateCounter{}, map[string]rateCounter{}, nil
+	}
+
+	response, err := manager.HandleRequest(context.Background(), map[string]any{
+		"action":          "list",
+		"hostname":        "test-host",
+		"max_age_seconds": 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := response.(map[string]any)
+	processes := payload["processes"].([]map[string]any)
+	if calls != 2 {
+		t.Fatalf("collector calls = %d, want 2", calls)
+	}
+	if payload["collection_state"] != "ready" || len(processes) != 1 || asInt(processes[0]["pid"]) != 123 {
+		t.Fatalf("response = %#v", payload)
+	}
+}
+
 func TestTerminateRefusesOwnAgentProcess(t *testing.T) {
 	manager := New("test-host")
 	response, err := manager.HandleRequest(context.Background(), map[string]any{

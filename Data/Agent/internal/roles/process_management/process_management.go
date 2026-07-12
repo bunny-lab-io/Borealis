@@ -16,18 +16,23 @@ import (
 )
 
 const (
-	refreshIntervalSeconds = 5.0
-	defaultCommandTimeout  = 8 * time.Second
-	terminateTimeout       = 15 * time.Second
+	refreshIntervalSeconds  = 5.0
+	defaultCommandTimeout   = 8 * time.Second
+	terminateTimeout        = 15 * time.Second
+	emptySnapshotRetryDelay = 250 * time.Millisecond
+	emptySnapshotRetryLimit = 2
+	warmupSnapshotTimeout   = defaultCommandTimeout + 2*time.Second
 )
 
 type Manager struct {
 	hostname        string
 	mu              sync.Mutex
+	collectMu       sync.Mutex
 	snapshot        Snapshot
 	lastErr         string
 	diskCounters    map[string]rateCounter
 	networkCounters map[string]rateCounter
+	collector       snapshotCollector
 }
 
 type Snapshot struct {
@@ -74,6 +79,8 @@ type rateCounter struct {
 	Total int64
 }
 
+type snapshotCollector func(context.Context, map[string]rateCounter, map[string]rateCounter) (Snapshot, map[string]rateCounter, map[string]rateCounter, error)
+
 func (e pmError) Error() string {
 	if strings.TrimSpace(e.Message) != "" {
 		return e.Message
@@ -91,7 +98,18 @@ func New(hostname string) *Manager {
 		},
 		diskCounters:    map[string]rateCounter{},
 		networkCounters: map[string]rateCounter{},
+		collector:       collectSnapshot,
 	}
+}
+
+func (m *Manager) Start(ctx context.Context) {
+	go func() {
+		warmupCtx, cancel := context.WithTimeout(ctx, warmupSnapshotTimeout)
+		defer cancel()
+		if _, err := m.refreshSnapshot(warmupCtx, 0); err != nil {
+			m.setLastError(err.Error())
+		}
+	}()
 }
 
 func (m *Manager) HandleRequest(ctx context.Context, payload any) (any, error) {
@@ -155,21 +173,11 @@ func (m *Manager) Health() RoleHealth {
 }
 
 func (m *Manager) list(ctx context.Context, maxAgeSeconds float64) (map[string]any, error) {
-	m.mu.Lock()
-	current := m.snapshot
-	m.mu.Unlock()
-	if current.ReportedAt > 0 && time.Since(time.Unix(current.ReportedAt, 0)).Seconds() <= maxAgeSeconds {
-		return snapshotResponse(current), nil
-	}
-	snapshot, err := m.collectSnapshot(ctx)
+	snapshot, err := m.refreshSnapshot(ctx, maxAgeSeconds)
 	if err != nil {
 		m.setLastError(err.Error())
 		return nil, err
 	}
-	m.mu.Lock()
-	m.snapshot = snapshot
-	m.lastErr = ""
-	m.mu.Unlock()
 	return snapshotResponse(snapshot), nil
 }
 
@@ -182,7 +190,7 @@ func (m *Manager) terminate(ctx context.Context, pid int, includeChildren bool) 
 	}
 	targets := []int{pid}
 	if includeChildren {
-		if snapshot, err := m.collectSnapshot(ctx); err == nil {
+		if snapshot, err := m.refreshSnapshot(ctx, 0); err == nil {
 			targets = descendantPIDs(snapshot.Processes, pid)
 			targets = append(targets, pid)
 		}
@@ -193,15 +201,11 @@ func (m *Manager) terminate(ctx context.Context, pid int, includeChildren bool) 
 		return nil, err
 	}
 	time.Sleep(250 * time.Millisecond)
-	snapshot, err := m.collectSnapshot(ctx)
+	snapshot, err := m.refreshSnapshot(ctx, 0)
 	if err != nil {
 		m.setLastError(err.Error())
 		return nil, err
 	}
-	m.mu.Lock()
-	m.snapshot = snapshot
-	m.lastErr = ""
-	m.mu.Unlock()
 	response := snapshotResponse(snapshot)
 	response["terminated_pids"] = terminated
 	return response, nil
@@ -227,12 +231,68 @@ func (m *Manager) setLastError(value string) {
 	m.lastErr = strings.TrimSpace(value)
 }
 
+func (m *Manager) refreshSnapshot(ctx context.Context, maxAgeSeconds float64) (Snapshot, error) {
+	m.collectMu.Lock()
+	defer m.collectMu.Unlock()
+
+	current := m.currentSnapshot()
+	if snapshotFresh(current, maxAgeSeconds) {
+		return current, nil
+	}
+
+	snapshot, err := m.collectSnapshot(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	for attempt := 0; len(snapshot.Processes) == 0 && attempt < emptySnapshotRetryLimit; attempt++ {
+		timer := time.NewTimer(emptySnapshotRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			m.storeSnapshot(snapshot)
+			return snapshot, nil
+		case <-timer.C:
+		}
+		next, retryErr := m.collectSnapshot(ctx)
+		if retryErr != nil {
+			break
+		}
+		snapshot = next
+	}
+	m.storeSnapshot(snapshot)
+	return snapshot, nil
+}
+
+func (m *Manager) currentSnapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.snapshot
+}
+
+func (m *Manager) storeSnapshot(snapshot Snapshot) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.snapshot = snapshot
+	m.lastErr = ""
+}
+
+func snapshotFresh(snapshot Snapshot, maxAgeSeconds float64) bool {
+	if snapshot.ReportedAt <= 0 || maxAgeSeconds < 0 {
+		return false
+	}
+	return time.Since(time.Unix(snapshot.ReportedAt, 0)).Seconds() <= maxAgeSeconds
+}
+
 func (m *Manager) collectSnapshot(ctx context.Context) (Snapshot, error) {
 	m.mu.Lock()
 	previousDisk := cloneCounters(m.diskCounters)
 	previousNetwork := cloneCounters(m.networkCounters)
 	m.mu.Unlock()
-	snapshot, nextDisk, nextNetwork, err := collectSnapshot(ctx, previousDisk, previousNetwork)
+	collector := m.collector
+	if collector == nil {
+		collector = collectSnapshot
+	}
+	snapshot, nextDisk, nextNetwork, err := collector(ctx, previousDisk, previousNetwork)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -539,10 +599,18 @@ func sortProcesses(processes []Process) []Process {
 }
 
 func snapshotResponse(snapshot Snapshot) map[string]any {
+	collectionState := "ready"
+	retryAfterMS := 0
+	if len(snapshot.Processes) == 0 {
+		collectionState = "collecting"
+		retryAfterMS = int(emptySnapshotRetryDelay / time.Millisecond)
+	}
 	return map[string]any{
 		"ok":                  true,
+		"collection_state":    collectionState,
 		"reported_at":         snapshot.ReportedAt,
 		"refresh_interval_ms": snapshot.RefreshIntervalMS,
+		"retry_after_ms":      retryAfterMS,
 		"processes":           processesToMaps(snapshot.Processes),
 	}
 }

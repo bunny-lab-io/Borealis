@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const processCollectingRetryAfterMS = 1200
+
 type deviceProcessStore interface {
 	loadDeviceProcessContext(ctx context.Context, profile operatorProfile, hostname string) (deviceProcessContext, int, error)
 }
@@ -63,13 +65,18 @@ func deviceProcessListHandler(auth *authService) http.HandlerFunc {
 		if processes == nil {
 			processes = []any{}
 		}
+		reportedAt := coerceInt64(response["reported_at"])
+		collectionState := processCollectionState(response, len(processes))
+		retryAfterMS := processRetryAfterMS(response, collectionState)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":              "ok",
+			"collection_state":    collectionState,
 			"hostname":            firstText(snapshot.Hostname, r.PathValue("hostname")),
 			"agent_id":            snapshot.AgentID,
 			"agent_socket":        true,
-			"reported_at":         coerceInt64(response["reported_at"]),
+			"reported_at":         reportedAt,
 			"refresh_interval_ms": maxInt64(5000, coerceInt64(firstNonEmpty(response["refresh_interval_ms"], 5000))),
+			"retry_after_ms":      retryAfterMS,
 			"count":               len(processes),
 			"processes":           processes,
 		})
@@ -122,13 +129,16 @@ func deviceProcessTerminateHandler(auth *authService) http.HandlerFunc {
 		if processes == nil {
 			processes = []any{}
 		}
+		collectionState := processCollectionState(response, len(processes))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":              "ok",
+			"collection_state":    collectionState,
 			"hostname":            firstText(snapshot.Hostname, r.PathValue("hostname")),
 			"agent_id":            snapshot.AgentID,
 			"terminated_pid":      pid,
 			"reported_at":         coerceInt64(response["reported_at"]),
 			"refresh_interval_ms": maxInt64(5000, coerceInt64(firstNonEmpty(response["refresh_interval_ms"], 5000))),
+			"retry_after_ms":      processRetryAfterMS(response, collectionState),
 			"count":               len(processes),
 			"processes":           processes,
 		})
@@ -181,6 +191,29 @@ func loadDeviceProcessSnapshotForRequest(w http.ResponseWriter, r *http.Request,
 		return deviceProcessContext{}, false
 	}
 	return snapshot, true
+}
+
+func processCollectionState(response map[string]any, processCount int) string {
+	state := strings.ToLower(cleanText(response["collection_state"]))
+	switch state {
+	case "ready", "collecting":
+		return state
+	}
+	if processCount == 0 {
+		return "collecting"
+	}
+	return "ready"
+}
+
+func processRetryAfterMS(response map[string]any, collectionState string) int64 {
+	retryAfterMS := coerceInt64(response["retry_after_ms"])
+	if retryAfterMS <= 0 && collectionState == "collecting" {
+		return processCollectingRetryAfterMS
+	}
+	if retryAfterMS < 0 {
+		return 0
+	}
+	return retryAfterMS
 }
 
 func (s *postgresOperatorStore) loadDeviceProcessContext(ctx context.Context, profile operatorProfile, hostname string) (deviceProcessContext, int, error) {

@@ -17,6 +17,8 @@ Process Management gives operators a live task-manager style view for one device
 
 Columns show name, owner, CPU, memory, disk, network, and command line.
 
+When a device is still building its first live snapshot, the table shows `Collecting Active Process Data...` and retries quickly before treating an empty response as final.
+
 ## End Task
 
 1. Right-click a process row.
@@ -53,5 +55,7 @@ Right-click row actions can copy executable location or command line. Use this b
     ### Runtime behavior
 
     - Live snapshots use the device SYSTEM Socket.IO channel through `process_management_request`.
+    - Agent process management warms a snapshot after authentication so the first UI request usually reads a hot cache.
+    - Empty live snapshots return `collection_state: collecting` and `retry_after_ms` so the WebUI can keep a loading state and retry before showing an empty table.
     - UI polling requests fresher agent snapshots when refresh rate needs it.
     - Cached process inventory still exists for watchdog rules and is separate from live process-management snapshots.
