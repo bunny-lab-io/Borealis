@@ -1436,6 +1436,21 @@ apply_runtime_service_ownership() {
   chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
+apply_deploy_env_file_permissions() {
+  local owner_gid
+  owner_gid="$(resolve_runtime_owner_gid)"
+  [[ "${owner_gid}" =~ ^[0-9]+$ ]] || return 0
+  [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
+
+  local path
+  for path in "${RUNTIME_ENV}" "${COMPOSE_ENV}"; do
+    [[ -e "${path}" ]] || continue
+    chown "0:${owner_gid}" "${path}" 2>/dev/null || true
+    chmod 0640 "${path}" 2>/dev/null || true
+  done
+  chmod 0600 "${WEBUI_ENV}" 2>/dev/null || true
+}
+
 ensure_service_tree() {
   mkdir -p "${DEPLOY_DIR}"
   mkdir -p \
@@ -2674,6 +2689,7 @@ BOREALIS_WIREGUARD_TUNNEL_IMAGE=${IMAGE_TAGS[wireguard-tunnel]:-borealis-engine/
 BOREALIS_DOCKER_PROXY_IMAGE=${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
 EOF
   chmod 600 "${COMPOSE_ENV}" "${RUNTIME_ENV}" "${WEBUI_ENV}"
+  apply_deploy_env_file_permissions
 }
 
 compute_service_hash() {
