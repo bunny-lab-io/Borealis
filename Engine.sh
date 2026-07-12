@@ -1418,8 +1418,21 @@ apply_runtime_service_ownership() {
   find "${RUNTIME_ROOT}/Services/api-backend/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     -type f -exec chmod go-rwx {} + 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/run" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" 2>/dev/null || true
+  find "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/logs" 2>/dev/null || true
+  chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/state" 2>/dev/null || true
+  chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/config/traefik.yml" 2>/dev/null || true
+  chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/core.yml" 2>/dev/null || true
+  chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json" 2>/dev/null || true
+  find "${RUNTIME_ROOT}/Services/traefik-edge/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
+  if [[ -e "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" ]]; then
+    chown "0:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
+    chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
+  fi
   chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 

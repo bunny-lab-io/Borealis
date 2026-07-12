@@ -36,7 +36,7 @@ EXPECTED_SERVICES = {
     "wireguard-tunnel",
 }
 
-ROOT_SERVICES = {"wireguard-tunnel"}
+ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
 DOCKER_SOCKET_SERVICES = {
     "docker-proxy": True,
     "site-worker-orchestrator": False,
