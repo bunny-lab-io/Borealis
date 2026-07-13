@@ -923,22 +923,24 @@ func (session *vpnSession) summary() map[string]any {
 
 func (s *vpnTunnelService) allocateVirtualIPLocked(agentID string) (string, error) {
 	if existing := s.ipLeases[agentID]; existing != "" {
-		return existing, nil
+		if s.usablePeerVirtualIP(existing) {
+			return existing, nil
+		}
+		delete(s.ipLeases, agentID)
 	}
 	reserved := map[string]struct{}{}
 	for owner, ip := range s.ipLeases {
-		if owner != agentID {
+		if owner != agentID && s.usablePeerVirtualIP(ip) {
 			reserved[ip] = struct{}{}
 		}
 	}
 	for owner, session := range s.sessionsByAgent {
-		if owner != agentID {
+		if owner != agentID && s.usablePeerVirtualIP(session.VirtualIP) {
 			reserved[session.VirtualIP] = struct{}{}
 		}
 	}
-	engineIP := s.enginePrefix.Addr()
 	for ip := s.peerPrefix.Addr(); s.peerPrefix.Contains(ip); ip = nextAddr(ip) {
-		if ip == engineIP {
+		if !usablePeerVirtualAddr(ip, s.peerPrefix, s.enginePrefix) {
 			continue
 		}
 		candidate := ip.String() + "/32"
@@ -948,6 +950,49 @@ func (s *vpnTunnelService) allocateVirtualIPLocked(agentID string) (string, erro
 		return candidate, nil
 	}
 	return "", errors.New("vpn_ip_pool_exhausted")
+}
+
+func (s *vpnTunnelService) usablePeerVirtualIP(value string) bool {
+	addr, ok := parseWireGuardHostRouteAddr(value)
+	return ok && usablePeerVirtualAddr(addr, s.peerPrefix, s.enginePrefix)
+}
+
+func parseWireGuardHostRouteAddr(value string) (netip.Addr, bool) {
+	prefix, err := netip.ParsePrefix(cleanText(value))
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	prefix = prefix.Masked()
+	if !prefix.Addr().Is4() || prefix.Bits() != 32 {
+		return netip.Addr{}, false
+	}
+	return prefix.Addr(), true
+}
+
+func peerPrefixBoundaryAddrs(prefix netip.Prefix) (netip.Addr, netip.Addr, bool) {
+	prefix = prefix.Masked()
+	if !prefix.IsValid() || !prefix.Addr().Is4() {
+		return netip.Addr{}, netip.Addr{}, false
+	}
+	network := prefix.Addr()
+	raw := network.As4()
+	hostBits := 32 - prefix.Bits()
+	for bit := 0; bit < hostBits; bit++ {
+		index := len(raw) - 1 - bit/8
+		raw[index] |= byte(1 << uint(bit%8))
+	}
+	return network, netip.AddrFrom4(raw), true
+}
+
+func usablePeerVirtualAddr(addr netip.Addr, peerPrefix netip.Prefix, enginePrefix netip.Prefix) bool {
+	if !addr.Is4() || !peerPrefix.Contains(addr) || addr == enginePrefix.Addr() {
+		return false
+	}
+	network, broadcast, ok := peerPrefixBoundaryAddrs(peerPrefix)
+	if !ok {
+		return false
+	}
+	return addr != network && addr != broadcast
 }
 
 func nextAddr(ip netip.Addr) netip.Addr {
@@ -990,6 +1035,10 @@ func (s *vpnTunnelService) loadLeases(ctx context.Context) {
 		for rows.Next() {
 			var agentID, virtualIP string
 			if rows.Scan(&agentID, &virtualIP) == nil && cleanText(agentID) != "" && cleanText(virtualIP) != "" {
+				if !s.usablePeerVirtualIP(virtualIP) {
+					log.Printf("vpn ip lease ignored agent_id=%s virtual_ip=%s reason=reserved_or_invalid", cleanText(agentID), cleanText(virtualIP))
+					continue
+				}
 				s.mu.Lock()
 				s.ipLeases[cleanText(agentID)] = cleanText(virtualIP)
 				s.mu.Unlock()
@@ -1559,8 +1608,11 @@ func (w *wireGuardRuntime) validatePeerPolicyLocked(agentID string, publicKey st
 	if !w.peerPrefix.Contains(prefix.Addr()) {
 		return nil, errors.New("wireguard_peer_allowed_ip_outside_peer_network")
 	}
-	if prefix.Addr() == w.enginePrefix.Addr() {
-		return nil, errors.New("wireguard_peer_allowed_ip_reserved_for_engine")
+	if !usablePeerVirtualAddr(prefix.Addr(), w.peerPrefix, w.enginePrefix) {
+		if prefix.Addr() == w.enginePrefix.Addr() {
+			return nil, errors.New("wireguard_peer_allowed_ip_reserved_for_engine")
+		}
+		return nil, errors.New("wireguard_peer_allowed_ip_reserved")
 	}
 	normalized := prefix.String()
 	if owner := owners.AllowedIPs[normalized]; owner != "" && owner != agentID {

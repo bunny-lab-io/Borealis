@@ -75,6 +75,62 @@ func TestWireGuardRuntimePrefixesAcceptPrivateContainedOverlayConfig(t *testing.
 	}
 }
 
+func TestVPNTunnelAllocateVirtualIPSkipsPeerNetworkAddress(t *testing.T) {
+	service := &vpnTunnelService{
+		enginePrefix:    netip.MustParsePrefix("10.255.0.1/32"),
+		peerPrefix:      netip.MustParsePrefix("10.255.0.0/16"),
+		ipLeases:        map[string]string{},
+		sessionsByAgent: map[string]*vpnSession{},
+	}
+
+	virtualIP, err := service.allocateVirtualIPLocked("agent-1")
+	if err != nil {
+		t.Fatalf("allocate virtual IP failed: %v", err)
+	}
+	if virtualIP != "10.255.0.2/32" {
+		t.Fatalf("expected first usable peer IP after network and engine addresses, got %s", virtualIP)
+	}
+}
+
+func TestVPNTunnelAllocateVirtualIPReplacesReservedLease(t *testing.T) {
+	service := &vpnTunnelService{
+		enginePrefix:    netip.MustParsePrefix("10.255.0.1/32"),
+		peerPrefix:      netip.MustParsePrefix("10.255.0.0/16"),
+		ipLeases:        map[string]string{"agent-1": "10.255.0.0/32"},
+		sessionsByAgent: map[string]*vpnSession{},
+	}
+
+	virtualIP, err := service.allocateVirtualIPLocked("agent-1")
+	if err != nil {
+		t.Fatalf("allocate virtual IP failed: %v", err)
+	}
+	if virtualIP != "10.255.0.2/32" {
+		t.Fatalf("expected reserved lease replacement, got %s", virtualIP)
+	}
+}
+
+func TestWireGuardRuntimeRejectsReservedAllowedIP(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	commandCount := 0
+	runtime.commandRunner = func(args []string) (int, string, string) {
+		commandCount++
+		return 0, "", ""
+	}
+
+	err := runtime.upsertPeer(map[string]any{
+		"agent_id":    "agent-1",
+		"public_key":  "peer-public-key-1",
+		"allowed_ips": []string{"10.255.0.0/32"},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved allowed IP rejection, got %v", err)
+	}
+	if commandCount != 0 {
+		t.Fatalf("reserved peer touched command path %d time(s)", commandCount)
+	}
+}
+
 func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	runtime.managedPeers["agent-1"] = map[string]any{

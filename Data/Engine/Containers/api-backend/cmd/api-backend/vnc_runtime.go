@@ -364,6 +364,8 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 		"session_id":             session.SessionID,
 		"participant_id":         participant.ParticipantID,
 		"role":                   participant.Role,
+		"hostname":               result.Device.Hostname,
+		"service_mode":           serviceModeFromAgentID(session.AgentID),
 		"allowed_ips":            session.AllowedIPs,
 		"engine_virtual_ip":      session.EngineVirtualIP,
 		"credential_revision":    session.CredentialRevision,

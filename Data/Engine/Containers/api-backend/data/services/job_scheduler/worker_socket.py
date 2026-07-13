@@ -882,6 +882,55 @@ class SiteWorkerSocketRuntime:
                 level="WARNING",
             )
 
+    def _post_host_service_event(
+        self,
+        *,
+        hostname: str,
+        service_mode: str,
+        event_name: str,
+        payload: Any,
+        timeout_seconds: float = 3.0,
+    ) -> bool:
+        if not self.internal_secret or self.port <= 0:
+            return False
+        try:
+            response = requests.post(
+                f"http://{self.host}:{self.port}/remote-ops/host-service/event",
+                headers={INTERNAL_TOKEN_HEADER: internal_token(self.internal_secret)},
+                json={
+                    "hostname": str(hostname or "").strip(),
+                    "service_mode": str(service_mode or "").strip(),
+                    "event_name": str(event_name or "").strip(),
+                    "payload": payload,
+                    "allow_pending": False,
+                },
+                timeout=max(0.5, float(timeout_seconds or 3.0)),
+            )
+            if response.status_code >= 400:
+                self._log(
+                    "host_service_event_post_failed hostname={0} service_mode={1} event={2} status={3}".format(
+                        normalize_host_key(hostname) or hostname or "-",
+                        normalize_service_mode(service_mode) or service_mode or "-",
+                        event_name or "-",
+                        response.status_code,
+                    ),
+                    level="WARNING",
+                )
+                return False
+            data = response.json() if response.content else {}
+            return bool(isinstance(data, Mapping) and data.get("emitted"))
+        except Exception as exc:
+            self._log(
+                "host_service_event_post_failed hostname={0} service_mode={1} event={2} error={3}".format(
+                    normalize_host_key(hostname) or hostname or "-",
+                    normalize_service_mode(service_mode) or service_mode or "-",
+                    event_name or "-",
+                    str(exc)[:160],
+                ),
+                level="WARNING",
+            )
+            return False
+
     def _register_remote_desktop_routes(self) -> None:
         @self.app.route("/remote-desktop/vnc/session", methods=["POST"])
         def _remote_desktop_session():
@@ -930,6 +979,8 @@ class SiteWorkerSocketRuntime:
             participant_id = str(data.get("participant_id") or "").strip()
             operator_id = str(data.get("operator_id") or "").strip()
             role = str(data.get("role") or "").strip()
+            hostname = str(data.get("hostname") or infer_hostname_from_agent_id(agent_id) or "").strip()
+            service_mode = normalize_service_mode(data.get("service_mode") or data.get("mode") or "system") or "system"
             allowed_ips = str(data.get("allowed_ips") or data.get("engine_virtual_ip") or "").strip()
             remove_wallpaper = _bool_from_any(data.get("remove_wallpaper"), True)
             try:
@@ -1007,10 +1058,17 @@ class SiteWorkerSocketRuntime:
                     "credential_revision": credential_revision,
                     "reason": str(reason or "guacd_backend_retry").strip() or "guacd_backend_retry",
                 }
-                emitted = self.registry.emit(agent_id, "vnc_start", restart_payload)
+                emitted = self._post_host_service_event(
+                    hostname=hostname,
+                    service_mode=service_mode,
+                    event_name="vnc_start",
+                    payload=restart_payload,
+                )
                 self._log(
-                    "remote_desktop_vnc_restart_emit agent_id={0} session_id={1} port={2} emitted={3} reason={4}".format(
+                    "remote_desktop_vnc_restart_emit agent_id={0} hostname={1} service_mode={2} session_id={3} port={4} emitted={5} reason={6}".format(
                         agent_id,
+                        normalize_host_key(hostname) or "-",
+                        service_mode,
                         session_id,
                         port,
                         str(bool(emitted)).lower(),
