@@ -294,6 +294,12 @@ function buildRetryableError(message, retryable = true) {
   return error;
 }
 
+function retryAfterMsFromPayload(data) {
+  const seconds = Number(data?.retry_after_seconds ?? data?.retry_after ?? 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.min(Math.ceil(seconds * 1000), 120000);
+}
+
 const VNC_AUTO_RETRY_ATTEMPTS = 3;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
@@ -2015,16 +2021,24 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         }
         const detail = data?.detail ? `: ${data.detail}` : "";
         const status = Number(resp.status || 0);
-        throw buildRetryableError(
+        const error = buildRetryableError(
           `${data?.error || `HTTP ${resp.status}`}${detail}`,
-          status >= 500 || status === 429 || status === 408
+          data?.error === "vnc_auth_retry_in_progress" ||
+            data?.error === "vnc_auth_retry_settling" ||
+            status >= 500 ||
+            status === 429 ||
+            status === 408
         );
+        error.retryAfterMs = retryAfterMsFromPayload(data);
+        throw error;
       }
       applySessionBootstrap(data);
       return data;
     } catch (err) {
       if (err?.retryable !== false) {
-        throw buildRetryableError(err?.message || err, true);
+        const retryableError = buildRetryableError(err?.message || err, true);
+        retryableError.retryAfterMs = Number(err?.retryAfterMs || 0);
+        throw retryableError;
       }
       throw err;
     }
@@ -2447,6 +2461,14 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           const retryable = err?.retryable !== false;
           if (!retryable || attempt >= VNC_AUTO_RETRY_ATTEMPTS) {
             throw err;
+          }
+          const retryAfterMs = Number(err?.retryAfterMs || 0);
+          if (retryAfterMs > 0) {
+            setSessionState("connecting");
+            setVncStage("retrying");
+            setStatusMessage("Waiting for Agent VNC credential recovery...");
+            await sleep(Math.max(VNC_AUTO_RETRY_DELAY_MS, retryAfterMs));
+            if (connectAttemptRef.current !== connectToken) return;
           }
         }
       }

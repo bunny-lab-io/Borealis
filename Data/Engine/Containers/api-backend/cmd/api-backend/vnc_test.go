@@ -333,7 +333,7 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	}
 }
 
-func TestVNCAgentNeedsAuthRetryFromPreviousProxyClose(t *testing.T) {
+func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 	runtime := newVNCRuntime(nil, nil)
 	session, participant, _ := runtime.ensureSession(
 		"agent-1",
@@ -341,17 +341,38 @@ func TestVNCAgentNeedsAuthRetryFromPreviousProxyClose(t *testing.T) {
 		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
 		true,
 	)
+	now := time.Unix(1700001000, 0).UTC()
 
-	if runtime.agentNeedsAuthRetry("agent-1") {
-		t.Fatalf("fresh session should not require auth retry")
+	if reservation := runtime.reserveAgentAuthRetry("agent-1", now, ""); reservation.Needed {
+		t.Fatalf("fresh session should not reserve auth retry: %#v", reservation)
 	}
 	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
-	if !runtime.agentNeedsAuthRetry("agent-1") {
-		t.Fatalf("previous proxy auth failure should require auth retry")
+	reservation := runtime.reserveAgentAuthRetry("agent-1", now, "")
+	if !reservation.Needed || !reservation.Reserved {
+		t.Fatalf("previous proxy auth failure should reserve auth retry: %#v", reservation)
+	}
+	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds <= 0 {
+		t.Fatalf("second auth retry should be debounced: %#v", blocked)
+	}
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	settling := runtime.reserveAgentAuthRetry("agent-1", now.Add(30*time.Second), "")
+	if !settling.Needed || settling.Reserved {
+		t.Fatalf("failed auth retry should settle before another attempt: %#v", settling)
+	}
+	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(3*time.Minute), "")
+	if probe.Needed {
+		t.Fatalf("settled failed retry should allow normal credential probe before rotating again: %#v", probe)
+	}
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	stale := runtime.reserveAgentAuthRetry("agent-1", now.Add(4*time.Minute), "")
+	if !stale.Needed || !stale.Reserved {
+		t.Fatalf("fresh auth failure after cooldown should reserve new retry: %#v", stale)
 	}
 	runtime.recordProxyFirstFrame(session.SessionID, participant.ParticipantID, "size")
-	if runtime.agentNeedsAuthRetry("agent-1") {
-		t.Fatalf("first frame should clear auth retry state")
+	cleared := runtime.reserveAgentAuthRetry("agent-1", now.Add(5*time.Minute), "")
+	if cleared.Needed {
+		t.Fatalf("first frame should clear auth retry state: %#v", cleared)
 	}
 }
 
@@ -363,6 +384,7 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 		"restart_ready":          defaultVNCRestartReadyWaitSeconds,
 		"auth_retry_credentials": defaultVNCAuthRetryCredentialWaitSeconds,
 		"auth_retry_ready":       defaultVNCAuthRetryReadyWaitSeconds,
+		"auth_retry_cooldown":    defaultVNCAuthRetryCooldownSeconds,
 	}
 	minimums := map[string]float64{
 		"live_credentials":       30,
@@ -371,6 +393,7 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 		"restart_ready":          20,
 		"auth_retry_credentials": 60,
 		"auth_retry_ready":       20,
+		"auth_retry_cooldown":    90,
 	}
 	for name, got := range cases {
 		if got < minimums[name] {
