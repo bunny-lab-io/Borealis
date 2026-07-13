@@ -277,7 +277,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		log.Printf("vnc_token_issue_failed agent_id=%s hostname=%s error=%v", agentID, hostname, issueErr)
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
-	authProbeRequired := true
+	authProbeRequired := boolFromAny(body["auth_probe"])
 	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, authProbeRequired)
 	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
 	if authRetryReserved {
@@ -427,7 +427,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 
 func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile operatorProfile, result remoteOpsSessionResult, issued issuedRemoteOpsSession, session *vncCollaborationSession, participant *vncParticipant, credential vncCredential, host string, vncPort int, body map[string]any, authProbe bool) (map[string]any, int, map[string]any) {
 	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
-	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
+	payload := map[string]any{
 		"operation_token":        issued.Token,
 		"agent_id":               session.AgentID,
 		"host":                   host,
@@ -441,8 +441,11 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 		"height":                 height,
 		"dpi":                    96,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
-		"auth_probe":             authProbe,
-	}, 10*time.Second)
+	}
+	if authProbe {
+		payload["auth_probe"] = true
+	}
+	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", payload, 10*time.Second)
 }
 
 func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {
