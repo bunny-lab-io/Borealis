@@ -479,6 +479,15 @@ func vncReasonIsAuthLockout(reason string) bool {
 		strings.Contains(text, "to many")
 }
 
+func vncReasonNeedsLongAuthSettle(reason string) bool {
+	text := strings.ToLower(cleanText(reason))
+	return vncReasonIsAuthLockout(text) ||
+		strings.Contains(text, "vnc_agent_live_credentials_unavailable") ||
+		strings.Contains(text, "vnc_auth_retry_settling") ||
+		strings.Contains(text, "stop_pending") ||
+		strings.Contains(text, "did not reach running")
+}
+
 func vncErrorNeedsAuthRetry(reason string) bool {
 	normalized := strings.ToLower(cleanText(reason))
 	if normalized == "" {
@@ -714,7 +723,7 @@ func vncAuthLockoutCooldown() time.Duration {
 
 func vncAuthRetryCooldownForReason(reason string) time.Duration {
 	cooldown := vncAuthRetryCooldown()
-	if vncReasonIsAuthLockout(reason) {
+	if vncReasonNeedsLongAuthSettle(reason) {
 		if lockoutCooldown := vncAuthLockoutCooldown(); lockoutCooldown > cooldown {
 			return lockoutCooldown
 		}

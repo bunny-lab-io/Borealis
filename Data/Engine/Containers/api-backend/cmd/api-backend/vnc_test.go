@@ -378,7 +378,7 @@ func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 	if !settling.Needed || settling.Reserved {
 		t.Fatalf("failed auth retry should settle before another attempt: %#v", settling)
 	}
-	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(3*time.Minute), "")
+	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(6*time.Minute), "")
 	if probe.Needed {
 		t.Fatalf("settled failed retry should allow normal credential probe before rotating again: %#v", probe)
 	}
@@ -459,6 +459,35 @@ func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
 	}
 	if !runtime.agentAuthProbeRequired("agent-1") {
 		t.Fatalf("lockout settle state should still require auth probe")
+	}
+}
+
+func TestVNCFailedCredentialRecoveryUsesLongSettleCooldown(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+
+	runtime := newVNCRuntime(nil, nil)
+	runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700002500, 0).UTC()
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	runtime.mu.Lock()
+	session := runtime.byID[runtime.byAgent["agent-1"]]
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
+
+	stillSettling := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
+	if !stillSettling.Needed || stillSettling.Reserved || stillSettling.RetryAfterSeconds < 160 {
+		t.Fatalf("failed credential recovery should hold beyond generic retry cooldown: %#v", stillSettling)
+	}
+	afterSettle := runtime.reserveAgentAuthRetry("agent-1", now.Add(301*time.Second), "")
+	if afterSettle.Needed {
+		t.Fatalf("expired failed credential recovery cooldown should allow normal credential probe: %#v", afterSettle)
 	}
 }
 
