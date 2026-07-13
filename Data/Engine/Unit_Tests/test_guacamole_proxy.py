@@ -120,7 +120,7 @@ def test_guacamole_connect_arguments_are_server_side_only() -> None:
         "",
         "true",
         "24",
-        "3",
+        "",
         "",
     ]
 

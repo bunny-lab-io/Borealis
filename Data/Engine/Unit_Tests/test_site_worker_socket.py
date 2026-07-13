@@ -718,13 +718,13 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     ]
 
 
-def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
+def test_vnc_auth_probe_enabled_by_default(monkeypatch) -> None:
     called = False
 
     def _probe(*_args, **_kwargs):
         nonlocal called
         called = True
-        return VncAuthProbeResult(True, False, "unexpected_probe")
+        return VncAuthProbeResult(True, True, "server_init_ok")
 
     monkeypatch.delenv("BOREALIS_VNC_AUTH_PROBE", raising=False)
     monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
@@ -737,8 +737,39 @@ def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
         poll_interval_seconds=0.1,
     )
 
+    assert result == VncAuthProbeResult(True, True, "server_init_ok")
+    assert called is True
+
+
+def test_vnc_auth_probe_can_be_disabled(monkeypatch) -> None:
+    called = False
+
+    def _probe(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return VncAuthProbeResult(True, False, "unexpected_probe")
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "0")
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.20",
+        5900,
+        "secretpw",
+        timeout_seconds=0.25,
+        poll_interval_seconds=0.1,
+    )
+
     assert result == VncAuthProbeResult(False, True, "auth_probe_disabled")
     assert called is False
+
+
+def test_vnc_auth_probe_rejection_text_maps_to_auth_failure() -> None:
+    assert (
+        worker_socket._vnc_auth_probe_error("too_many_auth_failures:Your connection has been rejected to many attempts.")
+        == "vnc_auth_failed"
+    )
+    assert worker_socket._vnc_auth_probe_error("auth_rejected:Your connection has been rejected.") == "vnc_auth_failed"
 
 
 def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:

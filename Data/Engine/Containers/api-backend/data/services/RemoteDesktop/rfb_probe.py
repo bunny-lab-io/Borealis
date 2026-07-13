@@ -67,6 +67,16 @@ def _read_rfb_failure_reason(sock: socket.socket) -> str:
         return ""
 
 
+def _normalize_rfb_rejection_reason(detail: str, fallback: str) -> str:
+    text = _normalize_text(detail)
+    lowered = text.lower()
+    if "too many" in lowered or "to many" in lowered or ("attempt" in lowered and "many" in lowered):
+        return f"too_many_auth_failures:{text}" if text else "too_many_auth_failures"
+    if "reject" in lowered:
+        return f"auth_rejected:{text}" if text else "auth_rejected"
+    return text or fallback
+
+
 def _reverse_byte_bits(value: int) -> int:
     result = 0
     for _index in range(8):
@@ -167,7 +177,11 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                 security_type_count = _read_socket_exact(sock, 1)[0]
                 if security_type_count <= 0:
                     detail = _read_rfb_failure_reason(sock)
-                    return VncAuthProbeResult(True, False, detail or "security_type_rejected")
+                    return VncAuthProbeResult(
+                        True,
+                        False,
+                        _normalize_rfb_rejection_reason(detail, "security_type_rejected"),
+                    )
                 security_types = _read_socket_exact(sock, security_type_count)
                 if 2 in security_types:
                     security_type = 2
@@ -191,9 +205,13 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                 return _complete_rfb_client_init(sock)
             detail = _read_rfb_failure_reason(sock)
             if result == 1:
-                return VncAuthProbeResult(True, False, detail or "auth_failed")
+                return VncAuthProbeResult(True, False, f"auth_failed:{detail}" if detail else "auth_failed")
             if result == 2:
-                return VncAuthProbeResult(True, False, detail or "too_many_auth_failures")
+                return VncAuthProbeResult(
+                    True,
+                    False,
+                    _normalize_rfb_rejection_reason(detail, "too_many_auth_failures"),
+                )
             return VncAuthProbeResult(True, False, f"auth_result_{result}")
     except Exception as exc:
         return VncAuthProbeResult(True, False, (str(exc) or "connect_failed")[:160])
@@ -228,7 +246,7 @@ def wait_for_vnc_auth_ready(
     timeout_seconds: float,
     poll_interval_seconds: float,
 ) -> VncAuthProbeResult:
-    if not _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False):
+    if not _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), True):
         return VncAuthProbeResult(False, True, "auth_probe_disabled")
     deadline = time.monotonic() + max(0.25, timeout_seconds)
     last_result = VncAuthProbeResult(True, False, "not_checked")

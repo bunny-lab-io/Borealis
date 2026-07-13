@@ -128,7 +128,11 @@ def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
     auth_markers = (
         "auth_failed",
+        "auth_rejected",
         "too_many_auth_failures",
+        "too many",
+        "to many",
+        "rejected",
         "security_type",
         "unsupported_security",
         "vnc_auth_unavailable",
