@@ -246,7 +246,7 @@ def wait_for_vnc_auth_ready(
     timeout_seconds: float,
     poll_interval_seconds: float,
 ) -> VncAuthProbeResult:
-    if not _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), True):
+    if not _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False):
         return VncAuthProbeResult(False, True, "auth_probe_disabled")
     deadline = time.monotonic() + max(0.25, timeout_seconds)
     last_result = VncAuthProbeResult(True, False, "not_checked")

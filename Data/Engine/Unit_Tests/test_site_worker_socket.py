@@ -718,7 +718,7 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     ]
 
 
-def test_vnc_auth_probe_enabled_by_default(monkeypatch) -> None:
+def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
     called = False
 
     def _probe(*_args, **_kwargs):
@@ -727,6 +727,29 @@ def test_vnc_auth_probe_enabled_by_default(monkeypatch) -> None:
         return VncAuthProbeResult(True, True, "server_init_ok")
 
     monkeypatch.delenv("BOREALIS_VNC_AUTH_PROBE", raising=False)
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.20",
+        5900,
+        "secretpw",
+        timeout_seconds=0.25,
+        poll_interval_seconds=0.1,
+    )
+
+    assert result == VncAuthProbeResult(False, True, "auth_probe_disabled")
+    assert called is False
+
+
+def test_vnc_auth_probe_can_be_enabled(monkeypatch) -> None:
+    called = False
+
+    def _probe(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return VncAuthProbeResult(True, True, "server_init_ok")
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "1")
     monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
 
     result = rfb_probe.wait_for_vnc_auth_ready(
