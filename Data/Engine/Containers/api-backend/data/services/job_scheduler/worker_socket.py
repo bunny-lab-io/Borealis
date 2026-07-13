@@ -136,6 +136,9 @@ def _vnc_auth_probe_error(reason: str) -> str:
         "security_type",
         "unsupported_security",
         "vnc_auth_unavailable",
+        "valid password",
+        "password enabled",
+        "password is set",
     )
     if any(marker in normalized for marker in auth_markers):
         return "vnc_auth_failed"

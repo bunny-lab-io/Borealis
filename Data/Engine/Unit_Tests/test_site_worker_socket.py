@@ -770,6 +770,12 @@ def test_vnc_auth_probe_rejection_text_maps_to_auth_failure() -> None:
         == "vnc_auth_failed"
     )
     assert worker_socket._vnc_auth_probe_error("auth_rejected:Your connection has been rejected.") == "vnc_auth_failed"
+    assert (
+        worker_socket._vnc_auth_probe_error(
+            "This server does not have a valid password enabled.Until a password is set, incoming connections cannot be accepted."
+        )
+        == "vnc_auth_failed"
+    )
 
 
 def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:
