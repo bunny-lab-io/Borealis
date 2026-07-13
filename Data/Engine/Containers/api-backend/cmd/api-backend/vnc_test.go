@@ -325,6 +325,12 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncErrorNeedsAuthRetry("too_many_auth_failures:Your connection has been rejected to many attempts.") {
 		t.Fatalf("expected UltraVNC lockout reason to request auth retry")
 	}
+	if !vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
+		t.Fatalf("expected UltraVNC lockout detail to be detected")
+	}
+	if vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "auth_failed"}) {
+		t.Fatalf("plain auth failures should still rotate credentials")
+	}
 	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_backend_unreachable"}) {
 		t.Fatalf("backend reachability errors should not rotate credentials")
 	}
@@ -405,6 +411,25 @@ func TestVNCAuthRetryStateSurvivesStaleParticipantCleanup(t *testing.T) {
 	}
 	if !runtime.agentAuthProbeRequired("agent-1") {
 		t.Fatalf("retained auth retry state should require worker auth probe")
+	}
+}
+
+func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	runtime.markAgentAuthRetrySettling("agent-1", "too_many_auth_failures:Your connection has been rejected to many attempts.")
+
+	reservation := runtime.reserveAgentAuthRetry("agent-1", time.Now().UTC().Add(10*time.Second), "")
+	if !reservation.Needed || reservation.Reserved {
+		t.Fatalf("lockout should settle without immediate rotation: %#v", reservation)
+	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("lockout settle state should still require auth probe")
 	}
 }
 
