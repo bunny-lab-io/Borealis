@@ -111,19 +111,6 @@ def _env_float(name: str, fallback: float, minimum: float = 0.0) -> float:
     return value
 
 
-def _bool_from_any(value: Any, fallback: bool = False) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return fallback
-    normalized = str(value).strip().lower()
-    if normalized in {"1", "true", "yes", "y", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "n", "off"}:
-        return False
-    return fallback
-
-
 def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
     auth_markers = (
@@ -889,55 +876,6 @@ class SiteWorkerSocketRuntime:
                 level="WARNING",
             )
 
-    def _post_host_service_event(
-        self,
-        *,
-        hostname: str,
-        service_mode: str,
-        event_name: str,
-        payload: Any,
-        timeout_seconds: float = 3.0,
-    ) -> bool:
-        if not self.internal_secret or self.port <= 0:
-            return False
-        try:
-            response = requests.post(
-                f"http://{self.host}:{self.port}/remote-ops/host-service/event",
-                headers={INTERNAL_TOKEN_HEADER: internal_token(self.internal_secret)},
-                json={
-                    "hostname": str(hostname or "").strip(),
-                    "service_mode": str(service_mode or "").strip(),
-                    "event_name": str(event_name or "").strip(),
-                    "payload": payload,
-                    "allow_pending": False,
-                },
-                timeout=max(0.5, float(timeout_seconds or 3.0)),
-            )
-            if response.status_code >= 400:
-                self._log(
-                    "host_service_event_post_failed hostname={0} service_mode={1} event={2} status={3}".format(
-                        normalize_host_key(hostname) or hostname or "-",
-                        normalize_service_mode(service_mode) or service_mode or "-",
-                        event_name or "-",
-                        response.status_code,
-                    ),
-                    level="WARNING",
-                )
-                return False
-            data = response.json() if response.content else {}
-            return bool(isinstance(data, Mapping) and data.get("emitted"))
-        except Exception as exc:
-            self._log(
-                "host_service_event_post_failed hostname={0} service_mode={1} event={2} error={3}".format(
-                    normalize_host_key(hostname) or hostname or "-",
-                    normalize_service_mode(service_mode) or service_mode or "-",
-                    event_name or "-",
-                    str(exc)[:160],
-                ),
-                level="WARNING",
-            )
-            return False
-
     def _register_remote_desktop_routes(self) -> None:
         @self.app.route("/remote-desktop/vnc/session", methods=["POST"])
         def _remote_desktop_session():
@@ -986,14 +924,6 @@ class SiteWorkerSocketRuntime:
             participant_id = str(data.get("participant_id") or "").strip()
             operator_id = str(data.get("operator_id") or "").strip()
             role = str(data.get("role") or "").strip()
-            hostname = str(data.get("hostname") or infer_hostname_from_agent_id(agent_id) or "").strip()
-            service_mode = normalize_service_mode(data.get("service_mode") or data.get("mode") or "system") or "system"
-            allowed_ips = str(data.get("allowed_ips") or data.get("engine_virtual_ip") or "").strip()
-            remove_wallpaper = _bool_from_any(data.get("remove_wallpaper"), True)
-            try:
-                credential_revision = int(data.get("credential_revision") or 0)
-            except Exception:
-                credential_revision = 0
             if not host or port <= 0 or not password or not session_id or not participant_id:
                 return jsonify({"error": "invalid_session_payload"}), 400
             try:
@@ -1044,46 +974,6 @@ class SiteWorkerSocketRuntime:
                     503,
                 )
 
-            def _restart_vnc_listener(reason: str) -> None:
-                if not allowed_ips:
-                    self._log(
-                        "remote_desktop_vnc_restart_skipped agent_id={0} session_id={1} reason=allowed_ips_missing".format(
-                            agent_id,
-                            session_id,
-                        ),
-                        level="WARNING",
-                    )
-                    return
-                restart_payload = {
-                    "agent_id": agent_id,
-                    "session_id": session_id,
-                    "controller_password": "",
-                    "view_only_password": "",
-                    "port": port,
-                    "allowed_ips": allowed_ips,
-                    "remove_wallpaper": remove_wallpaper,
-                    "credential_revision": credential_revision,
-                    "reason": str(reason or "guacd_backend_retry").strip() or "guacd_backend_retry",
-                }
-                emitted = self._post_host_service_event(
-                    hostname=hostname,
-                    service_mode=service_mode,
-                    event_name="vnc_start",
-                    payload=restart_payload,
-                )
-                self._log(
-                    "remote_desktop_vnc_restart_emit agent_id={0} hostname={1} service_mode={2} session_id={3} port={4} emitted={5} reason={6}".format(
-                        agent_id,
-                        normalize_host_key(hostname) or "-",
-                        service_mode,
-                        session_id,
-                        port,
-                        str(bool(emitted)).lower(),
-                        restart_payload["reason"],
-                    ),
-                    level="INFO" if emitted else "WARNING",
-                )
-
             guacamole_session = self._guacamole_registry.create(
                 agent_id=agent_id,
                 host=host,
@@ -1097,7 +987,6 @@ class SiteWorkerSocketRuntime:
                 height=height,
                 dpi=dpi,
                 performance_preference=performance_preference,
-                restart_tunnel=_restart_vnc_listener,
                 confirm_transport=lambda reason: self._notify_vnc_session_event(
                     event="transport_confirm",
                     agent_id=agent_id,

@@ -271,29 +271,6 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
     return resolved
 
 
-def _request_vnc_restart_once(
-    session: GuacamoleVncSession,
-    *,
-    reason: str,
-    logger: logging.Logger,
-) -> bool:
-    restart = session.restart_tunnel
-    if not callable(restart):
-        return False
-    try:
-        restart(reason)
-        return True
-    except Exception:
-        logger.debug(
-            "Guacamole VNC restart callback failed agent_id=%s session_id=%s token_hint=%s",
-            session.agent_id,
-            session.session_id or "-",
-            _token_hint(session),
-            exc_info=True,
-        )
-        return False
-
-
 def _extract_complete_guacamole_instruction_strings(
     raw_text: str,
 ) -> Tuple[List[Tuple[str, str, List[str]]], str]:
@@ -544,7 +521,6 @@ async def _open_ready_guacd(
     guacd_port: int,
 ) -> Tuple[Any, Any, str, List[Tuple[str, List[str]]]]:
     last_error: Optional[BaseException] = None
-    restart_attempted = False
     for attempt in range(1, _GUACD_READY_ATTEMPTS + 1):
         reader: Any = None
         writer: Any = None
@@ -574,23 +550,6 @@ async def _open_ready_guacd(
         except GuacdBackendRetryableError as exc:
             last_error = exc
             await _close_writer(writer)
-            if not restart_attempted:
-                restart_attempted = True
-                restart_requested = _request_vnc_restart_once(
-                    session,
-                    reason=f"guacd_backend_retryable_{exc.status}",
-                    logger=logger,
-                )
-                if restart_requested:
-                    logger.warning(
-                        "Guacamole VNC requested Agent listener restart after backend retryable error agent_id=%s session_id=%s participant_id=%s token_hint=%s status=%s message=%s",
-                        session.agent_id,
-                        session.session_id or "-",
-                        session.participant_id or "-",
-                        _token_hint(session),
-                        exc.status,
-                        exc.message,
-                    )
             if attempt >= _GUACD_READY_ATTEMPTS:
                 break
             logger.warning(
