@@ -322,6 +322,9 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_failed"}) {
 		t.Fatalf("expected vnc_auth_failed to request auth retry")
 	}
+	if !vncErrorNeedsAuthRetry("too_many_auth_failures:Your connection has been rejected to many attempts.") {
+		t.Fatalf("expected UltraVNC lockout reason to request auth retry")
+	}
 	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_backend_unreachable"}) {
 		t.Fatalf("backend reachability errors should not rotate credentials")
 	}
@@ -330,20 +333,44 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	}
 }
 
+func TestVNCAgentNeedsAuthRetryFromPreviousProxyClose(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	session, participant, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+
+	if runtime.agentNeedsAuthRetry("agent-1") {
+		t.Fatalf("fresh session should not require auth retry")
+	}
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	if !runtime.agentNeedsAuthRetry("agent-1") {
+		t.Fatalf("previous proxy auth failure should require auth retry")
+	}
+	runtime.recordProxyFirstFrame(session.SessionID, participant.ParticipantID, "size")
+	if runtime.agentNeedsAuthRetry("agent-1") {
+		t.Fatalf("first frame should clear auth retry state")
+	}
+}
+
 func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 	cases := map[string]float64{
-		"live_credentials": defaultVNCLiveCredentialWaitSeconds,
-		"start_ready":      defaultVNCStartReadyWaitSeconds,
-		"recovery_ready":   defaultVNCRecoveryReadyWaitSeconds,
-		"restart_ready":    defaultVNCRestartReadyWaitSeconds,
-		"auth_retry_ready": defaultVNCAuthRetryReadyWaitSeconds,
+		"live_credentials":       defaultVNCLiveCredentialWaitSeconds,
+		"start_ready":            defaultVNCStartReadyWaitSeconds,
+		"recovery_ready":         defaultVNCRecoveryReadyWaitSeconds,
+		"restart_ready":          defaultVNCRestartReadyWaitSeconds,
+		"auth_retry_credentials": defaultVNCAuthRetryCredentialWaitSeconds,
+		"auth_retry_ready":       defaultVNCAuthRetryReadyWaitSeconds,
 	}
 	minimums := map[string]float64{
-		"live_credentials": 30,
-		"start_ready":      30,
-		"recovery_ready":   20,
-		"restart_ready":    20,
-		"auth_retry_ready": 20,
+		"live_credentials":       30,
+		"start_ready":            30,
+		"recovery_ready":         20,
+		"restart_ready":          20,
+		"auth_retry_credentials": 60,
+		"auth_retry_ready":       20,
 	}
 	for name, got := range cases {
 		if got < minimums[name] {

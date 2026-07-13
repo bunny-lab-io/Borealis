@@ -22,6 +22,7 @@ from .guacamole_proxy import (
     DEFAULT_GUACD_HOST,
     DEFAULT_GUACD_PORT,
     GUACAMOLE_WS_PATH,
+    GuacdBackendRetryableError,
     GuacamoleSessionRegistry,
     proxy_guacamole_vnc_session,
 )
@@ -181,6 +182,11 @@ class VncProxyServer:
                     getattr(exc, "code", "-"),
                     close_reason or "-",
                 )
+            except GuacdBackendRetryableError as exc:
+                logger.warning("Guacamole VNC backend auth retry needed: %s", exc, exc_info=True)
+                close_reason = "vnc_auth_failed"
+                await websocket.close(code=1011, reason=close_reason)
+                return
             except Exception as exc:
                 logger.warning("Guacamole VNC bridge failed: %s", exc, exc_info=True)
                 close_reason = "guacamole_unavailable"

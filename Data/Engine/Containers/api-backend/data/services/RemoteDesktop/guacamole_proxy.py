@@ -582,6 +582,8 @@ async def _open_ready_guacd(
             )
             await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
     if last_error is not None:
+        if isinstance(last_error, GuacdBackendRetryableError):
+            raise last_error
         raise RuntimeError(str(last_error) or "guacd_unavailable") from last_error
     raise RuntimeError("guacd_unavailable")
 
