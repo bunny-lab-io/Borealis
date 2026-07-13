@@ -25,11 +25,12 @@ DEFAULT_GUACD_HOST = "127.0.0.1"
 DEFAULT_GUACD_PORT = 4822
 _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
 _GUACD_HANDSHAKE_TIMEOUT_SECONDS = 5.0
-_GUACD_READY_ATTEMPTS = 3
-_GUACD_READY_RETRY_DELAY_SECONDS = 2.0
+_GUACD_READY_ATTEMPTS = 7
+_GUACD_READY_RETRY_DELAY_SECONDS = 1.25
+_GUACD_READY_DEADLINE_SECONDS = 24.0
 _GUACD_BACKEND_VERIFY_SECONDS = 4.0
 _RETRYABLE_GUACD_BACKEND_STATUSES = {"519"}
-_GUACAMOLE_VNC_AUTORETRY = "0"
+_GUACAMOLE_VNC_AUTORETRY = "3"
 _GUACAMOLE_FIRST_FRAME_OPCODES = {
     "arc",
     "blob",
@@ -522,13 +523,17 @@ async def _open_ready_guacd(
     guacd_port: int,
 ) -> Tuple[Any, Any, str, List[Tuple[str, List[str]]]]:
     last_error: Optional[BaseException] = None
+    deadline = time.monotonic() + max(1.0, _GUACD_READY_DEADLINE_SECONDS)
     for attempt in range(1, _GUACD_READY_ATTEMPTS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         reader: Any = None
         writer: Any = None
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(guacd_host, int(guacd_port)),
-                timeout=_GUACD_CONNECT_TIMEOUT_SECONDS,
+                timeout=max(0.1, min(_GUACD_CONNECT_TIMEOUT_SECONDS, remaining)),
             )
             uuid_value, pending, parser = await _handshake_guacd(reader=reader, writer=writer, session=session)
             pending = await _verify_post_ready_guacd(
@@ -564,7 +569,10 @@ async def _open_ready_guacd(
                 exc.status,
                 exc.message,
             )
-            await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(_GUACD_READY_RETRY_DELAY_SECONDS, remaining))
         except Exception as exc:
             last_error = exc
             await _close_writer(writer)
@@ -580,7 +588,10 @@ async def _open_ready_guacd(
                 _GUACD_READY_ATTEMPTS,
                 str(exc)[:180],
             )
-            await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(_GUACD_READY_RETRY_DELAY_SECONDS, remaining))
     if last_error is not None:
         if isinstance(last_error, GuacdBackendRetryableError):
             raise last_error
