@@ -561,6 +561,47 @@ func TestVNCWaitOverridesClampToEstablishSLA(t *testing.T) {
 	}
 }
 
+func TestProbeRFBServerRequiresBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		time.Sleep(200 * time.Millisecond)
+	})
+
+	if probeRFBServer(host, port, 100*time.Millisecond) {
+		t.Fatalf("TCP-only listener should not count as RFB ready")
+	}
+}
+
+func TestProbeRFBServerAcceptsBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		_, _ = conn.Write([]byte("RFB 003.008\n"))
+	})
+
+	if !probeRFBServer(host, port, 500*time.Millisecond) {
+		t.Fatalf("RFB banner should count as VNC backend ready")
+	}
+}
+
+func startRFBTestServer(t *testing.T, handler func(net.Conn)) (string, int) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		handler(conn)
+	}()
+	addr := listener.Addr().(*net.TCPAddr)
+	return "127.0.0.1", addr.Port
+}
+
 func TestNormalizePerformancePreferencePreservesSpeedBias(t *testing.T) {
 	cases := map[any]int{
 		-4:    -2,
