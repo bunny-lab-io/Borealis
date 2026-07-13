@@ -337,6 +337,15 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if vncWorkerSessionNeedsAuthRetry(nil) {
 		t.Fatalf("nil worker error should not request auth retry")
 	}
+	if !vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_auth_retry_settling"}) {
+		t.Fatalf("auth retry settling payload should preserve auth recovery state")
+	}
+	if !vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_auth_retry_in_progress"}) {
+		t.Fatalf("auth retry in-progress payload should preserve auth recovery state")
+	}
+	if vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_backend_unreachable"}) {
+		t.Fatalf("backend reachability errors should still record generic worker failure")
+	}
 }
 
 func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
@@ -447,6 +456,33 @@ func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
 	}
 	if !runtime.agentAuthProbeRequired("agent-1") {
 		t.Fatalf("lockout settle state should still require auth probe")
+	}
+}
+
+func TestVNCAuthLockoutStateSurvivesGenericWorkerReturn(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+
+	runtime := newVNCRuntime(nil, nil)
+	session, _, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700003000, 0).UTC()
+	runtime.markAgentAuthRetrySettling("agent-1", "too_many_auth_failures:Your connection has been rejected to many attempts.")
+	runtime.mu.Lock()
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
+
+	if !vncWorkerSessionIsAuthRecoveryPayload(vncAuthRetrySettlingPayload(300)) {
+		runtime.recordError(session.SessionID, "worker_guacamole_unavailable")
+	}
+	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
+	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds < 160 {
+		t.Fatalf("generic worker return should not erase lockout cooldown: %#v", blocked)
 	}
 }
 

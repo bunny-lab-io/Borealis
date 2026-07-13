@@ -351,7 +351,9 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		}
 	}
 	if workerErr != nil {
-		v.recordError(session.SessionID, "worker_guacamole_unavailable")
+		if !vncWorkerSessionIsAuthRecoveryPayload(workerErr) {
+			v.recordError(session.SessionID, "worker_guacamole_unavailable")
+		}
 		if workerStatus == 0 {
 			workerStatus = http.StatusServiceUnavailable
 		}
@@ -441,6 +443,16 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 
 func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {
 	return vncErrorNeedsAuthRetry(cleanText(workerErr["error"]))
+}
+
+func vncWorkerSessionIsAuthRecoveryPayload(workerErr map[string]any) bool {
+	if workerErr == nil {
+		return false
+	}
+	errorCode := cleanText(workerErr["error"])
+	return errorCode == "vnc_auth_retry_in_progress" ||
+		errorCode == "vnc_auth_retry_settling" ||
+		vncWorkerSessionNeedsAuthRetry(workerErr)
 }
 
 func vncWorkerSessionIsAuthLockout(workerErr map[string]any) bool {
