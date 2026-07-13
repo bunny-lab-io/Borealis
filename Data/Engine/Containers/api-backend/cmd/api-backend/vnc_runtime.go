@@ -280,7 +280,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		if workerErr == nil {
 			v.finishAgentAuthRetry(agentID, true, "")
 		} else {
-			v.finishAgentAuthRetry(agentID, false, firstText(cleanText(workerErr["error"]), cleanText(workerErr["detail"])))
+			v.finishAgentAuthRetry(agentID, false, vncWorkerSessionAuthRetryReason(workerErr))
 			if vncWorkerSessionNeedsAuthRetry(workerErr) {
 				payload := vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
 				workerErr = payload
@@ -291,7 +291,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		v.clearAgentAuthRetryAfterWorkerReady(agentID)
 	}
 	if !authRetryReserved && vncWorkerSessionNeedsAuthRetry(workerErr) {
-		retryReason := firstText(cleanText(workerErr["error"]), cleanText(workerErr["detail"]), "vnc_auth_failed")
+		retryReason := vncWorkerSessionAuthRetryReason(workerErr)
 		if vncWorkerSessionIsAuthLockout(workerErr) {
 			v.markAgentAuthRetrySettling(agentID, retryReason)
 			workerErr = vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
@@ -342,7 +342,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 				} else {
 					log.Printf("vnc_auth_retry_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, retryErr)
 				}
-				v.finishAgentAuthRetry(agentID, retrySucceeded, firstText(cleanText(workerErr["error"]), cleanText(workerErr["detail"])))
+				v.finishAgentAuthRetry(agentID, retrySucceeded, vncWorkerSessionAuthRetryReason(workerErr))
 				if !retrySucceeded && vncWorkerSessionNeedsAuthRetry(workerErr) {
 					workerErr = vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
 					workerStatus = http.StatusServiceUnavailable
@@ -443,6 +443,16 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 
 func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {
 	return vncErrorNeedsAuthRetry(cleanText(workerErr["error"]))
+}
+
+func vncWorkerSessionAuthRetryReason(workerErr map[string]any) string {
+	if workerErr == nil {
+		return ""
+	}
+	if vncWorkerSessionIsAuthLockout(workerErr) {
+		return firstText(cleanText(workerErr["detail"]), cleanText(workerErr["error"]), "too_many_auth_failures")
+	}
+	return firstText(cleanText(workerErr["error"]), cleanText(workerErr["detail"]), "vnc_auth_failed")
 }
 
 func vncWorkerSessionIsAuthRecoveryPayload(workerErr map[string]any) bool {

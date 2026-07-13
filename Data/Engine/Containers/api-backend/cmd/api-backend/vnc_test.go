@@ -328,6 +328,9 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
 		t.Fatalf("expected UltraVNC lockout detail to be detected")
 	}
+	if got := vncWorkerSessionAuthRetryReason(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}); got != "too_many_auth_failures:Your connection has been rejected to many attempts." {
+		t.Fatalf("expected lockout detail to be preserved, got %q", got)
+	}
 	if vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "auth_failed"}) {
 		t.Fatalf("plain auth failures should still rotate credentials")
 	}
@@ -471,7 +474,11 @@ func TestVNCAuthLockoutStateSurvivesGenericWorkerReturn(t *testing.T) {
 		true,
 	)
 	now := time.Unix(1700003000, 0).UTC()
-	runtime.markAgentAuthRetrySettling("agent-1", "too_many_auth_failures:Your connection has been rejected to many attempts.")
+	lockoutErr := map[string]any{
+		"error":  "vnc_auth_failed",
+		"detail": "too_many_auth_failures:Your connection has been rejected to many attempts.",
+	}
+	runtime.markAgentAuthRetrySettling("agent-1", vncWorkerSessionAuthRetryReason(lockoutErr))
 	runtime.mu.Lock()
 	session.AuthRetryStartedAt = now
 	session.AuthRetryCompletedAt = now
