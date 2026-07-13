@@ -709,7 +709,7 @@ func (m *Manager) ensureService(ctx context.Context, reloadReason string, reason
 		}
 		return nil
 	}
-	return m.startService(ctx, service, reason)
+	return m.startService(ctx, service)
 }
 
 func (m *Manager) stabilizeServiceState(ctx context.Context, service string, state string, reason string) string {
@@ -727,36 +727,15 @@ func (m *Manager) stabilizeServiceState(ctx context.Context, service string, sta
 	return stableState
 }
 
-func (m *Manager) startService(ctx context.Context, service string, reason string) error {
-	state, err := m.requestServiceStart(ctx, service)
-	if err != nil {
-		return err
-	}
-	if isServiceRunning(state) {
-		return nil
-	}
-	if strings.EqualFold(state, "STOP_PENDING") && m.forceKillServiceProcess(ctx, service, reason) {
-		_ = m.waitForServiceStable(ctx, service, serviceTransitionForceKillWait)
-		state, err = m.requestServiceStart(ctx, service)
-		if err != nil {
-			return err
-		}
-		if isServiceRunning(state) {
-			return nil
-		}
-	}
-	return fmt.Errorf("UltraVNC service start did not reach RUNNING; state=%s", displayServiceState(state))
-}
-
-func (m *Manager) requestServiceStart(ctx context.Context, service string) (string, error) {
+func (m *Manager) startService(ctx context.Context, service string) error {
 	result, err := m.runner(ctx, 30*time.Second, "sc.exe", "start", service)
 	output := strings.TrimSpace(result.Stdout + "\n" + result.Stderr)
 	alreadyRunning := isServiceAlreadyRunning(result, output, err)
 	if err != nil && !alreadyRunning {
-		return "", err
+		return err
 	}
 	if result.ExitCode != 0 && !alreadyRunning {
-		return "", fmt.Errorf("UltraVNC service start failed: %s", output)
+		return fmt.Errorf("UltraVNC service start failed: %s", output)
 	}
 	m.logf("VNC service start requested service=%s exit_code=%d output=%s", service, result.ExitCode, compactLogText(output))
 	verifyWait := serviceTransitionWait
@@ -764,7 +743,10 @@ func (m *Manager) requestServiceStart(ctx context.Context, service string) (stri
 		verifyWait = serviceAlreadyRunningVerifyWait
 	}
 	state := m.waitForServiceStable(ctx, service, verifyWait)
-	return state, nil
+	if !isServiceRunning(state) {
+		return fmt.Errorf("UltraVNC service start did not reach RUNNING; state=%s", displayServiceState(state))
+	}
+	return nil
 }
 
 func isServiceAlreadyRunning(result commandResult, output string, err error) bool {
@@ -793,7 +775,7 @@ func (m *Manager) restartService(ctx context.Context, service string, reason str
 		}
 	}
 	m.waitForServiceNotRunning(ctx, service, 10*time.Second)
-	return m.startService(ctx, service, reason)
+	return m.startService(ctx, service)
 }
 
 func (m *Manager) waitForServiceNotRunning(ctx context.Context, service string, timeout time.Duration) bool {

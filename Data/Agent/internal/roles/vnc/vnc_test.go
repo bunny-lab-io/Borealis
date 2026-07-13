@@ -913,61 +913,8 @@ func TestStartServiceTreatsAlreadyRunningErrorAsSuccess(t *testing.T) {
 		},
 	}
 
-	if err := manager.startService(context.Background(), serviceName, "unit_test"); err != nil {
+	if err := manager.startService(context.Background(), serviceName); err != nil {
 		t.Fatalf("startService returned error for already-running service: %v", err)
-	}
-}
-
-func TestStartServiceForceKillsStopPendingAfterStart(t *testing.T) {
-	originalTransitionWait := serviceTransitionWait
-	originalForceKillWait := serviceTransitionForceKillWait
-	t.Cleanup(func() {
-		serviceTransitionWait = originalTransitionWait
-		serviceTransitionForceKillWait = originalForceKillWait
-	})
-	serviceTransitionWait = 10 * time.Millisecond
-	serviceTransitionForceKillWait = 10 * time.Millisecond
-
-	startCalls := 0
-	taskkillCalls := 0
-	killed := false
-	manager := &Manager{
-		serviceName: serviceName,
-		runner: func(_ context.Context, _ time.Duration, name string, args ...string) (commandResult, error) {
-			if name == "sc.exe" && len(args) > 0 {
-				switch args[0] {
-				case "start":
-					startCalls++
-					return commandResult{Stdout: "start pending", ExitCode: 0}, nil
-				case "query":
-					if startCalls >= 2 {
-						return commandResult{Stdout: "STATE              : 4  RUNNING", ExitCode: 0}, nil
-					}
-					if killed {
-						return commandResult{Stdout: "STATE              : 1  STOPPED", ExitCode: 0}, nil
-					}
-					return commandResult{Stdout: "STATE              : 3  STOP_PENDING", ExitCode: 0}, nil
-				case "queryex":
-					return commandResult{Stdout: "PID                : 4242", ExitCode: 0}, nil
-				}
-			}
-			if name == "taskkill.exe" {
-				taskkillCalls++
-				killed = true
-				return commandResult{Stdout: "SUCCESS", ExitCode: 0}, nil
-			}
-			return commandResult{Stdout: "ok", ExitCode: 0}, nil
-		},
-	}
-
-	if err := manager.startService(context.Background(), serviceName, "vnc_auth_retry"); err != nil {
-		t.Fatalf("startService returned error after force-kill recovery: %v", err)
-	}
-	if startCalls != 2 {
-		t.Fatalf("expected second service start after force-kill, got %d", startCalls)
-	}
-	if taskkillCalls != 1 {
-		t.Fatalf("expected one taskkill call, got %d", taskkillCalls)
 	}
 }
 
