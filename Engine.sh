@@ -1415,8 +1415,11 @@ apply_runtime_service_ownership() {
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens" 2>/dev/null || true
   chmod 0750 "${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates" 2>/dev/null || true
   chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" 2>/dev/null || true
-  find "${RUNTIME_ROOT}/Services/api-backend/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
+  chmod 0750 "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" 2>/dev/null || true
+  find "${RUNTIME_ROOT}/Services/api-backend/secrets" \
     -type f -exec chmod go-rwx {} + 2>/dev/null || true
+  find "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
+    -type f -exec chmod 0640 {} + 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/run" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true

@@ -41,6 +41,8 @@ Default Compose policy:
 
 Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, Traefik ACME storage, and PostgreSQL database state.
 
+WireGuard key and listener config files are `0640 borealis-engine:borealis-engine`, and the WireGuard config directory is `0750`. The API backend writes those files as the runtime owner, while `wireguard-tunnel` reads them as UID `0` with only the Borealis runtime group and no DAC override capability.
+
 `Engine/Deploy/runtime.env` and `Engine/Deploy/compose.env` are owned by `root:borealis-engine` with mode `0640`. They contain runtime secrets but must be readable by `site-worker-orchestrator`: dynamic `site-worker-*` launches use `runtime.env` as the Docker env file, and service snapshot reads use `compose.env` for Compose interpolation. `webui-frontend.env` remains `0600`.
 
 ## Reverse Proxy Client IP Preservation

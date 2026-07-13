@@ -1301,9 +1301,10 @@ func (w *wireGuardRuntime) ensureServerKeys() (string, string) {
 	if err != nil {
 		return "", ""
 	}
-	_ = os.MkdirAll(filepath.Dir(w.privateKeyPath), 0o700)
-	_ = os.WriteFile(w.privateKeyPath, []byte(keys.Private+"\n"), 0o600)
-	_ = os.WriteFile(w.publicKeyPath, []byte(keys.Public+"\n"), 0o600)
+	_ = os.MkdirAll(filepath.Dir(w.privateKeyPath), 0o750)
+	_ = os.Chmod(filepath.Dir(w.privateKeyPath), 0o750)
+	_ = os.WriteFile(w.privateKeyPath, []byte(keys.Private+"\n"), 0o640)
+	_ = os.WriteFile(w.publicKeyPath, []byte(keys.Public+"\n"), 0o640)
 	return keys.Private, keys.Public
 }
 
@@ -1476,11 +1477,12 @@ func (w *wireGuardRuntime) ensureListenerLocked() error {
 		}
 		return w.ensureLinuxRuntimeLocked()
 	}
-	if err := os.MkdirAll(w.configRoot, 0o700); err != nil {
+	if err := os.MkdirAll(w.configRoot, 0o750); err != nil {
 		return err
 	}
+	_ = os.Chmod(w.configRoot, 0o750)
 	configPath := filepath.Join(w.configRoot, defaultWireGuardConfigName+".conf")
-	if err := os.WriteFile(configPath, []byte(w.renderBaseConfig()), 0o600); err != nil {
+	if err := os.WriteFile(configPath, []byte(w.renderBaseConfig()), 0o640); err != nil {
 		return err
 	}
 	code, out, errOut := w.runCommand([]string{w.bin("wg-quick"), "up", configPath})

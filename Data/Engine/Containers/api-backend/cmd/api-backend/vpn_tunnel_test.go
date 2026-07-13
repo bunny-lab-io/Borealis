@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +104,41 @@ func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	}
 }
 
+func TestWireGuardRuntimeCreatesGroupReadableKeys(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	runtime.privateKeyPath = filepath.Join(t.TempDir(), "secrets", "server_private.key")
+	runtime.publicKeyPath = filepath.Join(filepath.Dir(runtime.privateKeyPath), "server_public.key")
+
+	privateKey, publicKey := runtime.ensureServerKeys()
+	if privateKey == "" || publicKey == "" {
+		t.Fatalf("expected generated WireGuard key pair")
+	}
+	assertFileMode(t, filepath.Dir(runtime.privateKeyPath), 0o750)
+	assertFileMode(t, runtime.privateKeyPath, 0o640)
+	assertFileMode(t, runtime.publicKeyPath, 0o640)
+}
+
+func TestWireGuardRuntimeCreatesGroupReadableConfig(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	runtime.serverPrivate = "test-private-key"
+	runtime.commandRunner = func(args []string) (int, string, string) {
+		if len(args) >= 3 && filepath.Base(args[0]) == "wg" && args[1] == "show" {
+			return 1, "", "missing interface"
+		}
+		if len(args) >= 5 && filepath.Base(args[0]) == "ip" && args[1] == "link" && args[2] == "show" {
+			return 1, "", "missing interface"
+		}
+		return 0, "", ""
+	}
+
+	if err := runtime.ensureListenerLocked(); err != nil {
+		t.Fatalf("ensureListenerLocked returned error: %v", err)
+	}
+
+	assertFileMode(t, runtime.configRoot, 0o750)
+	assertFileMode(t, filepath.Join(runtime.configRoot, defaultWireGuardConfigName+".conf"), 0o640)
+}
+
 func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	var calls [][]string
@@ -132,6 +168,17 @@ func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {
 		if !containsCommandSuffix(calls, expected) {
 			t.Fatalf("missing firewall command %v in %#v", expected, calls)
 		}
+	}
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode %s = %o, want %o", path, got, want)
 	}
 }
 
