@@ -375,10 +375,10 @@ func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 	}
 	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
 	settling := runtime.reserveAgentAuthRetry("agent-1", now.Add(30*time.Second), "")
-	if !settling.Needed || settling.Reserved {
-		t.Fatalf("failed auth retry should settle before another attempt: %#v", settling)
+	if settling.Needed {
+		t.Fatalf("failed auth retry should stop settling after 30 second cooldown: %#v", settling)
 	}
-	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(6*time.Minute), "")
+	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
 	if probe.Needed {
 		t.Fatalf("settled failed retry should allow normal credential probe before rotating again: %#v", probe)
 	}
@@ -390,12 +390,12 @@ func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 		t.Fatalf("worker-ready auth probe should clear retry state")
 	}
 	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
-	stale := runtime.reserveAgentAuthRetry("agent-1", now.Add(4*time.Minute), "")
+	stale := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
 	if !stale.Needed || !stale.Reserved {
 		t.Fatalf("fresh auth failure after cooldown should reserve new retry: %#v", stale)
 	}
 	runtime.recordProxyFirstFrame(session.SessionID, participant.ParticipantID, "size")
-	cleared := runtime.reserveAgentAuthRetry("agent-1", now.Add(5*time.Minute), "")
+	cleared := runtime.reserveAgentAuthRetry("agent-1", now.Add(32*time.Second), "")
 	if cleared.Needed {
 		t.Fatalf("first frame should clear auth retry state: %#v", cleared)
 	}
@@ -427,8 +427,8 @@ func TestVNCAuthRetryStateSurvivesStaleParticipantCleanup(t *testing.T) {
 }
 
 func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
-	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
-	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
 
 	runtime := newVNCRuntime(nil, nil)
 	runtime.ensureSession(
@@ -449,11 +449,10 @@ func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
 	if !reservation.Needed || reservation.Reserved {
 		t.Fatalf("lockout should settle without immediate rotation: %#v", reservation)
 	}
-	stillLocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
-	if !stillLocked.Needed || stillLocked.Reserved || stillLocked.RetryAfterSeconds < 160 {
-		t.Fatalf("lockout should hold beyond generic retry cooldown: %#v", stillLocked)
+	if reservation.RetryAfterSeconds > 20 {
+		t.Fatalf("lockout retry hint should stay inside 30 second SLA: %#v", reservation)
 	}
-	afterLockout := runtime.reserveAgentAuthRetry("agent-1", now.Add(301*time.Second), "")
+	afterLockout := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
 	if afterLockout.Needed {
 		t.Fatalf("expired lockout cooldown should allow normal credential auth probe: %#v", afterLockout)
 	}
@@ -462,9 +461,9 @@ func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
 	}
 }
 
-func TestVNCFailedCredentialRecoveryUsesLongSettleCooldown(t *testing.T) {
-	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
-	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+func TestVNCFailedCredentialRecoveryUsesFastSettleCooldown(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
 
 	runtime := newVNCRuntime(nil, nil)
 	runtime.ensureSession(
@@ -481,19 +480,19 @@ func TestVNCFailedCredentialRecoveryUsesLongSettleCooldown(t *testing.T) {
 	session.AuthRetryCompletedAt = now
 	runtime.mu.Unlock()
 
-	stillSettling := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
-	if !stillSettling.Needed || stillSettling.Reserved || stillSettling.RetryAfterSeconds < 160 {
-		t.Fatalf("failed credential recovery should hold beyond generic retry cooldown: %#v", stillSettling)
+	stillSettling := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !stillSettling.Needed || stillSettling.Reserved || stillSettling.RetryAfterSeconds > 20 {
+		t.Fatalf("failed credential recovery should return fast retry hint: %#v", stillSettling)
 	}
-	afterSettle := runtime.reserveAgentAuthRetry("agent-1", now.Add(301*time.Second), "")
+	afterSettle := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
 	if afterSettle.Needed {
 		t.Fatalf("expired failed credential recovery cooldown should allow normal credential probe: %#v", afterSettle)
 	}
 }
 
 func TestVNCAuthLockoutStateSurvivesGenericWorkerReturn(t *testing.T) {
-	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
-	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
 
 	runtime := newVNCRuntime(nil, nil)
 	session, _, _ := runtime.ensureSession(
@@ -513,17 +512,18 @@ func TestVNCAuthLockoutStateSurvivesGenericWorkerReturn(t *testing.T) {
 	session.AuthRetryCompletedAt = now
 	runtime.mu.Unlock()
 
-	if !vncWorkerSessionIsAuthRecoveryPayload(vncAuthRetrySettlingPayload(300)) {
+	if !vncWorkerSessionIsAuthRecoveryPayload(vncAuthRetrySettlingPayload(30)) {
 		runtime.recordError(session.SessionID, "worker_guacamole_unavailable")
 	}
-	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
-	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds < 160 {
+	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds > 20 {
 		t.Fatalf("generic worker return should not erase lockout cooldown: %#v", blocked)
 	}
 }
 
-func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
+func TestVNCDefaultReadinessWaitsStayInsideOperatorSLA(t *testing.T) {
 	cases := map[string]float64{
+		"establish_deadline":     defaultVNCEstablishDeadlineSeconds,
 		"live_credentials":       defaultVNCLiveCredentialWaitSeconds,
 		"start_ready":            defaultVNCStartReadyWaitSeconds,
 		"recovery_ready":         defaultVNCRecoveryReadyWaitSeconds,
@@ -533,20 +533,31 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 		"auth_retry_cooldown":    defaultVNCAuthRetryCooldownSeconds,
 		"auth_lockout_cooldown":  defaultVNCAuthLockoutCooldownSeconds,
 	}
-	minimums := map[string]float64{
-		"live_credentials":       30,
-		"start_ready":            30,
-		"recovery_ready":         20,
-		"restart_ready":          20,
-		"auth_retry_credentials": 60,
-		"auth_retry_ready":       20,
-		"auth_retry_cooldown":    90,
-		"auth_lockout_cooldown":  300,
-	}
 	for name, got := range cases {
-		if got < minimums[name] {
-			t.Fatalf("%s wait too short for slow agents: got %.1fs want >= %.1fs", name, got, minimums[name])
+		if got > defaultVNCEstablishDeadlineSeconds {
+			t.Fatalf("%s wait exceeds Remote Desktop establish SLA: got %.1fs want <= %.1fs", name, got, float64(defaultVNCEstablishDeadlineSeconds))
 		}
+	}
+}
+
+func TestVNCWaitOverridesClampToEstablishSLA(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_ESTABLISH_DEADLINE_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+	t.Setenv("BOREALIS_VNC_START_READY_WAIT_SECONDS", "90")
+
+	if got := vncEstablishTimeout(); got != 30*time.Second {
+		t.Fatalf("establish deadline should clamp to 30s, got %s", got)
+	}
+	if got := vncAuthRetryCooldown(); got != 30*time.Second {
+		t.Fatalf("auth retry cooldown should clamp to 30s, got %s", got)
+	}
+	if got := vncAuthLockoutCooldown(); got != 30*time.Second {
+		t.Fatalf("auth lockout cooldown should clamp to 30s, got %s", got)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	if got := vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, deadline); got > 20 {
+		t.Fatalf("bounded wait should clamp to remaining establish budget, got %.1fs", got)
 	}
 }
 

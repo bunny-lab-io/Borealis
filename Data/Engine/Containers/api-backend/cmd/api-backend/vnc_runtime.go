@@ -16,15 +16,16 @@ import (
 )
 
 const (
+	defaultVNCEstablishDeadlineSeconds       = 30
 	defaultVNCLiveCredentialWaitSeconds      = 30
-	defaultVNCStartReadyWaitSeconds          = 45
+	defaultVNCStartReadyWaitSeconds          = 20
 	defaultVNCStopDebounceSeconds            = 12
 	defaultVNCRecoveryReadyWaitSeconds       = 25
 	defaultVNCRestartReadyWaitSeconds        = 25
-	defaultVNCAuthRetryCredentialWaitSeconds = 60
+	defaultVNCAuthRetryCredentialWaitSeconds = 20
 	defaultVNCAuthRetryReadyWaitSeconds      = 20
-	defaultVNCAuthRetryCooldownSeconds       = 120
-	defaultVNCAuthLockoutCooldownSeconds     = 300
+	defaultVNCAuthRetryCooldownSeconds       = 30
+	defaultVNCAuthLockoutCooldownSeconds     = 30
 )
 
 type vncRuntime struct {
@@ -157,13 +158,16 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if v == nil || v.vpn == nil {
 		return map[string]any{"error": "tunnel_unavailable"}, http.StatusServiceUnavailable
 	}
+	var establishDeadline time.Time
+	ctx, cancel, establishDeadline := vncEstablishContext(ctx)
+	defer cancel()
 	agentID := result.Device.AgentID
 	hostname := result.Device.Hostname
 	serviceMode := serviceModeFromAgentID(agentID)
 	v.cancelPendingStop(agentID, "vnc_establish")
 	log.Printf("vnc_issue_start agent_id=%s hostname=%s service_mode=%s worker_guid=%s", agentID, hostname, serviceMode, result.Route.WorkerGUID)
 	credentialReason := "vnc_establish"
-	credentialWait := vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds)
+	credentialWait := vncBoundedWaitSeconds("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds, establishDeadline)
 	authRetryReserved := false
 	authRetryReservation := v.reserveAgentAuthRetry(agentID, time.Now().UTC(), "")
 	if authRetryReservation.Needed && !authRetryReservation.Reserved {
@@ -173,7 +177,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if authRetryReservation.Reserved {
 		authRetryReserved = true
 		credentialReason = "vnc_auth_retry"
-		credentialWait = vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds)
+		credentialWait = vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline)
 		log.Printf("vnc_auth_retry_preflight agent_id=%s hostname=%s reason=previous_vnc_auth_failed", agentID, hostname)
 	}
 	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, credentialReason, credentialWait)
@@ -237,22 +241,22 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"remove_wallpaper":    removeWallpaper,
 		"credential_revision": session.CredentialRevision,
 		"reason":              "vnc_establish",
-	}, vncEnvFloat("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds))
+	}, vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
 	log.Printf("vnc_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s", agentID, hostname, startErr == nil && boolFromAny(startResponse["ready"]), startStatus, cleanText(startErr["error"]), cleanText(startErr["detail"]), session.SessionID)
 	if startErr != nil {
 		return startErr, startStatus
 	}
-	fastReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	fastReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75, establishDeadline), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
 	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
 	recoveryReady := fastReady
 	if !fastReady {
-		recoveryReady = waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", defaultVNCRecoveryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
+		recoveryReady = waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", defaultVNCRecoveryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
 	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
 	if !recoveryReady {
 		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
 		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
-		restartReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", defaultVNCRestartReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
+		restartReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", defaultVNCRestartReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
 		log.Printf("vnc_tcp_probe_restart agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, restartReady)
 		if !restartReady {
 			v.recordError(session.SessionID, "vnc_backend_unreachable")
@@ -307,7 +311,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 				workerErr = vncAuthRetryInProgressPayload(authRetryReservation.RetryAfterSeconds)
 			} else {
 				log.Printf("vnc_auth_retry_start agent_id=%s hostname=%s session_id=%s reason=%s", agentID, hostname, session.SessionID, cleanText(workerErr["detail"]))
-				retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds))
+				retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline))
 				retrySucceeded := false
 				if retryErr == nil && retryCredential.ControllerPassword != "" {
 					credential = retryCredential
@@ -322,10 +326,10 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 						"remove_wallpaper":    removeWallpaper,
 						"credential_revision": session.CredentialRevision,
 						"reason":              "vnc_auth_retry",
-					}, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds))
+					}, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
 					log.Printf("vnc_auth_retry_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s revision=%d", agentID, hostname, retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), cleanText(retryStartErr["detail"]), session.SessionID, session.CredentialRevision)
 					if retryStartErr == nil {
-						retryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+						retryReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
 						log.Printf("vnc_auth_retry_tcp_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
 						if retryReady {
 							workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, true)
@@ -477,15 +481,6 @@ func vncReasonIsAuthLockout(reason string) bool {
 	return strings.Contains(text, "too_many_auth_failures") ||
 		strings.Contains(text, "too many") ||
 		strings.Contains(text, "to many")
-}
-
-func vncReasonNeedsLongAuthSettle(reason string) bool {
-	text := strings.ToLower(cleanText(reason))
-	return vncReasonIsAuthLockout(text) ||
-		strings.Contains(text, "vnc_agent_live_credentials_unavailable") ||
-		strings.Contains(text, "vnc_auth_retry_settling") ||
-		strings.Contains(text, "stop_pending") ||
-		strings.Contains(text, "did not reach running")
 }
 
 func vncErrorNeedsAuthRetry(reason string) bool {
@@ -710,6 +705,9 @@ func vncAuthRetryCooldown() time.Duration {
 	if seconds < 1 {
 		seconds = 1
 	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
 	return time.Duration(seconds * float64(time.Second))
 }
 
@@ -718,12 +716,15 @@ func vncAuthLockoutCooldown() time.Duration {
 	if seconds < 1 {
 		seconds = 1
 	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
 	return time.Duration(seconds * float64(time.Second))
 }
 
 func vncAuthRetryCooldownForReason(reason string) time.Duration {
 	cooldown := vncAuthRetryCooldown()
-	if vncReasonNeedsLongAuthSettle(reason) {
+	if vncReasonIsAuthLockout(reason) {
 		if lockoutCooldown := vncAuthLockoutCooldown(); lockoutCooldown > cooldown {
 			return lockoutCooldown
 		}
@@ -741,6 +742,49 @@ func retryAfterSeconds(remaining time.Duration) int {
 	}
 	if seconds < 1 {
 		return 1
+	}
+	return seconds
+}
+
+func vncEstablishContext(parent context.Context) (context.Context, context.CancelFunc, time.Time) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	deadline := time.Now().Add(vncEstablishTimeout())
+	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
+	return ctx, cancel, deadline
+}
+
+func vncEstablishTimeout() time.Duration {
+	seconds := vncEnvFloat("BOREALIS_VNC_ESTABLISH_DEADLINE_SECONDS", defaultVNCEstablishDeadlineSeconds)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncBoundedWaitSeconds(name string, fallback float64, deadline time.Time) float64 {
+	seconds := vncEnvFloat(name, fallback)
+	if seconds < 0.1 {
+		seconds = 0.1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	if !deadline.IsZero() {
+		remaining := time.Until(deadline).Seconds()
+		if remaining < 0.1 {
+			return 0.1
+		}
+		if seconds > remaining {
+			seconds = remaining
+		}
 	}
 	return seconds
 }
