@@ -383,6 +383,31 @@ func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 	}
 }
 
+func TestVNCAuthRetryStateSurvivesStaleParticipantCleanup(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	session, participant, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	if reservation := runtime.reserveAgentAuthRetry("agent-1", time.Now().UTC(), ""); !reservation.Needed || !reservation.Reserved {
+		t.Fatalf("expected auth retry reservation before cleanup: %#v", reservation)
+	}
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	participant.LastActivityAt = time.Now().UTC().Add(-2 * time.Minute)
+	participant.ActiveConnections = 0
+
+	retained := runtime.sessionByAgent("agent-1")
+	if retained == nil {
+		t.Fatalf("auth retry settle state should survive stale participant cleanup")
+	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("retained auth retry state should require worker auth probe")
+	}
+}
+
 func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 	cases := map[string]float64{
 		"live_credentials":       defaultVNCLiveCredentialWaitSeconds,

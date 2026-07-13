@@ -1214,10 +1214,27 @@ func (v *vncRuntime) cleanupStaleLocked() {
 			}
 		}
 		if len(session.Participants) == 0 {
+			if vncSessionRetainForRecovery(session, now) {
+				session.UpdatedAt = now
+				continue
+			}
 			delete(v.byID, sessionID)
 			delete(v.byAgent, session.AgentID)
 		}
 	}
+}
+
+func vncSessionRetainForRecovery(session *vncCollaborationSession, now time.Time) bool {
+	if session == nil {
+		return false
+	}
+	if session.AuthRetryInProgress || session.AuthRetrySettleProbe || vncErrorNeedsAuthRetry(session.LastError) {
+		if session.AuthRetryStartedAt.IsZero() {
+			return true
+		}
+		return now.Sub(session.AuthRetryStartedAt) <= vncAuthRetryCooldown()+90*time.Second
+	}
+	return false
 }
 
 func (v *vncRuntime) sessionSnapshot(session *vncCollaborationSession, currentOperator string) map[string]any {
