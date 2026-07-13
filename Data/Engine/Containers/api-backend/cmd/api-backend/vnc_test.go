@@ -364,6 +364,13 @@ func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
 	if probe.Needed {
 		t.Fatalf("settled failed retry should allow normal credential probe before rotating again: %#v", probe)
 	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("settled failed retry should require worker auth probe before clearing")
+	}
+	runtime.clearAgentAuthRetryAfterWorkerReady("agent-1")
+	if runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("worker-ready auth probe should clear retry state")
+	}
 	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
 	stale := runtime.reserveAgentAuthRetry("agent-1", now.Add(4*time.Minute), "")
 	if !stale.Needed || !stale.Reserved {

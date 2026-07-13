@@ -111,6 +111,20 @@ def _env_float(name: str, fallback: float, minimum: float = 0.0) -> float:
     return value
 
 
+def _normalize_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"1", "true", "yes", "y", "on"}:
+            return True
+        if cleaned in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
 def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
     auth_markers = (
@@ -939,12 +953,17 @@ class SiteWorkerSocketRuntime:
             except Exception:
                 dpi = 96
             performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
+            auth_probe_enabled = _normalize_bool(
+                data.get("auth_probe"),
+                _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),
+            )
             auth_probe = wait_for_vnc_auth_ready(
                 host,
                 port,
                 password,
                 timeout_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS", 5.0, 0.25),
                 poll_interval_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_POLL_INTERVAL_SECONDS", 0.5, 0.1),
+                enabled=auth_probe_enabled,
             )
             if auth_probe.checked and not auth_probe.ok:
                 error_code = _vnc_auth_probe_error(auth_probe.reason)
@@ -1025,7 +1044,20 @@ class SiteWorkerSocketRuntime:
                     guacamole_session.token[:8] if guacamole_session.token else "-",
                 )
             )
-            return jsonify({"status": "ok", "token": guacamole_session.token}), 200
+            return (
+                jsonify(
+                    {
+                        "status": "ok",
+                        "token": guacamole_session.token,
+                        "auth_probe": {
+                            "checked": auth_probe.checked,
+                            "ok": auth_probe.ok,
+                            "reason": auth_probe.reason,
+                        },
+                    }
+                ),
+                200,
+            )
 
         @self.app.route("/remote-desktop/vnc/disconnect", methods=["POST"])
         def _remote_desktop_disconnect():

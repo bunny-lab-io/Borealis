@@ -686,6 +686,50 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.restart_tunnel is None
 
 
+def test_site_worker_remote_desktop_honors_request_scoped_vnc_auth_probe(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "0")
+    runtime, _token = _runtime(tmp_path)
+    operation_token = _issue_remote_desktop_token(runtime)
+    monkeypatch.setattr(runtime, "_ensure_guacamole_proxy", lambda: True)
+    calls: list[dict[str, object]] = []
+
+    def _probe(*_args, **kwargs):
+        calls.append(dict(kwargs))
+        return VncAuthProbeResult(True, True, "server_init_ok")
+
+    monkeypatch.setattr(worker_socket, "wait_for_vnc_auth_ready", _probe)
+
+    response = runtime.app.test_client().post(
+        "/remote-desktop/vnc/session",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={
+            "operation_token": operation_token,
+            "agent_id": AGENT_ID,
+            "host": "10.255.0.20",
+            "port": 5900,
+            "password": "secretpw",
+            "operator_id": "unit",
+            "session_id": "vnc-session-1",
+            "participant_id": "participant-1",
+            "role": "controller",
+            "auth_probe": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["auth_probe"] == {"checked": True, "ok": True, "reason": "server_init_ok"}
+    assert calls == [
+        {
+            "timeout_seconds": 5.0,
+            "poll_interval_seconds": 0.5,
+            "enabled": True,
+        }
+    ]
+
+
 def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
     called = False
 
@@ -753,6 +797,30 @@ def test_vnc_auth_probe_can_be_disabled(monkeypatch) -> None:
 
     assert result == VncAuthProbeResult(False, True, "auth_probe_disabled")
     assert called is False
+
+
+def test_vnc_auth_probe_enabled_argument_overrides_env(monkeypatch) -> None:
+    called = False
+
+    def _probe(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return VncAuthProbeResult(True, True, "server_init_ok")
+
+    monkeypatch.setenv("BOREALIS_VNC_AUTH_PROBE", "0")
+    monkeypatch.setattr(rfb_probe, "probe_vnc_auth", _probe)
+
+    result = rfb_probe.wait_for_vnc_auth_ready(
+        "10.255.0.20",
+        5900,
+        "secretpw",
+        timeout_seconds=0.25,
+        poll_interval_seconds=0.1,
+        enabled=True,
+    )
+
+    assert result == VncAuthProbeResult(True, True, "server_init_ok")
+    assert called is True
 
 
 def test_vnc_auth_probe_rejection_text_maps_to_auth_failure() -> None:
