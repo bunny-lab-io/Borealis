@@ -25,10 +25,11 @@ DEFAULT_GUACD_HOST = "127.0.0.1"
 DEFAULT_GUACD_PORT = 4822
 _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
 _GUACD_HANDSHAKE_TIMEOUT_SECONDS = 5.0
-_GUACD_READY_ATTEMPTS = 7
-_GUACD_READY_RETRY_DELAY_SECONDS = 1.25
+_GUACD_READY_ATTEMPTS = 3
+_GUACD_READY_RETRY_DELAY_SECONDS = 2.0
 _GUACD_BACKEND_VERIFY_SECONDS = 4.0
 _RETRYABLE_GUACD_BACKEND_STATUSES = {"519"}
+_GUACAMOLE_VNC_AUTORETRY = "0"
 _GUACAMOLE_FIRST_FRAME_OPCODES = {
     "arc",
     "blob",
@@ -258,7 +259,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "swap-red-blue": "",
         "cursor": "remote",
         "clipboard-encoding": "UTF-8",
-        "autoretry": "3",
+        "autoretry": _GUACAMOLE_VNC_AUTORETRY,
     }
     values.update(guacamole_vnc_performance_arguments(session.performance_preference))
     resolved: List[str] = []
