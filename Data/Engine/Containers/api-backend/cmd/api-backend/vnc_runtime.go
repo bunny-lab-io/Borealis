@@ -24,6 +24,7 @@ const (
 	defaultVNCAuthRetryCredentialWaitSeconds = 60
 	defaultVNCAuthRetryReadyWaitSeconds      = 20
 	defaultVNCAuthRetryCooldownSeconds       = 120
+	defaultVNCAuthLockoutCooldownSeconds     = 300
 )
 
 type vncRuntime struct {
@@ -446,7 +447,11 @@ func vncWorkerSessionIsAuthLockout(workerErr map[string]any) bool {
 	if workerErr == nil {
 		return false
 	}
-	text := strings.ToLower(firstText(cleanText(workerErr["detail"]), cleanText(workerErr["error"])))
+	return vncReasonIsAuthLockout(firstText(cleanText(workerErr["detail"]), cleanText(workerErr["error"])))
+}
+
+func vncReasonIsAuthLockout(reason string) bool {
+	text := strings.ToLower(cleanText(reason))
 	return strings.Contains(text, "too_many_auth_failures") ||
 		strings.Contains(text, "too many") ||
 		strings.Contains(text, "to many")
@@ -495,7 +500,7 @@ func (v *vncRuntime) reserveAgentAuthRetry(agentID string, now time.Time, reason
 	}
 	reasonNeedsRetry := vncErrorNeedsAuthRetry(reason)
 	sessionNeedsRetry := vncErrorNeedsAuthRetry(session.LastError)
-	cooldown := vncAuthRetryCooldown()
+	cooldown := vncAuthRetryCooldownForReason(firstText(reason, session.LastError))
 	if !session.AuthRetryStartedAt.IsZero() {
 		elapsed := now.Sub(session.AuthRetryStartedAt)
 		if elapsed < cooldown && (session.AuthRetryInProgress || session.AuthRetrySettleProbe || sessionNeedsRetry || reasonNeedsRetry) {
@@ -594,10 +599,13 @@ func (v *vncRuntime) agentAuthRetryAfterSeconds(agentID string, now time.Time) i
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	cooldown := vncAuthRetryCooldown()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	session := v.byID[v.byAgent[agentID]]
+	cooldown := vncAuthRetryCooldown()
+	if session != nil {
+		cooldown = vncAuthRetryCooldownForReason(session.LastError)
+	}
 	if session == nil || session.AuthRetryStartedAt.IsZero() {
 		return retryAfterSeconds(cooldown)
 	}
@@ -672,6 +680,24 @@ func vncAuthRetryCooldown() time.Duration {
 		seconds = 1
 	}
 	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncAuthLockoutCooldown() time.Duration {
+	seconds := vncEnvFloat("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", defaultVNCAuthLockoutCooldownSeconds)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncAuthRetryCooldownForReason(reason string) time.Duration {
+	cooldown := vncAuthRetryCooldown()
+	if vncReasonIsAuthLockout(reason) {
+		if lockoutCooldown := vncAuthLockoutCooldown(); lockoutCooldown > cooldown {
+			return lockoutCooldown
+		}
+	}
+	return cooldown
 }
 
 func retryAfterSeconds(remaining time.Duration) int {
@@ -1271,7 +1297,7 @@ func vncSessionRetainForRecovery(session *vncCollaborationSession, now time.Time
 		if session.AuthRetryStartedAt.IsZero() {
 			return true
 		}
-		return now.Sub(session.AuthRetryStartedAt) <= vncAuthRetryCooldown()+90*time.Second
+		return now.Sub(session.AuthRetryStartedAt) <= vncAuthRetryCooldownForReason(session.LastError)+90*time.Second
 	}
 	return false
 }

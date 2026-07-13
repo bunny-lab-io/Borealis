@@ -415,6 +415,9 @@ func TestVNCAuthRetryStateSurvivesStaleParticipantCleanup(t *testing.T) {
 }
 
 func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+
 	runtime := newVNCRuntime(nil, nil)
 	runtime.ensureSession(
 		"agent-1",
@@ -422,11 +425,25 @@ func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
 		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
 		true,
 	)
+	now := time.Unix(1700002000, 0).UTC()
 	runtime.markAgentAuthRetrySettling("agent-1", "too_many_auth_failures:Your connection has been rejected to many attempts.")
+	runtime.mu.Lock()
+	session := runtime.byID[runtime.byAgent["agent-1"]]
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
 
-	reservation := runtime.reserveAgentAuthRetry("agent-1", time.Now().UTC().Add(10*time.Second), "")
+	reservation := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
 	if !reservation.Needed || reservation.Reserved {
 		t.Fatalf("lockout should settle without immediate rotation: %#v", reservation)
+	}
+	stillLocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(130*time.Second), "")
+	if !stillLocked.Needed || stillLocked.Reserved || stillLocked.RetryAfterSeconds < 160 {
+		t.Fatalf("lockout should hold beyond generic retry cooldown: %#v", stillLocked)
+	}
+	afterLockout := runtime.reserveAgentAuthRetry("agent-1", now.Add(301*time.Second), "")
+	if afterLockout.Needed {
+		t.Fatalf("expired lockout cooldown should allow normal credential auth probe: %#v", afterLockout)
 	}
 	if !runtime.agentAuthProbeRequired("agent-1") {
 		t.Fatalf("lockout settle state should still require auth probe")
@@ -442,6 +459,7 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 		"auth_retry_credentials": defaultVNCAuthRetryCredentialWaitSeconds,
 		"auth_retry_ready":       defaultVNCAuthRetryReadyWaitSeconds,
 		"auth_retry_cooldown":    defaultVNCAuthRetryCooldownSeconds,
+		"auth_lockout_cooldown":  defaultVNCAuthLockoutCooldownSeconds,
 	}
 	minimums := map[string]float64{
 		"live_credentials":       30,
@@ -451,6 +469,7 @@ func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
 		"auth_retry_credentials": 60,
 		"auth_retry_ready":       20,
 		"auth_retry_cooldown":    90,
+		"auth_lockout_cooldown":  300,
 	}
 	for name, got := range cases {
 		if got < minimums[name] {
