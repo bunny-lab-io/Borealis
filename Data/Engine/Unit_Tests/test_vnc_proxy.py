@@ -133,7 +133,7 @@ def test_vnc_proxy_keeps_token_when_bridge_fails_before_transport_confirm(monkey
     assert websocket.closed == (1011, "guacamole_unavailable")
 
 
-def test_vnc_proxy_reports_retryable_backend_error_as_auth_failure(monkeypatch) -> None:
+def test_vnc_proxy_reports_retryable_backend_error_as_guacamole_unavailable(monkeypatch) -> None:
     registry = GuacamoleSessionRegistry(ttl_seconds=120, logger=logging.getLogger("test.guac.registry"))
     close_reasons: list[str] = []
     proxy = vnc_proxy.VncProxyServer(
@@ -163,8 +163,8 @@ def test_vnc_proxy_reports_retryable_backend_error_as_auth_failure(monkeypatch) 
     asyncio.run(proxy._handle_client(websocket, f"/remote-desktop/vnc/guacamole?token={session.token}"))
 
     assert registry.lookup(session.token) is session
-    assert websocket.closed == (1011, "vnc_auth_failed")
-    assert close_reasons == ["vnc_auth_failed"]
+    assert websocket.closed == (1011, "guacamole_unavailable")
+    assert close_reasons == ["guacamole_unavailable"]
 
 
 def test_vnc_proxy_revokes_token_after_transport_confirm(monkeypatch) -> None:

@@ -492,7 +492,6 @@ func vncErrorNeedsAuthRetry(reason string) bool {
 		return false
 	}
 	return normalized == "vnc_auth_failed" ||
-		normalized == "guacd_backend_retryable_519" ||
 		strings.Contains(normalized, "too_many_auth_failures") ||
 		strings.Contains(normalized, "auth_failed") ||
 		strings.Contains(normalized, "auth_rejected")
