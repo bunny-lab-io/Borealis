@@ -111,6 +111,19 @@ def _env_float(name: str, fallback: float, minimum: float = 0.0) -> float:
     return value
 
 
+def _bool_from_any(value: Any, fallback: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return fallback
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return fallback
+
+
 def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
     auth_markers = (
@@ -917,6 +930,12 @@ class SiteWorkerSocketRuntime:
             participant_id = str(data.get("participant_id") or "").strip()
             operator_id = str(data.get("operator_id") or "").strip()
             role = str(data.get("role") or "").strip()
+            allowed_ips = str(data.get("allowed_ips") or data.get("engine_virtual_ip") or "").strip()
+            remove_wallpaper = _bool_from_any(data.get("remove_wallpaper"), True)
+            try:
+                credential_revision = int(data.get("credential_revision") or 0)
+            except Exception:
+                credential_revision = 0
             if not host or port <= 0 or not password or not session_id or not participant_id:
                 return jsonify({"error": "invalid_session_payload"}), 400
             try:
@@ -967,6 +986,39 @@ class SiteWorkerSocketRuntime:
                     503,
                 )
 
+            def _restart_vnc_listener(reason: str) -> None:
+                if not allowed_ips:
+                    self._log(
+                        "remote_desktop_vnc_restart_skipped agent_id={0} session_id={1} reason=allowed_ips_missing".format(
+                            agent_id,
+                            session_id,
+                        ),
+                        level="WARNING",
+                    )
+                    return
+                restart_payload = {
+                    "agent_id": agent_id,
+                    "session_id": session_id,
+                    "controller_password": "",
+                    "view_only_password": "",
+                    "port": port,
+                    "allowed_ips": allowed_ips,
+                    "remove_wallpaper": remove_wallpaper,
+                    "credential_revision": credential_revision,
+                    "reason": str(reason or "guacd_backend_retry").strip() or "guacd_backend_retry",
+                }
+                emitted = self.registry.emit(agent_id, "vnc_start", restart_payload)
+                self._log(
+                    "remote_desktop_vnc_restart_emit agent_id={0} session_id={1} port={2} emitted={3} reason={4}".format(
+                        agent_id,
+                        session_id,
+                        port,
+                        str(bool(emitted)).lower(),
+                        restart_payload["reason"],
+                    ),
+                    level="INFO" if emitted else "WARNING",
+                )
+
             guacamole_session = self._guacamole_registry.create(
                 agent_id=agent_id,
                 host=host,
@@ -980,6 +1032,7 @@ class SiteWorkerSocketRuntime:
                 height=height,
                 dpi=dpi,
                 performance_preference=performance_preference,
+                restart_tunnel=_restart_vnc_listener,
                 confirm_transport=lambda reason: self._notify_vnc_session_event(
                     event="transport_confirm",
                     agent_id=agent_id,

@@ -288,6 +288,7 @@ def test_guacamole_proxy_retries_retryable_post_ready_backend_error(monkeypatch:
     monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
     monkeypatch.setattr(guacamole_proxy, "_GUACD_READY_RETRY_DELAY_SECONDS", 0)
     first_frames: list[str] = []
+    restarts: list[str] = []
     session = GuacamoleVncSession(
         token="token",
         agent_id="agent-1",
@@ -297,6 +298,7 @@ def test_guacamole_proxy_retries_retryable_post_ready_backend_error(monkeypatch:
         created_at=0,
         expires_at=120,
         session_id="session-1",
+        restart_tunnel=lambda reason: restarts.append(reason),
         on_first_frame=lambda opcode: first_frames.append(opcode),
     )
     websocket = _FakeWebSocket([encode_instruction("disconnect")])
@@ -316,6 +318,7 @@ def test_guacamole_proxy_retries_retryable_post_ready_backend_error(monkeypatch:
     assert websocket.sent[0] == encode_instruction("", "uuid-ok")
     assert websocket.sent[1] == encode_instruction("size", "0", "1024", "768")
     assert first_frames == ["size"]
+    assert restarts == ["guacd_backend_retryable_519"]
 
 
 def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypatch: pytest.MonkeyPatch) -> None:

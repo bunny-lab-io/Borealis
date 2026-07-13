@@ -649,6 +649,13 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
         "wait_for_vnc_auth_ready",
         lambda *_args, **_kwargs: VncAuthProbeResult(False, True, "auth_probe_disabled"),
     )
+    emitted: list[tuple[str, str, dict]] = []
+
+    def _emit(agent_id: str, event_name: str, payload: dict) -> bool:
+        emitted.append((agent_id, event_name, dict(payload)))
+        return True
+
+    monkeypatch.setattr(runtime.registry, "emit", _emit)
 
     client = runtime.app.test_client()
     response = client.post(
@@ -664,6 +671,10 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
             "session_id": "vnc-session-1",
             "participant_id": "participant-1",
             "role": "controller",
+            "allowed_ips": "10.255.0.1/32",
+            "engine_virtual_ip": "10.255.0.1/32",
+            "credential_revision": 42,
+            "remove_wallpaper": False,
             "width": 1920,
             "height": 1080,
             "performance_preference": 2,
@@ -683,6 +694,25 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.session_id == "vnc-session-1"
     assert session.participant_id == "participant-1"
     assert session.performance_preference == 2
+    assert callable(session.restart_tunnel)
+    session.restart_tunnel("unit_retry")
+    assert emitted == [
+        (
+            AGENT_ID,
+            "vnc_start",
+            {
+                "agent_id": AGENT_ID,
+                "session_id": "vnc-session-1",
+                "controller_password": "",
+                "view_only_password": "",
+                "port": 5900,
+                "allowed_ips": "10.255.0.1/32",
+                "remove_wallpaper": False,
+                "credential_revision": 42,
+                "reason": "unit_retry",
+            },
+        )
+    ]
 
 
 def test_vnc_auth_probe_disabled_by_default(monkeypatch) -> None:
