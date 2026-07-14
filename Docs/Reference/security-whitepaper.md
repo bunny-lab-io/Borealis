@@ -46,6 +46,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
 - Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
 - Cross-service bind mounts are narrowed to explicit runtime contracts. `job-scheduler` owns site-worker Traefik route files, while dynamic `site-worker-*` containers do not mount Traefik config and cannot write those route files. WebUI source mounts are read-only inside the container.
+- Only containers that need root keep it: `traefik-edge` for host-network low-port binding, `wireguard-tunnel` for WireGuard interface setup, and a short-lived service-action helper for `Engine.sh --service` operations. These are documented exceptions, not default service behavior.
 - `remote-desktop-guacd` binds only to Engine loopback and does not mount the Docker socket.
 - WireGuard runtime uses explicit network capabilities, `/dev/net/tun`, and `no-new-privileges` instead of full privileged container mode.
 
@@ -94,6 +95,23 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
 - First deployment follows `Set Aegis Cipher -> Create first administrator -> Complete MFA -> Enter normal Borealis`.
 - Later Engine restarts follow `Unlock Aegis Cipher -> Enter normal Borealis login or passkey flow`.
 - Normal authenticated endpoints are unavailable until Aegis setup or unlock is complete and the Engine reaches the `login_required` bootstrap phase.
+
+### Engine Container Hardening
+
+Borealis Engine containers are deployed with least-privilege defaults and only receive the Linux capabilities, filesystem access, Docker access, and resource headroom they need to operate.
+
+- `Engine.sh` creates or repairs a `borealis-engine` system user/group and writes numeric runtime IDs into the Compose environment during every deploy.
+- Normal Engine services run as the `borealis-engine` runtime owner, use read-only root filesystems, drop default Linux capabilities, set `no-new-privileges`, use tmpfs for writable scratch paths, and receive profile-scaled CPU, memory, and PID caps.
+- PostgreSQL uses the official PostgreSQL non-root UID with the Borealis runtime group so database state ownership stays compatible with the upstream image.
+- `traefik-edge` is a root exception because it binds host-network ports `80` and `443`. It drops all default capabilities and adds only `NET_BIND_SERVICE`.
+- `wireguard-tunnel` is a root exception because it creates and reconciles the WireGuard interface. It uses `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`, with `no-new-privileges` and a constrained control socket instead of full privileged mode.
+- Server Info service actions use a short-lived helper container that mounts `/opt/Borealis` and the Docker socket so `Engine.sh --service` can perform scoped restart, rebuild, reload, and reconcile actions. This helper is Docker-root-equivalent by design, but still uses read-only root filesystem, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and resource caps.
+- Docker socket access is split by need: `docker-proxy` has read-only socket access for container status and metrics, `site-worker-orchestrator` has write socket access for site-worker lifecycle and allowlisted service helpers, and other static services do not mount the socket.
+- `job-scheduler` reaches Docker-backed lifecycle operations through the `site-worker-orchestrator` Unix socket with HMAC authentication. It does not mount the Docker socket.
+- Dynamic `site-worker-*` containers run non-root with dropped capabilities, `no-new-privileges`, read-only root filesystems, tmpfs `/tmp`, PID/memory/CPU caps, read-only API config and secrets, writable API cache/log paths, no Docker socket, and no Traefik config mount.
+- `remote-desktop-guacd` runs non-root, mounts only its log directory, binds guacd to `127.0.0.1`, and does not mount the Docker socket.
+- WebUI source mounts are read-only inside the WebUI container; dev-mode edits happen from the host runtime source directory, while Vite cache writes stay under `/tmp`.
+- Cross-service mounts use explicit path contracts. `job-scheduler` is the single writer for site-worker Traefik route files; site workers keep database state but cannot write route files.
 
 ### Operator Authentication
 
