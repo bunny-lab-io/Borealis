@@ -31,12 +31,13 @@ Most Engine containers use `network_mode: host`. Loopback assumptions are intent
 `Engine.sh` creates or repairs a `borealis-engine` system user/group with stable numeric IDs and writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID:GID` into `Engine/Deploy/compose.env`. It also detects the host Docker socket GID as `BOREALIS_DOCKER_SOCKET_GID` so only socket-owning services get explicit supplemental group access.
 
 Default Compose policy:
-- `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, `remote-desktop-guacd`, and `docker-proxy` run as `borealis-engine`.
+- `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, and `docker-proxy` run as `borealis-engine`.
 - `postgres-db` runs as the official PostgreSQL non-root UID by default so existing database state under `Engine/Services/postgres-db/state` keeps compatible ownership. `Engine.sh` writes that UID into `BOREALIS_POSTGRES_RUNTIME_UID` and uses the Borealis runtime group for shared host-side access.
-- All Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
+- Hardened Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
 - `docker-proxy` also gets tmpfs `/run` for HAProxy pid state under a read-only root filesystem.
 - `traefik-edge` runs as UID `0` with the Borealis runtime group because Docker does not grant effective low-port bind capability to a non-root user under host networking. It drops all default capabilities and adds only `NET_BIND_SERVICE` for ports `80` and `443`.
 - `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It runs as UID `0` with the Borealis runtime group so dropped DAC capabilities do not block its service-local control socket. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, a writable service-local run directory, and resource limits.
+- `remote-desktop-guacd` is a compatibility exception tracked by [Technical Debt #361](https://github.com/bunny-lab-io/Borealis/issues/361) while Remote Desktop hardening parity is being restored. It uses the upstream `guacamole/guacd` runtime defaults, stays bound to `127.0.0.1:4822`, mounts only its service log directory, and has no Docker socket access. Reapply guacd hardening one control at a time only after a deploy proves browser Remote Desktop connects within the 30-second operator budget.
 - `docker-proxy` has read-only Docker socket access. `site-worker-orchestrator` has write Docker socket access. No other static service mounts the Docker socket.
 
 Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, Traefik ACME storage, and PostgreSQL database state.
