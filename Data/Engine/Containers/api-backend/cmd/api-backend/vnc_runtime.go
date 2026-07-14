@@ -21,6 +21,7 @@ const (
 	defaultVNCLiveCredentialWaitSeconds      = 30
 	defaultVNCStartReadyWaitSeconds          = 20
 	defaultVNCStopDebounceSeconds            = 12
+	defaultVNCRFBReadyWaitSeconds            = 5
 	defaultVNCRecoveryReadyWaitSeconds       = 25
 	defaultVNCRestartReadyWaitSeconds        = 25
 	defaultVNCAuthRetryCredentialWaitSeconds = 20
@@ -247,26 +248,22 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if startErr != nil {
 		return startErr, startStatus
 	}
-	fastReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75, establishDeadline), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
-	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
-	recoveryReady := fastReady
+	fastReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_FAST_READY_WAIT_SECONDS", 1.0, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	log.Printf("vnc_rfb_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
+	rfbReady := fastReady
 	if !fastReady {
-		recoveryReady = waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", defaultVNCRecoveryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
+		rfbReady = waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_READY_WAIT_SECONDS", defaultVNCRFBReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
-	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
-	if !recoveryReady {
-		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
-		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
-		restartReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", defaultVNCRestartReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
-		log.Printf("vnc_tcp_probe_restart agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, restartReady)
-		if !restartReady {
-			v.recordError(session.SessionID, "vnc_backend_unreachable")
-			return map[string]any{
-				"error": "vnc_backend_unreachable",
-				"host":  host,
-				"port":  vncPort,
-			}, http.StatusServiceUnavailable
-		}
+	log.Printf("vnc_rfb_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, rfbReady)
+	if !rfbReady {
+		v.recordError(session.SessionID, "vnc_backend_no_rfb_banner")
+		return map[string]any{
+			"error":   "vnc_backend_no_rfb_banner",
+			"detail":  "VNC listener accepted TCP but did not send an RFB banner.",
+			"host":    host,
+			"port":    vncPort,
+			"timeout": defaultVNCRFBReadyWaitSeconds,
+		}, http.StatusServiceUnavailable
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
@@ -330,15 +327,15 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 					}, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
 					log.Printf("vnc_auth_retry_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s revision=%d", agentID, hostname, retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), cleanText(retryStartErr["detail"]), session.SessionID, session.CredentialRevision)
 					if retryStartErr == nil {
-						retryReady := waitForTCP(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
-						log.Printf("vnc_auth_retry_tcp_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
+						retryReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+						log.Printf("vnc_auth_retry_rfb_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
 						if retryReady {
 							workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, true)
 							log.Printf("vnc_auth_retry_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
 							retrySucceeded = workerErr == nil
 						} else {
 							workerStatus = http.StatusServiceUnavailable
-							workerErr = map[string]any{"error": "vnc_backend_unreachable", "detail": "vnc_auth_retry_tcp_probe_failed"}
+							workerErr = map[string]any{"error": "vnc_backend_no_rfb_banner", "detail": "vnc_auth_retry_rfb_probe_failed"}
 						}
 					} else {
 						workerStatus = retryStartStatus
