@@ -145,7 +145,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Explicit VNCAuth diagnostic failures are reported back to the Go VNC broker as `vnc_auth_failed`. The next establish request uses Agent reason `vnc_auth_retry`, which is already supported by the Agent VNC role for runtime credential rotation and UltraVNC config rewrite. Password-not-enabled preflight failures are classified as `vnc_password_not_enabled`, not `vnc_auth_failed`, and do not trigger credential rotation.
     - VNC auth retry is single-flight per Agent. The Go broker returns `vnc_auth_retry_in_progress` or `vnc_auth_retry_settling` with `retry_after_seconds` while one credential rotation or post-rotation settle window is active. Auth-retry state clears after first Guacamole frame or a successful explicit auth probe, not after credential fetch alone. Auth retry and UltraVNC lockout settle hints are capped at 30 seconds by default through `BOREALIS_VNC_ESTABLISH_DEADLINE_SECONDS`, `BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS`, and `BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS`.
     - Apache Guacamole is the sole browser remote desktop path. Guacamole VNC uses local `guacd` on `127.0.0.1:4822` by default, is served through `/remote-desktop/vnc/guacamole`, and never returns the UltraVNC password to the browser.
-    - `remote-desktop-guacd` uses Apache Guacamole Server 1.6.0 in VNC-only mode, runs as the Borealis runtime owner, binds loopback port `4822`, uses read-only root filesystem hardening, and mirrors guacd stdout/stderr into `Engine/Services/remote-desktop-guacd/logs/guacd.log`.
+    - `remote-desktop-guacd` uses Apache Guacamole Server 1.6.0 in VNC-only mode, runs as the Borealis runtime owner, binds loopback port `4822`, uses read-only root filesystem hardening, has no host bind mounts, and mirrors guacd stdout/stderr to Docker logs.
 
     ### Assembly runtime
     - Assembly catalog and mutation routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/assemblies.go` and `assemblies_catalog.go`.
@@ -186,7 +186,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 
     #### Logging
     - Primary API log: `Engine/Services/api-backend/logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
-    - Subsystems: `Engine/Services/api-backend/logs/<service>.log`; container build output: `Engine/Deploy/build.log`; Traefik logs: `Engine/Services/traefik-edge/logs/`.
+    - Subsystems: `Engine/Services/api-backend/logs/<service>.log`; container build output: `Engine/Deploy/build.log`; Traefik logs: `Engine/Services/traefik-edge/logs/`; PostgreSQL and guacd logs: Docker logs.
     - Keep Engine-specific artifacts within `Engine/Services/<role>/logs/` or `Engine/Deploy/` to preserve the runtime boundary.
 
     #### Security and API parity

@@ -109,7 +109,7 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 - Docker socket access is split by need: `docker-proxy` has read-only socket access for container status and metrics, `site-worker-orchestrator` has write socket access for site-worker lifecycle and allowlisted service helpers, and other static services do not mount the socket.
 - `job-scheduler` reaches Docker-backed lifecycle operations through the `site-worker-orchestrator` Unix socket with HMAC authentication. It does not mount the Docker socket.
 - Dynamic `site-worker-*` containers run non-root with dropped capabilities, `no-new-privileges`, read-only root filesystems, tmpfs `/tmp`, PID/memory/CPU caps, read-only API config and secrets, writable API cache/log paths, no Docker socket, and no Traefik config mount.
-- `remote-desktop-guacd` runs non-root, mounts only its log directory, binds guacd to `127.0.0.1`, and does not mount the Docker socket.
+- `remote-desktop-guacd` runs non-root, has no host bind mounts, binds guacd to `127.0.0.1`, and does not mount the Docker socket.
 - WebUI source mounts are read-only inside the WebUI container; dev-mode edits happen from the host runtime source directory, while Vite cache writes stay under `/tmp`.
 - Cross-service mounts use explicit path contracts. `job-scheduler` is the single writer for site-worker Traefik route files; site workers keep database state but cannot write route files.
 
@@ -282,6 +282,13 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
     - Agent token and key storage: `Data/Agent/internal/config`.
     - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
     - WireGuard tunnel container boundary: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
+    - Engine deployment identity, ownership repair, profile caps, and Compose env rendering: `Engine.sh`.
+    - Static container hardening and service mount contracts: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/compose.env.example`.
+    - Container policy validation: `Data/Engine/Containers/check-compose-policy.py` and `.github/workflows/engine-container-policy.yml`.
+    - Site-worker orchestrator runtime and Docker command construction: `Data/Engine/Containers/api-backend/cmd/api-backend/site_worker_orchestrator.go`.
+    - Scheduler-to-orchestrator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
+    - Orchestrator image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/orchestrator-healthcheck.sh`.
+    - Remote Desktop guacd container runtime: `Data/Engine/Containers/remote-desktop-guacd/Dockerfile`, `Data/Engine/Containers/remote-desktop-guacd/entrypoint.sh`, and `Data/Engine/Containers/remote-desktop-guacd/healthcheck.sh`.
 
     ### Key material locations
 
@@ -290,6 +297,109 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
     - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
     - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.
     - Agent identity keys, tokens, GUID, agent ID, enrollment code, and signing trust: protected `agent.json` beside installed `Agent.exe`.
+
+    ### Engine container hardening implementation
+
+    Borealis treats Docker as an Engine host trust boundary, not as a replacement for host security. Container hardening reduces blast radius when a service process misbehaves, but the Engine host and Docker daemon remain privileged control planes.
+
+    #### Runtime identity and ownership
+
+    - `Engine.sh` creates or repairs a `borealis-engine` system group and user during deploy. Defaults are UID/GID `64646`, shell `nologin` when available, no interactive login path, and no normal home directory.
+    - Deploy fails instead of silently reusing a mismatched UID/GID when the configured `borealis-engine` name or numeric ID is already bound to another account.
+    - `Engine.sh` writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID`, `BOREALIS_ENGINE_RUNTIME_OWNER_GID`, `BOREALIS_ENGINE_RUNTIME_USER`, and `BOREALIS_ENGINE_RUNTIME_GROUP` into `Engine/Deploy/compose.env`.
+    - `Engine.sh` detects the host Docker socket group and writes `BOREALIS_DOCKER_SOCKET_GID`. Only services that mount `/var/run/docker.sock` receive that supplemental group.
+    - Runtime service directories under `Engine/Services/` are chowned to the runtime owner during deploy. Secret paths keep stricter permissions.
+    - `Engine/Deploy/runtime.env` and `Engine/Deploy/compose.env` are `0640 root:borealis-engine` because the orchestrator must read them to launch workers and inspect Compose state. `webui-frontend.env` remains `0600`.
+    - API secrets are `0750` directories with files stripped of group/other access. WireGuard config and secret files are `0640` so the API backend can write them and the tunnel container can read them through the Borealis runtime group.
+    - PostgreSQL state keeps the upstream PostgreSQL runtime UID when an existing database is present. `Engine.sh` resolves `BOREALIS_POSTGRES_RUNTIME_UID` from existing `PG_VERSION` ownership or defaults to the upstream image UID.
+
+    #### Static Compose hardening
+
+    - `compose.yaml` uses `x-borealis-hardened-service` for shared defaults: `no-new-privileges:true`, `cap_drop: [ALL]`, `read_only: true`, and tmpfs `/tmp`.
+    - Hardened static services declare `pids_limit`, `mem_limit`, and `cpus`. Values come from profile-managed `compose.env` entries with operator override support.
+    - Most static services run as `${BOREALIS_ENGINE_RUNTIME_OWNER_UID}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID}`.
+    - Writable paths are explicit bind mounts or tmpfs entries. A read-only root filesystem forces cache, log, run, and state writes into reviewed paths.
+    - `docker-proxy` runs non-root with read-only root filesystem, read-only Docker socket mount, loopback-only host port `127.0.0.1:2375`, `CONTAINERS=1`, and `POST=0`.
+    - `api-backend` runs non-root and does not mount the Docker socket. It mounts only its service runtime plus specific Traefik and WireGuard paths required for edge settings and tunnel reconciliation.
+    - `job-scheduler` runs non-root and does not mount the Docker socket. It mounts API cache/logs read-write, API config/secrets read-only, orchestrator run path read-write, and Traefik dynamic config read-write.
+    - `site-worker-orchestrator` runs non-root with the Docker socket supplemental group, mounts the Docker socket read-write, and receives only the run path, API cache, site-worker logs, API secrets read-only, and deploy metadata read-only.
+    - `webui-frontend` runs non-root. Runtime source mounts are read-only inside the container; Vite cache and temporary writes use tmpfs.
+    - `remote-desktop-guacd` runs non-root, binds guacd to `127.0.0.1:4822`, has no host bind mounts, writes only transient in-container file logs under tmpfs, and does not mount the Docker socket.
+    - `postgres-db` runs as the PostgreSQL runtime UID with Borealis runtime group compatibility and explicit state/run mounts. PostgreSQL logging uses Docker stdout/stderr instead of a host log bind mount.
+    - `traefik-edge` is an explicit root exception for host-network low-port binding. It drops default capabilities and adds only `NET_BIND_SERVICE`.
+    - `wireguard-tunnel` is an explicit root exception for WireGuard interface setup. It gets `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`; it does not run with Compose `privileged: true`.
+
+    #### Docker socket boundary
+
+    - Docker socket write access is isolated to `site-worker-orchestrator` and short-lived service-action helper containers launched by the orchestrator.
+    - `docker-proxy` has read-only Docker API access for status and site-worker metrics. API and UI reads use the proxy or scheduler snapshots instead of mounting the Docker socket.
+    - `job-scheduler` talks to `site-worker-orchestrator` over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock`.
+    - The orchestrator Unix socket accepts only requests signed with `X-Borealis-Internal-Token`, backed by the Engine internal secret.
+    - The orchestrator exposes narrow operations: launch site-worker, stop site-worker, remove site-worker, and run allowlisted Engine service action helper.
+    - Stop and remove operations inspect target labels first and refuse non-site-worker containers. A supplied worker GUID must match the container label.
+    - Server Info does not expose a restart action for `site-worker-orchestrator` because the orchestrator owns the Docker control path used by those actions.
+
+    #### Dynamic site-worker launch policy
+
+    `site-worker-orchestrator` builds the `docker run` command for dynamic `site-worker-*` containers. Callers do not supply arbitrary Docker flags.
+
+    - Container names must use the `site-worker-` prefix.
+    - Images must match `BOREALIS_SITE_WORKER_IMAGE` or `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`.
+    - Workers run with host networking because current Traefik routes target per-worker loopback ports.
+    - Workers run as the Borealis runtime UID/GID from `compose.env`.
+    - Workers use `no-new-privileges`, `--cap-drop ALL`, `--read-only`, tmpfs `/tmp`, `--memory`, `--cpus`, and `--pids-limit`.
+    - Worker resource caps come from `BOREALIS_SITE_WORKER_MEMORY_LIMIT`, `BOREALIS_SITE_WORKER_CPU_LIMIT`, and `BOREALIS_SITE_WORKER_PIDS_LIMIT`.
+    - Workers receive labels for role, site ID, worker GUID, remote operation port, remote desktop port, selected image, and `borealis.created_by=site-worker-orchestrator`.
+    - Workers get `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0`, so legacy worker route helpers keep database state only and cannot write Traefik route files.
+    - Workers mount API logs/site-worker logs read-write, API cache read-write, API config read-only, and API secrets read-only.
+    - Workers do not mount `/var/run/docker.sock`.
+    - Workers do not mount Traefik config.
+    - Workers do not receive privileged mode, added capabilities, devices, namespace overrides, command overrides, or caller-provided environment overrides through the orchestrator API.
+    - Workers have an idle TTL of 300 seconds by default and are reconciled by `job-scheduler`.
+
+    #### Site-worker route ownership
+
+    - `job-scheduler` is the only writer for dynamic site-worker Traefik route files.
+    - Route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml`.
+    - Route metadata records `lifecycle_owner=site-worker-orchestrator`.
+    - When a worker is retired or reconciled away, `job-scheduler` removes the route file and asks the orchestrator to stop/remove the container.
+    - Dynamic workers keep host-service runtime behavior, remote operations, Ansible execution, file-transfer helpers, and database state updates, but do not write their own Traefik routes.
+
+    #### Service-action helper exception
+
+    - Server Info service actions create work items. `job-scheduler` asks `site-worker-orchestrator` to launch a detached helper container from the scheduler image.
+    - The helper runs `Engine.sh --network-mode <public|local> --service <service> <action> [mode]` after a short delay so the API response can return before service disruption.
+    - Supported actions are still constrained by `resolveOverviewServiceAction`; unsupported service/action/mode combinations are rejected before Docker launch.
+    - The helper mounts `/opt/Borealis` and `/var/run/docker.sock` because current `Engine.sh --service` actions need Compose source, runtime paths, image/deploy manifests, and Docker control.
+    - This helper is Docker-root-equivalent and documented as a remaining broad exception. It still uses host networking, `no-new-privileges`, `--cap-drop ALL`, read-only root filesystem, tmpfs `/tmp`, memory/CPU/PID caps, and `HOME=/tmp`.
+    - Properly narrowing this exception requires replacing the shell-based service helper with a dedicated service-management executor or API.
+
+    #### Bind-mount strategy
+
+    - Borealis uses host bind mounts for runtime ownership clarity and backup/restore visibility. Named Docker volumes are not treated as a security boundary.
+    - Security comes from service-specific mount targets, read-only flags, non-root users, dropped capabilities, read-only root filesystems, and single-writer ownership.
+    - `api-backend` does not mount the entire `Engine/Services` tree. It receives only its own runtime plus Traefik and WireGuard paths it must manage.
+    - `job-scheduler` does not mount the whole API runtime or WireGuard runtime. It receives the exact API cache/log/config/secrets paths it needs plus the Traefik dynamic directory it owns for worker routes.
+    - `site-worker-orchestrator` does not mount Traefik config and does not mount broad API runtime paths.
+    - `remote-desktop-guacd` has no host bind mounts and does not receive Engine secrets, Docker socket, Traefik config, API runtime paths, or host log directories.
+    - WebUI runtime source is mounted read-only into the WebUI container so source edits happen from the host runtime tree, not from inside the container.
+
+    #### Resource profile behavior
+
+    - `Engine.sh` derives profile-managed caps from the selected Engine deployment profile and writes them to `compose.env`.
+    - Caps are per-container limits, not reservations.
+    - Site-worker memory, CPU, and PID caps apply per active worker. Host sizing must account for expected active worker count.
+    - PostgreSQL memory caps derive from the deployment profile rather than sample idle usage.
+    - WebUI limits account for production static serving versus dev Vite behavior.
+    - Operators can override individual caps through environment variables before redeploy.
+
+    #### Policy validation
+
+    - `Data/Engine/Containers/check-compose-policy.py` renders Compose with `docker compose config --format json` and validates the static service policy.
+    - The policy check fails if expected services are missing, privileged mode is enabled, `no-new-privileges` is absent, capability dropping is missing, read-only root is missing, `/tmp` tmpfs is missing, resource caps are absent, or non-exception services run as root.
+    - The policy check enforces root exceptions, capability allowlists, Docker socket ownership, remote-desktop loopback binding, and selected service mount contracts.
+    - The policy check scans `site_worker_orchestrator.go` for dynamic worker hardening flags and fails if worker launch code contains Docker socket mounts, Traefik mounts, privileged flags, added capabilities, or device flags.
+    - `.github/workflows/engine-container-policy.yml` runs the policy check and Compose validation in CI.
 
     ### WireGuard runtime behavior
 

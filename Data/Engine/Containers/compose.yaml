@@ -276,7 +276,6 @@ services:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/state:/var/lib/postgresql/data
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/logs:/var/log/postgresql
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/run:/var/run/borealis
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U \"$${POSTGRES_USER:-borealis}\" -d \"$${POSTGRES_DB:-borealis}\""]
@@ -299,9 +298,8 @@ services:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     environment:
       BOREALIS_GUACD_BIND_HOST: "127.0.0.1"
+      BOREALIS_GUACD_LOG_DIR: /tmp/borealis-guacd-logs
       HOME: /tmp
-    volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/remote-desktop-guacd/logs:/opt/borealis/logs
     healthcheck:
       test: ["CMD", "borealis-guacd-healthcheck"]
       interval: 10s

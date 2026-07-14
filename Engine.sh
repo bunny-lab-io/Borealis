@@ -1404,7 +1404,6 @@ apply_runtime_service_ownership() {
     chmod 0700 "${RUNTIME_ROOT}/Services/postgres-db/state" 2>/dev/null || true
   fi
   for path in \
-    "${RUNTIME_ROOT}/Services/postgres-db/logs" \
     "${RUNTIME_ROOT}/Services/postgres-db/run"; do
     [[ -e "${path}" ]] || continue
     chown -R "${postgres_uid}:${postgres_gid}" "${path}" 2>/dev/null || true
@@ -1437,7 +1436,6 @@ apply_runtime_service_ownership() {
     chown "0:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
     chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
   fi
-  chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
 }
 
 apply_deploy_env_file_permissions() {
@@ -1470,7 +1468,6 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/api-backend/cache/Ansible/Generated/Runtime" \
     "${RUNTIME_ROOT}/Services/api-backend/cache/Aurora" \
     "${RUNTIME_ROOT}/Services/postgres-db/state" \
-    "${RUNTIME_ROOT}/Services/postgres-db/logs" \
     "${RUNTIME_ROOT}/Services/postgres-db/run" \
     "${RUNTIME_ROOT}/Services/traefik-edge/config" \
     "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" \
@@ -1480,14 +1477,12 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-ca" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
-    "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" \
     "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/run"
   apply_traefik_dynamic_config_permissions
-  chmod 0775 "${RUNTIME_ROOT}/Services/remote-desktop-guacd/logs" 2>/dev/null || true
   apply_runtime_service_ownership
 }
 

@@ -4,7 +4,7 @@ set -eu
 bind_host="${BOREALIS_GUACD_BIND_HOST:-127.0.0.1}"
 port="${BOREALIS_GUACD_PORT:-4822}"
 log_level="${BOREALIS_GUACD_LOG_LEVEL:-info}"
-log_dir="${BOREALIS_GUACD_LOG_DIR:-/opt/borealis/logs}"
+log_dir="${BOREALIS_GUACD_LOG_DIR:-/tmp/borealis-guacd-logs}"
 log_file="${BOREALIS_GUACD_LOG_FILE:-${log_dir}/guacd.log}"
 syslog_file="${BOREALIS_GUACD_SYSLOG_FILE:-${log_dir}/guacd-syslog.log}"
 guacd_bin="${BOREALIS_GUACD_BIN:-/opt/guacamole/sbin/guacd}"

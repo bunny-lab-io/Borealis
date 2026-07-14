@@ -32,7 +32,7 @@ Most Engine containers use `network_mode: host`. Loopback assumptions are intent
 
 Default Compose policy:
 - `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, and `docker-proxy` run as `borealis-engine`.
-- `remote-desktop-guacd` runs as `borealis-engine`, binds guacd to `127.0.0.1:4822`, mounts only its service log directory, and has no Docker socket access.
+- `remote-desktop-guacd` runs as `borealis-engine`, binds guacd to `127.0.0.1:4822`, has no host bind mounts, and has no Docker socket access.
 - `postgres-db` runs as the official PostgreSQL non-root UID by default so existing database state under `Engine/Services/postgres-db/state` keeps compatible ownership. `Engine.sh` writes that UID into `BOREALIS_POSTGRES_RUNTIME_UID` and uses the Borealis runtime group for shared host-side access.
 - Hardened Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
 - `docker-proxy` also gets tmpfs `/run` for HAProxy pid state under a read-only root filesystem.
@@ -140,7 +140,6 @@ Engine/Services/traefik-edge/config/dynamic -> /opt/Borealis/Engine/Services/tra
 `postgres-db`:
 ```text
 Engine/Services/postgres-db/state -> /var/lib/postgresql/data
-Engine/Services/postgres-db/logs  -> /var/log/postgresql
 Engine/Services/postgres-db/run   -> /var/run/borealis
 ```
 
@@ -152,16 +151,7 @@ Engine/Services/traefik-edge -> /opt/Borealis/Engine/Services/traefik-edge
 Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory. Externally Accessible deployments store ACME state in `state/acme.json`; Internal-Only deployments store Borealis local CA and leaf certificate material under `state/local-ca/` and `state/local-certs/`.
 
 `remote-desktop-guacd`:
-```text
-Engine/Services/remote-desktop-guacd/logs -> /opt/borealis/logs
-```
-
-Guacd logs:
-
-```text
-Engine/Services/remote-desktop-guacd/logs/guacd.log
-Engine/Services/remote-desktop-guacd/logs/guacd-syslog.log
-```
+No host bind mounts. Guacd writes transient in-container logs under `/tmp/borealis-guacd-logs`, and operator diagnostics should use Docker logs for `borealis-engine-remote-desktop-guacd`.
 
 `wireguard-tunnel`:
 ```text
@@ -522,10 +512,7 @@ Traefik logs:
 Engine/Services/traefik-edge/logs/
 ```
 
-PostgreSQL logs:
-```text
-Engine/Services/postgres-db/logs/
-```
+PostgreSQL logs use Docker stdout/stderr for `borealis-engine-postgres-db`.
 
 WireGuard tunnel logs:
 ```text
@@ -535,7 +522,7 @@ Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log
 
 Guacd logs:
 ```text
-Engine/Services/remote-desktop-guacd/logs/guacd.log
+docker logs borealis-engine-remote-desktop-guacd
 ```
 
 ## Common Scenarios
@@ -657,14 +644,12 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     Engine/Services/api-backend/cache/Ansible
     Engine/Services/api-backend/cache/Aurora
     Engine/Services/postgres-db/state
-    Engine/Services/postgres-db/logs
     Engine/Services/postgres-db/run
     Engine/Services/traefik-edge/config
     Engine/Services/traefik-edge/env
     Engine/Services/traefik-edge/logs
     Engine/Services/traefik-edge/state
     Engine/Services/webui-frontend/data/web-interface
-    Engine/Services/remote-desktop-guacd/logs
     Engine/Services/site-worker-orchestrator/run
     Engine/Services/wireguard-tunnel/config
     Engine/Services/wireguard-tunnel/logs

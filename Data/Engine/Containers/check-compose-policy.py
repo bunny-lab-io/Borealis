@@ -236,8 +236,12 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
         if name == "remote-desktop-guacd":
             if service_env(service, "BOREALIS_GUACD_BIND_HOST") != "127.0.0.1":
                 fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
+            if service.get("volumes"):
+                fail("remote-desktop-guacd must not use host bind mounts")
 
         mounts = mount_by_target(service)
+        if name == "postgres-db" and "/var/log/postgresql" in mounts:
+            fail("postgres-db must not mount host log directory")
         if name == "job-scheduler":
             forbid_mount_target_prefix(
                 mounts,
