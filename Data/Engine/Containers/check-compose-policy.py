@@ -37,9 +37,7 @@ EXPECTED_SERVICES = {
 }
 
 ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
-COMPATIBILITY_EXCEPTIONS = {
-    "remote-desktop-guacd": "Technical Debt #361: Remote Desktop parity rollback while guacd hardening regression is isolated",
-}
+COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
 DOCKER_SOCKET_SERVICES = {
     "docker-proxy": True,
     "site-worker-orchestrator": False,
@@ -113,6 +111,19 @@ def volume_parts(entry: Any) -> tuple[str, str, bool]:
     return source, target, "ro" in modes or "readonly" in modes
 
 
+def service_env(service: dict[str, Any], key: str) -> str:
+    environment = service.get("environment") or {}
+    if isinstance(environment, dict):
+        return str(environment.get(key) or "")
+    if isinstance(environment, list):
+        prefix = f"{key}="
+        for item in environment:
+            text = str(item)
+            if text.startswith(prefix):
+                return text[len(prefix) :]
+    return ""
+
+
 def is_root_user(user: Any) -> bool:
     text = str(user or "").strip()
     return text in {"", "0", "0:0", "root", "root:root"} or text.startswith("0:")
@@ -183,6 +194,10 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
                 fail(f"{name} must add Docker socket GID explicitly")
         elif socket_mounts:
             fail(f"{name} must not mount Docker socket")
+
+        if name == "remote-desktop-guacd":
+            if service_env(service, "BOREALIS_GUACD_BIND_HOST") != "127.0.0.1":
+                fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
 
 
 def assert_dynamic_orchestrator_policy() -> None:

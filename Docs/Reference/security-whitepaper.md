@@ -44,8 +44,8 @@ This page starts with a plain-language security posture summary for evaluators, 
 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
-- Most Engine containers run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
-- `remote-desktop-guacd` is a temporary compatibility exception while Guacamole Remote Desktop hardening parity is restored. It remains loopback-only and does not mount the Docker socket.
+- Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
+- `remote-desktop-guacd` binds only to Engine loopback and does not mount the Docker socket.
 - WireGuard runtime uses explicit network capabilities, `/dev/net/tun`, and `no-new-privileges` instead of full privileged container mode.
 
 ### Monitoring, Audit, and Recovery
