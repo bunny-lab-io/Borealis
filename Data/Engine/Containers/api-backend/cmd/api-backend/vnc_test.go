@@ -328,6 +328,9 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
 		t.Fatalf("expected UltraVNC lockout detail to be detected")
 	}
+	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_lockout", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
+		t.Fatalf("UltraVNC lockout should not start credential rotation")
+	}
 	if got := vncWorkerSessionAuthRetryReason(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}); got != "too_many_auth_failures:Your connection has been rejected to many attempts." {
 		t.Fatalf("expected lockout detail to be preserved, got %q", got)
 	}

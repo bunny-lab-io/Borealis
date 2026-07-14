@@ -139,12 +139,16 @@ def _vnc_auth_probe_error(reason: str) -> str:
     )
     if any(marker in normalized for marker in password_missing_markers):
         return "vnc_password_not_enabled"
-    auth_markers = (
-        "auth_failed",
-        "auth_rejected",
+    auth_lockout_markers = (
         "too_many_auth_failures",
         "too many",
         "to many",
+    )
+    if any(marker in normalized for marker in auth_lockout_markers):
+        return "vnc_auth_lockout"
+    auth_markers = (
+        "auth_failed",
+        "auth_rejected",
         "rejected",
         "security_type",
         "unsupported_security",
@@ -158,6 +162,8 @@ def _vnc_auth_probe_error(reason: str) -> str:
 def _vnc_auth_probe_status(error_code: str) -> int:
     if error_code == "vnc_password_not_enabled":
         return 409
+    if error_code == "vnc_auth_lockout":
+        return 423
     return 503
 
 
