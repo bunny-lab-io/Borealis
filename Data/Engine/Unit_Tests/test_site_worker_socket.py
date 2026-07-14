@@ -837,7 +837,7 @@ def test_vnc_auth_probe_enabled_argument_overrides_env(monkeypatch) -> None:
     assert called is True
 
 
-def test_vnc_auth_probe_rejection_text_maps_to_auth_failure() -> None:
+def test_vnc_auth_probe_rejection_text_maps_to_actionable_errors() -> None:
     assert (
         worker_socket._vnc_auth_probe_error("too_many_auth_failures:Your connection has been rejected to many attempts.")
         == "vnc_auth_failed"
@@ -847,8 +847,10 @@ def test_vnc_auth_probe_rejection_text_maps_to_auth_failure() -> None:
         worker_socket._vnc_auth_probe_error(
             "This server does not have a valid password enabled.Until a password is set, incoming connections cannot be accepted."
         )
-        == "vnc_auth_failed"
+        == "vnc_password_not_enabled"
     )
+    assert worker_socket._vnc_auth_probe_status("vnc_password_not_enabled") == 409
+    assert worker_socket._vnc_auth_probe_status("vnc_auth_failed") == 503
 
 
 def test_site_worker_remote_desktop_rejects_passwordless_vnc_before_guacd(tmp_path: Path, monkeypatch) -> None:
@@ -888,9 +890,9 @@ def test_site_worker_remote_desktop_rejects_passwordless_vnc_before_guacd(tmp_pa
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 409
     payload = response.get_json()
-    assert payload["error"] == "vnc_auth_failed"
+    assert payload["error"] == "vnc_password_not_enabled"
     assert payload["detail"] == rejection
     assert {key: payload["auth_probe"][key] for key in ("checked", "ok", "reason", "stage")} == {
         "checked": True,

@@ -132,6 +132,13 @@ def _normalize_bool(value: Any, default: bool = False) -> bool:
 
 def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
+    password_missing_markers = (
+        "valid password",
+        "password enabled",
+        "password is set",
+    )
+    if any(marker in normalized for marker in password_missing_markers):
+        return "vnc_password_not_enabled"
     auth_markers = (
         "auth_failed",
         "auth_rejected",
@@ -142,13 +149,16 @@ def _vnc_auth_probe_error(reason: str) -> str:
         "security_type",
         "unsupported_security",
         "vnc_auth_unavailable",
-        "valid password",
-        "password enabled",
-        "password is set",
     )
     if any(marker in normalized for marker in auth_markers):
         return "vnc_auth_failed"
     return "vnc_backend_unreachable"
+
+
+def _vnc_auth_probe_status(error_code: str) -> int:
+    if error_code == "vnc_password_not_enabled":
+        return 409
+    return 503
 
 
 def _assert_port_available(host: str, port: int) -> None:
@@ -1003,6 +1013,7 @@ class SiteWorkerSocketRuntime:
             )
             if security_preflight.checked and not security_preflight.ok:
                 error_code = _vnc_auth_probe_error(security_preflight.reason)
+                status_code = _vnc_auth_probe_status(error_code)
                 self._log(
                     "remote_desktop_vnc_security_preflight_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
                         agent_id,
@@ -1022,7 +1033,7 @@ class SiteWorkerSocketRuntime:
                             "auth_probe": security_preflight_detail,
                         }
                     ),
-                    503,
+                    status_code,
                 )
             self._log(
                 "remote_desktop_vnc_auth_probe_start agent_id={0} session_id={1} host={2} port={3} enabled={4}".format(
@@ -1074,6 +1085,7 @@ class SiteWorkerSocketRuntime:
             )
             if auth_probe.checked and not auth_probe.ok:
                 error_code = _vnc_auth_probe_error(auth_probe.reason)
+                status_code = _vnc_auth_probe_status(error_code)
                 self._log(
                     "remote_desktop_vnc_auth_probe_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
                         agent_id,
@@ -1093,7 +1105,7 @@ class SiteWorkerSocketRuntime:
                             "auth_probe": auth_probe_detail,
                         }
                     ),
-                    503,
+                    status_code,
                 )
 
             guacamole_session = self._guacamole_registry.create(
