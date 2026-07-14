@@ -149,6 +149,105 @@ def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[by
         return None
 
 
+def probe_vnc_security(host: str, port: int, timeout_seconds: float) -> VncAuthProbeResult:
+    started_at = time.monotonic()
+
+    def _result(
+        checked: bool,
+        ok: bool,
+        reason: str,
+        stage: str = "",
+        *,
+        server_version: str = "",
+        offered_security_types: tuple[int, ...] = (),
+        selected_security_type: int = 0,
+        socket_error: str = "",
+    ) -> VncAuthProbeResult:
+        return VncAuthProbeResult(
+            checked,
+            ok,
+            reason,
+            stage,
+            server_version,
+            offered_security_types,
+            selected_security_type,
+            None,
+            0,
+            0,
+            0,
+            int((time.monotonic() - started_at) * 1000),
+            socket_error,
+        )
+
+    host_value = _normalize_text(host)
+    try:
+        port_value = int(port)
+    except Exception:
+        return _result(True, False, "invalid_port", "input")
+    if not host_value or port_value < 1 or port_value > 65535:
+        return _result(True, False, "invalid_endpoint", "input")
+    try:
+        with socket.create_connection((host_value, port_value), timeout=max(0.25, timeout_seconds)) as sock:
+            sock.settimeout(max(0.25, timeout_seconds))
+            raw_server_version = _read_socket_exact(sock, 12)
+            server_version = raw_server_version.decode("ascii", errors="replace").strip()
+            if not raw_server_version.startswith(b"RFB "):
+                return _result(True, False, "invalid_rfb_banner", "banner", server_version=server_version)
+            try:
+                major = int(raw_server_version[4:7])
+                minor = int(raw_server_version[8:11])
+            except Exception:
+                major = 3
+                minor = 8
+            client_version = b"RFB 003.008\n" if major > 3 or minor >= 8 else raw_server_version
+            sock.sendall(client_version)
+            if major == 3 and minor <= 3:
+                security_type = struct.unpack(">I", _read_socket_exact(sock, 4))[0]
+                offered_security_types = (security_type,)
+                if security_type == 0:
+                    detail = _read_rfb_failure_reason(sock)
+                    return _result(
+                        True,
+                        False,
+                        _normalize_rfb_rejection_reason(detail, "security_type_rejected"),
+                        "security",
+                        server_version=server_version,
+                        offered_security_types=offered_security_types,
+                    )
+                return _result(
+                    True,
+                    True,
+                    f"security_type_available_{security_type}",
+                    "security",
+                    server_version=server_version,
+                    offered_security_types=offered_security_types,
+                    selected_security_type=security_type,
+                )
+
+            security_type_count = _read_socket_exact(sock, 1)[0]
+            if security_type_count <= 0:
+                detail = _read_rfb_failure_reason(sock)
+                return _result(
+                    True,
+                    False,
+                    _normalize_rfb_rejection_reason(detail, "security_type_rejected"),
+                    "security",
+                    server_version=server_version,
+                )
+            security_types = _read_socket_exact(sock, security_type_count)
+            offered_security_types = tuple(int(item) for item in security_types)
+            return _result(
+                True,
+                True,
+                "security_types_available",
+                "security",
+                server_version=server_version,
+                offered_security_types=offered_security_types,
+            )
+    except Exception as exc:
+        return _result(False, True, "security_preflight_unavailable", "connect", socket_error=str(exc)[:160])
+
+
 def _complete_rfb_client_init(
     sock: socket.socket,
     *,
@@ -456,4 +555,10 @@ def wait_for_vnc_auth_ready(
     return last_result
 
 
-__all__ = ["VncAuthProbeResult", "probe_vnc_auth", "vnc_auth_probe_payload", "wait_for_vnc_auth_ready"]
+__all__ = [
+    "VncAuthProbeResult",
+    "probe_vnc_auth",
+    "probe_vnc_security",
+    "vnc_auth_probe_payload",
+    "wait_for_vnc_auth_ready",
+]

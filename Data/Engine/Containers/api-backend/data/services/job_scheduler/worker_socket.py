@@ -64,7 +64,12 @@ from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     GuacamoleSessionRegistry,
     normalize_guacamole_performance_preference,
 )
-from Data.Engine.services.RemoteDesktop.rfb_probe import vnc_auth_probe_payload, wait_for_vnc_auth_ready
+from Data.Engine.services.RemoteDesktop.rfb_probe import (
+    VncAuthProbeResult,
+    probe_vnc_security,
+    vnc_auth_probe_payload,
+    wait_for_vnc_auth_ready,
+)
 from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
@@ -957,6 +962,68 @@ class SiteWorkerSocketRuntime:
                 data.get("auth_probe"),
                 _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),
             )
+            security_preflight_enabled = (
+                not auth_probe_enabled
+                and _normalize_bool(
+                    data.get("security_preflight"),
+                    _normalize_bool(os.environ.get("BOREALIS_VNC_SECURITY_PREFLIGHT"), True),
+                )
+            )
+            if security_preflight_enabled:
+                security_preflight = probe_vnc_security(
+                    host,
+                    port,
+                    timeout_seconds=_env_float("BOREALIS_VNC_SECURITY_PREFLIGHT_TIMEOUT_SECONDS", 1.5, 0.25),
+                )
+            else:
+                security_preflight = VncAuthProbeResult(False, True, "security_preflight_disabled")
+            security_preflight_detail = vnc_auth_probe_payload(security_preflight)
+            security_types = ".".join(str(item) for item in security_preflight_detail.get("offered_security_types") or [])
+            self._log(
+                (
+                    "remote_desktop_vnc_security_preflight_result agent_id={0} session_id={1} host={2} port={3} "
+                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
+                    "offered_security_types={10} elapsed_ms={11} socket_error={12}"
+                ).format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(security_preflight_enabled),
+                    security_preflight.checked,
+                    security_preflight.ok,
+                    security_preflight.reason,
+                    security_preflight.stage,
+                    security_preflight.server_version,
+                    security_types or "-",
+                    security_preflight.elapsed_ms,
+                    security_preflight.socket_error,
+                ),
+                level="INFO" if security_preflight.ok else "WARNING",
+            )
+            if security_preflight.checked and not security_preflight.ok:
+                error_code = _vnc_auth_probe_error(security_preflight.reason)
+                self._log(
+                    "remote_desktop_vnc_security_preflight_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
+                        agent_id,
+                        session_id,
+                        host,
+                        port,
+                        error_code,
+                        security_preflight.reason,
+                    ),
+                    level="WARNING",
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": error_code,
+                            "detail": security_preflight.reason,
+                            "auth_probe": security_preflight_detail,
+                        }
+                    ),
+                    503,
+                )
             self._log(
                 "remote_desktop_vnc_auth_probe_start agent_id={0} session_id={1} host={2} port={3} enabled={4}".format(
                     agent_id,
