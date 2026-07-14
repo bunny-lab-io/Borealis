@@ -3,17 +3,27 @@ set -eu
 
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
+ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
 
-mkdir -p \
-  "${API_ROOT}/config" \
-  "${API_ROOT}/logs" \
-  "${API_ROOT}/logs/VPN_Tunnel" \
-  "${API_ROOT}/secrets" \
-  "${API_ROOT}/secrets/Auth_Tokens" \
-  "${API_ROOT}/secrets/Certificates" \
-  "${API_ROOT}/cache/Ansible/collections" \
-  "${API_ROOT}/cache/Ansible/Generated/Runtime" \
-  "${API_ROOT}/cache/Aurora"
+case "${ROLE}" in
+  site-worker-orchestrator|worker-orchestrator|site-worker-orchestrator-healthcheck|worker-orchestrator-healthcheck)
+    mkdir -p \
+      "${API_ROOT}/cache" \
+      "${API_ROOT}/logs/site-workers"
+    ;;
+  *)
+    mkdir -p \
+      "${API_ROOT}/config" \
+      "${API_ROOT}/logs" \
+      "${API_ROOT}/logs/VPN_Tunnel" \
+      "${API_ROOT}/secrets" \
+      "${API_ROOT}/secrets/Auth_Tokens" \
+      "${API_ROOT}/secrets/Certificates" \
+      "${API_ROOT}/cache/Ansible/collections" \
+      "${API_ROOT}/cache/Ansible/Generated/Runtime" \
+      "${API_ROOT}/cache/Aurora"
+    ;;
+esac
 
 export BOREALIS_PROJECT_ROOT="${PROJECT_ROOT}"
 export BOREALIS_ENGINE_MODE="${BOREALIS_ENGINE_MODE:-production}"
@@ -33,6 +43,5 @@ export BOREALIS_WIREGUARD_LOG_FILE="${BOREALIS_WIREGUARD_LOG_FILE:-${BOREALIS_VP
 export BOREALIS_INTERNAL_API_BASE_URL="${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}"
 
 cd /opt/Borealis
-ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
 export BOREALIS_PROCESS_ROLE="${ROLE}"
 exec /usr/local/bin/borealis-api-backend-go "${ROLE}"
