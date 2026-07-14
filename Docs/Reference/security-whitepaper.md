@@ -45,6 +45,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
 - Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
+- Cross-service bind mounts are narrowed to explicit runtime contracts. `job-scheduler` owns site-worker Traefik route files, while dynamic `site-worker-*` containers do not mount Traefik config and cannot write those route files. WebUI source mounts are read-only inside the container.
 - `remote-desktop-guacd` binds only to Engine loopback and does not mount the Docker socket.
 - WireGuard runtime uses explicit network capabilities, `/dev/net/tun`, and `no-new-privileges` instead of full privileged container mode.
 
@@ -285,7 +286,8 @@ Scripts and assemblies are signed before delivery. Agents treat payloads as untr
     - `Engine/Deploy/runtime.env` and `Engine/Deploy/compose.env` are `0640 root:borealis-engine` because `site-worker-orchestrator` must read them for worker launch and Compose snapshot operations. They are not world-readable.
     - `deviceAllowsRemoteAccess` blocks non-active device status for `/api/agent/vpn/ensure`, `/api/agent/vpn/ready`, `/api/agent/vnc/ensure`, `/api/tunnel/connect`, `/api/tunnel/status`, `/api/tunnel/active`, `/api/remote-ops/session`, worker-backed process/quick-run/maintenance dispatch, and scheduled target materialization.
     - Site-worker socket authentication rejects quarantined, revoked, and decommissioned devices before registering host-service sockets or file-transfer agent sessions.
-    - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They run as the `borealis-engine` runtime owner with `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, PID/memory/CPU caps, and no `/var/run/docker.sock` mount. Only `site-worker-orchestrator` owns write access to the host Docker socket, and `job-scheduler` reaches it through an Engine-internal Unix socket with HMAC authentication.
+    - Site workers still run with host networking because Traefik routes and local Engine APIs currently address per-worker loopback ports. They run as the `borealis-engine` runtime owner with `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, PID/memory/CPU caps, read-only API config/secrets, no Traefik config mount, and no `/var/run/docker.sock` mount. Only `site-worker-orchestrator` owns write access to the host Docker socket, and `job-scheduler` reaches it through an Engine-internal Unix socket with HMAC authentication.
+    - Server Info service actions still use a short-lived helper container with `/opt/Borealis` and the Docker socket mounted so `Engine.sh --service` can perform scoped restart, rebuild, reload, and reconcile actions. This is a documented Docker-root-equivalent exception, not a normal service boundary.
 
     ### Enrollment workflow
 

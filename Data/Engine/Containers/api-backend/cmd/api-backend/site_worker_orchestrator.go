@@ -324,7 +324,6 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 	for _, path := range []string{
 		filepath.Join(apiRoot, "cache"),
 		filepath.Join(apiRoot, "logs", "site-workers"),
-		filepath.Join(o.projectRoot, "Engine", "Services", "traefik-edge", "config"),
 	} {
 		_ = os.MkdirAll(path, 0o755)
 	}
@@ -359,6 +358,7 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 		"-e", fmt.Sprintf("BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT=%d", remoteDesktopPort),
 		"-e", "BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE="+schedulerSiteWorkerSocketIOAsyncMode(),
 		"-e", "BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=300",
+		"-e", "BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0",
 		"-e", "BOREALIS_INTERNAL_API_BASE_URL="+envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"),
 		"-e", "HOME=/tmp",
 		"-e", fmt.Sprintf("BOREALIS_LOG_FILE=/opt/Borealis/Engine/Services/api-backend/logs/site-workers/%s.log", workerGUID),
@@ -371,7 +371,6 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 	}
 	args = append(args,
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/logs/site-workers", filepath.Join(apiRoot, "logs", "site-workers")),
-		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/traefik-edge/config", filepath.Join(o.projectRoot, "Engine", "Services", "traefik-edge", "config")),
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/secrets:ro", filepath.Join(apiRoot, "secrets")),
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/config:ro", filepath.Join(apiRoot, "config")),
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/cache", filepath.Join(apiRoot, "cache")),

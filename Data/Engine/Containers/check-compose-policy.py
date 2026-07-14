@@ -111,6 +111,44 @@ def volume_parts(entry: Any) -> tuple[str, str, bool]:
     return source, target, "ro" in modes or "readonly" in modes
 
 
+def mount_by_target(service: dict[str, Any]) -> dict[str, tuple[str, bool]]:
+    mounts: dict[str, tuple[str, bool]] = {}
+    for entry in service.get("volumes") or []:
+        source, target, read_only = volume_parts(entry)
+        if target:
+            mounts[target] = (source, read_only)
+    return mounts
+
+
+def require_mount(
+    mounts: dict[str, tuple[str, bool]],
+    service_name: str,
+    target: str,
+    *,
+    read_only: bool,
+) -> None:
+    if target not in mounts:
+        fail(f"{service_name} missing required mount target {target}")
+    _, actual_read_only = mounts[target]
+    if actual_read_only != read_only:
+        mode = "read-only" if read_only else "read-write"
+        fail(f"{service_name} mount {target} must be {mode}")
+
+
+def forbid_mount_target_prefix(
+    mounts: dict[str, tuple[str, bool]],
+    service_name: str,
+    prefixes: set[str],
+    allowed: set[str] | None = None,
+) -> None:
+    allowed = allowed or set()
+    for target in mounts:
+        if target in allowed:
+            continue
+        if any(target == prefix or target.startswith(prefix.rstrip("/") + "/") for prefix in prefixes):
+            fail(f"{service_name} must not mount broad target {target}")
+
+
 def service_env(service: dict[str, Any], key: str) -> str:
     environment = service.get("environment") or {}
     if isinstance(environment, dict):
@@ -199,6 +237,55 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             if service_env(service, "BOREALIS_GUACD_BIND_HOST") != "127.0.0.1":
                 fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
 
+        mounts = mount_by_target(service)
+        if name == "job-scheduler":
+            forbid_mount_target_prefix(
+                mounts,
+                name,
+                {
+                    "/opt/Borealis/Engine/Services/api-backend",
+                    "/opt/Borealis/Engine/Services/wireguard-tunnel",
+                    "/opt/Borealis/Engine/Services/traefik-edge/config",
+                },
+                allowed={
+                    "/opt/Borealis/Engine/Services/api-backend/cache",
+                    "/opt/Borealis/Engine/Services/api-backend/config",
+                    "/opt/Borealis/Engine/Services/api-backend/logs",
+                    "/opt/Borealis/Engine/Services/api-backend/secrets",
+                    "/opt/Borealis/Engine/Services/traefik-edge/config/dynamic",
+                },
+            )
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/cache", read_only=False)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/config", read_only=True)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/logs", read_only=False)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/secrets", read_only=True)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/site-worker-orchestrator/run", read_only=False)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/traefik-edge/config/dynamic", read_only=False)
+        if name == "site-worker-orchestrator":
+            forbid_mount_target_prefix(
+                mounts,
+                name,
+                {
+                    "/opt/Borealis/Engine/Services/api-backend",
+                    "/opt/Borealis/Engine/Services/site-worker-orchestrator",
+                    "/opt/Borealis/Engine/Services/traefik-edge",
+                },
+                allowed={
+                    "/opt/Borealis/Engine/Services/api-backend/cache",
+                    "/opt/Borealis/Engine/Services/api-backend/logs/site-workers",
+                    "/opt/Borealis/Engine/Services/api-backend/secrets",
+                    "/opt/Borealis/Engine/Services/site-worker-orchestrator/run",
+                },
+            )
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/cache", read_only=False)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/logs/site-workers", read_only=False)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/secrets", read_only=True)
+            require_mount(mounts, name, "/opt/Borealis/Engine/Services/site-worker-orchestrator/run", read_only=False)
+        if name == "webui-frontend":
+            for _, target, read_only in (volume_parts(entry) for entry in service.get("volumes") or []):
+                if target.startswith("/opt/Borealis/Data/Engine/web-interface/") and not read_only:
+                    fail(f"webui-frontend source mount must be read-only: {target}")
+
 
 def assert_dynamic_orchestrator_policy() -> None:
     source = ORCHESTRATOR_SOURCE.read_text(encoding="utf-8")
@@ -211,6 +298,7 @@ def assert_dynamic_orchestrator_policy() -> None:
         "site-worker memory": '"BOREALIS_SITE_WORKER_MEMORY_LIMIT", "256m"',
         "site-worker cpu": '"BOREALIS_SITE_WORKER_CPU_LIMIT", "1.00"',
         "site-worker pids": '"BOREALIS_SITE_WORKER_PIDS_LIMIT", "128"',
+        "site-worker route file writes disabled": '"BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0"',
         "site-worker home": '"HOME=/tmp"',
         "service helper no-new-privileges": '"BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"',
         "service helper socket path": '"BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock"',
@@ -222,6 +310,8 @@ def assert_dynamic_orchestrator_policy() -> None:
     launch_body = source.split("func orchestratorSiteWorkerImageAllowed", 1)[0]
     if "/var/run/docker.sock" in launch_body:
         fail("site-worker launch must not mount Docker socket")
+    if "Engine\", \"Services\", \"traefik-edge\"" in launch_body:
+        fail("site-worker launch must not mount Traefik config")
     if "--privileged" in launch_body or "--cap-add" in launch_body or "--device" in launch_body:
         fail("site-worker launch must not allow privileged Docker flags")
 

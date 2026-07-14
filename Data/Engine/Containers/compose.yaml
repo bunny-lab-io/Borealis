@@ -94,12 +94,12 @@ services:
       HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/cache:/opt/Borealis/Engine/Services/api-backend/cache
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/config:/opt/Borealis/Engine/Services/api-backend/config:ro
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/logs:/opt/Borealis/Engine/Services/api-backend/logs
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator/run:/opt/Borealis/Engine/Services/site-worker-orchestrator/run
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config/dynamic:/opt/Borealis/Engine/Services/traefik-edge/config/dynamic
     depends_on:
       api-backend:
         condition: service_healthy
@@ -136,8 +136,10 @@ services:
       HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator:/opt/Borealis/Engine/Services/site-worker-orchestrator
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/cache:/opt/Borealis/Engine/Services/api-backend/cache
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/logs/site-workers:/opt/Borealis/Engine/Services/api-backend/logs/site-workers
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro
+      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator/run:/opt/Borealis/Engine/Services/site-worker-orchestrator/run
       - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
       api-backend:
@@ -167,13 +169,13 @@ services:
       BOREALIS_WEBUI_VITE_CACHE_DIR: /tmp/borealis-vite-cache
       HOME: /tmp
     volumes:
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/Unit_Tests:/opt/Borealis/Data/Engine/web-interface/Unit_Tests
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/package.json:/opt/Borealis/Data/Engine/web-interface/package.json
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/tsconfig.json:/opt/Borealis/Data/Engine/web-interface/tsconfig.json
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/Unit_Tests:/opt/Borealis/Data/Engine/web-interface/Unit_Tests:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/package.json:/opt/Borealis/Data/Engine/web-interface/package.json:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/tsconfig.json:/opt/Borealis/Data/Engine/web-interface/tsconfig.json:ro
+      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts:ro
     healthcheck:
       test: ["CMD", "borealis-webui-healthcheck"]
       interval: 10s
