@@ -300,11 +300,12 @@ function retryAfterMsFromPayload(data) {
   return Math.min(Math.ceil(seconds * 1000), 120000);
 }
 
-const VNC_AUTO_RETRY_ATTEMPTS = 3;
+const VNC_CONNECT_DEADLINE_MS = 30000;
+const VNC_AUTO_RETRY_ATTEMPTS = 2;
 const VNC_AUTO_RETRY_DELAY_MS = 1500;
 const VNC_SESSION_RECONNECT_ATTEMPTS = 3;
 const VNC_SESSION_RECONNECT_DELAY_MS = 1500;
-const VNC_OPEN_TIMEOUT_MS = 90000;
+const VNC_OPEN_TIMEOUT_MS = 30000;
 const VNC_WS_OPEN_TIMEOUT_MS = 20000;
 const VNC_READY_STABILIZE_MS = 1800;
 const VNC_IDLE_WARNING_MS = 5 * 60 * 1000;
@@ -1994,10 +1995,17 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     };
   }, [cancelPendingConnect, clearSessionReconnect, disconnectVnc, teardownDisplay]);
 
-  const requestTunnel = useCallback(async () => {
+  const requestTunnel = useCallback(async (options = {}) => {
     if (!agentId) {
       throw buildRetryableError("Agent ID is required to establish.", false);
     }
+    const timeoutMs = Math.max(1, Math.min(VNC_CONNECT_DEADLINE_MS, Number(options.timeoutMs || VNC_CONNECT_DEADLINE_MS)));
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? window.setTimeout(() => {
+          controller.abort();
+        }, timeoutMs)
+      : 0;
     setStatusMessage("");
     setVncStage("starting_agent_vnc");
     setSessionState("connecting");
@@ -2006,6 +2014,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller?.signal,
         body: JSON.stringify({
           agent_id: agentId,
           remove_wallpaper: true,
@@ -2035,12 +2044,19 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       applySessionBootstrap(data);
       return data;
     } catch (err) {
+      if (err?.name === "AbortError") {
+        throw buildRetryableError("Remote desktop setup exceeded 30 seconds.", false);
+      }
       if (err?.retryable !== false) {
         const retryableError = buildRetryableError(err?.message || err, true);
         retryableError.retryAfterMs = Number(err?.retryAfterMs || 0);
         throw retryableError;
       }
       throw err;
+    } finally {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     }
   }, [agentId, applySessionBootstrap, handleAgentSocketUnavailable, performancePreference]);
 
@@ -2077,6 +2093,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
       const attempt = Number(options.attempt || 1);
       const maxAttempts = Number(options.maxAttempts || VNC_AUTO_RETRY_ATTEMPTS);
       const wsUrl = normalizeText(options.wsUrl) || buildGuacamoleWsCandidates(data)[0] || "";
+      const openTimeoutMs = Math.max(1, Math.min(VNC_OPEN_TIMEOUT_MS, Number(options.timeoutMs || VNC_OPEN_TIMEOUT_MS)));
+      const wsOpenTimeoutMs = Math.max(1, Math.min(VNC_WS_OPEN_TIMEOUT_MS, openTimeoutMs));
       const wsCandidateIndex = Math.max(1, Number(options.wsCandidateIndex || 1));
       const wsCandidateCount = Math.max(1, Number(options.wsCandidateCount || 1));
       const token = data?.token || "";
@@ -2356,7 +2374,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             /* ignore */
           }
           finishReject("Guacamole connection timed out.", true);
-        }, VNC_OPEN_TIMEOUT_MS);
+        }, openTimeoutMs);
         const wsOpenTimeoutId = setTimeout(() => {
           if (desktopReady || tunnelOpened) return;
           try {
@@ -2365,7 +2383,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
             /* ignore */
           }
           finishReject("Guacamole websocket did not open.", true);
-        }, VNC_WS_OPEN_TIMEOUT_MS);
+        }, wsOpenTimeoutMs);
         try {
           client.connect(`token=${encodeURIComponent(token)}`);
         } catch (error) {
@@ -2403,6 +2421,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     }
     const connectToken = connectAttemptRef.current + 1;
     connectAttemptRef.current = connectToken;
+    const connectDeadlineAt = Date.now() + VNC_CONNECT_DEADLINE_MS;
+    const remainingConnectMs = () => Math.max(0, connectDeadlineAt - Date.now());
     manualDisconnectRef.current = false;
     setStatusMessage("");
     setLoading(true);
@@ -2416,11 +2436,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           setSessionState("connecting");
           setVncStage("retrying");
           setStatusMessage(`Retrying VNC... (${attempt}/${VNC_AUTO_RETRY_ATTEMPTS})`);
-          await sleep(VNC_AUTO_RETRY_DELAY_MS);
+          await sleep(Math.min(VNC_AUTO_RETRY_DELAY_MS, remainingConnectMs()));
           if (connectAttemptRef.current !== connectToken) return;
         }
         try {
-          const sessionData = await requestTunnel();
+          const setupBudgetMs = remainingConnectMs();
+          if (setupBudgetMs <= 0) {
+            throw buildRetryableError("Remote desktop connection exceeded 30 seconds.", false);
+          }
+          const sessionData = await requestTunnel({ timeoutMs: setupBudgetMs });
           if (!sessionData || connectAttemptRef.current !== connectToken) {
             return;
           }
@@ -2434,6 +2458,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 connectToken,
                 attempt,
                 maxAttempts: VNC_AUTO_RETRY_ATTEMPTS,
+                timeoutMs: remainingConnectMs(),
                 wsUrl: candidateList[candidateIndex],
                 wsCandidateIndex: candidateIndex + 1,
                 wsCandidateCount: candidateList.length,
