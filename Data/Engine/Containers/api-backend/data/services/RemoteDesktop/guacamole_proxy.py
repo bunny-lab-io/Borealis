@@ -556,10 +556,8 @@ async def _open_ready_guacd(
         except GuacdBackendRetryableError as exc:
             last_error = exc
             await _close_writer(writer)
-            if attempt >= _GUACD_READY_ATTEMPTS:
-                break
             logger.warning(
-                "Guacamole VNC backend retryable error agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s status=%s message=%s",
+                "Guacamole VNC target backend failed agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s status=%s message=%s",
                 session.agent_id,
                 session.session_id or "-",
                 session.participant_id or "-",
@@ -569,10 +567,7 @@ async def _open_ready_guacd(
                 exc.status,
                 exc.message,
             )
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            await asyncio.sleep(min(_GUACD_READY_RETRY_DELAY_SECONDS, remaining))
+            break
         except Exception as exc:
             last_error = exc
             await _close_writer(writer)

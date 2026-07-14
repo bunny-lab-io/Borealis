@@ -2020,6 +2020,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           remove_wallpaper: true,
           viewer: "guacamole",
           performance_preference: normalizePerformancePreference(performancePreference),
+          auth_probe: Boolean(options.authProbe),
         }),
       });
       const data = await resp.json().catch(() => ({}));
@@ -2229,6 +2230,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           cleanup();
           const err = error instanceof Error ? error : new Error(String(error || "Guacamole session unavailable."));
           err.retryable = retryable;
+          err.remoteDesktopStage = "guacamole";
           reject(err);
         };
         const armDesktopReady = () => {
@@ -2429,6 +2431,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setSessionState("connecting");
     teardownDisplay();
     let reconnectScheduled = false;
+    let authProbeOnNextEstablish = false;
     try {
       for (let attempt = 1; attempt <= VNC_AUTO_RETRY_ATTEMPTS; attempt += 1) {
         if (connectAttemptRef.current !== connectToken) return;
@@ -2444,7 +2447,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (setupBudgetMs <= 0) {
             throw buildRetryableError("Remote desktop connection exceeded 30 seconds.", false);
           }
-          const sessionData = await requestTunnel({ timeoutMs: setupBudgetMs });
+          const sessionData = await requestTunnel({ timeoutMs: setupBudgetMs, authProbe: authProbeOnNextEstablish });
+          authProbeOnNextEstablish = false;
           if (!sessionData || connectAttemptRef.current !== connectToken) {
             return;
           }
@@ -2487,6 +2491,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           if (!retryable || attempt >= VNC_AUTO_RETRY_ATTEMPTS) {
             throw err;
           }
+          authProbeOnNextEstablish = err?.remoteDesktopStage === "guacamole";
           const retryAfterMs = Number(err?.retryAfterMs || 0);
           if (retryAfterMs > 0) {
             setSessionState("connecting");
