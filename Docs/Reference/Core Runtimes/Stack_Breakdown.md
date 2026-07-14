@@ -25,7 +25,26 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 
 Most Engine containers use `network_mode: host`. Loopback assumptions are intentional. `docker-proxy` uses bridge networking with a loopback-only host port so the Docker API proxy is not exposed publicly.
 
-`site-worker-orchestrator` is the only write boundary with `/var/run/docker.sock`. `job-scheduler` talks to it over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` using the Engine internal HMAC token. `api-backend` and `job-scheduler` do not mount the Docker socket in container mode. They read container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then fall back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, `borealis.created_by=site-worker-orchestrator`, read-only Engine secret/config mounts, and an idle timeout of 60 seconds.
+`site-worker-orchestrator` is the only write boundary with `/var/run/docker.sock`. `job-scheduler` talks to it over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` using the Engine internal HMAC token. `api-backend` and `job-scheduler` do not mount the Docker socket in container mode. They read container status and site-worker stats through `docker-proxy` with `CONTAINERS=1` and `POST=0`, then fall back to job-scheduler snapshots if the proxy is unavailable. Dynamic onboarding workers are launched as `site-worker-<uuid>` containers with no Docker socket, site id labels, `borealis.created_by=site-worker-orchestrator`, non-root user, `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, PID/memory/CPU caps, read-only Engine secret/config mounts, and a default idle timeout of 300 seconds.
+
+## Least-Privilege Runtime
+`Engine.sh` creates or repairs a `borealis-engine` system user/group with stable numeric IDs and writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID:GID` into `Engine/Deploy/compose.env`. It also detects the host Docker socket GID as `BOREALIS_DOCKER_SOCKET_GID` so only socket-owning services get explicit supplemental group access.
+
+Default Compose policy:
+- `api-backend`, `job-scheduler`, `site-worker-orchestrator`, `webui-frontend`, and `docker-proxy` run as `borealis-engine`.
+- `remote-desktop-guacd` runs as `borealis-engine`, binds guacd to `127.0.0.1:4822`, has no host bind mounts, and has no Docker socket access.
+- `postgres-db` runs as the official PostgreSQL non-root UID by default so existing database state under `Engine/Services/postgres-db/state` keeps compatible ownership. `Engine.sh` writes that UID into `BOREALIS_POSTGRES_RUNTIME_UID` and uses the Borealis runtime group for shared host-side access.
+- Hardened Engine services declare `no-new-privileges`, `cap_drop: [ALL]`, read-only root filesystem, tmpfs `/tmp`, `pids_limit`, `mem_limit`, and `cpus`.
+- `docker-proxy` also gets tmpfs `/run` for HAProxy pid state under a read-only root filesystem.
+- `traefik-edge` runs as UID `0` with the Borealis runtime group because Docker does not grant effective low-port bind capability to a non-root user under host networking. It drops all default capabilities and adds only `NET_BIND_SERVICE` for ports `80` and `443`.
+- `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It runs as UID `0` with the Borealis runtime group so dropped DAC capabilities do not block its service-local control socket. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, a writable service-local run directory, and resource limits.
+- `docker-proxy` has read-only Docker socket access. `site-worker-orchestrator` has write Docker socket access. No other static service mounts the Docker socket.
+
+Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, Traefik ACME storage, and PostgreSQL database state.
+
+WireGuard key and listener config files are `0640 borealis-engine:borealis-engine`, and the WireGuard config directory is `0750`. The API backend writes those files as the runtime owner, while `wireguard-tunnel` reads them as UID `0` with only the Borealis runtime group and no DAC override capability.
+
+`Engine/Deploy/runtime.env` and `Engine/Deploy/compose.env` are owned by `root:borealis-engine` with mode `0640`. They contain runtime secrets but must be readable by `site-worker-orchestrator`: dynamic `site-worker-*` launches use `runtime.env` as the Docker env file, and service snapshot reads use `compose.env` for Compose interpolation. `webui-frontend.env` remains `0600`.
 
 ## Reverse Proxy Client IP Preservation
 When another reverse proxy sits in front of `traefik-edge`, Borealis must trust only that proxy IP or CIDR. Otherwise all API requests look like they originate from the proxy, and IP-scoped enrollment rate limits can block every agent behind it.
@@ -87,7 +106,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 
 `docker-proxy`:
 ```text
-/var/run/docker.sock -> /var/run/docker.sock:ro
+${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock} -> /var/run/docker.sock:ro
 127.0.0.1:2375 -> 2375
 ```
 
@@ -95,17 +114,32 @@ The proxy grants only Docker container read APIs, including status and site-work
 
 `site-worker-orchestrator`:
 ```text
-Engine/Services/api-backend -> /opt/Borealis/Engine/Services/api-backend
-Engine/Services/site-worker-orchestrator -> /opt/Borealis/Engine/Services/site-worker-orchestrator
-/var/run/docker.sock -> /var/run/docker.sock
+Engine/Deploy -> /opt/Borealis/Engine/Deploy:ro
+Engine/Services/api-backend/cache -> /opt/Borealis/Engine/Services/api-backend/cache
+Engine/Services/api-backend/logs/site-workers -> /opt/Borealis/Engine/Services/api-backend/logs/site-workers
+Engine/Services/api-backend/secrets -> /opt/Borealis/Engine/Services/api-backend/secrets:ro
+Engine/Services/site-worker-orchestrator/run -> /opt/Borealis/Engine/Services/site-worker-orchestrator/run
+${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock} -> /var/run/docker.sock
 ```
 
-The orchestrator listens only on the Unix socket path from `BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET`. It accepts strict JSON requests signed with `X-Borealis-Internal-Token`, launches only images allowed by `BOREALIS_SITE_WORKER_IMAGE` plus optional `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`, and rejects arbitrary Docker privileges, devices, capabilities, namespaces, command overrides, and environment overrides. Server Info does not expose an operator restart action for this service.
+The orchestrator listens only on the Unix socket path from `BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET`. It accepts strict JSON requests signed with `X-Borealis-Internal-Token`, launches only images allowed by `BOREALIS_SITE_WORKER_IMAGE` plus optional `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`, adds non-root/read-only/resource-limit Docker flags itself, and rejects arbitrary Docker privileges, devices, capabilities, namespaces, command overrides, and environment overrides. Dynamic `site-worker-*` containers receive API config and secrets read-only, API cache and site-worker logs read-write, no Docker socket, and no Traefik config mount. Server Info does not expose an operator restart action for this service.
+
+`job-scheduler`:
+```text
+Engine/Deploy -> /opt/Borealis/Engine/Deploy:ro
+Engine/Services/api-backend/cache -> /opt/Borealis/Engine/Services/api-backend/cache
+Engine/Services/api-backend/config -> /opt/Borealis/Engine/Services/api-backend/config:ro
+Engine/Services/api-backend/logs -> /opt/Borealis/Engine/Services/api-backend/logs
+Engine/Services/api-backend/secrets -> /opt/Borealis/Engine/Services/api-backend/secrets:ro
+Engine/Services/site-worker-orchestrator/run -> /opt/Borealis/Engine/Services/site-worker-orchestrator/run
+Engine/Services/traefik-edge/config/dynamic -> /opt/Borealis/Engine/Services/traefik-edge/config/dynamic
+```
+
+`job-scheduler` is the single writer for site-worker Traefik route files. It writes and retires `site-worker-<worker_guid>.yml` files under the dynamic Traefik config directory, then asks `site-worker-orchestrator` to launch or stop the corresponding Docker container. `site-worker-*` containers set `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0` so legacy Python route helpers keep database state only and do not write files.
 
 `postgres-db`:
 ```text
 Engine/Services/postgres-db/state -> /var/lib/postgresql/data
-Engine/Services/postgres-db/logs  -> /var/log/postgresql
 Engine/Services/postgres-db/run   -> /var/run/borealis
 ```
 
@@ -117,9 +151,7 @@ Engine/Services/traefik-edge -> /opt/Borealis/Engine/Services/traefik-edge
 Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.yml`. Core Borealis routes render to `Engine/Services/traefik-edge/config/dynamic/core.yml`. Site-worker route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml` so Traefik can hotload worker route adds/removals from the watched dynamic directory. Externally Accessible deployments store ACME state in `state/acme.json`; Internal-Only deployments store Borealis local CA and leaf certificate material under `state/local-ca/` and `state/local-certs/`.
 
 `remote-desktop-guacd`:
-```text
-Engine/Services/remote-desktop-guacd/logs -> /opt/borealis/logs
-```
+No host bind mounts. Guacd writes transient in-container logs under `/tmp/borealis-guacd-logs`, and operator diagnostics should use Docker logs for `borealis-engine-remote-desktop-guacd`.
 
 `wireguard-tunnel`:
 ```text
@@ -128,16 +160,18 @@ Engine/Services/wireguard-tunnel -> /opt/Borealis/Engine/Services/wireguard-tunn
 
 `webui-frontend`:
 ```text
-Engine/Services/webui-frontend/data/web-interface/src        -> /opt/Borealis/Data/Engine/web-interface/src
-Engine/Services/webui-frontend/data/web-interface/public     -> /opt/Borealis/Data/Engine/web-interface/public
-Engine/Services/webui-frontend/data/web-interface/Unit_Tests -> /opt/Borealis/Data/Engine/web-interface/Unit_Tests
-Engine/Services/webui-frontend/data/web-interface/index.html -> /opt/Borealis/Data/Engine/web-interface/index.html
-Engine/Services/webui-frontend/data/web-interface/package.json -> /opt/Borealis/Data/Engine/web-interface/package.json
-Engine/Services/webui-frontend/data/web-interface/tsconfig.json -> /opt/Borealis/Data/Engine/web-interface/tsconfig.json
-Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Borealis/Data/Engine/web-interface/vite.config.mts
+Engine/Services/webui-frontend/data/web-interface/src        -> /opt/Borealis/Data/Engine/web-interface/src:ro
+Engine/Services/webui-frontend/data/web-interface/public     -> /opt/Borealis/Data/Engine/web-interface/public:ro
+Engine/Services/webui-frontend/data/web-interface/Unit_Tests -> /opt/Borealis/Data/Engine/web-interface/Unit_Tests:ro
+Engine/Services/webui-frontend/data/web-interface/index.html -> /opt/Borealis/Data/Engine/web-interface/index.html:ro
+Engine/Services/webui-frontend/data/web-interface/package.json -> /opt/Borealis/Data/Engine/web-interface/package.json:ro
+Engine/Services/webui-frontend/data/web-interface/tsconfig.json -> /opt/Borealis/Data/Engine/web-interface/tsconfig.json:ro
+Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Borealis/Data/Engine/web-interface/vite.config.mts:ro
 ```
 
-`Engine.sh` seeds `Engine/Services/webui-frontend/data/web-interface/` from committed WebUI source when the runtime copy is missing. It does not overwrite an existing runtime copy during normal deploys, so dev-mode Vite HMR edits survive rebuilds. Set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` before deploy to discard and reseed the runtime WebUI source from committed source.
+`Engine.sh` seeds `Engine/Services/webui-frontend/data/web-interface/` from committed WebUI source when the runtime copy is missing. It does not overwrite an existing runtime copy during normal deploys, so dev-mode Vite HMR edits survive rebuilds. The WebUI container reads that runtime copy but writes Vite cache under `/tmp`; edit files from the host, not from inside the container. Set `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1` before deploy to discard and reseed the runtime WebUI source from committed source.
+
+Borealis uses host bind mounts for runtime ownership clarity, not named volumes as a security boundary. Security comes from explicit narrow targets, read-only flags, non-root users, dropped capabilities, and one-writer ownership. Replacing a broad bind with a named volume does not make another container's write access safer by itself.
 
 ## Deploy Order
 `Engine.sh --network-mode public|local deploy [prod|dev]` performs these phases:
@@ -146,7 +180,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 2. If repo/release/branch options were supplied, sync the repository and re-exec installed `Engine.sh`.
 3. Install or verify Engine dependencies.
 4. Check for host PostgreSQL conflict on `127.0.0.1:5432`.
-5. Create service runtime tree under `Engine/Services/`.
+5. Create or repair `borealis-engine` runtime identity, then create service runtime tree under `Engine/Services/`.
 6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
 7. Prune empty legacy runtime paths.
 8. Resolve Engine FQDN, network mode, and certificate mode. Public resolves ACME email; Local generates or renews Borealis local CA/leaf certificate material.
@@ -194,11 +228,11 @@ Build cache:
 - `job-scheduler` and `site-worker-orchestrator` use the same Alpine scheduler image. `job-scheduler` runs the queue/reconcile mode without Docker socket access. `site-worker-orchestrator` runs the Docker-boundary mode with Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend` and `job-scheduler` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.
-- `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags separately.
+- `site-worker` is built as a local image but may not have a running container. Deploy cleanup protects the current site-worker image and removes stale site-worker tags only when no container still references them.
 - `webui-frontend`, `traefik-edge`, `postgres-db`, `remote-desktop-guacd`, and `wireguard-tunnel` use service-local build contexts.
 - Service-local build contexts carry their own `.dockerignore` files so `node_modules`, WebUI build output, Python bytecode, pytest caches, logs, and local test output stay out of image contexts.
 - Deploy mode is part of the image hash only for services with explicit mode targets, currently `webui-frontend`. Switching between prod and dev should not make PostgreSQL, guacd, WireGuard, Traefik, or the API image appear changed unless their own inputs changed.
-- `compose.env` carries image tags, stable env-file paths, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, and profile-managed site-worker scheduled work-item slots.
+- `compose.env` carries image tags, stable env-file paths, runtime UID/GID, Docker socket GID, hardware deployment profile metadata, Engine access profile metadata, certificate paths, DB pool values, PostgreSQL startup settings, profile-managed resource caps, and site-worker scheduled work-item slots.
 - `runtime.env` is shared by API, PostgreSQL, guacd, and WireGuard. It intentionally excludes image tag variables and keeps stable production WebUI defaults so one image or mode change does not mutate every container's environment.
 - `webui-frontend.env` overrides shared runtime settings with the requested `BOREALIS_WEBUI_MODE`. Switching `prod`/`dev` should recreate only `webui-frontend` when all containers are already running.
 - Traefik always routes the WebUI service to `127.0.0.1:8000`; the production static server and Vite HMR both bind that same loopback port.
@@ -363,7 +397,7 @@ Action support:
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
-Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` asks `site-worker-orchestrator` to launch a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately. Server Info does not expose an operator restart action for `site-worker-orchestrator`.
+Server Info service actions use the same command surface. The API backend writes a service-action work item, then `job-scheduler` asks `site-worker-orchestrator` to launch a short-lived helper container from the scheduler image with `/opt/Borealis` and the Docker socket mounted while the API returns immediately. The helper is the remaining broad bind-mount exception because `Engine.sh --service` needs the host deploy script, Compose source, image/deploy manifests, service runtime paths, and Docker socket to run scoped restart/rebuild/reload/reconcile actions. The helper still uses `no-new-privileges`, dropped capabilities, read-only root filesystem, tmpfs `/tmp`, and resource limits. Server Info does not expose an operator restart action for `site-worker-orchestrator`.
 
 ## Direct Compose Commands
 Use `Engine.sh` when possible. Direct Compose commands are useful for read-only inspection or emergency operations.
@@ -478,10 +512,7 @@ Traefik logs:
 Engine/Services/traefik-edge/logs/
 ```
 
-PostgreSQL logs:
-```text
-Engine/Services/postgres-db/logs/
-```
+PostgreSQL logs use Docker stdout/stderr for `borealis-engine-postgres-db`.
 
 WireGuard tunnel logs:
 ```text
@@ -491,7 +522,7 @@ Engine/Services/api-backend/logs/VPN_Tunnel/tunnel.log
 
 Guacd logs:
 ```text
-Engine/Services/remote-desktop-guacd/logs/guacd.log
+docker logs borealis-engine-remote-desktop-guacd
 ```
 
 ## Common Scenarios
@@ -613,14 +644,13 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     Engine/Services/api-backend/cache/Ansible
     Engine/Services/api-backend/cache/Aurora
     Engine/Services/postgres-db/state
-    Engine/Services/postgres-db/logs
     Engine/Services/postgres-db/run
     Engine/Services/traefik-edge/config
     Engine/Services/traefik-edge/env
     Engine/Services/traefik-edge/logs
     Engine/Services/traefik-edge/state
     Engine/Services/webui-frontend/data/web-interface
-    Engine/Services/remote-desktop-guacd/logs
+    Engine/Services/site-worker-orchestrator/run
     Engine/Services/wireguard-tunnel/config
     Engine/Services/wireguard-tunnel/logs
     Engine/Services/wireguard-tunnel/secrets
@@ -668,6 +698,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     - Validate launcher syntax after changing shell scripts:
     ```sh
     bash -n Engine.sh
-    docker compose -f Data/Engine/Containers/compose.yaml config
+    docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
+    python3 Data/Engine/Containers/check-compose-policy.py
     ```
     - Update this page when adding a service, port, volume, service action, or load-order dependency.

@@ -338,7 +338,14 @@ def _worker_route_config(route: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _route_file_writes_enabled() -> bool:
+    raw = str(os.environ.get("BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def _write_worker_route_file(route: Mapping[str, Any]) -> None:
+    if not _route_file_writes_enabled():
+        return
     if str(route.get("status") or "") != WORKER_ROUTE_STATUS_ACTIVE:
         return
     try:
@@ -358,6 +365,8 @@ def _write_worker_route_file(route: Mapping[str, Any]) -> None:
 
 
 def _remove_worker_route_files(routes: Sequence[Mapping[str, Any]]) -> None:
+    if not _route_file_writes_enabled():
+        return
     for route in routes or []:
         route_path = Path(str(route.get("route_file_path") or ""))
         if not str(route_path):

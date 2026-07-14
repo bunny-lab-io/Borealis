@@ -51,6 +51,48 @@ The Engine container deployment system auto-detects host CPU and RAM specs on ev
 
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
 
+## Profile-Managed Container Limits
+`Engine.sh` writes least-privilege runtime settings into `Engine/Deploy/compose.env` during every deploy. Normal Engine services, including `remote-desktop-guacd`, run as the `borealis-engine` system user/group, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, PID limits, and profile-scaled CPU/memory caps. PostgreSQL runs as the official non-root PostgreSQL UID so existing database state keeps compatible ownership. Limits are caps, not reservations. `remote-desktop-guacd` stays loopback-only and does not mount the Docker socket.
+
+Site-worker memory is per active worker. If 500 workers are active at once, aggregate memory pressure is roughly `500 x site-worker cap` plus Engine service overhead. Tune active worker concurrency and per-worker caps together before scaling large environments.
+
+=== "Homelab"
+    | Setting | Default |
+    | --- | ---: |
+    | Site-worker memory cap | `256m` |
+    | Site-worker CPU cap | `1.00` |
+    | Site-worker PID cap | `128` |
+
+=== "Small Business"
+    | Setting | Default |
+    | --- | ---: |
+    | Site-worker memory cap | `384m` |
+    | Site-worker CPU cap | `1.00` |
+    | Site-worker PID cap | `128` |
+
+=== "MSP / Production"
+    | Setting | Default |
+    | --- | ---: |
+    | Site-worker memory cap | `512m` |
+    | Site-worker CPU cap | `1.50` |
+    | Site-worker PID cap | `128` |
+
+=== "Enterprise"
+    | Setting | Default |
+    | --- | ---: |
+    | Site-worker memory cap | `512m` |
+    | Site-worker CPU cap | `2.00` |
+    | Site-worker PID cap | `128` |
+
+PostgreSQL memory caps derive from the selected PostgreSQL profile so `shared_buffers`, cache sizing, and container caps move together. WebUI gets separate production and dev-mode defaults so Vite dev mode has more headroom than static production serving.
+
+Override any limit before redeploy by exporting the matching env var, for example:
+```sh
+BOREALIS_SITE_WORKER_MEMORY_LIMIT=768m \
+BOREALIS_API_BACKEND_MEMORY_LIMIT=2g \
+bash Engine.sh --network-mode public deploy prod
+```
+
 ## Configure the Timezone
 Borealis reads the Linux host timezone during every `Engine.sh --network-mode public|local deploy` or redeploy and passes that value into the Engine containers as `TZ`. Server Info uses that propagated timezone for Engine-local clock displays.
 
@@ -145,7 +187,7 @@ After the first install, update and redeploy from the checked-out Borealis repos
 ### Docker Storage Cleanup
 Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
 
-`site-worker` images are handled carefully because the scheduler and site-worker orchestrator may need the current image even when no site-worker container is running. Borealis keeps the current site-worker image available and removes stale site-worker tags separately.
+`site-worker` images are handled carefully because the scheduler, site-worker orchestrator, and active site-worker containers may need them even when the main Compose stack has moved to a newer image. Borealis keeps the current site-worker image available and removes stale site-worker tags only when no container still references them.
 
 !!! warning "Shared Docker Hosts"
     Engine hosts should be dedicated to Borealis. Docker cleanup removes unused images and build cache from the host, which may affect unrelated Docker workloads if you co-host them. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` before deploy only when you intentionally need to preserve unused Docker images or build cache.
@@ -215,6 +257,7 @@ After deployment finishes:
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
     - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, defaults to production, and runs Docker Compose with project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
+    - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
     - Production (`Engine.sh --network-mode public|local deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.

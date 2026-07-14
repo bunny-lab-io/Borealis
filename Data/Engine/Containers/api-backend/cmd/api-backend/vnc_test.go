@@ -322,34 +322,287 @@ func TestVNCWorkerSessionNeedsAuthRetryOnlyForAuthFailure(t *testing.T) {
 	if !vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_failed"}) {
 		t.Fatalf("expected vnc_auth_failed to request auth retry")
 	}
+	if !vncErrorNeedsAuthRetry("too_many_auth_failures:Your connection has been rejected to many attempts.") {
+		t.Fatalf("expected UltraVNC lockout reason to request auth retry")
+	}
+	if !vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
+		t.Fatalf("expected UltraVNC lockout detail to be detected")
+	}
+	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_auth_lockout", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}) {
+		t.Fatalf("UltraVNC lockout should not start credential rotation")
+	}
+	if got := vncWorkerSessionAuthRetryReason(map[string]any{"error": "vnc_auth_failed", "detail": "too_many_auth_failures:Your connection has been rejected to many attempts."}); got != "too_many_auth_failures:Your connection has been rejected to many attempts." {
+		t.Fatalf("expected lockout detail to be preserved, got %q", got)
+	}
+	if vncWorkerSessionIsAuthLockout(map[string]any{"error": "vnc_auth_failed", "detail": "auth_failed"}) {
+		t.Fatalf("plain auth failures should still rotate credentials")
+	}
 	if vncWorkerSessionNeedsAuthRetry(map[string]any{"error": "vnc_backend_unreachable"}) {
 		t.Fatalf("backend reachability errors should not rotate credentials")
 	}
 	if vncWorkerSessionNeedsAuthRetry(nil) {
 		t.Fatalf("nil worker error should not request auth retry")
 	}
+	if !vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_auth_retry_settling"}) {
+		t.Fatalf("auth retry settling payload should preserve auth recovery state")
+	}
+	if !vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_auth_retry_in_progress"}) {
+		t.Fatalf("auth retry in-progress payload should preserve auth recovery state")
+	}
+	if vncWorkerSessionIsAuthRecoveryPayload(map[string]any{"error": "vnc_backend_unreachable"}) {
+		t.Fatalf("backend reachability errors should still record generic worker failure")
+	}
 }
 
-func TestVNCDefaultReadinessWaitsCoverSlowAgents(t *testing.T) {
-	cases := map[string]float64{
-		"live_credentials": defaultVNCLiveCredentialWaitSeconds,
-		"start_ready":      defaultVNCStartReadyWaitSeconds,
-		"recovery_ready":   defaultVNCRecoveryReadyWaitSeconds,
-		"restart_ready":    defaultVNCRestartReadyWaitSeconds,
-		"auth_retry_ready": defaultVNCAuthRetryReadyWaitSeconds,
+func TestVNCAgentAuthRetryReservationDebouncesPreviousProxyClose(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	session, participant, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700001000, 0).UTC()
+
+	if reservation := runtime.reserveAgentAuthRetry("agent-1", now, ""); reservation.Needed {
+		t.Fatalf("fresh session should not reserve auth retry: %#v", reservation)
 	}
-	minimums := map[string]float64{
-		"live_credentials": 30,
-		"start_ready":      30,
-		"recovery_ready":   20,
-		"restart_ready":    20,
-		"auth_retry_ready": 20,
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	reservation := runtime.reserveAgentAuthRetry("agent-1", now, "")
+	if !reservation.Needed || !reservation.Reserved {
+		t.Fatalf("previous proxy auth failure should reserve auth retry: %#v", reservation)
+	}
+	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds <= 0 {
+		t.Fatalf("second auth retry should be debounced: %#v", blocked)
+	}
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	settling := runtime.reserveAgentAuthRetry("agent-1", now.Add(30*time.Second), "")
+	if settling.Needed {
+		t.Fatalf("failed auth retry should stop settling after 30 second cooldown: %#v", settling)
+	}
+	probe := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
+	if probe.Needed {
+		t.Fatalf("settled failed retry should allow normal credential probe before rotating again: %#v", probe)
+	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("settled failed retry should require worker auth probe before clearing")
+	}
+	runtime.clearAgentAuthRetryAfterWorkerReady("agent-1")
+	if runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("worker-ready auth probe should clear retry state")
+	}
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	stale := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
+	if !stale.Needed || !stale.Reserved {
+		t.Fatalf("fresh auth failure after cooldown should reserve new retry: %#v", stale)
+	}
+	runtime.recordProxyFirstFrame(session.SessionID, participant.ParticipantID, "size")
+	cleared := runtime.reserveAgentAuthRetry("agent-1", now.Add(32*time.Second), "")
+	if cleared.Needed {
+		t.Fatalf("first frame should clear auth retry state: %#v", cleared)
+	}
+}
+
+func TestVNCAuthRetryStateSurvivesStaleParticipantCleanup(t *testing.T) {
+	runtime := newVNCRuntime(nil, nil)
+	session, participant, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	runtime.recordProxyClose(session.SessionID, participant.ParticipantID, "vnc_auth_failed")
+	if reservation := runtime.reserveAgentAuthRetry("agent-1", time.Now().UTC(), ""); !reservation.Needed || !reservation.Reserved {
+		t.Fatalf("expected auth retry reservation before cleanup: %#v", reservation)
+	}
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	participant.LastActivityAt = time.Now().UTC().Add(-2 * time.Minute)
+	participant.ActiveConnections = 0
+
+	retained := runtime.sessionByAgent("agent-1")
+	if retained == nil {
+		t.Fatalf("auth retry settle state should survive stale participant cleanup")
+	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("retained auth retry state should require worker auth probe")
+	}
+}
+
+func TestVNCAuthLockoutMarksSettleWithoutRotation(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
+
+	runtime := newVNCRuntime(nil, nil)
+	runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700002000, 0).UTC()
+	runtime.markAgentAuthRetrySettling("agent-1", "too_many_auth_failures:Your connection has been rejected to many attempts.")
+	runtime.mu.Lock()
+	session := runtime.byID[runtime.byAgent["agent-1"]]
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
+
+	reservation := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !reservation.Needed || reservation.Reserved {
+		t.Fatalf("lockout should settle without immediate rotation: %#v", reservation)
+	}
+	if reservation.RetryAfterSeconds > 20 {
+		t.Fatalf("lockout retry hint should stay inside 30 second SLA: %#v", reservation)
+	}
+	afterLockout := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
+	if afterLockout.Needed {
+		t.Fatalf("expired lockout cooldown should allow normal credential auth probe: %#v", afterLockout)
+	}
+	if !runtime.agentAuthProbeRequired("agent-1") {
+		t.Fatalf("lockout settle state should still require auth probe")
+	}
+}
+
+func TestVNCFailedCredentialRecoveryUsesFastSettleCooldown(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
+
+	runtime := newVNCRuntime(nil, nil)
+	runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700002500, 0).UTC()
+	runtime.finishAgentAuthRetry("agent-1", false, "vnc_agent_live_credentials_unavailable")
+	runtime.mu.Lock()
+	session := runtime.byID[runtime.byAgent["agent-1"]]
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
+
+	stillSettling := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !stillSettling.Needed || stillSettling.Reserved || stillSettling.RetryAfterSeconds > 20 {
+		t.Fatalf("failed credential recovery should return fast retry hint: %#v", stillSettling)
+	}
+	afterSettle := runtime.reserveAgentAuthRetry("agent-1", now.Add(31*time.Second), "")
+	if afterSettle.Needed {
+		t.Fatalf("expired failed credential recovery cooldown should allow normal credential probe: %#v", afterSettle)
+	}
+}
+
+func TestVNCAuthLockoutStateSurvivesGenericWorkerReturn(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "30")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "30")
+
+	runtime := newVNCRuntime(nil, nil)
+	session, _, _ := runtime.ensureSession(
+		"agent-1",
+		"operator",
+		vncCredential{ControllerPassword: "secret", CredentialRevision: 1},
+		true,
+	)
+	now := time.Unix(1700003000, 0).UTC()
+	lockoutErr := map[string]any{
+		"error":  "vnc_auth_failed",
+		"detail": "too_many_auth_failures:Your connection has been rejected to many attempts.",
+	}
+	runtime.markAgentAuthRetrySettling("agent-1", vncWorkerSessionAuthRetryReason(lockoutErr))
+	runtime.mu.Lock()
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	runtime.mu.Unlock()
+
+	if !vncWorkerSessionIsAuthRecoveryPayload(vncAuthRetrySettlingPayload(30)) {
+		runtime.recordError(session.SessionID, "worker_guacamole_unavailable")
+	}
+	blocked := runtime.reserveAgentAuthRetry("agent-1", now.Add(10*time.Second), "")
+	if !blocked.Needed || blocked.Reserved || blocked.RetryAfterSeconds > 20 {
+		t.Fatalf("generic worker return should not erase lockout cooldown: %#v", blocked)
+	}
+}
+
+func TestVNCDefaultReadinessWaitsStayInsideOperatorSLA(t *testing.T) {
+	cases := map[string]float64{
+		"establish_deadline":     defaultVNCEstablishDeadlineSeconds,
+		"live_credentials":       defaultVNCLiveCredentialWaitSeconds,
+		"start_ready":            defaultVNCStartReadyWaitSeconds,
+		"recovery_ready":         defaultVNCRecoveryReadyWaitSeconds,
+		"restart_ready":          defaultVNCRestartReadyWaitSeconds,
+		"auth_retry_credentials": defaultVNCAuthRetryCredentialWaitSeconds,
+		"auth_retry_ready":       defaultVNCAuthRetryReadyWaitSeconds,
+		"auth_retry_cooldown":    defaultVNCAuthRetryCooldownSeconds,
+		"auth_lockout_cooldown":  defaultVNCAuthLockoutCooldownSeconds,
 	}
 	for name, got := range cases {
-		if got < minimums[name] {
-			t.Fatalf("%s wait too short for slow agents: got %.1fs want >= %.1fs", name, got, minimums[name])
+		if got > defaultVNCEstablishDeadlineSeconds {
+			t.Fatalf("%s wait exceeds Remote Desktop establish SLA: got %.1fs want <= %.1fs", name, got, float64(defaultVNCEstablishDeadlineSeconds))
 		}
 	}
+}
+
+func TestVNCWaitOverridesClampToEstablishSLA(t *testing.T) {
+	t.Setenv("BOREALIS_VNC_ESTABLISH_DEADLINE_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", "120")
+	t.Setenv("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", "300")
+	t.Setenv("BOREALIS_VNC_START_READY_WAIT_SECONDS", "90")
+
+	if got := vncEstablishTimeout(); got != 30*time.Second {
+		t.Fatalf("establish deadline should clamp to 30s, got %s", got)
+	}
+	if got := vncAuthRetryCooldown(); got != 30*time.Second {
+		t.Fatalf("auth retry cooldown should clamp to 30s, got %s", got)
+	}
+	if got := vncAuthLockoutCooldown(); got != 30*time.Second {
+		t.Fatalf("auth lockout cooldown should clamp to 30s, got %s", got)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	if got := vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, deadline); got > 20 {
+		t.Fatalf("bounded wait should clamp to remaining establish budget, got %.1fs", got)
+	}
+}
+
+func TestProbeRFBServerRequiresBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		time.Sleep(200 * time.Millisecond)
+	})
+
+	if probeRFBServer(host, port, 100*time.Millisecond) {
+		t.Fatalf("TCP-only listener should not count as RFB ready")
+	}
+}
+
+func TestProbeRFBServerAcceptsBanner(t *testing.T) {
+	host, port := startRFBTestServer(t, func(conn net.Conn) {
+		_, _ = conn.Write([]byte("RFB 003.008\n"))
+	})
+
+	if !probeRFBServer(host, port, 500*time.Millisecond) {
+		t.Fatalf("RFB banner should count as VNC backend ready")
+	}
+}
+
+func startRFBTestServer(t *testing.T, handler func(net.Conn)) (string, int) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = listener.Close()
+	})
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		handler(conn)
+	}()
+	addr := listener.Addr().(*net.TCPAddr)
+	return "127.0.0.1", addr.Port
 }
 
 func TestNormalizePerformancePreferencePreservesSpeedBias(t *testing.T) {

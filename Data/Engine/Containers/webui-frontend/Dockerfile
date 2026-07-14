@@ -1,6 +1,12 @@
 FROM node:22-alpine AS deps
 
+ARG BOREALIS_ENGINE_RUNTIME_UID=64646
+ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+
 ENV NODE_ENV=development
+
+RUN addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
+    && adduser -S -D -H -u "${BOREALIS_ENGINE_RUNTIME_UID}" -G borealis-engine -s /sbin/nologin borealis-engine
 
 WORKDIR /opt/Borealis/Data/Engine/web-interface
 
@@ -32,7 +38,13 @@ RUN NODE_ENV=production npm run build
 
 FROM node:22-alpine AS prod
 
+ARG BOREALIS_ENGINE_RUNTIME_UID=64646
+ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+
 ENV NODE_ENV=production
+
+RUN addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
+    && adduser -S -D -H -u "${BOREALIS_ENGINE_RUNTIME_UID}" -G borealis-engine -s /sbin/nologin borealis-engine
 
 WORKDIR /opt/Borealis/Data/Engine/web-interface
 

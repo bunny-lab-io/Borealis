@@ -108,7 +108,8 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 - Container launcher/static validation should start with shell and Compose checks before broader unit lanes:
 ```bash
 bash -n Engine.sh
-docker compose -f Data/Engine/Containers/compose.yaml config
+docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
+python3 Data/Engine/Containers/check-compose-policy.py
 ```
 
 ## Shared Helpers
@@ -137,7 +138,7 @@ Prefer small helpers with clear names: fake Engine, fake devices, fake Role hook
 
     - Read this page before choosing validation for codebase changes.
     - Use documented lane scripts as testing entrypoint. Do not start with raw `pytest`, `npm`, or `vitest` unless diagnosing runner failure.
-    - For container deployment changes, run shell syntax checks for `Engine.sh`, then validate `Data/Engine/Containers/compose.yaml` through `docker compose -f Data/Engine/Containers/compose.yaml config`.
+    - For container deployment changes, run shell syntax checks for `Engine.sh`, validate `Data/Engine/Containers/compose.yaml` through `docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config`, then run `python3 Data/Engine/Containers/check-compose-policy.py`.
     - Pick narrow domain runs while iterating, then run full affected lane when practical: Engine change gets `./Engine_Unit_Tests.sh`; Agent change gets `./Data/Agent/Unit_Tests/Agent_Unit_Tests.sh` or `.\Data\Agent\Unit_Tests\Agent_Unit_Tests.ps1`; cross-runtime change gets both.
     - For WebUI unit tests, use `./Engine_Unit_Tests.sh --domain webui`. Do not run npm or vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; staging source is not the runtime test location.
     - Keep reports under `Unit_Test_Results/`. Do not write `.pytest_cache`, `__pycache__`, JUnit XML, or Vitest output under `Data/Engine`, `Data/Agent`, or `Data/Engine/Containers/webui-frontend/data/web-interface`.

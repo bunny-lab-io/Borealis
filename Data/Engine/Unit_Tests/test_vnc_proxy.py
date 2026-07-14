@@ -11,7 +11,7 @@ import asyncio
 import logging
 
 from Data.Engine.services.RemoteDesktop import vnc_proxy
-from Data.Engine.services.RemoteDesktop.guacamole_proxy import GuacamoleSessionRegistry
+from Data.Engine.services.RemoteDesktop.guacamole_proxy import GuacdBackendRetryableError, GuacamoleSessionRegistry
 
 
 def _build_proxy() -> vnc_proxy.VncProxyServer:
@@ -131,6 +131,40 @@ def test_vnc_proxy_keeps_token_when_bridge_fails_before_transport_confirm(monkey
 
     assert registry.lookup(session.token) is session
     assert websocket.closed == (1011, "guacamole_unavailable")
+
+
+def test_vnc_proxy_reports_retryable_backend_error_as_guacamole_unavailable(monkeypatch) -> None:
+    registry = GuacamoleSessionRegistry(ttl_seconds=120, logger=logging.getLogger("test.guac.registry"))
+    close_reasons: list[str] = []
+    proxy = vnc_proxy.VncProxyServer(
+        host="127.0.0.1",
+        port=4823,
+        guacamole_registry=registry,
+        logger=logging.getLogger("test.vnc.proxy"),
+    )
+    session = registry.create(
+        agent_id="agent-1",
+        host="10.255.0.6",
+        port=5900,
+        password="secretpw",
+        operator_id="admin",
+        session_id="session-1",
+        participant_id="participant-1",
+        role="controller",
+        on_close=lambda reason: close_reasons.append(reason),
+    )
+
+    async def _fail_with_retryable_backend(**_kwargs):
+        raise GuacdBackendRetryableError("519", "Aborted. See logs.")
+
+    monkeypatch.setattr(vnc_proxy, "proxy_guacamole_vnc_session", _fail_with_retryable_backend)
+    websocket = _FakeWebSocket()
+
+    asyncio.run(proxy._handle_client(websocket, f"/remote-desktop/vnc/guacamole?token={session.token}"))
+
+    assert registry.lookup(session.token) is session
+    assert websocket.closed == (1011, "guacamole_unavailable")
+    assert close_reasons == ["guacamole_unavailable"]
 
 
 def test_vnc_proxy_revokes_token_after_transport_confirm(monkeypatch) -> None:

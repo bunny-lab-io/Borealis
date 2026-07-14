@@ -1,5 +1,8 @@
 FROM python:3.12-slim-bookworm
 
+ARG BOREALIS_ENGINE_RUNTIME_UID=64646
+ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
@@ -15,6 +18,8 @@ RUN apt-get update \
         rsync \
         sshpass \
         wireguard-tools \
+    && groupadd --system --gid "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
+    && useradd --system --uid "${BOREALIS_ENGINE_RUNTIME_UID}" --gid "${BOREALIS_ENGINE_RUNTIME_GID}" --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin borealis-engine \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/Borealis

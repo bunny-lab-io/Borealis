@@ -102,10 +102,20 @@ func TestSiteWorkerOrchestratorLaunchBuildsSafeDockerPayload(t *testing.T) {
 	for _, expected := range []string{
 		"\nrun\n",
 		"\n--network\nhost\n",
+		"\n--user\n64646:64646\n",
+		"\n--security-opt\nno-new-privileges:true\n",
+		"\n--cap-drop\nALL\n",
+		"\n--read-only\n",
+		"\n--tmpfs\n/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777\n",
+		"\n--memory\n256m\n",
+		"\n--cpus\n1.00\n",
+		"\n--pids-limit\n128\n",
 		"\n--label\nborealis.role=site-worker\n",
 		"\n--label\nborealis.site_id=7\n",
 		"\n--label\nborealis.worker_guid=worker-safe\n",
 		"\n--label\nborealis.created_by=site-worker-orchestrator\n",
+		"\n-e\nBOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0\n",
+		"\n-e\nHOME=/tmp\n",
 		"\nborealis-engine/site-worker:test\n",
 	} {
 		if !strings.Contains(joined, expected) {
@@ -116,6 +126,9 @@ func TestSiteWorkerOrchestratorLaunchBuildsSafeDockerPayload(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("site-worker launch contains forbidden docker option %q:\n%s", forbidden, joined)
 		}
+	}
+	if strings.Contains(joined, "Engine/Services/traefik-edge") {
+		t.Fatalf("site-worker launch must not mount Traefik config:\n%s", joined)
 	}
 }
 
@@ -171,9 +184,29 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := "\n" + strings.Join(strings.Split(strings.TrimSpace(string(raw)), "\n"), "\n") + "\n"
-	for _, expected := range []string{"\nborealis-engine/job-scheduler:test\n", "Engine.sh", "--service", "webui-frontend", "rebuild", "prod"} {
+	for _, expected := range []string{
+		"\n--security-opt\nno-new-privileges:true\n",
+		"\n--cap-drop\nALL\n",
+		"\n--read-only\n",
+		"\n--tmpfs\n/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777\n",
+		"\n--memory\n512m\n",
+		"\n--cpus\n1.00\n",
+		"\n--pids-limit\n160\n",
+		"\n-e\nHOME=/tmp\n",
+		"\nborealis-engine/job-scheduler:test\n",
+		"Engine.sh",
+		"--service",
+		"webui-frontend",
+		"rebuild",
+		"prod",
+	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
+		}
+	}
+	for _, forbidden := range []string{"\n--privileged\n", "\n--device\n", "\n--cap-add\n", "\n--pid\n", "\n--ipc\n"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("service action helper contains forbidden docker option %q:\n%s", forbidden, joined)
 		}
 	}
 	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild"}); err == nil {
@@ -193,9 +226,38 @@ func TestComposeJobSchedulerDoesNotMountDockerSocket(t *testing.T) {
 	if strings.Contains(schedulerBlock, "/var/run/docker.sock") {
 		t.Fatalf("job-scheduler must not mount Docker socket:\n%s", schedulerBlock)
 	}
+	for _, forbidden := range []string{
+		"Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend",
+		"Engine/Services/wireguard-tunnel",
+		"Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config",
+	} {
+		if strings.Contains(schedulerBlock, forbidden) {
+			t.Fatalf("job-scheduler has overbroad mount %q:\n%s", forbidden, schedulerBlock)
+		}
+	}
 	orchestratorBlock := composeServiceBlock(string(content), "site-worker-orchestrator")
-	if !strings.Contains(orchestratorBlock, "/var/run/docker.sock:/var/run/docker.sock") {
+	if !strings.Contains(orchestratorBlock, "BOREALIS_DOCKER_SOCKET_PATH") || !strings.Contains(orchestratorBlock, ":/var/run/docker.sock") {
 		t.Fatalf("site-worker-orchestrator should own Docker socket mount:\n%s", orchestratorBlock)
+	}
+	for _, forbidden := range []string{
+		"Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend",
+		"Engine/Services/site-worker-orchestrator:/opt/Borealis/Engine/Services/site-worker-orchestrator",
+		"Engine/Services/traefik-edge",
+	} {
+		if strings.Contains(orchestratorBlock, forbidden) {
+			t.Fatalf("site-worker-orchestrator has overbroad mount %q:\n%s", forbidden, orchestratorBlock)
+		}
+	}
+	webuiBlock := composeServiceBlock(string(content), "webui-frontend")
+	for _, mount := range []string{
+		"web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src:ro",
+		"web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public:ro",
+		"web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html:ro",
+		"web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts:ro",
+	} {
+		if !strings.Contains(webuiBlock, mount) {
+			t.Fatalf("webui mount should be read-only %q:\n%s", mount, webuiBlock)
+		}
 	}
 }
 

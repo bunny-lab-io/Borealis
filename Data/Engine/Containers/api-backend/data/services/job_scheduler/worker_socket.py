@@ -64,7 +64,12 @@ from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     GuacamoleSessionRegistry,
     normalize_guacamole_performance_preference,
 )
-from Data.Engine.services.RemoteDesktop.rfb_probe import wait_for_vnc_auth_ready
+from Data.Engine.services.RemoteDesktop.rfb_probe import (
+    VncAuthProbeResult,
+    probe_vnc_security,
+    vnc_auth_probe_payload,
+    wait_for_vnc_auth_ready,
+)
 from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
@@ -111,11 +116,40 @@ def _env_float(name: str, fallback: float, minimum: float = 0.0) -> float:
     return value
 
 
+def _normalize_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"1", "true", "yes", "y", "on"}:
+            return True
+        if cleaned in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
 def _vnc_auth_probe_error(reason: str) -> str:
     normalized = str(reason or "").strip().lower()
+    password_missing_markers = (
+        "valid password",
+        "password enabled",
+        "password is set",
+    )
+    if any(marker in normalized for marker in password_missing_markers):
+        return "vnc_password_not_enabled"
+    auth_lockout_markers = (
+        "too_many_auth_failures",
+        "too many",
+        "to many",
+    )
+    if any(marker in normalized for marker in auth_lockout_markers):
+        return "vnc_auth_lockout"
     auth_markers = (
         "auth_failed",
-        "too_many_auth_failures",
+        "auth_rejected",
+        "rejected",
         "security_type",
         "unsupported_security",
         "vnc_auth_unavailable",
@@ -123,6 +157,14 @@ def _vnc_auth_probe_error(reason: str) -> str:
     if any(marker in normalized for marker in auth_markers):
         return "vnc_auth_failed"
     return "vnc_backend_unreachable"
+
+
+def _vnc_auth_probe_status(error_code: str) -> int:
+    if error_code == "vnc_password_not_enabled":
+        return 409
+    if error_code == "vnc_auth_lockout":
+        return 423
+    return 503
 
 
 def _assert_port_available(host: str, port: int) -> None:
@@ -932,15 +974,124 @@ class SiteWorkerSocketRuntime:
             except Exception:
                 dpi = 96
             performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
+            auth_probe_enabled = _normalize_bool(
+                data.get("auth_probe"),
+                _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),
+            )
+            security_preflight_enabled = (
+                not auth_probe_enabled
+                and _normalize_bool(
+                    data.get("security_preflight"),
+                    _normalize_bool(os.environ.get("BOREALIS_VNC_SECURITY_PREFLIGHT"), True),
+                )
+            )
+            if security_preflight_enabled:
+                security_preflight = probe_vnc_security(
+                    host,
+                    port,
+                    timeout_seconds=_env_float("BOREALIS_VNC_SECURITY_PREFLIGHT_TIMEOUT_SECONDS", 1.5, 0.25),
+                )
+            else:
+                security_preflight = VncAuthProbeResult(False, True, "security_preflight_disabled")
+            security_preflight_detail = vnc_auth_probe_payload(security_preflight)
+            security_types = ".".join(str(item) for item in security_preflight_detail.get("offered_security_types") or [])
+            self._log(
+                (
+                    "remote_desktop_vnc_security_preflight_result agent_id={0} session_id={1} host={2} port={3} "
+                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
+                    "offered_security_types={10} elapsed_ms={11} socket_error={12}"
+                ).format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(security_preflight_enabled),
+                    security_preflight.checked,
+                    security_preflight.ok,
+                    security_preflight.reason,
+                    security_preflight.stage,
+                    security_preflight.server_version,
+                    security_types or "-",
+                    security_preflight.elapsed_ms,
+                    security_preflight.socket_error,
+                ),
+                level="INFO" if security_preflight.ok else "WARNING",
+            )
+            if security_preflight.checked and not security_preflight.ok:
+                error_code = _vnc_auth_probe_error(security_preflight.reason)
+                status_code = _vnc_auth_probe_status(error_code)
+                self._log(
+                    "remote_desktop_vnc_security_preflight_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
+                        agent_id,
+                        session_id,
+                        host,
+                        port,
+                        error_code,
+                        security_preflight.reason,
+                    ),
+                    level="WARNING",
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": error_code,
+                            "detail": security_preflight.reason,
+                            "auth_probe": security_preflight_detail,
+                        }
+                    ),
+                    status_code,
+                )
+            self._log(
+                "remote_desktop_vnc_auth_probe_start agent_id={0} session_id={1} host={2} port={3} enabled={4}".format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(auth_probe_enabled),
+                )
+            )
             auth_probe = wait_for_vnc_auth_ready(
                 host,
                 port,
                 password,
                 timeout_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS", 5.0, 0.25),
                 poll_interval_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_POLL_INTERVAL_SECONDS", 0.5, 0.1),
+                enabled=auth_probe_enabled,
+            )
+            auth_probe_detail = vnc_auth_probe_payload(auth_probe)
+            offered_security_types = ".".join(str(item) for item in auth_probe_detail.get("offered_security_types") or [])
+            self._log(
+                (
+                    "remote_desktop_vnc_auth_probe_result agent_id={0} session_id={1} host={2} port={3} "
+                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
+                    "offered_security_types={10} selected_security_type={11} auth_result={12} "
+                    "framebuffer_width={13} framebuffer_height={14} desktop_name_length={15} "
+                    "elapsed_ms={16} socket_error={17}"
+                ).format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(auth_probe_enabled),
+                    auth_probe.checked,
+                    auth_probe.ok,
+                    auth_probe.reason,
+                    auth_probe.stage,
+                    auth_probe.server_version,
+                    offered_security_types or "-",
+                    auth_probe.selected_security_type,
+                    auth_probe.auth_result if auth_probe.auth_result is not None else "",
+                    auth_probe.framebuffer_width,
+                    auth_probe.framebuffer_height,
+                    auth_probe.desktop_name_length,
+                    auth_probe.elapsed_ms,
+                    auth_probe.socket_error,
+                ),
+                level="INFO" if auth_probe.ok else "WARNING",
             )
             if auth_probe.checked and not auth_probe.ok:
                 error_code = _vnc_auth_probe_error(auth_probe.reason)
+                status_code = _vnc_auth_probe_status(error_code)
                 self._log(
                     "remote_desktop_vnc_auth_probe_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
                         agent_id,
@@ -957,14 +1108,10 @@ class SiteWorkerSocketRuntime:
                         {
                             "error": error_code,
                             "detail": auth_probe.reason,
-                            "auth_probe": {
-                                "checked": auth_probe.checked,
-                                "ok": auth_probe.ok,
-                                "reason": auth_probe.reason,
-                            },
+                            "auth_probe": auth_probe_detail,
                         }
                     ),
-                    503,
+                    status_code,
                 )
 
             guacamole_session = self._guacamole_registry.create(
@@ -1018,7 +1165,16 @@ class SiteWorkerSocketRuntime:
                     guacamole_session.token[:8] if guacamole_session.token else "-",
                 )
             )
-            return jsonify({"status": "ok", "token": guacamole_session.token}), 200
+            return (
+                jsonify(
+                    {
+                        "status": "ok",
+                        "token": guacamole_session.token,
+                        "auth_probe": auth_probe_detail,
+                    }
+                ),
+                200,
+            )
 
         @self.app.route("/remote-desktop/vnc/disconnect", methods=["POST"])
         def _remote_desktop_disconnect():

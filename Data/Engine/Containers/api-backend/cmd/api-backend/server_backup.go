@@ -1142,9 +1142,7 @@ func engineBackupLogRoots() []string {
 		resolveLogRoot(),
 		filepath.Join(engineRoot, "Services", "traefik-edge", "logs"),
 		filepath.Join(engineRoot, "Services", "wireguard-tunnel", "logs"),
-		filepath.Join(engineRoot, "Services", "remote-desktop-guacd", "logs"),
 		filepath.Join(engineRoot, "Services", "webui-frontend", "logs"),
-		filepath.Join(engineRoot, "Services", "postgres-db", "logs"),
 	}
 	seen := map[string]bool{}
 	out := []string{}

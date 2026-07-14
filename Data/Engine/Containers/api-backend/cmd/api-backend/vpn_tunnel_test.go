@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,6 +75,62 @@ func TestWireGuardRuntimePrefixesAcceptPrivateContainedOverlayConfig(t *testing.
 	}
 }
 
+func TestVPNTunnelAllocateVirtualIPSkipsPeerNetworkAddress(t *testing.T) {
+	service := &vpnTunnelService{
+		enginePrefix:    netip.MustParsePrefix("10.255.0.1/32"),
+		peerPrefix:      netip.MustParsePrefix("10.255.0.0/16"),
+		ipLeases:        map[string]string{},
+		sessionsByAgent: map[string]*vpnSession{},
+	}
+
+	virtualIP, err := service.allocateVirtualIPLocked("agent-1")
+	if err != nil {
+		t.Fatalf("allocate virtual IP failed: %v", err)
+	}
+	if virtualIP != "10.255.0.2/32" {
+		t.Fatalf("expected first usable peer IP after network and engine addresses, got %s", virtualIP)
+	}
+}
+
+func TestVPNTunnelAllocateVirtualIPReplacesReservedLease(t *testing.T) {
+	service := &vpnTunnelService{
+		enginePrefix:    netip.MustParsePrefix("10.255.0.1/32"),
+		peerPrefix:      netip.MustParsePrefix("10.255.0.0/16"),
+		ipLeases:        map[string]string{"agent-1": "10.255.0.0/32"},
+		sessionsByAgent: map[string]*vpnSession{},
+	}
+
+	virtualIP, err := service.allocateVirtualIPLocked("agent-1")
+	if err != nil {
+		t.Fatalf("allocate virtual IP failed: %v", err)
+	}
+	if virtualIP != "10.255.0.2/32" {
+		t.Fatalf("expected reserved lease replacement, got %s", virtualIP)
+	}
+}
+
+func TestWireGuardRuntimeRejectsReservedAllowedIP(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	commandCount := 0
+	runtime.commandRunner = func(args []string) (int, string, string) {
+		commandCount++
+		return 0, "", ""
+	}
+
+	err := runtime.upsertPeer(map[string]any{
+		"agent_id":    "agent-1",
+		"public_key":  "peer-public-key-1",
+		"allowed_ips": []string{"10.255.0.0/32"},
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("expected reserved allowed IP rejection, got %v", err)
+	}
+	if commandCount != 0 {
+		t.Fatalf("reserved peer touched command path %d time(s)", commandCount)
+	}
+}
+
 func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	runtime := testWireGuardRuntime(t)
 	runtime.managedPeers["agent-1"] = map[string]any{
@@ -101,6 +158,41 @@ func TestWireGuardRuntimeRejectsDuplicateAllowedIPAndPublicKey(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "public_key_already_assigned") {
 		t.Fatalf("expected duplicate public key rejection, got %v", err)
 	}
+}
+
+func TestWireGuardRuntimeCreatesGroupReadableKeys(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	runtime.privateKeyPath = filepath.Join(t.TempDir(), "secrets", "server_private.key")
+	runtime.publicKeyPath = filepath.Join(filepath.Dir(runtime.privateKeyPath), "server_public.key")
+
+	privateKey, publicKey := runtime.ensureServerKeys()
+	if privateKey == "" || publicKey == "" {
+		t.Fatalf("expected generated WireGuard key pair")
+	}
+	assertFileMode(t, filepath.Dir(runtime.privateKeyPath), 0o750)
+	assertFileMode(t, runtime.privateKeyPath, 0o640)
+	assertFileMode(t, runtime.publicKeyPath, 0o640)
+}
+
+func TestWireGuardRuntimeCreatesGroupReadableConfig(t *testing.T) {
+	runtime := testWireGuardRuntime(t)
+	runtime.serverPrivate = "test-private-key"
+	runtime.commandRunner = func(args []string) (int, string, string) {
+		if len(args) >= 3 && filepath.Base(args[0]) == "wg" && args[1] == "show" {
+			return 1, "", "missing interface"
+		}
+		if len(args) >= 5 && filepath.Base(args[0]) == "ip" && args[1] == "link" && args[2] == "show" {
+			return 1, "", "missing interface"
+		}
+		return 0, "", ""
+	}
+
+	if err := runtime.ensureListenerLocked(); err != nil {
+		t.Fatalf("ensureListenerLocked returned error: %v", err)
+	}
+
+	assertFileMode(t, runtime.configRoot, 0o750)
+	assertFileMode(t, filepath.Join(runtime.configRoot, defaultWireGuardConfigName+".conf"), 0o640)
 }
 
 func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {
@@ -132,6 +224,17 @@ func TestWireGuardRuntimeInstallsDefaultDenyFirewallChains(t *testing.T) {
 		if !containsCommandSuffix(calls, expected) {
 			t.Fatalf("missing firewall command %v in %#v", expected, calls)
 		}
+	}
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("mode %s = %o, want %o", path, got, want)
 	}
 }
 

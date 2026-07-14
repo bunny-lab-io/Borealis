@@ -25,10 +25,12 @@ DEFAULT_GUACD_HOST = "127.0.0.1"
 DEFAULT_GUACD_PORT = 4822
 _GUACD_CONNECT_TIMEOUT_SECONDS = 3.0
 _GUACD_HANDSHAKE_TIMEOUT_SECONDS = 5.0
-_GUACD_READY_ATTEMPTS = 7
+_GUACD_READY_ATTEMPTS = 5
 _GUACD_READY_RETRY_DELAY_SECONDS = 1.25
+_GUACD_READY_DEADLINE_SECONDS = 20.0
 _GUACD_BACKEND_VERIFY_SECONDS = 4.0
 _RETRYABLE_GUACD_BACKEND_STATUSES = {"519"}
+_GUACAMOLE_VNC_AUTORETRY = "3"
 _GUACAMOLE_FIRST_FRAME_OPCODES = {
     "arc",
     "blob",
@@ -258,7 +260,7 @@ def guacamole_connect_arguments(session: GuacamoleVncSession, names: List[str]) 
         "swap-red-blue": "",
         "cursor": "remote",
         "clipboard-encoding": "UTF-8",
-        "autoretry": "3",
+        "autoretry": _GUACAMOLE_VNC_AUTORETRY,
     }
     values.update(guacamole_vnc_performance_arguments(session.performance_preference))
     resolved: List[str] = []
@@ -521,13 +523,17 @@ async def _open_ready_guacd(
     guacd_port: int,
 ) -> Tuple[Any, Any, str, List[Tuple[str, List[str]]]]:
     last_error: Optional[BaseException] = None
+    deadline = time.monotonic() + max(1.0, _GUACD_READY_DEADLINE_SECONDS)
     for attempt in range(1, _GUACD_READY_ATTEMPTS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         reader: Any = None
         writer: Any = None
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(guacd_host, int(guacd_port)),
-                timeout=_GUACD_CONNECT_TIMEOUT_SECONDS,
+                timeout=max(0.1, min(_GUACD_CONNECT_TIMEOUT_SECONDS, remaining)),
             )
             uuid_value, pending, parser = await _handshake_guacd(reader=reader, writer=writer, session=session)
             pending = await _verify_post_ready_guacd(
@@ -550,10 +556,8 @@ async def _open_ready_guacd(
         except GuacdBackendRetryableError as exc:
             last_error = exc
             await _close_writer(writer)
-            if attempt >= _GUACD_READY_ATTEMPTS:
-                break
             logger.warning(
-                "Guacamole VNC backend retryable error agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s status=%s message=%s",
+                "Guacamole VNC target backend failed agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s status=%s message=%s",
                 session.agent_id,
                 session.session_id or "-",
                 session.participant_id or "-",
@@ -563,7 +567,7 @@ async def _open_ready_guacd(
                 exc.status,
                 exc.message,
             )
-            await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
+            break
         except Exception as exc:
             last_error = exc
             await _close_writer(writer)
@@ -579,8 +583,13 @@ async def _open_ready_guacd(
                 _GUACD_READY_ATTEMPTS,
                 str(exc)[:180],
             )
-            await asyncio.sleep(_GUACD_READY_RETRY_DELAY_SECONDS)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(_GUACD_READY_RETRY_DELAY_SECONDS, remaining))
     if last_error is not None:
+        if isinstance(last_error, GuacdBackendRetryableError):
+            raise last_error
         raise RuntimeError(str(last_error) or "guacd_unavailable") from last_error
     raise RuntimeError("guacd_unavailable")
 

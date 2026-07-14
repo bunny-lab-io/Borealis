@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -16,12 +17,17 @@ import (
 )
 
 const (
-	defaultVNCLiveCredentialWaitSeconds = 30
-	defaultVNCStartReadyWaitSeconds     = 45
-	defaultVNCStopDebounceSeconds       = 12
-	defaultVNCRecoveryReadyWaitSeconds  = 25
-	defaultVNCRestartReadyWaitSeconds   = 25
-	defaultVNCAuthRetryReadyWaitSeconds = 20
+	defaultVNCEstablishDeadlineSeconds       = 30
+	defaultVNCLiveCredentialWaitSeconds      = 30
+	defaultVNCStartReadyWaitSeconds          = 20
+	defaultVNCStopDebounceSeconds            = 12
+	defaultVNCRFBReadyWaitSeconds            = 5
+	defaultVNCRecoveryReadyWaitSeconds       = 25
+	defaultVNCRestartReadyWaitSeconds        = 25
+	defaultVNCAuthRetryCredentialWaitSeconds = 20
+	defaultVNCAuthRetryReadyWaitSeconds      = 20
+	defaultVNCAuthRetryCooldownSeconds       = 30
+	defaultVNCAuthLockoutCooldownSeconds     = 30
 )
 
 type vncRuntime struct {
@@ -54,6 +60,10 @@ type vncCollaborationSession struct {
 	TunnelID              string
 	AllowedIPs            string
 	EngineVirtualIP       string
+	AuthRetryStartedAt    time.Time
+	AuthRetryCompletedAt  time.Time
+	AuthRetryInProgress   bool
+	AuthRetrySettleProbe  bool
 	LastBackendReadyAt    time.Time
 	FirstFrameAt          time.Time
 	DisplayTopology       []map[string]any
@@ -150,14 +160,38 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	if v == nil || v.vpn == nil {
 		return map[string]any{"error": "tunnel_unavailable"}, http.StatusServiceUnavailable
 	}
+	var establishDeadline time.Time
+	ctx, cancel, establishDeadline := vncEstablishContext(ctx)
+	defer cancel()
 	agentID := result.Device.AgentID
 	hostname := result.Device.Hostname
 	serviceMode := serviceModeFromAgentID(agentID)
 	v.cancelPendingStop(agentID, "vnc_establish")
 	log.Printf("vnc_issue_start agent_id=%s hostname=%s service_mode=%s worker_guid=%s", agentID, hostname, serviceMode, result.Route.WorkerGUID)
-	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_establish", vncEnvFloat("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds))
+	credentialReason := "vnc_establish"
+	credentialWait := vncBoundedWaitSeconds("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds, establishDeadline)
+	authRetryReserved := false
+	authRetryReservation := v.reserveAgentAuthRetry(agentID, time.Now().UTC(), "")
+	if authRetryReservation.Needed && !authRetryReservation.Reserved {
+		log.Printf("vnc_auth_retry_wait agent_id=%s hostname=%s retry_after_seconds=%d reason=%s", agentID, hostname, authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
+		return vncAuthRetryInProgressPayload(authRetryReservation.RetryAfterSeconds), http.StatusTooManyRequests
+	}
+	if authRetryReservation.Reserved {
+		authRetryReserved = true
+		credentialReason = "vnc_auth_retry"
+		credentialWait = vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline)
+		log.Printf("vnc_auth_retry_preflight agent_id=%s hostname=%s reason=previous_vnc_auth_failed", agentID, hostname)
+	}
+	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, credentialReason, credentialWait)
 	if credErr != nil || credential.ControllerPassword == "" {
 		log.Printf("vnc_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, credErr)
+		if authRetryReserved {
+			v.finishAgentAuthRetry(agentID, false, "vnc_agent_live_credentials_unavailable")
+			payload := vncAuthRetryInProgressPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
+			payload["error"] = "vnc_auth_retry_settling"
+			payload["detail"] = "Agent VNC credential rotation started but service readiness is still settling."
+			return payload, http.StatusServiceUnavailable
+		}
 		return map[string]any{"error": "vnc_agent_live_credentials_unavailable"}, http.StatusServiceUnavailable
 	}
 	log.Printf("vnc_credential_received agent_id=%s hostname=%s revision=%d displays=%d", agentID, hostname, credential.CredentialRevision, len(credential.DisplayTopology))
@@ -209,31 +243,27 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"remove_wallpaper":    removeWallpaper,
 		"credential_revision": session.CredentialRevision,
 		"reason":              "vnc_establish",
-	}, vncEnvFloat("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds))
+	}, vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
 	log.Printf("vnc_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s", agentID, hostname, startErr == nil && boolFromAny(startResponse["ready"]), startStatus, cleanText(startErr["error"]), cleanText(startErr["detail"]), session.SessionID)
 	if startErr != nil {
 		return startErr, startStatus
 	}
-	fastReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_FAST_READY_WAIT_SECONDS", 0.75), vncEnvFloat("BOREALIS_VNC_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
-	log.Printf("vnc_tcp_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
-	recoveryReady := fastReady
+	fastReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_FAST_READY_WAIT_SECONDS", 1.0, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
+	log.Printf("vnc_rfb_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
+	rfbReady := fastReady
 	if !fastReady {
-		recoveryReady = waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_WAIT_SECONDS", defaultVNCRecoveryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RECOVERY_READY_POLL_INTERVAL_SECONDS", 0.5))
+		rfbReady = waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_READY_WAIT_SECONDS", defaultVNCRFBReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
-	log.Printf("vnc_tcp_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, recoveryReady)
-	if !recoveryReady {
-		log.Printf("vnc_tunnel_force_restart agent_id=%s hostname=%s host=%s port=%d reason=vnc_backend_unreachable", agentID, hostname, host, vncPort)
-		v.vpn.requestAgentStart(ctx, agentID, true, "vnc_backend_unreachable", []int{vncPort})
-		restartReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_RESTART_READY_WAIT_SECONDS", defaultVNCRestartReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_RESTART_READY_POLL_INTERVAL_SECONDS", 0.5))
-		log.Printf("vnc_tcp_probe_restart agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, restartReady)
-		if !restartReady {
-			v.recordError(session.SessionID, "vnc_backend_unreachable")
-			return map[string]any{
-				"error": "vnc_backend_unreachable",
-				"host":  host,
-				"port":  vncPort,
-			}, http.StatusServiceUnavailable
-		}
+	log.Printf("vnc_rfb_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, rfbReady)
+	if !rfbReady {
+		v.recordError(session.SessionID, "vnc_backend_no_rfb_banner")
+		return map[string]any{
+			"error":   "vnc_backend_no_rfb_banner",
+			"detail":  "VNC listener accepted TCP but did not send an RFB banner.",
+			"host":    host,
+			"port":    vncPort,
+			"timeout": defaultVNCRFBReadyWaitSeconds,
+		}, http.StatusServiceUnavailable
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
@@ -245,46 +275,89 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		log.Printf("vnc_token_issue_failed agent_id=%s hostname=%s error=%v", agentID, hostname, issueErr)
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
-	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body)
+	authProbeRequired := boolFromAny(body["auth_probe"])
+	log.Printf("vnc_worker_session_request agent_id=%s hostname=%s session_id=%s auth_probe=%t", agentID, hostname, session.SessionID, authProbeRequired)
+	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, authProbeRequired)
 	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
-	if vncWorkerSessionNeedsAuthRetry(workerErr) {
-		log.Printf("vnc_auth_retry_start agent_id=%s hostname=%s session_id=%s reason=%s", agentID, hostname, session.SessionID, cleanText(workerErr["detail"]))
-		retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", 25))
-		if retryErr == nil && retryCredential.ControllerPassword != "" {
-			credential = retryCredential
-			session, participant, _ = v.ensureSession(agentID, profile.Username, credential, removeWallpaper)
-			retryStartResponse, retryStartStatus, retryStartErr := requestVNCStartReady(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
-				"agent_id":            agentID,
-				"session_id":          session.SessionID,
-				"controller_password": "",
-				"view_only_password":  "",
-				"port":                vncPort,
-				"allowed_ips":         allowedIPs,
-				"remove_wallpaper":    removeWallpaper,
-				"credential_revision": session.CredentialRevision,
-				"reason":              "vnc_auth_retry",
-			}, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds))
-			log.Printf("vnc_auth_retry_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s revision=%d", agentID, hostname, retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), cleanText(retryStartErr["detail"]), session.SessionID, session.CredentialRevision)
-			if retryStartErr == nil {
-				retryReady := waitForTCP(host, vncPort, vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
-				log.Printf("vnc_auth_retry_tcp_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
-				if retryReady {
-					workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body)
-					log.Printf("vnc_auth_retry_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
-				} else {
-					workerStatus = http.StatusServiceUnavailable
-					workerErr = map[string]any{"error": "vnc_backend_unreachable", "detail": "vnc_auth_retry_tcp_probe_failed"}
-				}
-			} else {
-				workerStatus = retryStartStatus
-				workerErr = retryStartErr
-			}
+	logWorkerAuthProbeResult(agentID, hostname, session.SessionID, workerResponse, workerErr)
+	if authRetryReserved {
+		if workerErr == nil {
+			v.finishAgentAuthRetry(agentID, true, "")
 		} else {
-			log.Printf("vnc_auth_retry_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, retryErr)
+			v.finishAgentAuthRetry(agentID, false, vncWorkerSessionAuthRetryReason(workerErr))
+			if vncWorkerSessionNeedsAuthRetry(workerErr) {
+				payload := vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
+				workerErr = payload
+				workerStatus = http.StatusServiceUnavailable
+			}
+		}
+	} else if workerErr == nil && authProbeRequired {
+		v.clearAgentAuthRetryAfterWorkerReady(agentID)
+	}
+	if !authRetryReserved && vncWorkerSessionNeedsAuthRetry(workerErr) {
+		retryReason := vncWorkerSessionAuthRetryReason(workerErr)
+		if vncWorkerSessionIsAuthLockout(workerErr) {
+			v.markAgentAuthRetrySettling(agentID, retryReason)
+			workerErr = vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
+			workerStatus = http.StatusServiceUnavailable
+		} else {
+			authRetryReservation := v.reserveAgentAuthRetry(agentID, time.Now().UTC(), retryReason)
+			if !authRetryReservation.Reserved {
+				if authRetryReservation.RetryAfterSeconds <= 0 {
+					authRetryReservation.RetryAfterSeconds = v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC())
+				}
+				log.Printf("vnc_auth_retry_deferred agent_id=%s hostname=%s retry_after_seconds=%d reason=%s", agentID, hostname, authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
+				workerStatus = http.StatusTooManyRequests
+				workerErr = vncAuthRetryInProgressPayload(authRetryReservation.RetryAfterSeconds)
+			} else {
+				log.Printf("vnc_auth_retry_start agent_id=%s hostname=%s session_id=%s reason=%s", agentID, hostname, session.SessionID, cleanText(workerErr["detail"]))
+				retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline))
+				retrySucceeded := false
+				if retryErr == nil && retryCredential.ControllerPassword != "" {
+					credential = retryCredential
+					session, participant, _ = v.ensureSession(agentID, profile.Username, credential, removeWallpaper)
+					retryStartResponse, retryStartStatus, retryStartErr := requestVNCStartReady(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
+						"agent_id":            agentID,
+						"session_id":          session.SessionID,
+						"controller_password": "",
+						"view_only_password":  "",
+						"port":                vncPort,
+						"allowed_ips":         allowedIPs,
+						"remove_wallpaper":    removeWallpaper,
+						"credential_revision": session.CredentialRevision,
+						"reason":              "vnc_auth_retry",
+					}, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
+					log.Printf("vnc_auth_retry_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s revision=%d", agentID, hostname, retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), cleanText(retryStartErr["detail"]), session.SessionID, session.CredentialRevision)
+					if retryStartErr == nil {
+						retryReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
+						log.Printf("vnc_auth_retry_rfb_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
+						if retryReady {
+							workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, true)
+							log.Printf("vnc_auth_retry_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
+							retrySucceeded = workerErr == nil
+						} else {
+							workerStatus = http.StatusServiceUnavailable
+							workerErr = map[string]any{"error": "vnc_backend_no_rfb_banner", "detail": "vnc_auth_retry_rfb_probe_failed"}
+						}
+					} else {
+						workerStatus = retryStartStatus
+						workerErr = retryStartErr
+					}
+				} else {
+					log.Printf("vnc_auth_retry_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, retryErr)
+				}
+				v.finishAgentAuthRetry(agentID, retrySucceeded, vncWorkerSessionAuthRetryReason(workerErr))
+				if !retrySucceeded && vncWorkerSessionNeedsAuthRetry(workerErr) {
+					workerErr = vncAuthRetrySettlingPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
+					workerStatus = http.StatusServiceUnavailable
+				}
+			}
 		}
 	}
 	if workerErr != nil {
-		v.recordError(session.SessionID, "worker_guacamole_unavailable")
+		if !vncWorkerSessionIsAuthRecoveryPayload(workerErr) {
+			v.recordError(session.SessionID, "worker_guacamole_unavailable")
+		}
 		if workerStatus == 0 {
 			workerStatus = http.StatusServiceUnavailable
 		}
@@ -352,9 +425,9 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	}, http.StatusOK
 }
 
-func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile operatorProfile, result remoteOpsSessionResult, issued issuedRemoteOpsSession, session *vncCollaborationSession, participant *vncParticipant, credential vncCredential, host string, vncPort int, body map[string]any) (map[string]any, int, map[string]any) {
+func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile operatorProfile, result remoteOpsSessionResult, issued issuedRemoteOpsSession, session *vncCollaborationSession, participant *vncParticipant, credential vncCredential, host string, vncPort int, body map[string]any, authProbe bool) (map[string]any, int, map[string]any) {
 	width, height := initialDisplaySize(credential.DisplayVirtualBounds, credential.DisplayTopology)
-	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", map[string]any{
+	payload := map[string]any{
 		"operation_token":        issued.Token,
 		"agent_id":               session.AgentID,
 		"host":                   host,
@@ -368,11 +441,416 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 		"height":                 height,
 		"dpi":                    96,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
-	}, 10*time.Second)
+	}
+	if authProbe {
+		payload["auth_probe"] = true
+	}
+	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", payload, 10*time.Second)
+}
+
+func logWorkerAuthProbeResult(agentID string, hostname string, sessionID string, workerResponse map[string]any, workerErr map[string]any) {
+	payload := workerAuthProbePayload(workerResponse, workerErr)
+	if payload == nil {
+		return
+	}
+	log.Printf(
+		"vnc_worker_auth_probe_result agent_id=%s hostname=%s session_id=%s checked=%t ok=%t reason=%s stage=%s server_version=%s offered_security_types=%s selected_security_type=%s auth_result=%s framebuffer_width=%s framebuffer_height=%s desktop_name_length=%s elapsed_ms=%s socket_error=%s",
+		agentID,
+		hostname,
+		sessionID,
+		boolFromAny(payload["checked"]),
+		boolFromAny(payload["ok"]),
+		cleanText(payload["reason"]),
+		cleanText(payload["stage"]),
+		cleanText(payload["server_version"]),
+		vncAuthProbeOfferedSecurityTypes(payload["offered_security_types"]),
+		cleanText(payload["selected_security_type"]),
+		cleanText(payload["auth_result"]),
+		cleanText(payload["framebuffer_width"]),
+		cleanText(payload["framebuffer_height"]),
+		cleanText(payload["desktop_name_length"]),
+		cleanText(payload["elapsed_ms"]),
+		cleanText(payload["socket_error"]),
+	)
+}
+
+func workerAuthProbePayload(workerResponse map[string]any, workerErr map[string]any) map[string]any {
+	if payload, ok := workerResponse["auth_probe"].(map[string]any); ok {
+		return payload
+	}
+	if payload, ok := workerErr["auth_probe"].(map[string]any); ok {
+		return payload
+	}
+	return nil
+}
+
+func vncAuthProbeOfferedSecurityTypes(value any) string {
+	switch typed := value.(type) {
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := cleanText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ",")
+		}
+	case []int:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, strconv.Itoa(item))
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ",")
+		}
+	case string:
+		return cleanText(typed)
+	}
+	return "-"
 }
 
 func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {
-	return strings.EqualFold(cleanText(workerErr["error"]), "vnc_auth_failed")
+	return vncErrorNeedsAuthRetry(cleanText(workerErr["error"]))
+}
+
+func vncWorkerSessionAuthRetryReason(workerErr map[string]any) string {
+	if workerErr == nil {
+		return ""
+	}
+	if vncWorkerSessionIsAuthLockout(workerErr) {
+		return firstText(cleanText(workerErr["detail"]), cleanText(workerErr["error"]), "too_many_auth_failures")
+	}
+	return firstText(cleanText(workerErr["error"]), cleanText(workerErr["detail"]), "vnc_auth_failed")
+}
+
+func vncWorkerSessionIsAuthRecoveryPayload(workerErr map[string]any) bool {
+	if workerErr == nil {
+		return false
+	}
+	errorCode := cleanText(workerErr["error"])
+	return errorCode == "vnc_auth_retry_in_progress" ||
+		errorCode == "vnc_auth_retry_settling" ||
+		vncWorkerSessionNeedsAuthRetry(workerErr)
+}
+
+func vncWorkerSessionIsAuthLockout(workerErr map[string]any) bool {
+	if workerErr == nil {
+		return false
+	}
+	return vncReasonIsAuthLockout(firstText(cleanText(workerErr["detail"]), cleanText(workerErr["error"])))
+}
+
+func vncReasonIsAuthLockout(reason string) bool {
+	text := strings.ToLower(cleanText(reason))
+	return strings.Contains(text, "too_many_auth_failures") ||
+		strings.Contains(text, "too many") ||
+		strings.Contains(text, "to many")
+}
+
+func vncErrorNeedsAuthRetry(reason string) bool {
+	normalized := strings.ToLower(cleanText(reason))
+	if normalized == "" {
+		return false
+	}
+	return normalized == "vnc_auth_failed" ||
+		strings.Contains(normalized, "too_many_auth_failures") ||
+		strings.Contains(normalized, "auth_failed") ||
+		strings.Contains(normalized, "auth_rejected")
+}
+
+type vncAuthRetryReservation struct {
+	Needed            bool
+	Reserved          bool
+	RetryAfterSeconds int
+	Reason            string
+}
+
+func (v *vncRuntime) reserveAgentAuthRetry(agentID string, now time.Time, reason string) vncAuthRetryReservation {
+	if v == nil {
+		return vncAuthRetryReservation{}
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return vncAuthRetryReservation{}
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	reason = cleanText(reason)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	sessionID := v.byAgent[agentID]
+	if sessionID == "" {
+		return vncAuthRetryReservation{}
+	}
+	session := v.byID[sessionID]
+	if session == nil {
+		return vncAuthRetryReservation{}
+	}
+	reasonNeedsRetry := vncErrorNeedsAuthRetry(reason)
+	sessionNeedsRetry := vncErrorNeedsAuthRetry(session.LastError)
+	cooldown := vncAuthRetryCooldownForReason(firstText(reason, session.LastError))
+	if !session.AuthRetryStartedAt.IsZero() {
+		elapsed := now.Sub(session.AuthRetryStartedAt)
+		if elapsed < cooldown && (session.AuthRetryInProgress || session.AuthRetrySettleProbe || sessionNeedsRetry || reasonNeedsRetry) {
+			if reasonNeedsRetry {
+				session.LastError = reason
+				session.AuthRetrySettleProbe = true
+			}
+			session.UpdatedAt = now
+			return vncAuthRetryReservation{
+				Needed:            true,
+				Reserved:          false,
+				RetryAfterSeconds: retryAfterSeconds(cooldown - elapsed),
+				Reason:            firstText(reason, session.LastError, "vnc_auth_retry_in_progress"),
+			}
+		}
+	}
+	if session.AuthRetrySettleProbe && !reasonNeedsRetry {
+		return vncAuthRetryReservation{}
+	}
+	if !session.AuthRetryInProgress && !sessionNeedsRetry && !reasonNeedsRetry {
+		return vncAuthRetryReservation{}
+	}
+	if reasonNeedsRetry {
+		session.LastError = reason
+	}
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = time.Time{}
+	session.AuthRetryInProgress = true
+	session.AuthRetrySettleProbe = false
+	session.UpdatedAt = now
+	return vncAuthRetryReservation{
+		Needed:            true,
+		Reserved:          true,
+		RetryAfterSeconds: 0,
+		Reason:            firstText(reason, session.LastError, "vnc_auth_failed"),
+	}
+}
+
+func (v *vncRuntime) finishAgentAuthRetry(agentID string, success bool, reason string) {
+	if v == nil {
+		return
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[v.byAgent[agentID]]
+	if session == nil {
+		return
+	}
+	session.AuthRetryInProgress = false
+	session.AuthRetryCompletedAt = now
+	session.AuthRetrySettleProbe = !success
+	session.UpdatedAt = now
+	if success {
+		session.LastError = ""
+		return
+	}
+	session.LastError = firstText(cleanText(reason), "vnc_auth_retry_settling")
+}
+
+func (v *vncRuntime) markAgentAuthRetrySettling(agentID string, reason string) {
+	if v == nil {
+		return
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return
+	}
+	now := time.Now().UTC()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[v.byAgent[agentID]]
+	if session == nil {
+		return
+	}
+	session.AuthRetryStartedAt = now
+	session.AuthRetryCompletedAt = now
+	session.AuthRetryInProgress = false
+	session.AuthRetrySettleProbe = true
+	session.LastError = firstText(cleanText(reason), "vnc_auth_retry_settling")
+	session.UpdatedAt = now
+}
+
+func (v *vncRuntime) agentAuthRetryAfterSeconds(agentID string, now time.Time) int {
+	if v == nil {
+		return retryAfterSeconds(vncAuthRetryCooldown())
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return retryAfterSeconds(vncAuthRetryCooldown())
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[v.byAgent[agentID]]
+	cooldown := vncAuthRetryCooldown()
+	if session != nil {
+		cooldown = vncAuthRetryCooldownForReason(session.LastError)
+	}
+	if session == nil || session.AuthRetryStartedAt.IsZero() {
+		return retryAfterSeconds(cooldown)
+	}
+	remaining := cooldown - now.Sub(session.AuthRetryStartedAt)
+	return retryAfterSeconds(remaining)
+}
+
+func vncAuthRetryInProgressPayload(retryAfterSeconds int) map[string]any {
+	return map[string]any{
+		"error":               "vnc_auth_retry_in_progress",
+		"detail":              "Agent VNC credential recovery is already in progress.",
+		"retry_after_seconds": retryAfterSeconds,
+	}
+}
+
+func vncAuthRetrySettlingPayload(retryAfterSeconds int) map[string]any {
+	payload := vncAuthRetryInProgressPayload(retryAfterSeconds)
+	payload["error"] = "vnc_auth_retry_settling"
+	payload["detail"] = "Agent VNC credential recovery started but UltraVNC auth is still settling."
+	return payload
+}
+
+func clearAgentAuthRetryLocked(session *vncCollaborationSession) {
+	if session == nil {
+		return
+	}
+	session.AuthRetryStartedAt = time.Time{}
+	session.AuthRetryCompletedAt = time.Time{}
+	session.AuthRetryInProgress = false
+	session.AuthRetrySettleProbe = false
+}
+
+func (v *vncRuntime) agentAuthProbeRequired(agentID string) bool {
+	if v == nil {
+		return false
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return false
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[v.byAgent[agentID]]
+	if session == nil {
+		return false
+	}
+	return session.AuthRetryInProgress || session.AuthRetrySettleProbe || vncErrorNeedsAuthRetry(session.LastError)
+}
+
+func (v *vncRuntime) clearAgentAuthRetryAfterWorkerReady(agentID string) {
+	if v == nil {
+		return
+	}
+	agentID = cleanText(agentID)
+	if agentID == "" {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	session := v.byID[v.byAgent[agentID]]
+	if session == nil {
+		return
+	}
+	clearAgentAuthRetryLocked(session)
+	session.LastError = ""
+	session.UpdatedAt = time.Now().UTC()
+}
+
+func vncAuthRetryCooldown() time.Duration {
+	seconds := vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_COOLDOWN_SECONDS", defaultVNCAuthRetryCooldownSeconds)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncAuthLockoutCooldown() time.Duration {
+	seconds := vncEnvFloat("BOREALIS_VNC_AUTH_LOCKOUT_COOLDOWN_SECONDS", defaultVNCAuthLockoutCooldownSeconds)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncAuthRetryCooldownForReason(reason string) time.Duration {
+	cooldown := vncAuthRetryCooldown()
+	if vncReasonIsAuthLockout(reason) {
+		if lockoutCooldown := vncAuthLockoutCooldown(); lockoutCooldown > cooldown {
+			return lockoutCooldown
+		}
+	}
+	return cooldown
+}
+
+func retryAfterSeconds(remaining time.Duration) int {
+	if remaining <= 0 {
+		return 1
+	}
+	seconds := int(remaining / time.Second)
+	if remaining%time.Second != 0 {
+		seconds++
+	}
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
+}
+
+func vncEstablishContext(parent context.Context) (context.Context, context.CancelFunc, time.Time) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	deadline := time.Now().Add(vncEstablishTimeout())
+	if parentDeadline, ok := parent.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	ctx, cancel := context.WithDeadline(parent, deadline)
+	return ctx, cancel, deadline
+}
+
+func vncEstablishTimeout() time.Duration {
+	seconds := vncEnvFloat("BOREALIS_VNC_ESTABLISH_DEADLINE_SECONDS", defaultVNCEstablishDeadlineSeconds)
+	if seconds < 1 {
+		seconds = 1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	return time.Duration(seconds * float64(time.Second))
+}
+
+func vncBoundedWaitSeconds(name string, fallback float64, deadline time.Time) float64 {
+	seconds := vncEnvFloat(name, fallback)
+	if seconds < 0.1 {
+		seconds = 0.1
+	}
+	if seconds > defaultVNCEstablishDeadlineSeconds {
+		seconds = defaultVNCEstablishDeadlineSeconds
+	}
+	if !deadline.IsZero() {
+		remaining := time.Until(deadline).Seconds()
+		if remaining < 0.1 {
+			return 0.1
+		}
+		if seconds > remaining {
+			seconds = remaining
+		}
+	}
+	return seconds
 }
 
 func (v *vncRuntime) issueRemoteDesktopToken(profile operatorProfile, result remoteOpsSessionResult) (issuedRemoteOpsSession, error) {
@@ -899,6 +1377,7 @@ func (v *vncRuntime) recordProxyFirstFrame(sessionID string, participantID strin
 		session.FirstFrameAt = now
 	}
 	session.LastError = ""
+	clearAgentAuthRetryLocked(session)
 	session.UpdatedAt = now
 	if participant := session.Participants[participantID]; participant != nil {
 		participant.LastActivityAt = now
@@ -924,6 +1403,9 @@ func (v *vncRuntime) recordProxyClose(sessionID string, participantID string, re
 	}
 	if cleanText(reason) != "" {
 		session.LastError = cleanText(reason)
+		if vncErrorNeedsAuthRetry(session.LastError) {
+			session.AuthRetrySettleProbe = false
+		}
 	}
 }
 
@@ -936,10 +1418,27 @@ func (v *vncRuntime) cleanupStaleLocked() {
 			}
 		}
 		if len(session.Participants) == 0 {
+			if vncSessionRetainForRecovery(session, now) {
+				session.UpdatedAt = now
+				continue
+			}
 			delete(v.byID, sessionID)
 			delete(v.byAgent, session.AgentID)
 		}
 	}
+}
+
+func vncSessionRetainForRecovery(session *vncCollaborationSession, now time.Time) bool {
+	if session == nil {
+		return false
+	}
+	if session.AuthRetryInProgress || session.AuthRetrySettleProbe || vncErrorNeedsAuthRetry(session.LastError) {
+		if session.AuthRetryStartedAt.IsZero() {
+			return true
+		}
+		return now.Sub(session.AuthRetryStartedAt) <= vncAuthRetryCooldownForReason(session.LastError)+90*time.Second
+	}
+	return false
 }
 
 func (v *vncRuntime) sessionSnapshot(session *vncCollaborationSession, currentOperator string) map[string]any {
@@ -981,6 +1480,10 @@ func (v *vncRuntime) sessionSnapshot(session *vncCollaborationSession, currentOp
 		"tunnel_id":                   session.TunnelID,
 		"allowed_ips":                 session.AllowedIPs,
 		"engine_virtual_ip":           session.EngineVirtualIP,
+		"auth_retry_in_progress":      session.AuthRetryInProgress,
+		"auth_retry_settle_probe":     session.AuthRetrySettleProbe,
+		"auth_retry_started_at":       unixOrNil(session.AuthRetryStartedAt),
+		"auth_retry_completed_at":     unixOrNil(session.AuthRetryCompletedAt),
 		"last_backend_ready_at":       float64(session.LastBackendReadyAt.Unix()),
 		"first_frame_at":              unixOrNil(session.FirstFrameAt),
 		"participants":                participants,
@@ -1130,6 +1633,47 @@ func waitForTCP(host string, port int, timeoutSeconds float64, pollSeconds float
 		time.Sleep(sleep)
 	}
 	return false
+}
+
+func waitForRFBServer(host string, port int, timeoutSeconds float64, pollSeconds float64) bool {
+	if host == "" || port <= 0 || timeoutSeconds <= 0 {
+		return false
+	}
+	deadline := time.Now().Add(time.Duration(timeoutSeconds * float64(time.Second)))
+	for time.Now().Before(deadline) {
+		if probeRFBServer(host, port, 750*time.Millisecond) {
+			return true
+		}
+		sleep := time.Duration(pollSeconds * float64(time.Second))
+		if sleep <= 0 {
+			sleep = 250 * time.Millisecond
+		}
+		if remaining := time.Until(deadline); sleep > remaining {
+			sleep = remaining
+		}
+		time.Sleep(sleep)
+	}
+	return false
+}
+
+func probeRFBServer(host string, port int, timeout time.Duration) bool {
+	if host == "" || port <= 0 {
+		return false
+	}
+	if timeout <= 0 {
+		timeout = 750 * time.Millisecond
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), timeout)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	banner := make([]byte, 12)
+	if _, err := io.ReadFull(conn, banner); err != nil {
+		return false
+	}
+	return strings.HasPrefix(string(banner), "RFB ")
 }
 
 func initialDisplaySize(bounds map[string]any, topology []map[string]any) (int, int) {
