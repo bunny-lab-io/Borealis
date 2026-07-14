@@ -37,7 +37,7 @@ Default Compose policy:
 - `docker-proxy` also gets tmpfs `/run` for HAProxy pid state under a read-only root filesystem.
 - `traefik-edge` runs as UID `0` with the Borealis runtime group because Docker does not grant effective low-port bind capability to a non-root user under host networking. It drops all default capabilities and adds only `NET_BIND_SERVICE` for ports `80` and `443`.
 - `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It runs as UID `0` with the Borealis runtime group so dropped DAC capabilities do not block its service-local control socket. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, a writable service-local run directory, and resource limits.
-- `remote-desktop-guacd` is a compatibility exception tracked by [Technical Debt #361](https://github.com/bunny-lab-io/Borealis/issues/361) while Remote Desktop hardening parity is being restored. It uses the upstream `guacamole/guacd` runtime defaults, stays bound to `127.0.0.1:4822`, mounts only its service log directory, and has no Docker socket access. Reapply guacd hardening one control at a time only after a deploy proves browser Remote Desktop connects within the 30-second operator budget.
+- `remote-desktop-guacd` is a compatibility exception tracked by [Technical Debt #361](https://github.com/bunny-lab-io/Borealis/issues/361) while Remote Desktop hardening parity is being restored. Its entrypoint starts a local BusyBox syslog sink for LibVNCClient diagnostics, then drops the guacd process to the upstream `guacd` user. It stays bound to `127.0.0.1:4822`, mounts only its service log directory, and has no Docker socket access. Reapply guacd hardening one control at a time only after a deploy proves browser Remote Desktop connects within the 30-second operator budget.
 - `docker-proxy` has read-only Docker socket access. `site-worker-orchestrator` has write Docker socket access. No other static service mounts the Docker socket.
 
 Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, Traefik ACME storage, and PostgreSQL database state.
@@ -138,6 +138,13 @@ Traefik static config renders to `Engine/Services/traefik-edge/config/traefik.ym
 `remote-desktop-guacd`:
 ```text
 Engine/Services/remote-desktop-guacd/logs -> /opt/borealis/logs
+```
+
+Guacd logs:
+
+```text
+Engine/Services/remote-desktop-guacd/logs/guacd.log
+Engine/Services/remote-desktop-guacd/logs/guacd-syslog.log
 ```
 
 `wireguard-tunnel`:

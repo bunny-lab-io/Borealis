@@ -64,7 +64,7 @@ from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     GuacamoleSessionRegistry,
     normalize_guacamole_performance_preference,
 )
-from Data.Engine.services.RemoteDesktop.rfb_probe import wait_for_vnc_auth_ready
+from Data.Engine.services.RemoteDesktop.rfb_probe import vnc_auth_probe_payload, wait_for_vnc_auth_ready
 from Data.Engine.services.RemoteDesktop.vnc_proxy import VncProxyServer
 from Data.Engine.services.job_scheduler.security import INTERNAL_TOKEN_HEADER, internal_token, validate_internal_token
 
@@ -957,6 +957,15 @@ class SiteWorkerSocketRuntime:
                 data.get("auth_probe"),
                 _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),
             )
+            self._log(
+                "remote_desktop_vnc_auth_probe_start agent_id={0} session_id={1} host={2} port={3} enabled={4}".format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(auth_probe_enabled),
+                )
+            )
             auth_probe = wait_for_vnc_auth_ready(
                 host,
                 port,
@@ -964,6 +973,37 @@ class SiteWorkerSocketRuntime:
                 timeout_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_WAIT_SECONDS", 5.0, 0.25),
                 poll_interval_seconds=_env_float("BOREALIS_VNC_AUTH_PROBE_POLL_INTERVAL_SECONDS", 0.5, 0.1),
                 enabled=auth_probe_enabled,
+            )
+            auth_probe_detail = vnc_auth_probe_payload(auth_probe)
+            offered_security_types = ".".join(str(item) for item in auth_probe_detail.get("offered_security_types") or [])
+            self._log(
+                (
+                    "remote_desktop_vnc_auth_probe_result agent_id={0} session_id={1} host={2} port={3} "
+                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
+                    "offered_security_types={10} selected_security_type={11} auth_result={12} "
+                    "framebuffer_width={13} framebuffer_height={14} desktop_name_length={15} "
+                    "elapsed_ms={16} socket_error={17}"
+                ).format(
+                    agent_id,
+                    session_id,
+                    host,
+                    port,
+                    bool(auth_probe_enabled),
+                    auth_probe.checked,
+                    auth_probe.ok,
+                    auth_probe.reason,
+                    auth_probe.stage,
+                    auth_probe.server_version,
+                    offered_security_types or "-",
+                    auth_probe.selected_security_type,
+                    auth_probe.auth_result if auth_probe.auth_result is not None else "",
+                    auth_probe.framebuffer_width,
+                    auth_probe.framebuffer_height,
+                    auth_probe.desktop_name_length,
+                    auth_probe.elapsed_ms,
+                    auth_probe.socket_error,
+                ),
+                level="INFO" if auth_probe.ok else "WARNING",
             )
             if auth_probe.checked and not auth_probe.ok:
                 error_code = _vnc_auth_probe_error(auth_probe.reason)
@@ -983,11 +1023,7 @@ class SiteWorkerSocketRuntime:
                         {
                             "error": error_code,
                             "detail": auth_probe.reason,
-                            "auth_probe": {
-                                "checked": auth_probe.checked,
-                                "ok": auth_probe.ok,
-                                "reason": auth_probe.reason,
-                            },
+                            "auth_probe": auth_probe_detail,
                         }
                     ),
                     503,
@@ -1049,11 +1085,7 @@ class SiteWorkerSocketRuntime:
                     {
                         "status": "ok",
                         "token": guacamole_session.token,
-                        "auth_probe": {
-                            "checked": auth_probe.checked,
-                            "ok": auth_probe.ok,
-                            "reason": auth_probe.reason,
-                        },
+                        "auth_probe": auth_probe_detail,
                     }
                 ),
                 200,

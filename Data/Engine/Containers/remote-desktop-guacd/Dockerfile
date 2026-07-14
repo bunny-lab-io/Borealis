@@ -5,4 +5,6 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/borealis-guacd-entrypoint
 
 EXPOSE 4822
 
-CMD ["borealis-guacd-entrypoint"]
+USER root
+ENTRYPOINT ["/usr/local/bin/borealis-guacd-entrypoint"]
+CMD []

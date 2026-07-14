@@ -276,8 +276,10 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
 	authProbeRequired := boolFromAny(body["auth_probe"])
+	log.Printf("vnc_worker_session_request agent_id=%s hostname=%s session_id=%s auth_probe=%t", agentID, hostname, session.SessionID, authProbeRequired)
 	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, authProbeRequired)
 	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
+	logWorkerAuthProbeResult(agentID, hostname, session.SessionID, workerResponse, workerErr)
 	if authRetryReserved {
 		if workerErr == nil {
 			v.finishAgentAuthRetry(agentID, true, "")
@@ -444,6 +446,68 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 		payload["auth_probe"] = true
 	}
 	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", payload, 10*time.Second)
+}
+
+func logWorkerAuthProbeResult(agentID string, hostname string, sessionID string, workerResponse map[string]any, workerErr map[string]any) {
+	payload := workerAuthProbePayload(workerResponse, workerErr)
+	if payload == nil {
+		return
+	}
+	log.Printf(
+		"vnc_worker_auth_probe_result agent_id=%s hostname=%s session_id=%s checked=%t ok=%t reason=%s stage=%s server_version=%s offered_security_types=%s selected_security_type=%s auth_result=%s framebuffer_width=%s framebuffer_height=%s desktop_name_length=%s elapsed_ms=%s socket_error=%s",
+		agentID,
+		hostname,
+		sessionID,
+		boolFromAny(payload["checked"]),
+		boolFromAny(payload["ok"]),
+		cleanText(payload["reason"]),
+		cleanText(payload["stage"]),
+		cleanText(payload["server_version"]),
+		vncAuthProbeOfferedSecurityTypes(payload["offered_security_types"]),
+		cleanText(payload["selected_security_type"]),
+		cleanText(payload["auth_result"]),
+		cleanText(payload["framebuffer_width"]),
+		cleanText(payload["framebuffer_height"]),
+		cleanText(payload["desktop_name_length"]),
+		cleanText(payload["elapsed_ms"]),
+		cleanText(payload["socket_error"]),
+	)
+}
+
+func workerAuthProbePayload(workerResponse map[string]any, workerErr map[string]any) map[string]any {
+	if payload, ok := workerResponse["auth_probe"].(map[string]any); ok {
+		return payload
+	}
+	if payload, ok := workerErr["auth_probe"].(map[string]any); ok {
+		return payload
+	}
+	return nil
+}
+
+func vncAuthProbeOfferedSecurityTypes(value any) string {
+	switch typed := value.(type) {
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := cleanText(item); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ",")
+		}
+	case []int:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, strconv.Itoa(item))
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, ",")
+		}
+	case string:
+		return cleanText(typed)
+	}
+	return "-"
 }
 
 func vncWorkerSessionNeedsAuthRetry(workerErr map[string]any) bool {

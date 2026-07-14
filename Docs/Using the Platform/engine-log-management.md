@@ -54,6 +54,6 @@ Use `Delete File` for one file. Use domain/family deletion only when you intenti
 
     - Primary API logs live under `Engine/Services/api-backend/logs/`.
     - Traefik logs live under `Engine/Services/traefik-edge/logs/`.
-    - guacd logs live under `Engine/Services/remote-desktop-guacd/logs/`.
+    - guacd logs live under `Engine/Services/remote-desktop-guacd/logs/`. Use `guacd.log` for daemon stdout/stderr and `guacd-syslog.log` for LibVNCClient/syslog diagnostics.
     - WireGuard tunnel logs live under `Engine/Services/wireguard-tunnel/logs/` and `Engine/Services/api-backend/logs/VPN_Tunnel/`.
     - Retention overrides live in `Engine/Services/api-backend/logs/retention_policy.json`.

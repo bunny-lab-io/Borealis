@@ -720,7 +720,11 @@ def test_site_worker_remote_desktop_honors_request_scoped_vnc_auth_probe(tmp_pat
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert payload["auth_probe"] == {"checked": True, "ok": True, "reason": "server_init_ok"}
+    assert {key: payload["auth_probe"][key] for key in ("checked", "ok", "reason")} == {
+        "checked": True,
+        "ok": True,
+        "reason": "server_init_ok",
+    }
     assert calls == [
         {
             "timeout_seconds": 5.0,
@@ -868,7 +872,11 @@ def test_site_worker_remote_desktop_rejects_failed_vnc_auth_probe(tmp_path: Path
     assert response.status_code == 503
     payload = response.get_json()
     assert payload["error"] == "vnc_auth_failed"
-    assert payload["auth_probe"] == {"checked": True, "ok": False, "reason": "auth_failed"}
+    assert {key: payload["auth_probe"][key] for key in ("checked", "ok", "reason")} == {
+        "checked": True,
+        "ok": False,
+        "reason": "auth_failed",
+    }
 
 
 def test_site_worker_remote_desktop_rejects_wrong_worker_token(tmp_path: Path, monkeypatch) -> None:
