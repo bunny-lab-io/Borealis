@@ -322,6 +322,15 @@ const WINDOWS_SYSTEM_EXECUTABLES = new Set([
   "cscript.exe",
   "regsvr32.exe",
 ]);
+const INSTALL_DATE_SOURCE_LABELS = {
+  registry_install_date: "Registry InstallDate",
+  msi_product_info: "MSI install metadata",
+  uninstall_key_last_write_time: "Uninstall registry key timestamp",
+  install_location_creation_time: "Install folder creation time",
+  display_icon_file_creation_time: "Display icon file creation time",
+  quiet_uninstall_command_file_creation_time: "Quiet uninstall command file creation time",
+  uninstall_command_file_creation_time: "Uninstall command file creation time",
+};
 function getSoftwareMetadata(row = {}) {
   const metadata =
     row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
@@ -975,8 +984,12 @@ function formatEstimatedSizeKb(sizeKb) {
 }
 
 function getSoftwareInstallDateRaw(row = {}) {
+  return getSoftwareInstallDateDetails(row).value;
+}
+
+function getSoftwareInstallDateDetails(row = {}) {
   const metadata = getSoftwareMetadata(row);
-  return [
+  const value = [
     metadata?.install_date,
     metadata?.installed_on,
     metadata?.installed_at,
@@ -985,6 +998,11 @@ function getSoftwareInstallDateRaw(row = {}) {
     row?.installed_on,
     row?.installed_at,
   ].find((value) => value != null && String(value).trim() !== "");
+  return {
+    value,
+    source: String(metadata?.install_date_source || row?.install_date_source || "").trim(),
+    confidence: String(metadata?.install_date_confidence || row?.install_date_confidence || "").trim().toLowerCase(),
+  };
 }
 
 function parseSoftwareInstallDateValue(value) {
@@ -1038,6 +1056,38 @@ export function formatSoftwareInstallDateValue(value) {
 
 export function formatSoftwareInstallDate(row = {}) {
   return formatSoftwareInstallDateValue(getSoftwareInstallDateRaw(row));
+}
+
+export function formatSoftwareInstallDateDetail(row = {}) {
+  const details = getSoftwareInstallDateDetails(row);
+  const formattedDate = formatSoftwareInstallDateValue(details.value);
+  if (formattedDate === "—") return "Install date unavailable.";
+  const sourceLabel = INSTALL_DATE_SOURCE_LABELS[details.source] || details.source;
+  const confidenceLabel = details.confidence === "estimated" ? "Estimated" : details.confidence === "exact" ? "Exact" : "";
+  return [confidenceLabel, sourceLabel].filter(Boolean).length
+    ? `${formattedDate} • ${[confidenceLabel, sourceLabel].filter(Boolean).join(" from ")}`
+    : formattedDate;
+}
+
+function SoftwareInstallDateCell({ row = {} }) {
+  const label = formatSoftwareInstallDate(row);
+  if (label === "—") {
+    return <Box component="span">—</Box>;
+  }
+  return (
+    <Tooltip title={formatSoftwareInstallDateDetail(row)} placement="top">
+      <Box
+        component="span"
+        sx={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </Box>
+    </Tooltip>
+  );
 }
 
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
@@ -1992,6 +2042,7 @@ export default function InstalledSoftwareTab({
         valueGetter: (params) => formatSoftwareInstallDate(params.data),
         comparator: (_left, _right, nodeA, nodeB) =>
           getSoftwareInstallDateSortValue(nodeA?.data) - getSoftwareInstallDateSortValue(nodeB?.data),
+        cellRenderer: (params) => <SoftwareInstallDateCell row={params.data} />,
       },
       {
         field: "source",

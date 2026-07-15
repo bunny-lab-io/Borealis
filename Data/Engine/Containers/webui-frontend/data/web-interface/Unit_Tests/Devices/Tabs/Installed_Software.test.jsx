@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSoftwareInstallDate,
+  formatSoftwareInstallDateDetail,
   formatSoftwareInstallDateValue,
   getSoftwareInstallDateSortValue,
 } from "@/Devices/Tabs/Installed_Software.jsx";
@@ -29,5 +30,26 @@ describe("Installed Software helpers", () => {
   it("formats unsupported install date values as unknown", () => {
     expect(formatSoftwareInstallDateValue("not-a-date")).toBe("—");
     expect(formatSoftwareInstallDate({ metadata: { install_date: "20241301" } })).toBe("—");
+  });
+
+  it("describes exact and estimated install date provenance", () => {
+    expect(
+      formatSoftwareInstallDateDetail({
+        metadata: {
+          install_date: "20240115",
+          install_date_source: "registry_install_date",
+          install_date_confidence: "exact",
+        },
+      })
+    ).toBe("01/15/2024 • Exact from Registry InstallDate");
+    expect(
+      formatSoftwareInstallDateDetail({
+        metadata: {
+          install_date: "20240116",
+          install_date_source: "install_location_creation_time",
+          install_date_confidence: "estimated",
+        },
+      })
+    ).toBe("01/16/2024 • Estimated from Install folder creation time");
   });
 });

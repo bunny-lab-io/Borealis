@@ -846,6 +846,23 @@ func TestSoftwareAuditHandlerReturnsRows(t *testing.T) {
 	}
 }
 
+func TestSoftwareAuditMetadataKeepsInstallDateProvenance(t *testing.T) {
+	metadata := softwareAuditMetadata(map[string]any{
+		"install_date":            "20240115",
+		"install_date_source":     "uninstall_key_last_write_time",
+		"install_date_confidence": "estimated",
+		"ignored":                 "drop",
+	})
+	if metadata["install_date"] != "20240115" ||
+		metadata["install_date_source"] != "uninstall_key_last_write_time" ||
+		metadata["install_date_confidence"] != "estimated" {
+		t.Fatalf("install date metadata missing: %#v", metadata)
+	}
+	if _, ok := metadata["ignored"]; ok {
+		t.Fatalf("unexpected metadata survived: %#v", metadata)
+	}
+}
+
 func TestNormalizeDeviceServicePayloadMatchesPendingShape(t *testing.T) {
 	raw := sqlNullString(`{"reported_at":100,"services":[{"name":"Spooler","displayName":"Print Spooler","status":"active","captured_at":101},{"service_name":"Borealis Agent","state":"stop-pending","pending_action":"restart","pending_requested_at":102,"pending_requested_by":"operator"}]}`)
 	services, reportedAt := normalizeDeviceServicePayload(raw)

@@ -12,7 +12,7 @@ Software Management helps operators audit installed applications, refresh softwa
 - Open `Alerting & Reporting > Software Audit` for fleet-level software review.
 - Open a device and select `Installed Software` for device-level software inventory.
 - Use filters and sorting to find package name, version, source, publisher, or installation metadata.
-- Device-level `Installed Software` shows `Install Date` when endpoint inventory includes that metadata.
+- Device-level `Installed Software` shows `Install Date` when endpoint inventory includes that metadata. Some dates are exact, and some are estimated from endpoint timestamps when installer metadata is missing.
 
 ## Refresh Inventory
 
@@ -69,7 +69,9 @@ These hotload immediately in the Engine. Commit file-backed rules later when the
     ### Runtime behavior
 
     - Agent publishes raw software blobs for device detail display.
-    - Windows Agent software inventory stores registry `InstallDate` as `metadata.install_date`; the device-level Installed Software UI formats that value into the `Install Date` column.
+    - Windows Agent software inventory stores install dates as `metadata.install_date` with `metadata.install_date_source` and `metadata.install_date_confidence`.
+    - Windows install-date collection prefers exact installer metadata, then falls back to MSI product info, uninstall registry key LastWriteTime, install folder creation time, display icon file creation time, quiet uninstall command file creation time, and uninstall command file creation time.
+    - The device-level Installed Software UI formats `metadata.install_date` into the `Install Date` column and exposes source/confidence in a tooltip.
     - Engine normalizes rows into `device_software_inventory` for reliable filtering.
     - Uninstall actions run through signed quick-job execution and write Activity History.
     - Override and blocklist JSON files live under `Data/Engine/Containers/api-backend/data/services/API/devices/`.
