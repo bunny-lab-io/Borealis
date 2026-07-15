@@ -7,6 +7,7 @@ import {
   DescriptionCellRenderer,
   FieldNumberCellRenderer,
   RESERVED_METADATA_TOOLTIP,
+  getReservedAssemblyName,
   getReservedAssemblyPath,
 } from "@/Admin/Metadata_Field_List.jsx";
 
@@ -30,6 +31,7 @@ describe("MetadataFieldList reserved fields", () => {
     expect(getReservedAssemblyPath(reservedField)).toBe(
       "/assemblies/scripts/628f6686-c7c4-477d-bf9a-13c73d8246ba"
     );
+    expect(getReservedAssemblyName(reservedField)).toBe("Detect Server Roles [WIN]");
   });
 
   it("renders reserved field number as assembly link", () => {

@@ -81,14 +81,19 @@ export function getReservedAssemblyPath(row) {
   return APP_PATHS.assemblyScript(guid);
 }
 
+export function getReservedAssemblyName(row) {
+  const assembly = row?.linked_assembly && typeof row.linked_assembly === "object" ? row.linked_assembly : {};
+  return String(row?.linked_assembly_name || row?.assembly_name || assembly.name || "").trim();
+}
+
 export function FieldNumberCellRenderer(props) {
   const { data, value } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
   const assemblyPath = isReservedMetadataField(data) ? getReservedAssemblyPath(data) : "";
   if (!assemblyPath) return safeValue;
-  const tooltip = String(data?.reserved_tooltip || RESERVED_METADATA_TOOLTIP);
+  const tooltip = getReservedAssemblyName(data) || safeValue;
   return (
-    <Tooltip title={tooltip} arrow placement="top-start">
+    <Tooltip title={tooltip} arrow placement="top-start" describeChild>
       <Link
         component={RouterLink}
         to={assemblyPath}
