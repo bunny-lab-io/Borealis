@@ -88,6 +88,10 @@ func (s *postgresOperatorStore) clearAllScheduledJobRuns(ctx context.Context, jo
 		return 0, err
 	}
 	defer rollbackQuietly(tx)
+	activityIDs, err := scheduledActivityIDsForRunIDs(ctx, tx, runIDs)
+	if err != nil {
+		return 0, err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)", pq.Array(runIDs)); err != nil {
 		return 0, err
 	}
@@ -106,6 +110,9 @@ func (s *postgresOperatorStore) clearAllScheduledJobRuns(ctx context.Context, jo
 	}
 	cleared, err := result.RowsAffected()
 	if err != nil {
+		return 0, err
+	}
+	if _, err := deleteScheduledActivityHistoryRows(ctx, tx, activityIDs); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

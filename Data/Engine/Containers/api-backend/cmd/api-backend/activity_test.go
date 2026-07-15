@@ -153,19 +153,31 @@ func TestActivityUnsupportedMethod(t *testing.T) {
 
 func TestActivityPayloadNormalizers(t *testing.T) {
 	row := activityHistoryRow{
-		ID:           sqlNullInt(7),
-		Hostname:     sqlNullString("LAB"),
-		ScriptName:   sqlNullString("Check"),
-		Status:       sqlNullString("in-progress"),
-		StdoutLen:    sqlNullInt(3),
-		MetadataJSON: sqlNullString(`{"job":102}`),
+		ID:               sqlNullInt(7),
+		Hostname:         sqlNullString("LAB"),
+		ScriptName:       sqlNullString("Check"),
+		Status:           sqlNullString("in-progress"),
+		StdoutLen:        sqlNullInt(3),
+		MetadataJSON:     sqlNullString(`{"job":102}`),
+		ScheduledJobName: sqlNullString("Zoom Workplace [WIN]"),
+		ScheduledJobKind: sqlNullString("automation"),
 	}
 	payload := activityHistorySummaryPayload(row)
 	if payload["status"] != "Running" || payload["has_stdout"] != true {
 		t.Fatalf("unexpected payload %+v", payload)
 	}
+	if payload["scheduled_job_name"] != "Zoom Workplace [WIN]" || payload["scheduled_job_kind"] != "automation" {
+		t.Fatalf("unexpected scheduled job enrichment %+v", payload)
+	}
 	metadata, ok := payload["metadata"].(map[string]any)
 	if !ok || metadata["job"].(float64) != 102 {
 		t.Fatalf("unexpected metadata %+v", payload["metadata"])
+	}
+}
+
+func TestActivityScheduledJobIDFromMetadata(t *testing.T) {
+	row := activityHistoryRow{MetadataJSON: sqlNullString(`{"scheduled_job_id":308}`)}
+	if jobID := scheduledJobIDFromActivityRow(row); jobID != 308 {
+		t.Fatalf("unexpected job id %d", jobID)
 	}
 }

@@ -1,0 +1,261 @@
+import { describe, expect, it } from "vitest";
+import {
+  activityConnectorPaths,
+  activityTimelineParts,
+  activityTimelineSortValue,
+  decorateHistoryActivityRows,
+  formatActivityTimelineDuration,
+  historyActivityLabel,
+  historyActivityColumnWidth,
+  historyActivityGroupKey,
+  regroupActivityRowNodes,
+  scheduledJobActivityId,
+  scheduledJobActivityPath,
+  visibleActivityGroupSize,
+} from "@/Devices/Tabs/Activity_History.jsx";
+
+describe("Activity History helpers", () => {
+  it("builds scheduled job links from activity metadata", () => {
+    const row = {
+      script_type: "powershell",
+      activity_kind: "scheduled_job",
+      scheduled_job_name: "Zoom Workplace [WIN]",
+      metadata: {
+        scheduled_job_id: 42,
+        scheduled_job_run_id: 9001,
+      },
+    };
+
+    expect(scheduledJobActivityId(row)).toBe(42);
+    expect(scheduledJobActivityPath(row)).toBe("/jobs/42?tab=job_history");
+    expect(historyActivityLabel(row)).toBe("Zoom Workplace [WIN]");
+  });
+
+  it("falls back to task name then job id for scheduled job labels", () => {
+    expect(
+      historyActivityLabel({
+        script_display_name: "Patch KB5000001",
+        metadata: {
+          scheduled_job_id: 12,
+        },
+      })
+    ).toBe("Patch KB5000001");
+    expect(
+      historyActivityLabel({
+        metadata: {
+          scheduled_job_id: 13,
+        },
+      })
+    ).toBe("#13");
+  });
+
+  it("uses trusted task-link paths when backend supplies one", () => {
+    expect(
+      scheduledJobActivityPath({
+        metadata: {
+          task_link: {
+            job_id: "7",
+            path: "/jobs/7?tab=job_history",
+          },
+        },
+      })
+    ).toBe("/jobs/7?tab=job_history");
+  });
+
+  it("ignores non-job task-link paths", () => {
+    expect(
+      scheduledJobActivityPath({
+        metadata: {
+          task_link: {
+            job_id: "7",
+            path: "/devices/LAB-OPERATOR-01",
+          },
+        },
+      })
+    ).toBe("/jobs/7?tab=job_history");
+  });
+
+  it("does not build scheduled job paths for direct quick jobs", () => {
+    const row = { id: 123, script_type: "powershell", metadata: {} };
+
+    expect(scheduledJobActivityId(row)).toBe(0);
+    expect(scheduledJobActivityPath(row)).toBe("");
+    expect(historyActivityLabel({ ...row, script_display_name: "Uninstall - 7-Zip" })).toBe("Uninstall - 7-Zip");
+  });
+
+  it("keeps non-script activity labels readable", () => {
+    expect(historyActivityLabel({ script_type: "ansible" })).toBe("Ansible Playbook");
+    expect(historyActivityLabel({ script_type: "reverse_tunnel" })).toBe("Reverse VPN Tunnel");
+  });
+
+  it("groups scheduled rows by job occurrence", () => {
+    const first = {
+      id: 1,
+      scheduled_job_name: "Zoom Workplace [WIN]",
+      metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+    };
+    const second = {
+      id: 2,
+      scheduled_job_name: "Zoom Workplace [WIN]",
+      metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+    };
+    const third = {
+      id: 3,
+      scheduled_job_name: "Zoom Workplace [WIN]",
+      metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9002 },
+    };
+
+    expect(historyActivityGroupKey(first)).toBe(historyActivityGroupKey(second));
+    expect(historyActivityGroupKey(first)).not.toBe(historyActivityGroupKey(third));
+  });
+
+  it("decorates rows with labels and group keys", () => {
+    const rows = decorateHistoryActivityRows([
+      {
+        id: 1,
+        script_display_name: "Uninstall - 7-Zip",
+        script_type: "powershell",
+      },
+    ]);
+
+    expect(rows[0].activity_label).toBe("Uninstall - 7-Zip");
+    expect(rows[0].activity_group_key).toBe("activity:1");
+    expect(rows[0].activity_group_size).toBe(1);
+    expect(rows[0].activity_group_index).toBe(0);
+  });
+
+  it("sizes activity column from widest label plus padding", () => {
+    const rows = decorateHistoryActivityRows([
+      { id: 1, script_display_name: "Short", script_type: "powershell" },
+      { id: 2, scheduled_job_name: "Long Scheduled Job Name", metadata: { scheduled_job_id: 7 } },
+    ]);
+
+    expect(historyActivityColumnWidth(rows, (value) => String(value).length * 10)).toBe(302);
+  });
+
+  it("adds group size metadata for multi-task activities", () => {
+    const rows = decorateHistoryActivityRows([
+      {
+        id: 1,
+        scheduled_job_name: "Zoom Workplace [WIN]",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+      {
+        id: 2,
+        scheduled_job_name: "Zoom Workplace [WIN]",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+    ]);
+
+    expect(rows.map((row) => row.activity_group_size)).toEqual([2, 2]);
+    expect(rows.map((row) => row.activity_group_index)).toEqual([0, 1]);
+  });
+
+  it("adds one timeline sort value for all rows in an activity group", () => {
+    const rows = decorateHistoryActivityRows([
+      {
+        id: 1,
+        started_at: 100,
+        scheduled_job_name: "Workstation Software",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+      {
+        id: 2,
+        started_at: 200,
+        scheduled_job_name: "Workstation Software",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+    ]);
+
+    expect(rows.map((row) => row.activity_group_sort_value)).toEqual([200, 200]);
+  });
+
+  it("regroups sorted row nodes by activity without changing task order inside each group", () => {
+    const nodes = [
+      { data: { id: "workstation-reader", activity_group_key: "scheduled:42:9001" } },
+      { data: { id: "quick-job", activity_group_key: "activity:7" } },
+      { data: { id: "workstation-7zip", activity_group_key: "scheduled:42:9001" } },
+      { data: { id: "filezilla", activity_group_key: "scheduled:43:9001" } },
+    ];
+
+    expect(regroupActivityRowNodes(nodes)).toBe(nodes);
+    expect(nodes.map((node) => node.data.id)).toEqual([
+      "workstation-reader",
+      "workstation-7zip",
+      "quick-job",
+      "filezilla",
+    ]);
+  });
+
+  it("counts only visible contiguous activity rows for connector geometry", () => {
+    const nodes = [
+      { data: { activity_group_key: "scheduled:42:9001" } },
+      { data: { activity_group_key: "scheduled:42:9001" } },
+      { data: { activity_group_key: "activity:7" } },
+    ];
+
+    expect(
+      visibleActivityGroupSize({
+        data: {
+          activity_group_key: "scheduled:42:9001",
+          activity_group_size: 5,
+        },
+        node: { rowIndex: 0 },
+        api: {
+          getDisplayedRowCount: () => nodes.length,
+          getDisplayedRowAtIndex: (index) => nodes[index],
+        },
+      })
+    ).toBe(2);
+  });
+
+  it("creates one curved connector path per grouped task row", () => {
+    expect(activityConnectorPaths(1)).toEqual([]);
+    expect(activityConnectorPaths(3)).toEqual([
+      "M 0 50 C 32 50, 68 50, 100 50",
+      "M 0 50 C 32 50, 68 150, 100 150",
+      "M 0 50 C 32 50, 68 250, 100 250",
+    ]);
+    expect(activityConnectorPaths(2, 240, 80, 18)).toEqual([
+      "M 0 18 C 76.8 18, 163.2 20, 240 20",
+      "M 0 18 C 76.8 18, 163.2 60, 240 60",
+    ]);
+  });
+
+  it("formats completed and running activity timelines", () => {
+    expect(formatActivityTimelineDuration(100, 5500)).toBe("1h 30m");
+    expect(formatActivityTimelineDuration(100, 5505)).toBe("1h 30m 5s");
+    expect(formatActivityTimelineDuration(100, 145)).toBe("45s");
+    expect(formatActivityTimelineDuration(100, 100)).toBe("0s");
+
+    const completed = activityTimelineParts({
+      status: "success",
+      started_at: 100,
+      finished_at: 5500,
+      updated_at: 6000,
+    });
+    expect(completed.running).toBe(false);
+    expect(completed.endAt).toBe(5500);
+    expect(completed.endText).not.toBe("");
+    expect(completed.durationText).toBe("1h 30m");
+
+    const running = activityTimelineParts(
+      {
+        status: "running",
+        started_at: 100,
+        updated_at: 6000,
+      },
+      165
+    );
+    expect(running.running).toBe(true);
+    expect(running.endAt).toBe(0);
+    expect(running.endText).toBe("");
+    expect(running.durationText).toBe("1m 5s");
+  });
+
+  it("sorts activity timelines by started time with legacy fallbacks", () => {
+    expect(activityTimelineSortValue({ started_at: 50, ran_at: 80, id: 99 })).toBe(50);
+    expect(activityTimelineSortValue({ ran_at: 80, updated_at: 90, id: 99 })).toBe(80);
+    expect(activityTimelineSortValue({ id: 99 })).toBe(99);
+  });
+});

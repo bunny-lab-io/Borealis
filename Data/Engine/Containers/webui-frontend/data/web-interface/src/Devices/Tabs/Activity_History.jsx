@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle } from "@mui/material";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
@@ -25,6 +26,7 @@ import {
   gridFontFamily,
 } from "./Shared.jsx";
 import UninstallProgressDialog from "./Uninstall_Progress_Dialog.jsx";
+import { APP_PATHS } from "../../app/routes/paths.js";
 
 const HISTORY_STATUS_THEME = {
   queued: {
@@ -58,6 +60,288 @@ const HISTORY_STATUS_THEME = {
     dot: "#e2e8f0",
   },
 };
+
+const ACTIVITY_LINK_COLOR = "#58a6ff";
+const ACTIVITY_CONNECTOR_COLOR = ACTIVITY_LINK_COLOR;
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function positiveInteger(value) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) && numberValue > 0 ? Math.trunc(numberValue) : 0;
+}
+
+function internalAppPath(value) {
+  const text = String(value || "").trim();
+  if (!text || !text.startsWith("/") || text.startsWith("//")) return "";
+  return text;
+}
+
+function scheduledJobAppPath(value) {
+  const text = internalAppPath(value);
+  if (!text) return "";
+  if (text === APP_PATHS.jobs || text.startsWith(`${APP_PATHS.jobs}/`) || text.startsWith(`${APP_PATHS.jobs}?`)) {
+    return text;
+  }
+  return "";
+}
+
+export function formatHistoryScriptType(raw) {
+  const value = String(raw || "").toLowerCase();
+  if (value === "ansible") return "Ansible Playbook";
+  if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
+  return "Script";
+}
+
+export function scheduledJobActivityId(row = {}) {
+  const metadata = objectValue(row?.metadata);
+  const taskLink = objectValue(row?.task_link || metadata?.task_link);
+  return (
+    positiveInteger(row?.scheduled_job_id) ||
+    positiveInteger(row?.scheduledJobId) ||
+    positiveInteger(metadata?.scheduled_job_id) ||
+    positiveInteger(metadata?.scheduledJobId) ||
+    positiveInteger(taskLink?.job_id)
+  );
+}
+
+export function scheduledJobActivityPath(row = {}) {
+  const jobId = scheduledJobActivityId(row);
+  if (!jobId) return "";
+  const metadata = objectValue(row?.metadata);
+  const taskLink = objectValue(row?.task_link || metadata?.task_link);
+  return scheduledJobAppPath(taskLink?.path || metadata?.scheduled_job_path) || `${APP_PATHS.job(jobId)}?tab=job_history`;
+}
+
+export function historyActivityLabel(row = {}) {
+  const jobId = scheduledJobActivityId(row);
+  const rawLabel = String(row?.scheduled_job_name || row?.scheduledJobName || row?.script_display_name || row?.script_name || "").trim();
+  if (rawLabel) return rawLabel;
+  if (jobId) return `#${jobId}`;
+  const activityKind = String(row?.activity_kind || "").trim().toLowerCase();
+  if (activityKind === "software_uninstall") return "Activity";
+  const scriptType = String(row?.script_type || "").trim().toLowerCase();
+  if (scriptType === "powershell" || scriptType === "batch" || scriptType === "bash" || scriptType === "script") {
+    return "Activity";
+  }
+  return formatHistoryScriptType(row?.script_type);
+}
+
+export function historyActivityGroupKey(row = {}) {
+  const metadata = objectValue(row?.metadata);
+  const jobId = scheduledJobActivityId(row);
+  if (jobId) {
+    const runId =
+      positiveInteger(row?.scheduled_job_run_id) ||
+      positiveInteger(row?.scheduledJobRunId) ||
+      positiveInteger(metadata?.scheduled_job_run_id) ||
+      positiveInteger(metadata?.scheduledJobRunId) ||
+      positiveInteger(metadata?.scheduled_run_id) ||
+      positiveInteger(metadata?.scheduledRunId);
+    const scheduledTs = positiveInteger(row?.scheduled_ts) || positiveInteger(metadata?.scheduled_ts);
+    const occurrenceId = runId || scheduledTs || positiveInteger(row?.ran_at) || positiveInteger(row?.id);
+    return `scheduled:${jobId}:${occurrenceId}`;
+  }
+  const rowId = positiveInteger(row?.id) || positiveInteger(row?.jobId);
+  if (rowId) return `activity:${rowId}`;
+  return `activity:${historyActivityLabel(row)}`;
+}
+
+function browserTextWidth(text) {
+  if (typeof document === "undefined") return String(text || "").length * 8;
+  const canvas = browserTextWidth.canvas || document.createElement("canvas");
+  browserTextWidth.canvas = canvas;
+  const context = canvas.getContext("2d");
+  if (!context) return String(text || "").length * 8;
+  context.font = `600 13px ${gridFontFamily}`;
+  return context.measureText(String(text || "")).width;
+}
+
+export function historyActivityColumnWidth(rows = [], measureText = browserTextWidth) {
+  const labels = ["Activity", ...(Array.isArray(rows) ? rows.map((row) => row?.activity_label || historyActivityLabel(row)) : [])];
+  const widest = labels.reduce((maxWidth, label) => Math.max(maxWidth, Number(measureText(label) || 0)), 0);
+  return Math.max(190, Math.ceil(widest + 72));
+}
+
+export function decorateHistoryActivityRows(rows = []) {
+  const decorated = (Array.isArray(rows) ? rows : []).map((row) => {
+    const activityLabel = historyActivityLabel(row);
+    return {
+      ...row,
+      activity_label: activityLabel,
+      activity_group_key: historyActivityGroupKey(row),
+    };
+  });
+  const groupMetadata = decorated.reduce((groups, row) => {
+    const key = row.activity_group_key;
+    const current = groups.get(key) || { count: 0, sortValue: 0 };
+    groups.set(key, {
+      count: current.count + 1,
+      sortValue: Math.max(current.sortValue, activityTimelineSortValue(row)),
+    });
+    return groups;
+  }, new Map());
+  const groupIndexes = new Map();
+  return decorated.map((row) => {
+    const key = row.activity_group_key;
+    const group = groupMetadata.get(key) || {};
+    const index = groupIndexes.get(key) || 0;
+    groupIndexes.set(key, index + 1);
+    return {
+      ...row,
+      activity_group_size: group.count || 1,
+      activity_group_index: index,
+      activity_group_sort_value: group.sortValue || activityTimelineSortValue(row),
+    };
+  });
+}
+
+export function regroupActivityRowNodes(nodes = []) {
+  if (!Array.isArray(nodes) || nodes.length <= 1) return nodes;
+  const groupOrder = [];
+  const groups = new Map();
+
+  nodes.forEach((node, index) => {
+    const groupKey = String(node?.data?.activity_group_key || "").trim();
+    const key = groupKey || `__activity_row:${String(node?.data?.id || node?.id || index)}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      groupOrder.push(key);
+    }
+    groups.get(key).push(node);
+  });
+
+  const regrouped = [];
+  groupOrder.forEach((key) => {
+    regrouped.push(...(groups.get(key) || []));
+  });
+  nodes.splice(0, nodes.length, ...regrouped);
+  return nodes;
+}
+
+export function visibleActivityGroupSize(props = {}) {
+  const row = props?.data || {};
+  const fallback = positiveInteger(row?.activity_group_size) || 1;
+  const groupKey = String(row?.activity_group_key || "").trim();
+  const api = props?.api;
+  const rawRowIndex = props?.node?.rowIndex;
+  const rowIndex = Number(rawRowIndex);
+  if (!groupKey || !api || rawRowIndex == null || !Number.isFinite(rowIndex) || rowIndex < 0) return fallback;
+
+  const getDisplayedRowAtIndex = typeof api.getDisplayedRowAtIndex === "function" ? api.getDisplayedRowAtIndex.bind(api) : null;
+  const displayedRowCount = typeof api.getDisplayedRowCount === "function" ? Number(api.getDisplayedRowCount()) : 0;
+  if (!getDisplayedRowAtIndex || !Number.isFinite(displayedRowCount) || displayedRowCount <= rowIndex) return fallback;
+
+  let count = 0;
+  for (let index = rowIndex; index < displayedRowCount; index += 1) {
+    const nextNode = getDisplayedRowAtIndex(index);
+    const nextKey = String(nextNode?.data?.activity_group_key || "").trim();
+    if (nextKey !== groupKey) break;
+    count += 1;
+  }
+
+  return count || fallback;
+}
+
+function connectorCoordinate(value) {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue)) return "0";
+  const rounded = Math.round(numberValue * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function activityConnectorPaths(rowCount = 0, width = 100, height = 0, sourceY = 50) {
+  const count = positiveInteger(rowCount);
+  if (count <= 1) return [];
+  const connectorWidth = Math.max(1, Number(width || 0));
+  const connectorHeight = Math.max(1, Number(height || count * 100));
+  const boundedSourceY = Math.min(Math.max(Number(sourceY || 0), 0), connectorHeight);
+  const controlX1 = connectorWidth * 0.32;
+  const controlX2 = connectorWidth * 0.68;
+  const rowHeight = connectorHeight / count;
+  return Array.from({ length: count }, (_unused, index) => {
+    const targetY = index * rowHeight + rowHeight / 2;
+    return [
+      `M 0 ${connectorCoordinate(boundedSourceY)}`,
+      `C ${connectorCoordinate(controlX1)} ${connectorCoordinate(boundedSourceY)},`,
+      `${connectorCoordinate(controlX2)} ${connectorCoordinate(targetY)},`,
+      `${connectorCoordinate(connectorWidth)} ${connectorCoordinate(targetY)}`,
+    ].join(" ");
+  });
+}
+
+function sameConnectorGeometry(left, right) {
+  if (!left || !right) return left === right;
+  return left.left === right.left && left.width === right.width && left.height === right.height && left.sourceY === right.sourceY;
+}
+
+export function formatActivityTimelineTimestamp(epochSec = 0) {
+  const ts = positiveInteger(epochSec);
+  if (!ts) return "";
+  const date = new Date(ts * 1000);
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  let hh = date.getHours();
+  const ampm = hh >= 12 ? "PM" : "AM";
+  hh = hh % 12 || 12;
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${mm}/${dd}/${yyyy} @ ${hh}:${min}${ampm}`;
+}
+
+export function formatActivityTimelineDuration(startEpoch = 0, endEpoch = 0) {
+  const start = positiveInteger(startEpoch);
+  const end = positiveInteger(endEpoch);
+  if (!start || !end) return "";
+  const totalSeconds = Math.max(0, end - start);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  if (seconds || parts.length === 0) parts.push(`${seconds}s`);
+  return parts.join(" ");
+}
+
+function isActivityRunning(row = {}) {
+  return String(row?.status || "").trim().toLowerCase() === "running";
+}
+
+export function activityTimelineSortValue(row = {}) {
+  return (
+    positiveInteger(row?.started_at) ||
+    positiveInteger(row?.startedAt) ||
+    positiveInteger(row?.ran_at) ||
+    positiveInteger(row?.ranAt) ||
+    positiveInteger(row?.updated_at) ||
+    positiveInteger(row?.updatedAt) ||
+    positiveInteger(row?.id)
+  );
+}
+
+export function activityTimelineParts(row = {}, nowEpoch = 0) {
+  const running = isActivityRunning(row);
+  const startAt = positiveInteger(row?.started_at) || positiveInteger(row?.startedAt) || positiveInteger(row?.ran_at) || positiveInteger(row?.ranAt);
+  const terminalEndAt =
+    positiveInteger(row?.finished_at) ||
+    positiveInteger(row?.finishedAt) ||
+    (!running ? positiveInteger(row?.updated_at) || positiveInteger(row?.updatedAt) : 0);
+  const liveEndAt = running ? positiveInteger(nowEpoch) || Math.floor(Date.now() / 1000) : 0;
+  const durationEndAt = running ? liveEndAt : terminalEndAt;
+  return {
+    running,
+    startAt,
+    endAt: terminalEndAt,
+    startText: formatActivityTimelineTimestamp(startAt),
+    endText: running ? "" : formatActivityTimelineTimestamp(terminalEndAt),
+    durationText: formatActivityTimelineDuration(startAt, durationEndAt),
+  };
+}
 
 const StatusPillCell = React.memo(function StatusPillCell(props) {
   const value = String(props?.value || "");
@@ -100,6 +384,166 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
   );
 });
 
+const ActivityConnectorSvg = React.memo(function ActivityConnectorSvg({ rowCount = 0, geometry = null }) {
+  const width = Number(geometry?.width || 0);
+  const height = Number(geometry?.height || 0);
+  const paths = width > 12 && height > 1 ? activityConnectorPaths(rowCount, width, height, geometry?.sourceY) : [];
+  if (!paths.length) return null;
+  return (
+    <Box
+      component="svg"
+      viewBox={`0 0 ${connectorCoordinate(width)} ${connectorCoordinate(height)}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      sx={{
+        position: "absolute",
+        left: geometry?.left || 0,
+        top: 0,
+        width,
+        height,
+        zIndex: 0,
+        pointerEvents: "none",
+        opacity: 0.55,
+      }}
+    >
+      {paths.map((path, index) => (
+        <path
+          key={`${index}:${path}`}
+          d={path}
+          fill="none"
+          stroke={ACTIVITY_CONNECTOR_COLOR}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+    </Box>
+  );
+});
+
+const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
+  const row = props.data || {};
+  const label = String(row?.activity_label || historyActivityLabel(row)).trim() || "Activity";
+  const jobPath = scheduledJobActivityPath(row);
+  const groupSize = visibleActivityGroupSize(props);
+  const cellRef = useRef(null);
+  const labelRef = useRef(null);
+  const [connectorGeometry, setConnectorGeometry] = useState(null);
+  useLayoutEffect(() => {
+    if (groupSize <= 1) {
+      setConnectorGeometry((previous) => (previous ? null : previous));
+      return undefined;
+    }
+
+    const updateConnectorGeometry = () => {
+      const cellNode = cellRef.current;
+      const labelNode = labelRef.current;
+      if (!cellNode || !labelNode) {
+        setConnectorGeometry((previous) => (previous ? null : previous));
+        return;
+      }
+
+      const cellRect = cellNode.getBoundingClientRect();
+      const labelRect = labelNode.getBoundingClientRect();
+      const left = Math.ceil(labelRect.right - cellRect.left + 8);
+      const width = Math.floor(cellRect.width - left);
+      const height = Math.floor(cellRect.height);
+      const sourceY = Math.round(labelRect.top - cellRect.top + labelRect.height / 2);
+      const nextGeometry = width > 12 && height > 1 ? { left, width, height, sourceY } : null;
+      setConnectorGeometry((previous) => (sameConnectorGeometry(previous, nextGeometry) ? previous : nextGeometry));
+    };
+
+    updateConnectorGeometry();
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateConnectorGeometry) : null;
+    if (resizeObserver && cellRef.current && labelRef.current) {
+      resizeObserver.observe(cellRef.current);
+      resizeObserver.observe(labelRef.current);
+    }
+    if (typeof window !== "undefined") window.addEventListener("resize", updateConnectorGeometry);
+
+    return () => {
+      if (resizeObserver) resizeObserver.disconnect();
+      if (typeof window !== "undefined") window.removeEventListener("resize", updateConnectorGeometry);
+    };
+  }, [groupSize, label, jobPath]);
+  const labelSx = {
+    position: "relative",
+    zIndex: 1,
+    display: "inline-flex",
+    minWidth: 0,
+    maxWidth: "100%",
+    alignItems: "center",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    fontWeight: 600,
+    fontFamily: gridFontFamily,
+    lineHeight: 1.2,
+  };
+  const cellSx = {
+    position: "relative",
+    display: "block",
+    boxSizing: "border-box",
+    height: "100%",
+    minWidth: 0,
+    overflow: "hidden",
+  };
+  const labelRowSx = {
+    position: "relative",
+    zIndex: 1,
+    display: "flex",
+    alignItems: "center",
+    height: "min(100%, var(--ag-row-height, 42px))",
+    minWidth: 0,
+  };
+  if (!jobPath) {
+    return (
+      <Box
+        ref={cellRef}
+        component="span"
+        sx={cellSx}
+      >
+        <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
+        <Box component="span" sx={labelRowSx}>
+          <Box ref={labelRef} component="span" sx={{ ...labelSx, color: "#dbeafe" }}>
+            {label}
+          </Box>
+        </Box>
+      </Box>
+    );
+  }
+  return (
+    <Box
+      ref={cellRef}
+      sx={cellSx}
+    >
+      <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
+      <Box component="span" sx={labelRowSx}>
+        <Box
+          ref={labelRef}
+          component={Link}
+          to={jobPath}
+          title={`Open ${label}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          sx={{
+            ...labelSx,
+            color: ACTIVITY_LINK_COLOR,
+            textDecoration: "none",
+            "&:hover": {
+              color: "#8fbfff",
+              textDecoration: "underline",
+            },
+          }}
+        >
+          {label}
+        </Box>
+      </Box>
+    </Box>
+  );
+});
+
 const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
   const row = props.data || {};
   const onOpenUninstall = props.context?.onOpenUninstall;
@@ -132,6 +576,9 @@ const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
         textTransform: "none",
         color: "#dbeafe",
         fontWeight: 600,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
         "&:hover": {
           backgroundColor: "transparent",
           color: "#dbeafe",
@@ -143,16 +590,86 @@ const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
   );
 });
 
+const HistoryTimelineCell = React.memo(function HistoryTimelineCell(props) {
+  const row = props.data || {};
+  const running = isActivityRunning(row);
+  const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const tick = () => setNowEpoch(Math.floor(Date.now() / 1000));
+    tick();
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, [running]);
+
+  const timeline = activityTimelineParts(row, nowEpoch);
+  if (!timeline.startText) {
+    return (
+      <Box component="span" sx={{ color: "#6b7280" }}>
+        —
+      </Box>
+    );
+  }
+
+  const rangeText = timeline.endText ? `${timeline.startText} - ${timeline.endText}` : timeline.startText;
+  const title = timeline.durationText ? `${rangeText} ${timeline.durationText}` : rangeText;
+  return (
+    <Box
+      component="span"
+      title={title}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        minWidth: 0,
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {rangeText}
+      </Box>
+      {timeline.durationText ? (
+        <Box
+          component="span"
+          sx={{
+            flex: "0 0 auto",
+            ml: 0.75,
+            color: "#6b7280",
+          }}
+        >
+          {timeline.durationText}
+        </Box>
+      ) : null}
+    </Box>
+  );
+});
+
 const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
   const row = props.data || {};
   const onViewOutput = props.context?.onViewOutput;
 
   return (
-    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+    <Box sx={{ display: "flex", gap: 1, alignItems: "center", height: "100%", minWidth: 0 }}>
       {row.has_stdout ? (
         <Button
           size="small"
-          sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
+          sx={{
+            alignItems: "center",
+            color: MAGIC_UI.accentA,
+            display: "inline-flex",
+            lineHeight: 1,
+            minWidth: 0,
+            p: 0,
+            textTransform: "none",
+          }}
           onClick={() => onViewOutput && onViewOutput(row, "stdout")}
         >
           StdOut
@@ -161,7 +678,15 @@ const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
       {row.has_stderr ? (
         <Button
           size="small"
-          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
+          sx={{
+            alignItems: "center",
+            color: "#ff7b89",
+            display: "inline-flex",
+            lineHeight: 1,
+            minWidth: 0,
+            p: 0,
+            textTransform: "none",
+          }}
           onClick={() => onViewOutput && onViewOutput(row, "stderr")}
         >
           StdErr
@@ -175,6 +700,8 @@ const GRID_COMPONENTS = {
   StatusPillCell,
   HistoryActionsCell,
   HistoryTaskCell,
+  HistoryActivityCell,
+  HistoryTimelineCell,
 };
 
 export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) {
@@ -188,27 +715,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   const [selectedUninstallJobId, setSelectedUninstallJobId] = useState(0);
 
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
-
-  const formatTimestamp = useCallback((epochSec) => {
-    const ts = Number(epochSec || 0);
-    if (!ts) return "—";
-    const date = new Date(ts * 1000);
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const yyyy = date.getFullYear();
-    let hh = date.getHours();
-    const ampm = hh >= 12 ? "PM" : "AM";
-    hh = hh % 12 || 12;
-    const min = String(date.getMinutes()).padStart(2, "0");
-    return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
-  }, []);
-
-  const formatScriptType = useCallback((raw) => {
-    const value = String(raw || "").toLowerCase();
-    if (value === "ansible") return "Ansible Playbook";
-    if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
-    return "Script";
-  }, []);
 
   const buildUninstallDialogJob = useCallback(
     (payload = {}) => {
@@ -313,6 +819,26 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     [assemblyNameMap]
   );
 
+  const historyDisplayRows = useMemo(
+    () =>
+      decorateHistoryActivityRows(
+        (historyRows || []).map((row) => ({
+          ...row,
+          script_display_name: resolveAssemblyName(row.script_name, row.script_path),
+        }))
+      ),
+    [historyRows, resolveAssemblyName]
+  );
+
+  const activityColumnMinWidth = useMemo(
+    () => historyActivityColumnWidth(historyDisplayRows),
+    [historyDisplayRows]
+  );
+  const hasRunningHistoryRows = useMemo(
+    () => historyDisplayRows.some((row) => isActivityRunning(row)),
+    [historyDisplayRows]
+  );
+
   const loadHistory = useCallback(async () => {
     if (!normalizedHostname) {
       setHistoryRows([]);
@@ -332,6 +858,12 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   useEffect(() => {
     loadHistory();
   }, [loadHistory, refreshToken]);
+
+  useEffect(() => {
+    if (!normalizedHostname || !hasRunningHistoryRows) return undefined;
+    const intervalId = setInterval(loadHistory, 10000);
+    return () => clearInterval(intervalId);
+  }, [hasRunningHistoryRows, loadHistory, normalizedHostname]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
@@ -365,65 +897,63 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     () => [
       {
         headerName: "Activity",
-        field: "script_type",
-        minWidth: 170,
-        valueGetter: (params) => formatScriptType(params.data?.script_type),
+        field: "activity_group_key",
+        colId: "activity",
+        flex: 1,
+        minWidth: activityColumnMinWidth,
+        valueGetter: (params) => params.data?.activity_group_key || historyActivityGroupKey(params.data || {}),
+        filterValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
+        tooltipValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
+        comparator: (_left, _right, nodeA, nodeB) =>
+          String(nodeA?.data?.activity_label || "").localeCompare(String(nodeB?.data?.activity_label || "")),
+        spanRows: ({ valueA, valueB }) => Boolean(valueA && valueA === valueB),
+        cellRenderer: "HistoryActivityCell",
       },
       {
         headerName: "Task",
         field: "script_display_name",
-        flex: 1.2,
+        flex: 0,
+        width: 280,
         minWidth: 240,
         filter: "agTextColumnFilter",
         cellRenderer: "HistoryTaskCell",
       },
       {
-        headerName: "Lane",
-        field: "queue_lane",
-        width: 180,
-        valueFormatter: (params) =>
-          String(params.value || "")
-            .replace(/_/g, " ")
-            .replace(/\b\w/g, (ch) => ch.toUpperCase()) || "General",
-      },
-      {
-        headerName: "Queued",
-        field: "ran_at",
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
+        headerName: "Timeline",
+        colId: "timeline",
+        field: "started_at",
+        flex: 0,
+        width: 390,
+        minWidth: 340,
+        valueGetter: (params) => params.data?.activity_group_sort_value || activityTimelineSortValue(params.data || {}),
+        tooltipValueGetter: (params) => {
+          const timeline = activityTimelineParts(params.data || {});
+          if (!timeline.startText) return "—";
+          const rangeText = timeline.endText ? `${timeline.startText} - ${timeline.endText}` : timeline.startText;
+          return timeline.durationText ? `${rangeText} ${timeline.durationText}` : rangeText;
+        },
         sort: "desc",
         comparator: (a, b) => (a || 0) - (b || 0),
-      },
-      {
-        headerName: "Started",
-        field: "started_at",
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        comparator: (a, b) => (a || 0) - (b || 0),
-      },
-      {
-        headerName: "Updated",
-        field: "updated_at",
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        comparator: (a, b) => (a || 0) - (b || 0),
+        cellRenderer: "HistoryTimelineCell",
       },
       {
         headerName: "Job Status",
         field: "status",
+        flex: 0,
         width: 160,
         cellRenderer: "StatusPillCell",
       },
       {
         headerName: "StdOut / StdErr",
         colId: "stdout",
+        flex: 0,
         width: 220,
         sortable: false,
         filter: false,
         cellRenderer: "HistoryActionsCell",
       },
     ],
-    [formatScriptType, formatTimestamp]
+    [activityColumnMinWidth]
   );
 
   const highlightCode = useCallback((code, lang) => {
@@ -496,16 +1026,10 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     };
   }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
 
-  const historyDisplayRows = useMemo(
-    () =>
-      (historyRows || []).map((row) => ({
-        ...row,
-        script_display_name: resolveAssemblyName(row.script_name, row.script_path),
-      })),
-    [historyRows, resolveAssemblyName]
-  );
-
   const getHistoryRowId = useCallback((params) => String(params.data?.id || params.rowIndex), []);
+  const postSortActivityRows = useCallback((params) => {
+    regroupActivityRowNodes(params?.nodes || []);
+  }, []);
 
   const historyGridContext = useMemo(
     () => ({
@@ -517,7 +1041,16 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
 
   return (
     <>
-      <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
+      <GridShell
+        sx={{
+          flexGrow: 1,
+          minHeight: 360,
+          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+          "& .ag-row-hover": {
+            backgroundColor: "rgba(73,156,196,0.2) !important",
+          },
+        }}
+      >
         <AgGridReact
           rowData={historyDisplayRows}
           columnDefs={historyColumnDefs}
@@ -526,9 +1059,11 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
           paginationPageSize={20}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
+          enableCellSpan
           components={GRID_COMPONENTS}
           context={historyGridContext}
           getRowId={getHistoryRowId}
+          postSortRows={postSortActivityRows}
           suppressCellFocus
           theme={DEVICE_DETAILS_GRID_THEME}
         />

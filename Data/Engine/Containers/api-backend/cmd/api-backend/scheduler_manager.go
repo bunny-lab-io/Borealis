@@ -2006,6 +2006,10 @@ func (m *goSchedulerManager) purgeOldScheduledRuns(ctx context.Context, now int6
 		return err
 	}
 	defer rollbackQuietly(tx)
+	activityIDs, err := scheduledActivityIDsForRunIDs(ctx, tx, ids)
+	if err != nil {
+		return err
+	}
 	for _, statement := range []string{
 		`DELETE FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)`,
 		`DELETE FROM engine.scheduled_job_run_targets WHERE run_id = ANY($1)`,
@@ -2016,6 +2020,9 @@ func (m *goSchedulerManager) purgeOldScheduledRuns(ctx context.Context, now int6
 		if _, err := tx.ExecContext(ctx, statement, pq.Array(ids)); err != nil {
 			return err
 		}
+	}
+	if _, err := deleteScheduledActivityHistoryRows(ctx, tx, activityIDs); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
