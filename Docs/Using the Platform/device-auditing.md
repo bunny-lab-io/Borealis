@@ -23,7 +23,7 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
 - `Installed Software` shows software inventory and software actions.
 - `Patch Management` shows pending and installed Windows patch inventory and can open Scheduled Job drafts for ad-hoc Windows update installs.
 - `Services`, `Processes`, `File Management`, `Registry`, `Remote Shell`, and `Remote Desktop` are live operations tabs.
-- `Activity History` shows quick job and automation output tied to the device.
+- `Activity History` shows quick job and automation output tied to the device, with scheduled-job rows linking back to the job history.
 - `Watchdogs` shows active incidents, effective watchdog assignments, and device-level suppressions.
 - `Agent Health` shows startup flow and role health separately from online/offline status.
 
@@ -96,3 +96,4 @@ Device Summary collects the last-known inventory and action tabs for one endpoin
     - Software data is stored both in `devices.software` for UI detail and `device_software_inventory` for reliable filter matching.
     - Patch data is normalized into `device_patch_inventory`; non-patch details payloads preserve existing patch rows.
     - Device-level patch install actions open Scheduled Job drafts with `job_kind=patch_install`; the scheduler handles target history, execution, stdout/stderr capture, and timeout state.
+    - Scheduled activity rows carry `metadata.scheduled_job_id`; `Activity_History.jsx` uses it to link Device Summary activity rows to `/jobs/<job_id>?tab=job_history`.

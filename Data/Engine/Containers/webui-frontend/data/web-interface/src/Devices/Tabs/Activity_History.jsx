@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle } from "@mui/material";
 import Prism from "prismjs";
 import "prismjs/components/prism-yaml";
@@ -25,6 +26,7 @@ import {
   gridFontFamily,
 } from "./Shared.jsx";
 import UninstallProgressDialog from "./Uninstall_Progress_Dialog.jsx";
+import { APP_PATHS } from "../../app/routes/paths.js";
 
 const HISTORY_STATUS_THEME = {
   queued: {
@@ -58,6 +60,69 @@ const HISTORY_STATUS_THEME = {
     dot: "#e2e8f0",
   },
 };
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function positiveInteger(value) {
+  const numberValue = Number(value || 0);
+  return Number.isFinite(numberValue) && numberValue > 0 ? Math.trunc(numberValue) : 0;
+}
+
+function internalAppPath(value) {
+  const text = String(value || "").trim();
+  if (!text || !text.startsWith("/") || text.startsWith("//")) return "";
+  return text;
+}
+
+function scheduledJobAppPath(value) {
+  const text = internalAppPath(value);
+  if (!text) return "";
+  if (text === APP_PATHS.jobs || text.startsWith(`${APP_PATHS.jobs}/`) || text.startsWith(`${APP_PATHS.jobs}?`)) {
+    return text;
+  }
+  return "";
+}
+
+export function formatHistoryScriptType(raw) {
+  const value = String(raw || "").toLowerCase();
+  if (value === "ansible") return "Ansible Playbook";
+  if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
+  return "Script";
+}
+
+export function scheduledJobActivityId(row = {}) {
+  const metadata = objectValue(row?.metadata);
+  const taskLink = objectValue(row?.task_link || metadata?.task_link);
+  return (
+    positiveInteger(row?.scheduled_job_id) ||
+    positiveInteger(row?.scheduledJobId) ||
+    positiveInteger(metadata?.scheduled_job_id) ||
+    positiveInteger(metadata?.scheduledJobId) ||
+    positiveInteger(taskLink?.job_id)
+  );
+}
+
+export function scheduledJobActivityPath(row = {}) {
+  const jobId = scheduledJobActivityId(row);
+  if (!jobId) return "";
+  const metadata = objectValue(row?.metadata);
+  const taskLink = objectValue(row?.task_link || metadata?.task_link);
+  return scheduledJobAppPath(taskLink?.path || metadata?.scheduled_job_path) || `${APP_PATHS.job(jobId)}?tab=job_history`;
+}
+
+export function historyActivityLabel(row = {}) {
+  const jobId = scheduledJobActivityId(row);
+  if (jobId) return `Scheduled Job #${jobId}`;
+  const activityKind = String(row?.activity_kind || "").trim().toLowerCase();
+  if (activityKind === "software_uninstall") return "Quick Job";
+  const scriptType = String(row?.script_type || "").trim().toLowerCase();
+  if (scriptType === "powershell" || scriptType === "batch" || scriptType === "bash" || scriptType === "script") {
+    return "Quick Job";
+  }
+  return formatHistoryScriptType(row?.script_type);
+}
 
 const StatusPillCell = React.memo(function StatusPillCell(props) {
   const value = String(props?.value || "");
@@ -96,6 +161,57 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
         }}
       />
       {value}
+    </Box>
+  );
+});
+
+const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
+  const row = props.data || {};
+  const label = String(props?.value || historyActivityLabel(row)).trim() || "Activity";
+  const jobPath = scheduledJobActivityPath(row);
+  if (!jobPath) {
+    return (
+      <Box
+        component="span"
+        sx={{
+          display: "inline-block",
+          minWidth: 0,
+          maxWidth: "100%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+      </Box>
+    );
+  }
+  return (
+    <Box
+      component={Link}
+      to={jobPath}
+      title={`Open ${label}`}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      sx={{
+        display: "inline-flex",
+        minWidth: 0,
+        maxWidth: "100%",
+        alignItems: "center",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        color: "#58a6ff",
+        fontWeight: 600,
+        fontFamily: gridFontFamily,
+        textDecoration: "none",
+        "&:hover": {
+          color: "#8fbfff",
+          textDecoration: "underline",
+        },
+      }}
+    >
+      {label}
     </Box>
   );
 });
@@ -175,6 +291,7 @@ const GRID_COMPONENTS = {
   StatusPillCell,
   HistoryActionsCell,
   HistoryTaskCell,
+  HistoryActivityCell,
 };
 
 export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) {
@@ -201,13 +318,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     hh = hh % 12 || 12;
     const min = String(date.getMinutes()).padStart(2, "0");
     return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
-  }, []);
-
-  const formatScriptType = useCallback((raw) => {
-    const value = String(raw || "").toLowerCase();
-    if (value === "ansible") return "Ansible Playbook";
-    if (value === "reverse_tunnel" || value === "vpn_tunnel") return "Reverse VPN Tunnel";
-    return "Script";
   }, []);
 
   const buildUninstallDialogJob = useCallback(
@@ -366,8 +476,9 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Activity",
         field: "script_type",
-        minWidth: 170,
-        valueGetter: (params) => formatScriptType(params.data?.script_type),
+        minWidth: 190,
+        valueGetter: (params) => historyActivityLabel(params.data || {}),
+        cellRenderer: "HistoryActivityCell",
       },
       {
         headerName: "Task",
@@ -423,7 +534,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         cellRenderer: "HistoryActionsCell",
       },
     ],
-    [formatScriptType, formatTimestamp]
+    [formatTimestamp]
   );
 
   const highlightCode = useCallback((code, lang) => {
