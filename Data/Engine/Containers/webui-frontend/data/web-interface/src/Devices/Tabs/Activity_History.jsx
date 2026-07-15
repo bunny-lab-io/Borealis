@@ -115,15 +115,62 @@ export function scheduledJobActivityPath(row = {}) {
 export function historyActivityLabel(row = {}) {
   const jobId = scheduledJobActivityId(row);
   const rawLabel = String(row?.scheduled_job_name || row?.scheduledJobName || row?.script_display_name || row?.script_name || "").trim();
-  if (jobId) return `Job: ${rawLabel || `#${jobId}`}`;
-  const quickJobName = rawLabel || "Activity";
+  if (rawLabel) return rawLabel;
+  if (jobId) return `#${jobId}`;
   const activityKind = String(row?.activity_kind || "").trim().toLowerCase();
-  if (activityKind === "software_uninstall") return `Quick Job: ${quickJobName}`;
+  if (activityKind === "software_uninstall") return "Activity";
   const scriptType = String(row?.script_type || "").trim().toLowerCase();
   if (scriptType === "powershell" || scriptType === "batch" || scriptType === "bash" || scriptType === "script") {
-    return `Quick Job: ${quickJobName}`;
+    return "Activity";
   }
   return formatHistoryScriptType(row?.script_type);
+}
+
+export function historyActivityGroupKey(row = {}) {
+  const metadata = objectValue(row?.metadata);
+  const jobId = scheduledJobActivityId(row);
+  if (jobId) {
+    const runId =
+      positiveInteger(row?.scheduled_job_run_id) ||
+      positiveInteger(row?.scheduledJobRunId) ||
+      positiveInteger(metadata?.scheduled_job_run_id) ||
+      positiveInteger(metadata?.scheduledJobRunId) ||
+      positiveInteger(metadata?.scheduled_run_id) ||
+      positiveInteger(metadata?.scheduledRunId);
+    const scheduledTs = positiveInteger(row?.scheduled_ts) || positiveInteger(metadata?.scheduled_ts);
+    const occurrenceId = runId || scheduledTs || positiveInteger(row?.ran_at) || positiveInteger(row?.id);
+    return `scheduled:${jobId}:${occurrenceId}`;
+  }
+  const rowId = positiveInteger(row?.id) || positiveInteger(row?.jobId);
+  if (rowId) return `activity:${rowId}`;
+  return `activity:${historyActivityLabel(row)}`;
+}
+
+function browserTextWidth(text) {
+  if (typeof document === "undefined") return String(text || "").length * 8;
+  const canvas = browserTextWidth.canvas || document.createElement("canvas");
+  browserTextWidth.canvas = canvas;
+  const context = canvas.getContext("2d");
+  if (!context) return String(text || "").length * 8;
+  context.font = `600 13px ${gridFontFamily}`;
+  return context.measureText(String(text || "")).width;
+}
+
+export function historyActivityColumnWidth(rows = [], measureText = browserTextWidth) {
+  const labels = ["Activity", ...(Array.isArray(rows) ? rows.map((row) => row?.activity_label || historyActivityLabel(row)) : [])];
+  const widest = labels.reduce((maxWidth, label) => Math.max(maxWidth, Number(measureText(label) || 0)), 0);
+  return Math.max(190, Math.ceil(widest + 72));
+}
+
+export function decorateHistoryActivityRows(rows = []) {
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const activityLabel = historyActivityLabel(row);
+    return {
+      ...row,
+      activity_label: activityLabel,
+      activity_group_key: historyActivityGroupKey(row),
+    };
+  });
 }
 
 const StatusPillCell = React.memo(function StatusPillCell(props) {
@@ -169,7 +216,7 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
 
 const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   const row = props.data || {};
-  const label = String(props?.value || historyActivityLabel(row)).trim() || "Activity";
+  const label = String(row?.activity_label || historyActivityLabel(row)).trim() || "Activity";
   const jobPath = scheduledJobActivityPath(row);
   if (!jobPath) {
     return (
@@ -425,6 +472,22 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     [assemblyNameMap]
   );
 
+  const historyDisplayRows = useMemo(
+    () =>
+      decorateHistoryActivityRows(
+        (historyRows || []).map((row) => ({
+          ...row,
+          script_display_name: resolveAssemblyName(row.script_name, row.script_path),
+        }))
+      ),
+    [historyRows, resolveAssemblyName]
+  );
+
+  const activityColumnMinWidth = useMemo(
+    () => historyActivityColumnWidth(historyDisplayRows),
+    [historyDisplayRows]
+  );
+
   const loadHistory = useCallback(async () => {
     if (!normalizedHostname) {
       setHistoryRows([]);
@@ -477,15 +540,23 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     () => [
       {
         headerName: "Activity",
-        field: "script_type",
-        minWidth: 190,
-        valueGetter: (params) => historyActivityLabel(params.data || {}),
+        field: "activity_group_key",
+        colId: "activity",
+        flex: 1,
+        minWidth: activityColumnMinWidth,
+        valueGetter: (params) => params.data?.activity_group_key || historyActivityGroupKey(params.data || {}),
+        filterValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
+        tooltipValueGetter: (params) => params.data?.activity_label || historyActivityLabel(params.data || {}),
+        comparator: (_left, _right, nodeA, nodeB) =>
+          String(nodeA?.data?.activity_label || "").localeCompare(String(nodeB?.data?.activity_label || "")),
+        spanRows: ({ valueA, valueB }) => Boolean(valueA && valueA === valueB),
         cellRenderer: "HistoryActivityCell",
       },
       {
         headerName: "Task",
         field: "script_display_name",
-        flex: 1.2,
+        flex: 0,
+        width: 280,
         minWidth: 240,
         filter: "agTextColumnFilter",
         cellRenderer: "HistoryTaskCell",
@@ -493,6 +564,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Lane",
         field: "queue_lane",
+        flex: 0,
         width: 180,
         valueFormatter: (params) =>
           String(params.value || "")
@@ -502,6 +574,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Queued",
         field: "ran_at",
+        flex: 0,
         width: 190,
         valueFormatter: (params) => formatTimestamp(params.value),
         sort: "desc",
@@ -510,6 +583,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Started",
         field: "started_at",
+        flex: 0,
         width: 190,
         valueFormatter: (params) => formatTimestamp(params.value),
         comparator: (a, b) => (a || 0) - (b || 0),
@@ -517,6 +591,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Updated",
         field: "updated_at",
+        flex: 0,
         width: 190,
         valueFormatter: (params) => formatTimestamp(params.value),
         comparator: (a, b) => (a || 0) - (b || 0),
@@ -524,19 +599,21 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
       {
         headerName: "Job Status",
         field: "status",
+        flex: 0,
         width: 160,
         cellRenderer: "StatusPillCell",
       },
       {
         headerName: "StdOut / StdErr",
         colId: "stdout",
+        flex: 0,
         width: 220,
         sortable: false,
         filter: false,
         cellRenderer: "HistoryActionsCell",
       },
     ],
-    [formatTimestamp]
+    [activityColumnMinWidth, formatTimestamp]
   );
 
   const highlightCode = useCallback((code, lang) => {
@@ -609,15 +686,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     };
   }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
 
-  const historyDisplayRows = useMemo(
-    () =>
-      (historyRows || []).map((row) => ({
-        ...row,
-        script_display_name: resolveAssemblyName(row.script_name, row.script_path),
-      })),
-    [historyRows, resolveAssemblyName]
-  );
-
   const getHistoryRowId = useCallback((params) => String(params.data?.id || params.rowIndex), []);
 
   const historyGridContext = useMemo(
@@ -639,6 +707,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
           paginationPageSize={20}
           paginationPageSizeSelector={[20, 50, 100]}
           animateRows
+          enableCellSpan
           components={GRID_COMPONENTS}
           context={historyGridContext}
           getRowId={getHistoryRowId}
