@@ -174,22 +174,75 @@ export function decorateHistoryActivityRows(rows = []) {
       activity_group_key: historyActivityGroupKey(row),
     };
   });
-  const groupCounts = decorated.reduce((counts, row) => {
+  const groupMetadata = decorated.reduce((groups, row) => {
     const key = row.activity_group_key;
-    counts.set(key, (counts.get(key) || 0) + 1);
-    return counts;
+    const current = groups.get(key) || { count: 0, sortValue: 0 };
+    groups.set(key, {
+      count: current.count + 1,
+      sortValue: Math.max(current.sortValue, activityTimelineSortValue(row)),
+    });
+    return groups;
   }, new Map());
   const groupIndexes = new Map();
   return decorated.map((row) => {
     const key = row.activity_group_key;
+    const group = groupMetadata.get(key) || {};
     const index = groupIndexes.get(key) || 0;
     groupIndexes.set(key, index + 1);
     return {
       ...row,
-      activity_group_size: groupCounts.get(key) || 1,
+      activity_group_size: group.count || 1,
       activity_group_index: index,
+      activity_group_sort_value: group.sortValue || activityTimelineSortValue(row),
     };
   });
+}
+
+export function regroupActivityRowNodes(nodes = []) {
+  if (!Array.isArray(nodes) || nodes.length <= 1) return nodes;
+  const groupOrder = [];
+  const groups = new Map();
+
+  nodes.forEach((node, index) => {
+    const groupKey = String(node?.data?.activity_group_key || "").trim();
+    const key = groupKey || `__activity_row:${String(node?.data?.id || node?.id || index)}`;
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      groupOrder.push(key);
+    }
+    groups.get(key).push(node);
+  });
+
+  const regrouped = [];
+  groupOrder.forEach((key) => {
+    regrouped.push(...(groups.get(key) || []));
+  });
+  nodes.splice(0, nodes.length, ...regrouped);
+  return nodes;
+}
+
+export function visibleActivityGroupSize(props = {}) {
+  const row = props?.data || {};
+  const fallback = positiveInteger(row?.activity_group_size) || 1;
+  const groupKey = String(row?.activity_group_key || "").trim();
+  const api = props?.api;
+  const rawRowIndex = props?.node?.rowIndex;
+  const rowIndex = Number(rawRowIndex);
+  if (!groupKey || !api || rawRowIndex == null || !Number.isFinite(rowIndex) || rowIndex < 0) return fallback;
+
+  const getDisplayedRowAtIndex = typeof api.getDisplayedRowAtIndex === "function" ? api.getDisplayedRowAtIndex.bind(api) : null;
+  const displayedRowCount = typeof api.getDisplayedRowCount === "function" ? Number(api.getDisplayedRowCount()) : 0;
+  if (!getDisplayedRowAtIndex || !Number.isFinite(displayedRowCount) || displayedRowCount <= rowIndex) return fallback;
+
+  let count = 0;
+  for (let index = rowIndex; index < displayedRowCount; index += 1) {
+    const nextNode = getDisplayedRowAtIndex(index);
+    const nextKey = String(nextNode?.data?.activity_group_key || "").trim();
+    if (nextKey !== groupKey) break;
+    count += 1;
+  }
+
+  return count || fallback;
 }
 
 function connectorCoordinate(value) {
@@ -372,7 +425,7 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   const row = props.data || {};
   const label = String(row?.activity_label || historyActivityLabel(row)).trim() || "Activity";
   const jobPath = scheduledJobActivityPath(row);
-  const groupSize = positiveInteger(row?.activity_group_size);
+  const groupSize = visibleActivityGroupSize(props);
   const cellRef = useRef(null);
   const labelRef = useRef(null);
   const [connectorGeometry, setConnectorGeometry] = useState(null);
@@ -872,7 +925,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         flex: 0,
         width: 390,
         minWidth: 340,
-        valueGetter: (params) => activityTimelineSortValue(params.data || {}),
+        valueGetter: (params) => params.data?.activity_group_sort_value || activityTimelineSortValue(params.data || {}),
         tooltipValueGetter: (params) => {
           const timeline = activityTimelineParts(params.data || {});
           if (!timeline.startText) return "—";
@@ -974,6 +1027,9 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   }, [handleOpenUninstall, normalizedHostname, selectedUninstallJobId]);
 
   const getHistoryRowId = useCallback((params) => String(params.data?.id || params.rowIndex), []);
+  const postSortActivityRows = useCallback((params) => {
+    regroupActivityRowNodes(params?.nodes || []);
+  }, []);
 
   const historyGridContext = useMemo(
     () => ({
@@ -1007,6 +1063,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
           components={GRID_COMPONENTS}
           context={historyGridContext}
           getRowId={getHistoryRowId}
+          postSortRows={postSortActivityRows}
           suppressCellFocus
           theme={DEVICE_DETAILS_GRID_THEME}
         />

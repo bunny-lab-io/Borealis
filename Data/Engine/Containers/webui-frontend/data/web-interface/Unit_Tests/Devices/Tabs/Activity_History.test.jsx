@@ -8,8 +8,10 @@ import {
   historyActivityLabel,
   historyActivityColumnWidth,
   historyActivityGroupKey,
+  regroupActivityRowNodes,
   scheduledJobActivityId,
   scheduledJobActivityPath,
+  visibleActivityGroupSize,
 } from "@/Devices/Tabs/Activity_History.jsx";
 
 describe("Activity History helpers", () => {
@@ -147,6 +149,64 @@ describe("Activity History helpers", () => {
 
     expect(rows.map((row) => row.activity_group_size)).toEqual([2, 2]);
     expect(rows.map((row) => row.activity_group_index)).toEqual([0, 1]);
+  });
+
+  it("adds one timeline sort value for all rows in an activity group", () => {
+    const rows = decorateHistoryActivityRows([
+      {
+        id: 1,
+        started_at: 100,
+        scheduled_job_name: "Workstation Software",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+      {
+        id: 2,
+        started_at: 200,
+        scheduled_job_name: "Workstation Software",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+    ]);
+
+    expect(rows.map((row) => row.activity_group_sort_value)).toEqual([200, 200]);
+  });
+
+  it("regroups sorted row nodes by activity without changing task order inside each group", () => {
+    const nodes = [
+      { data: { id: "workstation-reader", activity_group_key: "scheduled:42:9001" } },
+      { data: { id: "quick-job", activity_group_key: "activity:7" } },
+      { data: { id: "workstation-7zip", activity_group_key: "scheduled:42:9001" } },
+      { data: { id: "filezilla", activity_group_key: "scheduled:43:9001" } },
+    ];
+
+    expect(regroupActivityRowNodes(nodes)).toBe(nodes);
+    expect(nodes.map((node) => node.data.id)).toEqual([
+      "workstation-reader",
+      "workstation-7zip",
+      "quick-job",
+      "filezilla",
+    ]);
+  });
+
+  it("counts only visible contiguous activity rows for connector geometry", () => {
+    const nodes = [
+      { data: { activity_group_key: "scheduled:42:9001" } },
+      { data: { activity_group_key: "scheduled:42:9001" } },
+      { data: { activity_group_key: "activity:7" } },
+    ];
+
+    expect(
+      visibleActivityGroupSize({
+        data: {
+          activity_group_key: "scheduled:42:9001",
+          activity_group_size: 5,
+        },
+        node: { rowIndex: 0 },
+        api: {
+          getDisplayedRowCount: () => nodes.length,
+          getDisplayedRowAtIndex: (index) => nodes[index],
+        },
+      })
+    ).toBe(2);
   });
 
   it("creates one curved connector path per grouped task row", () => {
