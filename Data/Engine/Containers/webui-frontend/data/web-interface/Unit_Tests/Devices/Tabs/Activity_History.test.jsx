@@ -10,6 +10,7 @@ describe("Activity History helpers", () => {
     const row = {
       script_type: "powershell",
       activity_kind: "scheduled_job",
+      scheduled_job_name: "Zoom Workplace [WIN]",
       metadata: {
         scheduled_job_id: 42,
         scheduled_job_run_id: 9001,
@@ -18,7 +19,25 @@ describe("Activity History helpers", () => {
 
     expect(scheduledJobActivityId(row)).toBe(42);
     expect(scheduledJobActivityPath(row)).toBe("/jobs/42?tab=job_history");
-    expect(historyActivityLabel(row)).toBe("Scheduled Job #42");
+    expect(historyActivityLabel(row)).toBe("Job: Zoom Workplace [WIN]");
+  });
+
+  it("falls back to task name then job id for scheduled job labels", () => {
+    expect(
+      historyActivityLabel({
+        script_display_name: "Patch KB5000001",
+        metadata: {
+          scheduled_job_id: 12,
+        },
+      })
+    ).toBe("Job: Patch KB5000001");
+    expect(
+      historyActivityLabel({
+        metadata: {
+          scheduled_job_id: 13,
+        },
+      })
+    ).toBe("Job: #13");
   });
 
   it("uses trusted task-link paths when backend supplies one", () => {
@@ -52,7 +71,7 @@ describe("Activity History helpers", () => {
 
     expect(scheduledJobActivityId(row)).toBe(0);
     expect(scheduledJobActivityPath(row)).toBe("");
-    expect(historyActivityLabel(row)).toBe("Quick Job");
+    expect(historyActivityLabel({ ...row, script_display_name: "Uninstall - 7-Zip" })).toBe("Quick Job: Uninstall - 7-Zip");
   });
 
   it("keeps non-script activity labels readable", () => {

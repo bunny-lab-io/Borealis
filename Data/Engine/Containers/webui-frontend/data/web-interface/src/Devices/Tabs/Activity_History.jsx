@@ -114,12 +114,14 @@ export function scheduledJobActivityPath(row = {}) {
 
 export function historyActivityLabel(row = {}) {
   const jobId = scheduledJobActivityId(row);
-  if (jobId) return `Scheduled Job #${jobId}`;
+  const rawLabel = String(row?.scheduled_job_name || row?.scheduledJobName || row?.script_display_name || row?.script_name || "").trim();
+  if (jobId) return `Job: ${rawLabel || `#${jobId}`}`;
+  const quickJobName = rawLabel || "Activity";
   const activityKind = String(row?.activity_kind || "").trim().toLowerCase();
-  if (activityKind === "software_uninstall") return "Quick Job";
+  if (activityKind === "software_uninstall") return `Quick Job: ${quickJobName}`;
   const scriptType = String(row?.script_type || "").trim().toLowerCase();
   if (scriptType === "powershell" || scriptType === "batch" || scriptType === "bash" || scriptType === "script") {
-    return "Quick Job";
+    return `Quick Job: ${quickJobName}`;
   }
   return formatHistoryScriptType(row?.script_type);
 }

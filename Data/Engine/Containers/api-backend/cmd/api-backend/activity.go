@@ -103,23 +103,25 @@ func activityTimeoutContext(ctx context.Context, auth *authService) (context.Con
 }
 
 type activityHistoryRow struct {
-	ID           sql.NullInt64
-	Hostname     sql.NullString
-	ScriptName   sql.NullString
-	ScriptPath   sql.NullString
-	ScriptType   sql.NullString
-	RanAt        sql.NullInt64
-	Status       sql.NullString
-	Stdout       sql.NullString
-	Stderr       sql.NullString
-	StdoutLen    sql.NullInt64
-	StderrLen    sql.NullInt64
-	QueueLane    sql.NullString
-	ActivityKind sql.NullString
-	MetadataJSON sql.NullString
-	StartedAt    sql.NullInt64
-	UpdatedAt    sql.NullInt64
-	FinishedAt   sql.NullInt64
+	ID               sql.NullInt64
+	Hostname         sql.NullString
+	ScriptName       sql.NullString
+	ScriptPath       sql.NullString
+	ScriptType       sql.NullString
+	RanAt            sql.NullInt64
+	Status           sql.NullString
+	Stdout           sql.NullString
+	Stderr           sql.NullString
+	StdoutLen        sql.NullInt64
+	StderrLen        sql.NullInt64
+	QueueLane        sql.NullString
+	ActivityKind     sql.NullString
+	MetadataJSON     sql.NullString
+	StartedAt        sql.NullInt64
+	UpdatedAt        sql.NullInt64
+	FinishedAt       sql.NullInt64
+	ScheduledJobName sql.NullString
+	ScheduledJobKind sql.NullString
 }
 
 func (s *postgresOperatorStore) listDeviceActivity(ctx context.Context, profile operatorProfile, hostname string) (map[string]any, int, error) {
@@ -153,7 +155,7 @@ func (s *postgresOperatorStore) listDeviceActivity(ctx context.Context, profile 
 	}
 	defer rows.Close()
 
-	history := make([]map[string]any, 0)
+	activityRows := make([]activityHistoryRow, 0)
 	for rows.Next() {
 		var row activityHistoryRow
 		if err := rows.Scan(
@@ -175,10 +177,18 @@ func (s *postgresOperatorStore) listDeviceActivity(ctx context.Context, profile 
 		); err != nil {
 			return nil, 0, err
 		}
-		history = append(history, activityHistorySummaryPayload(row))
+		activityRows = append(activityRows, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, err
+	}
+	activityRows, err = enrichActivityRowsWithScheduledJobInfo(ctx, conn, activityRows)
+	if err != nil {
+		return nil, 0, err
+	}
+	history := make([]map[string]any, 0, len(activityRows))
+	for _, row := range activityRows {
+		history = append(history, activityHistorySummaryPayload(row))
 	}
 	return map[string]any{"history": history}, http.StatusOK, nil
 }
@@ -290,42 +300,115 @@ func (s *postgresOperatorStore) profileCanAccessHostname(ctx context.Context, pr
 
 func activityHistorySummaryPayload(row activityHistoryRow) map[string]any {
 	return map[string]any{
-		"id":            nullInt(row.ID),
-		"hostname":      nullString(row.Hostname),
-		"script_name":   nullString(row.ScriptName),
-		"script_path":   nullString(row.ScriptPath),
-		"script_type":   nullString(row.ScriptType),
-		"ran_at":        nullInt(row.RanAt),
-		"status":        normalizeActivityStatus(nullString(row.Status), cleanText(firstNonEmpty(nullString(row.Status), "Unknown"))),
-		"has_stdout":    nullInt(row.StdoutLen) > 0,
-		"has_stderr":    nullInt(row.StderrLen) > 0,
-		"queue_lane":    nullString(row.QueueLane),
-		"activity_kind": nullString(row.ActivityKind),
-		"metadata":      parseActivityMetadata(nullString(row.MetadataJSON)),
-		"started_at":    nullInt(row.StartedAt),
-		"updated_at":    nullInt(row.UpdatedAt),
-		"finished_at":   nullInt(row.FinishedAt),
+		"id":                 nullInt(row.ID),
+		"hostname":           nullString(row.Hostname),
+		"script_name":        nullString(row.ScriptName),
+		"script_path":        nullString(row.ScriptPath),
+		"script_type":        nullString(row.ScriptType),
+		"ran_at":             nullInt(row.RanAt),
+		"status":             normalizeActivityStatus(nullString(row.Status), cleanText(firstNonEmpty(nullString(row.Status), "Unknown"))),
+		"has_stdout":         nullInt(row.StdoutLen) > 0,
+		"has_stderr":         nullInt(row.StderrLen) > 0,
+		"queue_lane":         nullString(row.QueueLane),
+		"activity_kind":      nullString(row.ActivityKind),
+		"metadata":           parseActivityMetadata(nullString(row.MetadataJSON)),
+		"started_at":         nullInt(row.StartedAt),
+		"updated_at":         nullInt(row.UpdatedAt),
+		"finished_at":        nullInt(row.FinishedAt),
+		"scheduled_job_name": nullString(row.ScheduledJobName),
+		"scheduled_job_kind": nullString(row.ScheduledJobKind),
 	}
 }
 
 func activityHistoryDetailPayload(row activityHistoryRow) map[string]any {
 	return map[string]any{
-		"id":            nullInt(row.ID),
-		"hostname":      nullString(row.Hostname),
-		"script_name":   nullString(row.ScriptName),
-		"script_path":   nullString(row.ScriptPath),
-		"script_type":   nullString(row.ScriptType),
-		"ran_at":        nullInt(row.RanAt),
-		"status":        normalizeActivityStatus(nullString(row.Status), cleanText(firstNonEmpty(nullString(row.Status), "Unknown"))),
-		"stdout":        nullString(row.Stdout),
-		"stderr":        nullString(row.Stderr),
-		"queue_lane":    nullString(row.QueueLane),
-		"activity_kind": nullString(row.ActivityKind),
-		"metadata":      parseActivityMetadata(nullString(row.MetadataJSON)),
-		"started_at":    nullInt(row.StartedAt),
-		"updated_at":    nullInt(row.UpdatedAt),
-		"finished_at":   nullInt(row.FinishedAt),
+		"id":                 nullInt(row.ID),
+		"hostname":           nullString(row.Hostname),
+		"script_name":        nullString(row.ScriptName),
+		"script_path":        nullString(row.ScriptPath),
+		"script_type":        nullString(row.ScriptType),
+		"ran_at":             nullInt(row.RanAt),
+		"status":             normalizeActivityStatus(nullString(row.Status), cleanText(firstNonEmpty(nullString(row.Status), "Unknown"))),
+		"stdout":             nullString(row.Stdout),
+		"stderr":             nullString(row.Stderr),
+		"queue_lane":         nullString(row.QueueLane),
+		"activity_kind":      nullString(row.ActivityKind),
+		"metadata":           parseActivityMetadata(nullString(row.MetadataJSON)),
+		"started_at":         nullInt(row.StartedAt),
+		"updated_at":         nullInt(row.UpdatedAt),
+		"finished_at":        nullInt(row.FinishedAt),
+		"scheduled_job_name": nullString(row.ScheduledJobName),
+		"scheduled_job_kind": nullString(row.ScheduledJobKind),
 	}
+}
+
+type activityScheduledJobInfo struct {
+	Name string
+	Kind string
+}
+
+func enrichActivityRowsWithScheduledJobInfo(ctx context.Context, conn *sql.Conn, activityRows []activityHistoryRow) ([]activityHistoryRow, error) {
+	jobIDs := make([]int64, 0, len(activityRows))
+	for _, row := range activityRows {
+		jobIDs = append(jobIDs, scheduledJobIDFromActivityRow(row))
+	}
+	jobInfo, err := loadActivityScheduledJobInfo(ctx, conn, jobIDs)
+	if err != nil {
+		return nil, err
+	}
+	if len(jobInfo) == 0 {
+		return activityRows, nil
+	}
+	for index, row := range activityRows {
+		jobID := scheduledJobIDFromActivityRow(row)
+		info, ok := jobInfo[jobID]
+		if !ok {
+			continue
+		}
+		activityRows[index].ScheduledJobName = sql.NullString{String: info.Name, Valid: info.Name != ""}
+		activityRows[index].ScheduledJobKind = sql.NullString{String: info.Kind, Valid: info.Kind != ""}
+	}
+	return activityRows, nil
+}
+
+func scheduledJobIDFromActivityRow(row activityHistoryRow) int64 {
+	metadata := parseActivityMetadata(nullString(row.MetadataJSON))
+	return coerceInt64(firstNonEmptyAny(metadata["scheduled_job_id"], metadata["scheduledJobId"]))
+}
+
+func loadActivityScheduledJobInfo(ctx context.Context, conn *sql.Conn, jobIDs []int64) (map[int64]activityScheduledJobInfo, error) {
+	jobIDs = uniquePositiveInt64s(jobIDs)
+	if len(jobIDs) == 0 {
+		return map[int64]activityScheduledJobInfo{}, nil
+	}
+	query, params := inClauseQuery(`
+		SELECT id, name, job_kind
+		  FROM engine.scheduled_jobs
+		 WHERE id IN (%s)
+	`, jobIDs)
+	rows, err := conn.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64]activityScheduledJobInfo, len(jobIDs))
+	for rows.Next() {
+		var id sql.NullInt64
+		var name, kind sql.NullString
+		if err := rows.Scan(&id, &name, &kind); err != nil {
+			return nil, err
+		}
+		jobID := nullInt(id)
+		if jobID <= 0 {
+			continue
+		}
+		result[jobID] = activityScheduledJobInfo{
+			Name: nullString(name),
+			Kind: normalizeScheduledJobKind(nullString(kind)),
+		}
+	}
+	return result, rows.Err()
 }
 
 func normalizeActivityStatus(value string, fallback string) string {
