@@ -16,6 +16,17 @@ Metadata Fields give operators 500 simple custom text fields per device. Use the
 
 Descriptions are global labels. They do not store device values.
 
+## Reserved Fields
+
+Borealis reserves some fields for standard audit data collected by bundled assemblies. These field descriptions cannot be renamed in the global metadata field editor. The field number links to the assembly that can collect the value.
+
+| Field Number | Field Description | Linked Assembly |
+| :--- | :--- | :--- |
+| Field 001 | Server Roles | `Detect Server Roles [WIN]` |
+| Field 002 | Bitlocker Drive Encryption | `Audit Bitlocker / TPM Status [WIN]` |
+
+Create recurring scheduled jobs for the reserved assemblies when you want Borealis to refresh this data on a regular cadence. Borealis does not force collection. Operators still choose which assemblies to run, which targets receive them, and how often values refresh.
+
 ## Fill Device Values
 
 1. Open a device.
@@ -58,7 +69,8 @@ Blank values queue a clear.
 
     ### Source map
 
-    - Metadata API: `Data/Engine/Containers/api-backend/data/services/API/metadata_fields.py`
+    - Metadata API: `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`
+    - Shared metadata helpers: `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`
     - Admin UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Metadata_Field_List.jsx`
     - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Metadata.jsx`
 
@@ -68,3 +80,5 @@ Blank values queue a clear.
     - Sparse per-device values live in `device_metadata_fields`.
     - Values are base64-encoded at rest and capped at 1024 decoded characters.
     - Newest `modified_at` wins. Future agent timestamps are clamped before conflict comparison.
+    - Reserved metadata field definitions are API-level constants. Existing database descriptions for reserved fields are ignored during list rendering, and definition updates for reserved fields return `reserved_metadata_field`.
+    - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.

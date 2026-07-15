@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData } from "react-router-dom";
-import { Alert, Box, LinearProgress, TextField, Typography } from "@mui/material";
+import { Link as RouterLink, useLoaderData } from "react-router-dom";
+import { Alert, Box, LinearProgress, Link, TextField, Tooltip, Typography } from "@mui/material";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
@@ -15,12 +15,15 @@ import {
   requireAuthenticatedRequest,
   rethrowIfRouteRedirect,
 } from "../app/routes/routeData.js";
+import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_ICON = LabelRoundedIcon;
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
+export const RESERVED_METADATA_TOOLTIP =
+  "Reserved Borealis Metadata Field - Create a scheduled job using the hyperlinked assembly to collect data for this field.";
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -60,7 +63,53 @@ const GRID_SX = {
   },
 };
 
-function DescriptionCellRenderer(props) {
+export function isReservedMetadataField(row) {
+  return Boolean(row?.reserved);
+}
+
+export function getReservedAssemblyPath(row) {
+  const assembly = row?.linked_assembly && typeof row.linked_assembly === "object" ? row.linked_assembly : {};
+  const explicitPath = String(row?.linked_assembly_path || row?.assembly_path || assembly.path || "").trim();
+  if (explicitPath) return explicitPath;
+  const guid = String(row?.linked_assembly_guid || row?.assembly_guid || assembly.guid || "").trim();
+  if (!guid) return "";
+  const type = String(row?.linked_assembly_type || row?.assembly_type || assembly.type || "script")
+    .trim()
+    .toLowerCase();
+  if (type === "ansible_playbook") return APP_PATHS.assemblyAnsible(guid);
+  if (type === "workflow") return APP_PATHS.assemblyWorkflow(guid);
+  return APP_PATHS.assemblyScript(guid);
+}
+
+export function FieldNumberCellRenderer(props) {
+  const { data, value } = props;
+  const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
+  const assemblyPath = isReservedMetadataField(data) ? getReservedAssemblyPath(data) : "";
+  if (!assemblyPath) return safeValue;
+  const tooltip = String(data?.reserved_tooltip || RESERVED_METADATA_TOOLTIP);
+  return (
+    <Tooltip title={tooltip} arrow placement="top-start">
+      <Link
+        component={RouterLink}
+        to={assemblyPath}
+        onClick={(event) => event.stopPropagation()}
+        sx={{
+          color: "#7dd3fc",
+          fontWeight: 700,
+          textDecorationColor: "rgba(125,211,252,0.55)",
+          "&:hover": {
+            color: "#bae6fd",
+            textDecorationColor: "#bae6fd",
+          },
+        }}
+      >
+        {safeValue}
+      </Link>
+    </Tooltip>
+  );
+}
+
+export function DescriptionCellRenderer(props) {
   const { data, value, onSaveDescription } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
   const [draft, setDraft] = useState(safeValue);
@@ -93,6 +142,52 @@ function DescriptionCellRenderer(props) {
     }
     setError("Failed to save description");
   }, [data, draft, onSaveDescription, safeValue]);
+
+  if (isReservedMetadataField(data)) {
+    const tooltip = String(data?.reserved_tooltip || RESERVED_METADATA_TOOLTIP);
+    const reservedLabel = safeValue || data?.label || "";
+    return (
+      <Tooltip title={tooltip} arrow placement="top-start">
+        <Box component="span" sx={{ display: "block" }}>
+          <TextField
+            value={reservedLabel}
+            variant="outlined"
+            size="small"
+            fullWidth
+            InputProps={{ readOnly: true }}
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onFocus={(event) => event.stopPropagation()}
+            sx={{
+              mt: 0.45,
+              mb: 0.45,
+              "& .MuiOutlinedInput-root": {
+                height: 34,
+                color: "#dff7ff",
+                fontFamily: gridFontFamily,
+                fontSize: "0.875rem",
+                backgroundColor: "rgba(14,116,144,0.18)",
+                "& fieldset": {
+                  borderColor: "rgba(125,211,252,0.45)",
+                },
+                "&:hover fieldset": {
+                  borderColor: "#7dd3fc",
+                },
+                "&.Mui-focused fieldset": {
+                  borderColor: "#7dd3fc",
+                },
+              },
+              "& .MuiOutlinedInput-input": {
+                py: 0.75,
+                px: 1.5,
+                cursor: "help",
+              },
+            }}
+          />
+        </Box>
+      </Tooltip>
+    );
+  }
 
   return (
     <TextField
@@ -226,6 +321,10 @@ export default function MetadataFieldList() {
     async (row, description) => {
       const fieldNumber = Number(row?.field_number || 0);
       if (!Number.isInteger(fieldNumber) || fieldNumber < 1 || fieldNumber > 500) return false;
+      if (isReservedMetadataField(row)) {
+        void notifyOperator?.(String(row?.reserved_tooltip || RESERVED_METADATA_TOOLTIP), { variant: "warning" });
+        return false;
+      }
       try {
         const response = await fetch(`/api/metadata_fields/${fieldNumber}`, {
           method: "PUT",
@@ -269,6 +368,7 @@ export default function MetadataFieldList() {
         pinned: "left",
         sortable: true,
         filter: "agTextColumnFilter",
+        cellRenderer: FieldNumberCellRenderer,
       },
       {
         headerName: "Field Description",
@@ -297,7 +397,7 @@ export default function MetadataFieldList() {
       {loading ? <LinearProgress /> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Typography sx={{ color: "#94a3b8", fontSize: "0.86rem" }}>
-        Empty descriptions fall back to Field 001 through Field 500.
+        Empty descriptions fall back to Field 001 through Field 500. Reserved Borealis fields link to the assembly that collects their values.
       </Typography>
     </Box>
   );
