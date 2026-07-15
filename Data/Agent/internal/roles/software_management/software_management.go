@@ -354,7 +354,7 @@ func (m *Manager) collectSoftware(ctx context.Context) ([]Software, error) {
 }
 
 func (m *Manager) collectWindowsSoftware(ctx context.Context) ([]Software, error) {
-	result, err := m.runner(ctx, softwareCommandTimeout, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", windowsSoftwareInventoryScript())
+	result, err := m.runPowerShellScriptFile(ctx, windowsSoftwareInventoryScript(), softwareCommandTimeout)
 	if err != nil || result.ExitCode != 0 {
 		return nil, commandError(result, err)
 	}
@@ -828,7 +828,7 @@ func (m *Manager) runPowerShellScriptFile(ctx context.Context, script string, ti
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return commandResult{}, err
 	}
-	file, err := os.CreateTemp(root, "icon_extract_*.ps1")
+	file, err := os.CreateTemp(root, "software_*.ps1")
 	if err != nil {
 		return commandResult{}, err
 	}
@@ -925,12 +925,233 @@ func normalizeMetadata(value any) map[string]any {
 }
 
 func windowsSoftwareInventoryScript() string {
-	return `$ErrorActionPreference='SilentlyContinue'; ` +
-		`$rows=@(); ` +
-		`$paths=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*','HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'); ` +
-		`foreach($p in $paths){ try { Get-ItemProperty -Path $p -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -and "$($_.DisplayName)".Trim().Length -gt 0 } | ForEach-Object { $m=[ordered]@{}; if($_.Publisher){$m.publisher="$($_.Publisher)".Trim()}; if($_.InstallLocation){$m.install_location="$($_.InstallLocation)".Trim()}; if($_.InstallDate){$m.install_date="$($_.InstallDate)".Trim()}; if($_.EstimatedSize){$m.estimated_size_kb=[int64]$_.EstimatedSize}; if($_.DisplayIcon){$m.display_icon="$($_.DisplayIcon)".Trim()}; if($_.UninstallString){$m.uninstall_string="$($_.UninstallString)".Trim()}; if($_.QuietUninstallString){$m.quiet_uninstall_string="$($_.QuietUninstallString)".Trim()}; if($_.PSChildName){$m.product_code="$($_.PSChildName)".Trim()}; if($null -ne $_.WindowsInstaller -and "$($_.WindowsInstaller)" -ne ''){$m.windows_installer=[bool]$_.WindowsInstaller}; $rows += [pscustomobject]@{name="$($_.DisplayName)".Trim(); version="$($_.DisplayVersion)".Trim(); source='local_installed'; metadata=$m} } } catch {} }; ` +
-		`try { Get-AppxPackage -AllUsers -ErrorAction Stop | Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } | ForEach-Object { $m=[ordered]@{}; if($_.Publisher){$m.publisher="$($_.Publisher)".Trim()}; if($_.InstallLocation){$m.install_location="$($_.InstallLocation)".Trim()}; if($_.PackageFamilyName){$m.package_family_name="$($_.PackageFamilyName)".Trim()}; if($null -ne $_.NonRemovable){$m.non_removable=[bool]$_.NonRemovable}; $rows += [pscustomobject]@{name="$($_.Name)".Trim(); version="$($_.Version)".Trim(); source='windows_store'; metadata=$m} } } catch { try { Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } | ForEach-Object { $m=[ordered]@{}; if($_.Publisher){$m.publisher="$($_.Publisher)".Trim()}; if($_.InstallLocation){$m.install_location="$($_.InstallLocation)".Trim()}; if($_.PackageFamilyName){$m.package_family_name="$($_.PackageFamilyName)".Trim()}; if($null -ne $_.NonRemovable){$m.non_removable=[bool]$_.NonRemovable}; $rows += [pscustomobject]@{name="$($_.Name)".Trim(); version="$($_.Version)".Trim(); source='windows_store'; metadata=$m} } } catch {} }; ` +
-		`$rows | Sort-Object name,source,version -Unique | ConvertTo-Json -Depth 6 -Compress`
+	return `
+$ErrorActionPreference = 'SilentlyContinue'
+$rows = @()
+
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
+
+public static class BorealisRegistryTimestamp {
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern int RegQueryInfoKey(
+    SafeRegistryHandle hKey,
+    StringBuilder lpClass,
+    ref uint lpcchClass,
+    IntPtr lpReserved,
+    out uint lpcSubKeys,
+    out uint lpcbMaxSubKeyLen,
+    out uint lpcbMaxClassLen,
+    out uint lpcValues,
+    out uint lpcbMaxValueNameLen,
+    out uint lpcbMaxValueLen,
+    out uint lpcbSecurityDescriptor,
+    out long lpftLastWriteTime
+  );
+
+  public static DateTime GetLastWriteTime(RegistryKey key) {
+    if (key == null) {
+      return DateTime.MinValue;
+    }
+    uint classLength = 0;
+    uint subKeys;
+    uint maxSubKeyLen;
+    uint maxClassLen;
+    uint values;
+    uint maxValueNameLen;
+    uint maxValueLen;
+    uint securityDescriptor;
+    long lastWriteTime;
+    int result = RegQueryInfoKey(
+      key.Handle,
+      null,
+      ref classLength,
+      IntPtr.Zero,
+      out subKeys,
+      out maxSubKeyLen,
+      out maxClassLen,
+      out values,
+      out maxValueNameLen,
+      out maxValueLen,
+      out securityDescriptor,
+      out lastWriteTime
+    );
+    if (result != 0 || lastWriteTime <= 0) {
+      return DateTime.MinValue;
+    }
+    return DateTime.FromFileTimeUtc(lastWriteTime).ToLocalTime();
+  }
+}
+"@
+
+function Convert-BorealisInstallDate {
+  param($Value)
+  if ($null -eq $Value) { return "" }
+  if ($Value -is [DateTime]) {
+    if ($Value.Year -lt 1980) { return "" }
+    return $Value.ToString("yyyyMMdd")
+  }
+  $text = "$Value".Trim()
+  if (-not $text) { return "" }
+  $date = [DateTime]::MinValue
+  if ([DateTime]::TryParseExact($text, "yyyyMMdd", $null, [System.Globalization.DateTimeStyles]::None, [ref]$date)) {
+    if ($date.Year -lt 1980) { return "" }
+    return $date.ToString("yyyyMMdd")
+  }
+  if ([DateTime]::TryParse($text, [ref]$date)) {
+    if ($date.Year -lt 1980) { return "" }
+    return $date.ToString("yyyyMMdd")
+  }
+  return ""
+}
+
+function Set-BorealisInstallDateMetadata {
+  param(
+    [System.Collections.Specialized.OrderedDictionary]$Metadata,
+    $Value,
+    [string]$Source,
+    [string]$Confidence
+  )
+  if ($null -eq $Metadata -or $Metadata.Contains("install_date")) { return }
+  $date = Convert-BorealisInstallDate $Value
+  if (-not $date) { return }
+  $Metadata.install_date = $date
+  $Metadata.install_date_source = $Source
+  $Metadata.install_date_confidence = $Confidence
+}
+
+function Get-BorealisMsiInstallDate {
+  param([string]$ProductCode)
+  $code = "$ProductCode".Trim()
+  if ($code -notmatch '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$') {
+    return ""
+  }
+  try {
+    if ($script:BorealisWindowsInstaller -eq $null) {
+      $script:BorealisWindowsInstaller = New-Object -ComObject WindowsInstaller.Installer
+    }
+    return Convert-BorealisInstallDate ($script:BorealisWindowsInstaller.ProductInfo($code, "InstallDate"))
+  } catch {
+    return ""
+  }
+}
+
+function Get-BorealisRegistryLastWriteDate {
+  param($Key)
+  try {
+    $timestamp = [BorealisRegistryTimestamp]::GetLastWriteTime($Key)
+    return Convert-BorealisInstallDate $timestamp
+  } catch {
+    return ""
+  }
+}
+
+function Resolve-BorealisPathCandidate {
+  param([string]$Value)
+  $text = "$Value".Trim()
+  if (-not $text) { return "" }
+  $text = [Environment]::ExpandEnvironmentVariables($text).Trim().Trim('"')
+  if ($text -match '^\s*"([^"]+)"') {
+    return [Environment]::ExpandEnvironmentVariables($Matches[1]).Trim()
+  }
+  if ($text -match '^\s*([^,]+?\.(?:exe|dll|ico|icl|cpl|ocx|scr|msi|cmd|bat|ps1))\b') {
+    return [Environment]::ExpandEnvironmentVariables($Matches[1]).Trim().Trim('"')
+  }
+  return $text
+}
+
+function Get-BorealisFilesystemDate {
+  param([string]$Path)
+  $candidate = Resolve-BorealisPathCandidate $Path
+  if (-not $candidate) { return "" }
+  try {
+    $item = Get-Item -LiteralPath $candidate -ErrorAction Stop
+    return Convert-BorealisInstallDate $item.CreationTime
+  } catch {
+    return ""
+  }
+}
+
+function Add-BorealisRegistrySoftwareRow {
+  param($Key)
+  try {
+    $item = Get-ItemProperty -LiteralPath $Key.PSPath -ErrorAction Stop
+    $name = "$($item.DisplayName)".Trim()
+    if (-not $name) { return }
+    $m = [ordered]@{}
+    if ($item.Publisher) { $m.publisher = "$($item.Publisher)".Trim() }
+    if ($item.InstallLocation) { $m.install_location = "$($item.InstallLocation)".Trim() }
+    if ($item.EstimatedSize) { $m.estimated_size_kb = [int64]$item.EstimatedSize }
+    if ($item.DisplayIcon) { $m.display_icon = "$($item.DisplayIcon)".Trim() }
+    if ($item.UninstallString) { $m.uninstall_string = "$($item.UninstallString)".Trim() }
+    if ($item.QuietUninstallString) { $m.quiet_uninstall_string = "$($item.QuietUninstallString)".Trim() }
+    if ($item.PSChildName) { $m.product_code = "$($item.PSChildName)".Trim() }
+    if ($null -ne $item.WindowsInstaller -and "$($item.WindowsInstaller)" -ne "") { $m.windows_installer = [bool]$item.WindowsInstaller }
+
+    Set-BorealisInstallDateMetadata $m $item.InstallDate "registry_install_date" "exact"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisMsiInstallDate "$($item.PSChildName)") "msi_product_info" "exact"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisRegistryLastWriteDate $Key) "uninstall_key_last_write_time" "estimated"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisFilesystemDate "$($item.InstallLocation)") "install_location_creation_time" "estimated"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisFilesystemDate "$($item.DisplayIcon)") "display_icon_file_creation_time" "estimated"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisFilesystemDate "$($item.QuietUninstallString)") "quiet_uninstall_command_file_creation_time" "estimated"
+    Set-BorealisInstallDateMetadata $m (Get-BorealisFilesystemDate "$($item.UninstallString)") "uninstall_command_file_creation_time" "estimated"
+
+    $script:rows += [pscustomobject]@{
+      name = $name
+      version = "$($item.DisplayVersion)".Trim()
+      source = "local_installed"
+      metadata = $m
+    }
+  } catch {}
+}
+
+$paths = @(
+  'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+  'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)
+foreach ($p in $paths) {
+  try {
+    Get-Item -Path $p -ErrorAction SilentlyContinue | ForEach-Object { Add-BorealisRegistrySoftwareRow $_ }
+  } catch {}
+}
+
+function Add-BorealisAppxRows {
+  param([bool]$AllUsers)
+  try {
+    $packages = if ($AllUsers) { Get-AppxPackage -AllUsers -ErrorAction Stop } else { Get-AppxPackage -ErrorAction SilentlyContinue }
+    $packages |
+      Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
+      ForEach-Object {
+        $m = [ordered]@{}
+        if ($_.Publisher) { $m.publisher = "$($_.Publisher)".Trim() }
+        if ($_.InstallLocation) { $m.install_location = "$($_.InstallLocation)".Trim() }
+        if ($_.PackageFamilyName) { $m.package_family_name = "$($_.PackageFamilyName)".Trim() }
+        if ($null -ne $_.NonRemovable) { $m.non_removable = [bool]$_.NonRemovable }
+        Set-BorealisInstallDateMetadata $m (Get-BorealisFilesystemDate "$($_.InstallLocation)") "install_location_creation_time" "estimated"
+        $script:rows += [pscustomobject]@{
+          name = "$($_.Name)".Trim()
+          version = "$($_.Version)".Trim()
+          source = "windows_store"
+          metadata = $m
+        }
+      }
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+if (-not (Add-BorealisAppxRows $true)) {
+  [void](Add-BorealisAppxRows $false)
+}
+
+$rows | Sort-Object name,source,version -Unique | ConvertTo-Json -Depth 6 -Compress
+`
 }
 
 func windowsIconExtractionScript(specsJSONB64 string) string {

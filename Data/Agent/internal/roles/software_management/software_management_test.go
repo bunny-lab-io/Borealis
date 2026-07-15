@@ -22,7 +22,7 @@ func TestParseLinuxPackagesDedupeAndSort(t *testing.T) {
 }
 
 func TestParseWindowsSoftwareSingleObject(t *testing.T) {
-	raw := `{"name":"Example App","version":"1.0","source":"registry","metadata":{"publisher":"Example Co","estimated_size_kb":1024,"windows_installer":true,"empty":""}}`
+	raw := `{"name":"Example App","version":"1.0","source":"registry","metadata":{"publisher":"Example Co","estimated_size_kb":1024,"windows_installer":true,"install_date":"20240115","install_date_source":"uninstall_key_last_write_time","install_date_confidence":"estimated","empty":""}}`
 	rows, err := parseWindowsSoftware(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -37,8 +37,27 @@ func TestParseWindowsSoftwareSingleObject(t *testing.T) {
 	if row.Metadata["publisher"] != "Example Co" || row.Metadata["windows_installer"] != true {
 		t.Fatalf("metadata = %#v", row.Metadata)
 	}
+	if row.Metadata["install_date"] != "20240115" || row.Metadata["install_date_source"] != "uninstall_key_last_write_time" || row.Metadata["install_date_confidence"] != "estimated" {
+		t.Fatalf("install date metadata = %#v", row.Metadata)
+	}
 	if _, ok := row.Metadata["empty"]; ok {
 		t.Fatalf("empty metadata was retained: %#v", row.Metadata)
+	}
+}
+
+func TestWindowsSoftwareInventoryScriptCollectsInstallDateFallbacks(t *testing.T) {
+	script := windowsSoftwareInventoryScript()
+	for _, expected := range []string{
+		"registry_install_date",
+		"RegQueryInfoKey",
+		"WindowsInstaller.Installer",
+		"uninstall_key_last_write_time",
+		"install_location_creation_time",
+		"install_date_confidence",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("script missing %q", expected)
+		}
 	}
 }
 
