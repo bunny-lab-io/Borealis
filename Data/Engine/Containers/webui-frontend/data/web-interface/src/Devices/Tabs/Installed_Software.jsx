@@ -974,6 +974,72 @@ function formatEstimatedSizeKb(sizeKb) {
   return `${value.toFixed(decimals)} ${SIZE_UNITS[unitIndex]}`;
 }
 
+function getSoftwareInstallDateRaw(row = {}) {
+  const metadata = getSoftwareMetadata(row);
+  return [
+    metadata?.install_date,
+    metadata?.installed_on,
+    metadata?.installed_at,
+    metadata?.installDate,
+    row?.install_date,
+    row?.installed_on,
+    row?.installed_at,
+  ].find((value) => value != null && String(value).trim() !== "");
+}
+
+function parseSoftwareInstallDateValue(value) {
+  if (value == null || value === "" || typeof value === "boolean") return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  const text = String(value).trim();
+  if (!text) return null;
+  const compactDate = text.replace(/[-/.\s]/g, "");
+  if (/^\d{8}$/.test(compactDate)) {
+    const year = Number.parseInt(compactDate.slice(0, 4), 10);
+    const month = Number.parseInt(compactDate.slice(4, 6), 10);
+    const day = Number.parseInt(compactDate.slice(6, 8), 10);
+    const date = new Date(year, month - 1, day);
+    if (
+      date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day
+    ) {
+      return date;
+    }
+    if (/^\d{8}$/.test(text)) {
+      return null;
+    }
+  }
+  const numeric = Number(text);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    const timestampMs = numeric > 9_999_999_999 ? numeric : numeric * 1000;
+    const date = new Date(timestampMs);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function getSoftwareInstallDateSortValue(row = {}) {
+  const date = parseSoftwareInstallDateValue(getSoftwareInstallDateRaw(row));
+  return date ? date.getTime() : 0;
+}
+
+export function formatSoftwareInstallDateValue(value) {
+  const date = parseSoftwareInstallDateValue(value);
+  if (!date) return "—";
+  return date.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+export function formatSoftwareInstallDate(row = {}) {
+  return formatSoftwareInstallDateValue(getSoftwareInstallDateRaw(row));
+}
+
 function ActionCell({ data, hostname, busyKey, onRequestUninstall }) {
   const row = data || {};
   const eligibility = getUninstallCapability(row, hostname);
@@ -1916,6 +1982,16 @@ export default function InstalledSoftwareTab({
         filter: "agNumberColumnFilter",
         valueGetter: (params) => getEstimatedSizeKb(params.data),
         valueFormatter: (params) => formatEstimatedSizeKb(params.value),
+      },
+      {
+        colId: "install_date",
+        headerName: "Install Date",
+        width: 160,
+        minWidth: 145,
+        filter: "agTextColumnFilter",
+        valueGetter: (params) => formatSoftwareInstallDate(params.data),
+        comparator: (_left, _right, nodeA, nodeB) =>
+          getSoftwareInstallDateSortValue(nodeA?.data) - getSoftwareInstallDateSortValue(nodeB?.data),
       },
       {
         field: "source",
