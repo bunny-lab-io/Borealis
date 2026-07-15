@@ -598,11 +598,19 @@ const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
   const onViewOutput = props.context?.onViewOutput;
 
   return (
-    <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+    <Box sx={{ display: "flex", gap: 1, alignItems: "center", height: "100%", minWidth: 0 }}>
       {row.has_stdout ? (
         <Button
           size="small"
-          sx={{ color: MAGIC_UI.accentA, textTransform: "none", minWidth: 0, p: 0 }}
+          sx={{
+            alignItems: "center",
+            color: MAGIC_UI.accentA,
+            display: "inline-flex",
+            lineHeight: 1,
+            minWidth: 0,
+            p: 0,
+            textTransform: "none",
+          }}
           onClick={() => onViewOutput && onViewOutput(row, "stdout")}
         >
           StdOut
@@ -611,7 +619,15 @@ const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
       {row.has_stderr ? (
         <Button
           size="small"
-          sx={{ color: "#ff7b89", textTransform: "none", minWidth: 0, p: 0 }}
+          sx={{
+            alignItems: "center",
+            color: "#ff7b89",
+            display: "inline-flex",
+            lineHeight: 1,
+            minWidth: 0,
+            p: 0,
+            textTransform: "none",
+          }}
           onClick={() => onViewOutput && onViewOutput(row, "stderr")}
         >
           StdErr
