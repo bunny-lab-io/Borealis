@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityConnectorPaths,
   decorateHistoryActivityRows,
   historyActivityLabel,
   historyActivityColumnWidth,
@@ -114,6 +115,8 @@ describe("Activity History helpers", () => {
 
     expect(rows[0].activity_label).toBe("Uninstall - 7-Zip");
     expect(rows[0].activity_group_key).toBe("activity:1");
+    expect(rows[0].activity_group_size).toBe(1);
+    expect(rows[0].activity_group_index).toBe(0);
   });
 
   it("sizes activity column from widest label plus padding", () => {
@@ -123,5 +126,32 @@ describe("Activity History helpers", () => {
     ]);
 
     expect(historyActivityColumnWidth(rows, (value) => String(value).length * 10)).toBe(302);
+  });
+
+  it("adds group size metadata for multi-task activities", () => {
+    const rows = decorateHistoryActivityRows([
+      {
+        id: 1,
+        scheduled_job_name: "Zoom Workplace [WIN]",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+      {
+        id: 2,
+        scheduled_job_name: "Zoom Workplace [WIN]",
+        metadata: { scheduled_job_id: 42, scheduled_job_run_id: 9001 },
+      },
+    ]);
+
+    expect(rows.map((row) => row.activity_group_size)).toEqual([2, 2]);
+    expect(rows.map((row) => row.activity_group_index)).toEqual([0, 1]);
+  });
+
+  it("creates one curved connector path per grouped task row", () => {
+    expect(activityConnectorPaths(1)).toEqual([]);
+    expect(activityConnectorPaths(3)).toEqual([
+      "M 26 150 C 58 150, 62 50, 100 50",
+      "M 26 150 C 58 150, 62 150, 100 150",
+      "M 26 150 C 58 150, 62 250, 100 250",
+    ]);
   });
 });
