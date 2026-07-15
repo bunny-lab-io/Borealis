@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle } from "@mui/material";
 import Prism from "prismjs";
@@ -192,15 +192,36 @@ export function decorateHistoryActivityRows(rows = []) {
   });
 }
 
-export function activityConnectorPaths(rowCount = 0) {
+function connectorCoordinate(value) {
+  const numberValue = Number(value || 0);
+  if (!Number.isFinite(numberValue)) return "0";
+  const rounded = Math.round(numberValue * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function activityConnectorPaths(rowCount = 0, width = 100, height = 0, sourceY = 50) {
   const count = positiveInteger(rowCount);
   if (count <= 1) return [];
-  const height = count * 100;
-  const sourceY = 50;
+  const connectorWidth = Math.max(1, Number(width || 0));
+  const connectorHeight = Math.max(1, Number(height || count * 100));
+  const boundedSourceY = Math.min(Math.max(Number(sourceY || 0), 0), connectorHeight);
+  const controlX1 = connectorWidth * 0.32;
+  const controlX2 = connectorWidth * 0.68;
+  const rowHeight = connectorHeight / count;
   return Array.from({ length: count }, (_unused, index) => {
-    const targetY = index * 100 + 50;
-    return `M 26 ${sourceY} C 58 ${sourceY}, 62 ${targetY}, 100 ${targetY}`;
+    const targetY = index * rowHeight + rowHeight / 2;
+    return [
+      `M 0 ${connectorCoordinate(boundedSourceY)}`,
+      `C ${connectorCoordinate(controlX1)} ${connectorCoordinate(boundedSourceY)},`,
+      `${connectorCoordinate(controlX2)} ${connectorCoordinate(targetY)},`,
+      `${connectorCoordinate(connectorWidth)} ${connectorCoordinate(targetY)}`,
+    ].join(" ");
   });
+}
+
+function sameConnectorGeometry(left, right) {
+  if (!left || !right) return left === right;
+  return left.left === right.left && left.width === right.width && left.height === right.height && left.sourceY === right.sourceY;
 }
 
 const StatusPillCell = React.memo(function StatusPillCell(props) {
@@ -244,21 +265,24 @@ const StatusPillCell = React.memo(function StatusPillCell(props) {
   );
 });
 
-const ActivityConnectorSvg = React.memo(function ActivityConnectorSvg({ rowCount = 0 }) {
-  const paths = activityConnectorPaths(rowCount);
+const ActivityConnectorSvg = React.memo(function ActivityConnectorSvg({ rowCount = 0, geometry = null }) {
+  const width = Number(geometry?.width || 0);
+  const height = Number(geometry?.height || 0);
+  const paths = width > 12 && height > 1 ? activityConnectorPaths(rowCount, width, height, geometry?.sourceY) : [];
   if (!paths.length) return null;
-  const height = positiveInteger(rowCount) * 100;
   return (
     <Box
       component="svg"
-      viewBox={`0 0 100 ${height}`}
+      viewBox={`0 0 ${connectorCoordinate(width)} ${connectorCoordinate(height)}`}
       preserveAspectRatio="none"
       aria-hidden="true"
       sx={{
         position: "absolute",
-        inset: 0,
-        width: "100%",
-        height: "100%",
+        left: geometry?.left || 0,
+        top: 0,
+        width,
+        height,
+        zIndex: 0,
         pointerEvents: "none",
         opacity: 0.55,
       }}
@@ -283,6 +307,47 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   const label = String(row?.activity_label || historyActivityLabel(row)).trim() || "Activity";
   const jobPath = scheduledJobActivityPath(row);
   const groupSize = positiveInteger(row?.activity_group_size);
+  const cellRef = useRef(null);
+  const labelRef = useRef(null);
+  const [connectorGeometry, setConnectorGeometry] = useState(null);
+  useLayoutEffect(() => {
+    if (groupSize <= 1) {
+      setConnectorGeometry((previous) => (previous ? null : previous));
+      return undefined;
+    }
+
+    const updateConnectorGeometry = () => {
+      const cellNode = cellRef.current;
+      const labelNode = labelRef.current;
+      if (!cellNode || !labelNode) {
+        setConnectorGeometry((previous) => (previous ? null : previous));
+        return;
+      }
+
+      const cellRect = cellNode.getBoundingClientRect();
+      const labelRect = labelNode.getBoundingClientRect();
+      const left = Math.ceil(labelRect.right - cellRect.left + 8);
+      const width = Math.floor(cellRect.width - left);
+      const height = Math.floor(cellRect.height);
+      const sourceY = Math.round(labelRect.top - cellRect.top + labelRect.height / 2);
+      const nextGeometry = width > 12 && height > 1 ? { left, width, height, sourceY } : null;
+      setConnectorGeometry((previous) => (sameConnectorGeometry(previous, nextGeometry) ? previous : nextGeometry));
+    };
+
+    updateConnectorGeometry();
+
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateConnectorGeometry) : null;
+    if (resizeObserver && cellRef.current && labelRef.current) {
+      resizeObserver.observe(cellRef.current);
+      resizeObserver.observe(labelRef.current);
+    }
+    if (typeof window !== "undefined") window.addEventListener("resize", updateConnectorGeometry);
+
+    return () => {
+      if (resizeObserver) resizeObserver.disconnect();
+      if (typeof window !== "undefined") window.removeEventListener("resize", updateConnectorGeometry);
+    };
+  }, [groupSize, label, jobPath]);
   const labelSx = {
     position: "relative",
     zIndex: 1,
@@ -302,6 +367,7 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   if (!jobPath) {
     return (
       <Box
+        ref={cellRef}
         component="span"
         sx={{
           position: "relative",
@@ -313,8 +379,8 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
           pt: 1,
         }}
       >
-        <ActivityConnectorSvg rowCount={groupSize} />
-        <Box component="span" sx={{ ...labelSx, color: "#dbeafe" }}>
+        <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
+        <Box ref={labelRef} component="span" sx={{ ...labelSx, color: "#dbeafe" }}>
           {label}
         </Box>
       </Box>
@@ -322,6 +388,7 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   }
   return (
     <Box
+      ref={cellRef}
       sx={{
         position: "relative",
         display: "flex",
@@ -332,8 +399,9 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
         pt: 1,
       }}
     >
-      <ActivityConnectorSvg rowCount={groupSize} />
+      <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
       <Box
+        ref={labelRef}
         component={Link}
         to={jobPath}
         title={`Open ${label}`}
