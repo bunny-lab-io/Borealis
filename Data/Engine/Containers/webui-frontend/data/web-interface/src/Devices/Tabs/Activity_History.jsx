@@ -238,7 +238,7 @@ export function formatActivityTimelineTimestamp(epochSec = 0) {
   return `${mm}/${dd}/${yyyy} @ ${hh}:${min}${ampm}`;
 }
 
-export function formatActivityTimelineDuration(startEpoch = 0, endEpoch = 0, includeSeconds = false) {
+export function formatActivityTimelineDuration(startEpoch = 0, endEpoch = 0) {
   const start = positiveInteger(startEpoch);
   const end = positiveInteger(endEpoch);
   if (!start || !end) return "";
@@ -247,8 +247,12 @@ export function formatActivityTimelineDuration(startEpoch = 0, endEpoch = 0, inc
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  const text = `${days}d ${hours}hr ${minutes}m`;
-  return includeSeconds ? `${text} ${seconds}s` : text;
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  if (seconds || parts.length === 0) parts.push(`${seconds}s`);
+  return parts.join(" ");
 }
 
 function isActivityRunning(row = {}) {
@@ -282,7 +286,7 @@ export function activityTimelineParts(row = {}, nowEpoch = 0) {
     endAt: terminalEndAt,
     startText: formatActivityTimelineTimestamp(startAt),
     endText: running ? "" : formatActivityTimelineTimestamp(terminalEndAt),
-    durationText: formatActivityTimelineDuration(startAt, durationEndAt, running),
+    durationText: formatActivityTimelineDuration(startAt, durationEndAt),
   };
 }
 
@@ -422,28 +426,36 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
     whiteSpace: "nowrap",
     fontWeight: 600,
     fontFamily: gridFontFamily,
-    backgroundColor: "rgba(7,11,24,0.78)",
-    borderRadius: "6px",
-    pr: 0.75,
+    lineHeight: 1.2,
+  };
+  const cellSx = {
+    position: "relative",
+    display: "block",
+    boxSizing: "border-box",
+    height: "100%",
+    minWidth: 0,
+    overflow: "hidden",
+  };
+  const labelRowSx = {
+    position: "relative",
+    zIndex: 1,
+    display: "flex",
+    alignItems: "center",
+    height: "min(100%, var(--ag-row-height, 42px))",
+    minWidth: 0,
   };
   if (!jobPath) {
     return (
       <Box
         ref={cellRef}
         component="span"
-        sx={{
-          position: "relative",
-          display: "flex",
-          alignItems: "flex-start",
-          boxSizing: "border-box",
-          height: "100%",
-          minWidth: 0,
-          pt: 1,
-        }}
+        sx={cellSx}
       >
         <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
-        <Box ref={labelRef} component="span" sx={{ ...labelSx, color: "#dbeafe" }}>
-          {label}
+        <Box component="span" sx={labelRowSx}>
+          <Box ref={labelRef} component="span" sx={{ ...labelSx, color: "#dbeafe" }}>
+            {label}
+          </Box>
         </Box>
       </Box>
     );
@@ -451,35 +463,29 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   return (
     <Box
       ref={cellRef}
-      sx={{
-        position: "relative",
-        display: "flex",
-        alignItems: "flex-start",
-        boxSizing: "border-box",
-        height: "100%",
-        minWidth: 0,
-        pt: 1,
-      }}
+      sx={cellSx}
     >
       <ActivityConnectorSvg rowCount={groupSize} geometry={connectorGeometry} />
-      <Box
-        ref={labelRef}
-        component={Link}
-        to={jobPath}
-        title={`Open ${label}`}
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-        sx={{
-          ...labelSx,
-          color: ACTIVITY_LINK_COLOR,
-          textDecoration: "none",
-          "&:hover": {
-            color: "#8fbfff",
-            textDecoration: "underline",
-          },
-        }}
-      >
-        {label}
+      <Box component="span" sx={labelRowSx}>
+        <Box
+          ref={labelRef}
+          component={Link}
+          to={jobPath}
+          title={`Open ${label}`}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          sx={{
+            ...labelSx,
+            color: ACTIVITY_LINK_COLOR,
+            textDecoration: "none",
+            "&:hover": {
+              color: "#8fbfff",
+              textDecoration: "underline",
+            },
+          }}
+        >
+          {label}
+        </Box>
       </Box>
     </Box>
   );
@@ -775,6 +781,10 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
     () => historyActivityColumnWidth(historyDisplayRows),
     [historyDisplayRows]
   );
+  const hasRunningHistoryRows = useMemo(
+    () => historyDisplayRows.some((row) => isActivityRunning(row)),
+    [historyDisplayRows]
+  );
 
   const loadHistory = useCallback(async () => {
     if (!normalizedHostname) {
@@ -795,6 +805,12 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   useEffect(() => {
     loadHistory();
   }, [loadHistory, refreshToken]);
+
+  useEffect(() => {
+    if (!normalizedHostname || !hasRunningHistoryRows) return undefined;
+    const intervalId = setInterval(loadHistory, 10000);
+    return () => clearInterval(intervalId);
+  }, [hasRunningHistoryRows, loadHistory, normalizedHostname]);
 
   useEffect(() => {
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
@@ -969,7 +985,16 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
 
   return (
     <>
-      <GridShell sx={{ flexGrow: 1, minHeight: 360 }}>
+      <GridShell
+        sx={{
+          flexGrow: 1,
+          minHeight: 360,
+          "--ag-row-hover-color": "rgba(73,156,196,0.2)",
+          "& .ag-row-hover": {
+            backgroundColor: "rgba(73,156,196,0.2) !important",
+          },
+        }}
+      >
         <AgGridReact
           rowData={historyDisplayRows}
           columnDefs={historyColumnDefs}

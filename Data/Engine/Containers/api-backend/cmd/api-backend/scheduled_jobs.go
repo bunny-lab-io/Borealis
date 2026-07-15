@@ -644,6 +644,70 @@ func (s *postgresOperatorStore) toggleScheduledJob(ctx context.Context, profile 
 	return map[string]any{"job": payload}, http.StatusOK, nil
 }
 
+func scheduledRunIDsForJobID(ctx context.Context, tx *sql.Tx, jobID int64) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id FROM engine.scheduled_job_runs WHERE job_id=$1", jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	runIDs := []int64{}
+	for rows.Next() {
+		var id sql.NullInt64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id.Valid {
+			runIDs = append(runIDs, id.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return uniquePositiveInt64s(runIDs), nil
+}
+
+func scheduledActivityIDsForRunIDs(ctx context.Context, tx *sql.Tx, runIDs []int64) ([]int64, error) {
+	runIDs = uniquePositiveInt64s(runIDs)
+	if len(runIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT activity_id FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)", pq.Array(runIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	activityIDs := []int64{}
+	for rows.Next() {
+		var id sql.NullInt64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id.Valid {
+			activityIDs = append(activityIDs, id.Int64)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return uniquePositiveInt64s(activityIDs), nil
+}
+
+func deleteScheduledActivityHistoryRows(ctx context.Context, tx *sql.Tx, activityIDs []int64) (int64, error) {
+	activityIDs = uniquePositiveInt64s(activityIDs)
+	if len(activityIDs) == 0 {
+		return 0, nil
+	}
+	result, err := tx.ExecContext(ctx, "DELETE FROM engine.activity_history WHERE id = ANY($1)", pq.Array(activityIDs))
+	if err != nil {
+		return 0, err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 func (s *postgresOperatorStore) deleteScheduledJob(ctx context.Context, profile operatorProfile, jobID int64) (map[string]any, int, error) {
 	allowedSiteIDs, err := s.siteIDsForProfile(ctx, profile)
 	if err != nil {
@@ -663,6 +727,14 @@ func (s *postgresOperatorStore) deleteScheduledJob(ctx context.Context, profile 
 		return nil, http.StatusInternalServerError, err
 	}
 	defer rollbackQuietly(tx)
+	runIDs, err := scheduledRunIDsForJobID(ctx, tx, jobID)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	activityIDs, err := scheduledActivityIDsForRunIDs(ctx, tx, runIDs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	result, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_jobs WHERE id=$1", jobID)
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
@@ -674,10 +746,19 @@ func (s *postgresOperatorStore) deleteScheduledJob(ctx context.Context, profile 
 	if deleted == 0 {
 		return map[string]any{"error": "not found"}, http.StatusNotFound, nil
 	}
+	if len(runIDs) > 0 {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)", pq.Array(runIDs)); err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+	}
+	deletedActivities, err := deleteScheduledActivityHistoryRows(ctx, tx, activityIDs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return map[string]any{"status": "ok"}, http.StatusOK, nil
+	return map[string]any{"status": "ok", "activity_rows_deleted": deletedActivities}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) listScheduledJobRuns(ctx context.Context, profile operatorProfile, jobID int64, days int) (map[string]any, int, error) {
@@ -776,6 +857,10 @@ func (s *postgresOperatorStore) clearScheduledJobRuns(ctx context.Context, profi
 		return nil, http.StatusInternalServerError, err
 	}
 	defer rollbackQuietly(tx)
+	activityIDs, err := scheduledActivityIDsForRunIDs(ctx, tx, oldRunIDs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM engine.scheduled_job_run_activity WHERE run_id = ANY($1)", pq.Array(oldRunIDs)); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -796,10 +881,14 @@ func (s *postgresOperatorStore) clearScheduledJobRuns(ctx context.Context, profi
 	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
+	deletedActivities, err := deleteScheduledActivityHistoryRows(ctx, tx, activityIDs)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
-	return map[string]any{"status": "ok", "cleared": cleared, "kept_occurrence": latest.Int64}, http.StatusOK, nil
+	return map[string]any{"status": "ok", "cleared": cleared, "kept_occurrence": latest.Int64, "activity_rows_deleted": deletedActivities}, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) listScheduledJobDevices(ctx context.Context, profile operatorProfile, jobID int64, occurrence *int64) (map[string]any, int, error) {

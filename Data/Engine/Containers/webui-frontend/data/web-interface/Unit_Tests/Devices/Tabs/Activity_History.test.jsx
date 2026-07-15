@@ -163,8 +163,10 @@ describe("Activity History helpers", () => {
   });
 
   it("formats completed and running activity timelines", () => {
-    expect(formatActivityTimelineDuration(100, 5500)).toBe("0d 1hr 30m");
-    expect(formatActivityTimelineDuration(100, 5505, true)).toBe("0d 1hr 30m 5s");
+    expect(formatActivityTimelineDuration(100, 5500)).toBe("1h 30m");
+    expect(formatActivityTimelineDuration(100, 5505)).toBe("1h 30m 5s");
+    expect(formatActivityTimelineDuration(100, 145)).toBe("45s");
+    expect(formatActivityTimelineDuration(100, 100)).toBe("0s");
 
     const completed = activityTimelineParts({
       status: "success",
@@ -175,7 +177,7 @@ describe("Activity History helpers", () => {
     expect(completed.running).toBe(false);
     expect(completed.endAt).toBe(5500);
     expect(completed.endText).not.toBe("");
-    expect(completed.durationText).toBe("0d 1hr 30m");
+    expect(completed.durationText).toBe("1h 30m");
 
     const running = activityTimelineParts(
       {
@@ -188,7 +190,7 @@ describe("Activity History helpers", () => {
     expect(running.running).toBe(true);
     expect(running.endAt).toBe(0);
     expect(running.endText).toBe("");
-    expect(running.durationText).toBe("0d 0hr 1m 5s");
+    expect(running.durationText).toBe("1m 5s");
   });
 
   it("sorts activity timelines by started time with legacy fallbacks", () => {
