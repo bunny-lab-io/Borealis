@@ -196,7 +196,7 @@ export function activityConnectorPaths(rowCount = 0) {
   const count = positiveInteger(rowCount);
   if (count <= 1) return [];
   const height = count * 100;
-  const sourceY = height / 2;
+  const sourceY = 50;
   return Array.from({ length: count }, (_unused, index) => {
     const targetY = index * 100 + 50;
     return `M 26 ${sourceY} C 58 ${sourceY}, 62 ${targetY}, 100 ${targetY}`;
@@ -306,9 +306,11 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
         sx={{
           position: "relative",
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-start",
+          boxSizing: "border-box",
           height: "100%",
           minWidth: 0,
+          pt: 1,
         }}
       >
         <ActivityConnectorSvg rowCount={groupSize} />
@@ -323,9 +325,11 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
       sx={{
         position: "relative",
         display: "flex",
-        alignItems: "center",
+        alignItems: "flex-start",
+        boxSizing: "border-box",
         height: "100%",
         minWidth: 0,
+        pt: 1,
       }}
     >
       <ActivityConnectorSvg rowCount={groupSize} />
@@ -351,93 +355,49 @@ const HistoryActivityCell = React.memo(function HistoryActivityCell(props) {
   );
 });
 
-const TaskConnector = React.memo(function TaskConnector({ visible = false }) {
-  if (!visible) return null;
-  return (
-    <Box
-      component="svg"
-      viewBox="0 0 34 20"
-      preserveAspectRatio="none"
-      aria-hidden="true"
-      sx={{
-        flex: "0 0 34px",
-        width: 34,
-        height: 20,
-        mr: 0.75,
-        pointerEvents: "none",
-        opacity: 0.55,
-      }}
-    >
-      <path
-        d="M 0 10 C 10 10, 15 10, 34 10"
-        fill="none"
-        stroke={ACTIVITY_CONNECTOR_COLOR}
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        vectorEffect="non-scaling-stroke"
-      />
-    </Box>
-  );
-});
-
 const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
   const row = props.data || {};
   const onOpenUninstall = props.context?.onOpenUninstall;
   const label = String(props?.value || row?.script_display_name || row?.script_name || "Activity").trim() || "Activity";
   const isUninstall = String(row?.activity_kind || "").trim().toLowerCase() === "software_uninstall";
-  const showConnector = positiveInteger(row?.activity_group_size) > 1;
   if (!isUninstall) {
     return (
       <Box
         component="span"
         sx={{
-          display: "flex",
-          alignItems: "center",
+          display: "inline-block",
           minWidth: 0,
-          height: "100%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
         }}
       >
-        <TaskConnector visible={showConnector} />
-        <Box
-          component="span"
-          sx={{
-            display: "inline-block",
-            minWidth: 0,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {label}
-        </Box>
+        {label}
       </Box>
     );
   }
   return (
-    <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, height: "100%" }}>
-      <TaskConnector visible={showConnector} />
-      <Button
-        size="small"
-        onClick={() => onOpenUninstall && onOpenUninstall(row)}
-        sx={{
-          p: 0,
-          minWidth: 0,
-          justifyContent: "flex-start",
-          textTransform: "none",
+    <Button
+      size="small"
+      onClick={() => onOpenUninstall && onOpenUninstall(row)}
+      sx={{
+        p: 0,
+        minWidth: 0,
+        justifyContent: "flex-start",
+        textTransform: "none",
+        color: "#dbeafe",
+        fontWeight: 600,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        "&:hover": {
+          backgroundColor: "transparent",
           color: "#dbeafe",
-          fontWeight: 600,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          "&:hover": {
-            backgroundColor: "transparent",
-            color: "#dbeafe",
-          },
-        }}
-      >
-        {label}
-      </Button>
-    </Box>
+        },
+      }}
+    >
+      {label}
+    </Button>
   );
 });
 

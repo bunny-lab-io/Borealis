@@ -149,9 +149,9 @@ describe("Activity History helpers", () => {
   it("creates one curved connector path per grouped task row", () => {
     expect(activityConnectorPaths(1)).toEqual([]);
     expect(activityConnectorPaths(3)).toEqual([
-      "M 26 150 C 58 150, 62 50, 100 50",
-      "M 26 150 C 58 150, 62 150, 100 150",
-      "M 26 150 C 58 150, 62 250, 100 250",
+      "M 26 50 C 58 50, 62 50, 100 50",
+      "M 26 50 C 58 50, 62 150, 100 150",
+      "M 26 50 C 58 50, 62 250, 100 250",
     ]);
   });
 });
