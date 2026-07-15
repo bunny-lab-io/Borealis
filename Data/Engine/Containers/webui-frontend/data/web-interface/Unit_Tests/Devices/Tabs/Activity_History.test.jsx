@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   activityConnectorPaths,
+  activityTimelineParts,
+  activityTimelineSortValue,
   decorateHistoryActivityRows,
+  formatActivityTimelineDuration,
   historyActivityLabel,
   historyActivityColumnWidth,
   historyActivityGroupKey,
@@ -157,5 +160,40 @@ describe("Activity History helpers", () => {
       "M 0 18 C 76.8 18, 163.2 20, 240 20",
       "M 0 18 C 76.8 18, 163.2 60, 240 60",
     ]);
+  });
+
+  it("formats completed and running activity timelines", () => {
+    expect(formatActivityTimelineDuration(100, 5500)).toBe("0d 1hr 30m");
+    expect(formatActivityTimelineDuration(100, 5505, true)).toBe("0d 1hr 30m 5s");
+
+    const completed = activityTimelineParts({
+      status: "success",
+      started_at: 100,
+      finished_at: 5500,
+      updated_at: 6000,
+    });
+    expect(completed.running).toBe(false);
+    expect(completed.endAt).toBe(5500);
+    expect(completed.endText).not.toBe("");
+    expect(completed.durationText).toBe("0d 1hr 30m");
+
+    const running = activityTimelineParts(
+      {
+        status: "running",
+        started_at: 100,
+        updated_at: 6000,
+      },
+      165
+    );
+    expect(running.running).toBe(true);
+    expect(running.endAt).toBe(0);
+    expect(running.endText).toBe("");
+    expect(running.durationText).toBe("0d 0hr 1m 5s");
+  });
+
+  it("sorts activity timelines by started time with legacy fallbacks", () => {
+    expect(activityTimelineSortValue({ started_at: 50, ran_at: 80, id: 99 })).toBe(50);
+    expect(activityTimelineSortValue({ ran_at: 80, updated_at: 90, id: 99 })).toBe(80);
+    expect(activityTimelineSortValue({ id: 99 })).toBe(99);
   });
 });

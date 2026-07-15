@@ -224,6 +224,68 @@ function sameConnectorGeometry(left, right) {
   return left.left === right.left && left.width === right.width && left.height === right.height && left.sourceY === right.sourceY;
 }
 
+export function formatActivityTimelineTimestamp(epochSec = 0) {
+  const ts = positiveInteger(epochSec);
+  if (!ts) return "";
+  const date = new Date(ts * 1000);
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const yyyy = date.getFullYear();
+  let hh = date.getHours();
+  const ampm = hh >= 12 ? "PM" : "AM";
+  hh = hh % 12 || 12;
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `${mm}/${dd}/${yyyy} @ ${hh}:${min}${ampm}`;
+}
+
+export function formatActivityTimelineDuration(startEpoch = 0, endEpoch = 0, includeSeconds = false) {
+  const start = positiveInteger(startEpoch);
+  const end = positiveInteger(endEpoch);
+  if (!start || !end) return "";
+  const totalSeconds = Math.max(0, end - start);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const text = `${days}d ${hours}hr ${minutes}m`;
+  return includeSeconds ? `${text} ${seconds}s` : text;
+}
+
+function isActivityRunning(row = {}) {
+  return String(row?.status || "").trim().toLowerCase() === "running";
+}
+
+export function activityTimelineSortValue(row = {}) {
+  return (
+    positiveInteger(row?.started_at) ||
+    positiveInteger(row?.startedAt) ||
+    positiveInteger(row?.ran_at) ||
+    positiveInteger(row?.ranAt) ||
+    positiveInteger(row?.updated_at) ||
+    positiveInteger(row?.updatedAt) ||
+    positiveInteger(row?.id)
+  );
+}
+
+export function activityTimelineParts(row = {}, nowEpoch = 0) {
+  const running = isActivityRunning(row);
+  const startAt = positiveInteger(row?.started_at) || positiveInteger(row?.startedAt) || positiveInteger(row?.ran_at) || positiveInteger(row?.ranAt);
+  const terminalEndAt =
+    positiveInteger(row?.finished_at) ||
+    positiveInteger(row?.finishedAt) ||
+    (!running ? positiveInteger(row?.updated_at) || positiveInteger(row?.updatedAt) : 0);
+  const liveEndAt = running ? positiveInteger(nowEpoch) || Math.floor(Date.now() / 1000) : 0;
+  const durationEndAt = running ? liveEndAt : terminalEndAt;
+  return {
+    running,
+    startAt,
+    endAt: terminalEndAt,
+    startText: formatActivityTimelineTimestamp(startAt),
+    endText: running ? "" : formatActivityTimelineTimestamp(terminalEndAt),
+    durationText: formatActivityTimelineDuration(startAt, durationEndAt, running),
+  };
+}
+
 const StatusPillCell = React.memo(function StatusPillCell(props) {
   const value = String(props?.value || "");
   if (!value) return null;
@@ -469,6 +531,68 @@ const HistoryTaskCell = React.memo(function HistoryTaskCell(props) {
   );
 });
 
+const HistoryTimelineCell = React.memo(function HistoryTimelineCell(props) {
+  const row = props.data || {};
+  const running = isActivityRunning(row);
+  const [nowEpoch, setNowEpoch] = useState(() => Math.floor(Date.now() / 1000));
+
+  useEffect(() => {
+    if (!running) return undefined;
+    const tick = () => setNowEpoch(Math.floor(Date.now() / 1000));
+    tick();
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, [running]);
+
+  const timeline = activityTimelineParts(row, nowEpoch);
+  if (!timeline.startText) {
+    return (
+      <Box component="span" sx={{ color: "#6b7280" }}>
+        —
+      </Box>
+    );
+  }
+
+  const rangeText = timeline.endText ? `${timeline.startText} - ${timeline.endText}` : timeline.startText;
+  const title = timeline.durationText ? `${rangeText} ${timeline.durationText}` : rangeText;
+  return (
+    <Box
+      component="span"
+      title={title}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        minWidth: 0,
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <Box
+        component="span"
+        sx={{
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {rangeText}
+      </Box>
+      {timeline.durationText ? (
+        <Box
+          component="span"
+          sx={{
+            flex: "0 0 auto",
+            ml: 0.75,
+            color: "#6b7280",
+          }}
+        >
+          {timeline.durationText}
+        </Box>
+      ) : null}
+    </Box>
+  );
+});
+
 const HistoryActionsCell = React.memo(function HistoryActionsCell(props) {
   const row = props.data || {};
   const onViewOutput = props.context?.onViewOutput;
@@ -502,6 +626,7 @@ const GRID_COMPONENTS = {
   HistoryActionsCell,
   HistoryTaskCell,
   HistoryActivityCell,
+  HistoryTimelineCell,
 };
 
 export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) {
@@ -515,20 +640,6 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
   const [selectedUninstallJobId, setSelectedUninstallJobId] = useState(0);
 
   const normalizedHostname = useMemo(() => String(hostname || "").trim(), [hostname]);
-
-  const formatTimestamp = useCallback((epochSec) => {
-    const ts = Number(epochSec || 0);
-    if (!ts) return "—";
-    const date = new Date(ts * 1000);
-    const mm = String(date.getMonth() + 1).padStart(2, "0");
-    const dd = String(date.getDate()).padStart(2, "0");
-    const yyyy = date.getFullYear();
-    let hh = date.getHours();
-    const ampm = hh >= 12 ? "PM" : "AM";
-    hh = hh % 12 || 12;
-    const min = String(date.getMinutes()).padStart(2, "0");
-    return `${mm}/${dd}/${yyyy} @ ${hh}:${min} ${ampm}`;
-  }, []);
 
   const buildUninstallDialogJob = useCallback(
     (payload = {}) => {
@@ -723,39 +834,22 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         cellRenderer: "HistoryTaskCell",
       },
       {
-        headerName: "Lane",
-        field: "queue_lane",
-        flex: 0,
-        width: 180,
-        valueFormatter: (params) =>
-          String(params.value || "")
-            .replace(/_/g, " ")
-            .replace(/\b\w/g, (ch) => ch.toUpperCase()) || "General",
-      },
-      {
-        headerName: "Queued",
-        field: "ran_at",
-        flex: 0,
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        sort: "desc",
-        comparator: (a, b) => (a || 0) - (b || 0),
-      },
-      {
-        headerName: "Started",
+        headerName: "Timeline",
+        colId: "timeline",
         field: "started_at",
         flex: 0,
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
+        width: 390,
+        minWidth: 340,
+        valueGetter: (params) => activityTimelineSortValue(params.data || {}),
+        tooltipValueGetter: (params) => {
+          const timeline = activityTimelineParts(params.data || {});
+          if (!timeline.startText) return "—";
+          const rangeText = timeline.endText ? `${timeline.startText} - ${timeline.endText}` : timeline.startText;
+          return timeline.durationText ? `${rangeText} ${timeline.durationText}` : rangeText;
+        },
+        sort: "desc",
         comparator: (a, b) => (a || 0) - (b || 0),
-      },
-      {
-        headerName: "Updated",
-        field: "updated_at",
-        flex: 0,
-        width: 190,
-        valueFormatter: (params) => formatTimestamp(params.value),
-        comparator: (a, b) => (a || 0) - (b || 0),
+        cellRenderer: "HistoryTimelineCell",
       },
       {
         headerName: "Job Status",
@@ -774,7 +868,7 @@ export default function ActivityHistoryTab({ hostname = "", refreshToken = 0 }) 
         cellRenderer: "HistoryActionsCell",
       },
     ],
-    [activityColumnMinWidth, formatTimestamp]
+    [activityColumnMinWidth]
   );
 
   const highlightCode = useCallback((code, lang) => {
