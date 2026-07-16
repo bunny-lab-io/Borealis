@@ -397,6 +397,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"engine_virtual_ip":      tunnelPayload["engine_virtual_ip"],
 		"vnc_port":               vncPort,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
+		"image_codec":            normalizeVNCImageCodec(body["image_codec"]),
 		"guacamole_ws_url":       websocketURLForRequest(r, wsPath),
 		"guacamole_ws_path":      wsPath,
 		"token":                  guacToken,
@@ -441,6 +442,7 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 		"height":                 height,
 		"dpi":                    96,
 		"performance_preference": normalizePerformancePreference(body["performance_preference"]),
+		"image_codec":            normalizeVNCImageCodec(body["image_codec"]),
 	}
 	if authProbe {
 		payload["auth_probe"] = true
@@ -1701,6 +1703,18 @@ func normalizePerformancePreference(value any) int {
 		return 2
 	}
 	return parsed
+}
+
+func normalizeVNCImageCodec(value any) string {
+	normalized := strings.ToLower(cleanText(value))
+	switch normalized {
+	case "jpg", "jpeg":
+		return "jpeg"
+	case "png":
+		return "png"
+	default:
+		return ""
+	}
 }
 
 func vncEnvFloat(name string, fallback float64) float64 {

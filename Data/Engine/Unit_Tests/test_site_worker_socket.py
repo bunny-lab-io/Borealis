@@ -672,6 +672,7 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
             "width": 1920,
             "height": 1080,
             "performance_preference": 2,
+            "image_codec": "png",
         },
     )
 
@@ -688,6 +689,7 @@ def test_site_worker_remote_desktop_registers_worker_guacamole_session(tmp_path:
     assert session.session_id == "vnc-session-1"
     assert session.participant_id == "participant-1"
     assert session.performance_preference == 2
+    assert session.image_codec == "png"
     assert session.restart_tunnel is None
 
 

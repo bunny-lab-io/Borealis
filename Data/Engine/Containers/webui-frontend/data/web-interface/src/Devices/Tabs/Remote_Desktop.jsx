@@ -13,7 +13,6 @@ import {
   Divider,
   ListItemButton,
   ListItemText,
-  Slider,
   Switch,
   LinearProgress,
   Stack,
@@ -317,6 +316,10 @@ const REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY = "borealis_remote_desktop_performa
 const PERFORMANCE_PREFERENCE_MIN = -2;
 const PERFORMANCE_PREFERENCE_MAX = 2;
 const PERFORMANCE_PREFERENCE_DEFAULT = PERFORMANCE_PREFERENCE_MIN;
+const PERFORMANCE_MODE_SPEED = "speed";
+const PERFORMANCE_MODE_QUALITY = "quality";
+const PERFORMANCE_CODEC_SPEED = "jpeg";
+const PERFORMANCE_CODEC_QUALITY = "png";
 const DISPLAY_INFERENCE_MIN_WIDTH = 640;
 const DISPLAY_INFERENCE_WIDE_RATIO = 4.1;
 const DISPLAY_INFERENCE_MAX_ASPECT_ERROR = 0.08;
@@ -359,6 +362,24 @@ function normalizePerformancePreference(value) {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) return PERFORMANCE_PREFERENCE_DEFAULT;
   return Math.max(PERFORMANCE_PREFERENCE_MIN, Math.min(PERFORMANCE_PREFERENCE_MAX, parsed));
+}
+
+function preferenceModeFromValue(value) {
+  return normalizePerformancePreference(value) > 0 ? PERFORMANCE_MODE_QUALITY : PERFORMANCE_MODE_SPEED;
+}
+
+function preferenceValueFromMode(value) {
+  return value === PERFORMANCE_MODE_QUALITY ? PERFORMANCE_PREFERENCE_MAX : PERFORMANCE_PREFERENCE_MIN;
+}
+
+function normalizePerformanceTogglePreference(value) {
+  return preferenceValueFromMode(preferenceModeFromValue(value));
+}
+
+function performanceCodecFromPreference(value) {
+  return normalizePerformanceTogglePreference(value) === PERFORMANCE_PREFERENCE_MAX
+    ? PERFORMANCE_CODEC_QUALITY
+    : PERFORMANCE_CODEC_SPEED;
 }
 
 function sendGuacamoleKeysym(client, keysym) {
@@ -1150,7 +1171,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const [performancePreference, setPerformancePreference] = useState(() => {
     if (typeof window === "undefined") return PERFORMANCE_PREFERENCE_DEFAULT;
     try {
-      return normalizePerformancePreference(
+      return normalizePerformanceTogglePreference(
         window.localStorage.getItem(REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY)
       );
     } catch {
@@ -1197,6 +1218,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
   const sessionIdRef = useRef("");
   const sessionStateRef = useRef(sessionState);
   const loadingRef = useRef(loading);
+  const performancePreferenceRef = useRef(performancePreference);
   const clipboardSyncRef = useRef(clipboardSync);
   const clipboardLastRef = useRef("");
   const connectAttemptRef = useRef(0);
@@ -1424,11 +1446,15 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     try {
       window.localStorage.setItem(
         REMOTE_DESKTOP_PERFORMANCE_STORAGE_KEY,
-        String(normalizePerformancePreference(performancePreference))
+        String(normalizePerformanceTogglePreference(performancePreference))
       );
     } catch {
       /* ignore */
     }
+  }, [performancePreference]);
+
+  useEffect(() => {
+    performancePreferenceRef.current = normalizePerformanceTogglePreference(performancePreference);
   }, [performancePreference]);
 
   useEffect(() => {
@@ -2010,6 +2036,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setVncStage("starting_agent_vnc");
     setSessionState("connecting");
     setStatusMessage("Starting Agent VNC service...");
+    const selectedPerformancePreference = normalizePerformanceTogglePreference(performancePreferenceRef.current);
     try {
       const resp = await fetch("/api/vnc/establish", {
         method: "POST",
@@ -2019,7 +2046,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
           agent_id: agentId,
           remove_wallpaper: true,
           viewer: "guacamole",
-          performance_preference: normalizePerformancePreference(performancePreference),
+          performance_preference: selectedPerformancePreference,
+          image_codec: performanceCodecFromPreference(selectedPerformancePreference),
           auth_probe: Boolean(options.authProbe),
         }),
       });
@@ -2059,7 +2087,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
         window.clearTimeout(timeoutId);
       }
     }
-  }, [agentId, applySessionBootstrap, handleAgentSocketUnavailable, performancePreference]);
+  }, [agentId, applySessionBootstrap, handleAgentSocketUnavailable]);
 
   const handleClipboardSyncAttempt = useCallback(() => {
     setClipboardSync(false);
@@ -2067,25 +2095,48 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
     setClipboardNotImplementedOpen(true);
   }, []);
 
-  const handlePerformancePreferenceChange = useCallback((_event, value) => {
-    setPerformancePreference(normalizePerformancePreference(Array.isArray(value) ? value[0] : value));
-  }, []);
-
-  const handlePerformancePreferenceCommitted = useCallback(
-    (_event, value) => {
-      const normalized = normalizePerformancePreference(Array.isArray(value) ? value[0] : value);
+  const handlePerformanceModeSelect = useCallback(
+    (mode) => {
+      const normalized = preferenceValueFromMode(mode);
+      if (normalizePerformanceTogglePreference(performancePreferenceRef.current) === normalized) return;
+      performancePreferenceRef.current = normalized;
       setPerformancePreference(normalized);
-      if (sessionStateRef.current === "connected") {
-        setStatusMessage("Speed/quality preference will apply on reconnect.");
+      const shouldReconnect =
+        Boolean(agentIdRef.current) &&
+        (sessionStateRef.current === "connected" ||
+          sessionStateRef.current === "connecting" ||
+          loadingRef.current);
+      if (shouldReconnect) {
+        cancelPendingConnect();
+        clearSessionReconnect();
+        sessionReconnectAttemptRef.current = 0;
+        manualDisconnectRef.current = true;
+        setLoading(true);
+        setSessionState("connecting");
+        setVncStage("retrying");
+        setStatusMessage("Applying remote desktop display preference...");
         void notifyOperator({
-          title: "Remote Desktop Preference Saved",
-          message: "Speed/quality preference will apply on the next remote desktop reconnect.",
+          title: "Remote Desktop Preference Applying",
+          message: "Remote desktop will reconnect to apply the display preference.",
           icon: "info",
           variant: "info",
         });
+        void (async () => {
+          try {
+            teardownDisplay();
+            await disconnectVnc("display_preference_changed");
+            await sleep(250);
+          } finally {
+            manualDisconnectRef.current = false;
+          }
+          const runner = connectRunnerRef.current;
+          if (typeof runner === "function") {
+            void runner({ automaticReconnect: true, reconnectReason: "display_preference_changed" });
+          }
+        })();
       }
     },
-    [notifyOperator]
+    [cancelPendingConnect, clearSessionReconnect, disconnectVnc, notifyOperator, teardownDisplay]
   );
 
   const openGuacamoleSession = useCallback(
@@ -3284,6 +3335,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
 
   const showClipboardActions = isConnected;
   const displaySettingsEnabled = isConnected;
+  const performanceMode = preferenceModeFromValue(performancePreference);
   const showLaunchButton = !loading;
   const showConnectingStatus =
     !isConnected &&
@@ -3684,59 +3736,61 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                 onClick={handleDisconnect}
               />
               <Box sx={{ px: 1.5, pt: 1, pb: 1.25 }}>
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  justifyContent="space-between"
-                  sx={{ mb: 0.5 }}
-                >
-                  <Typography
-                    variant="caption"
-                    sx={{ color: SIDEBAR_THEME.muted, fontWeight: 700 }}
-                  >
-                    Speed
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{ color: SIDEBAR_THEME.muted, fontWeight: 700 }}
-                  >
-                    Quality
-                  </Typography>
-                </Stack>
-                <Slider
-                  value={performancePreference}
-                  min={PERFORMANCE_PREFERENCE_MIN}
-                  max={PERFORMANCE_PREFERENCE_MAX}
-                  step={1}
-                  size="small"
-                  onChange={handlePerformancePreferenceChange}
-                  onChangeCommitted={handlePerformancePreferenceCommitted}
-                  aria-label="Remote desktop speed quality preference"
+                <Box
+                  role="radiogroup"
+                  aria-label="Remote desktop display preference"
                   sx={{
-                    color: NAV_COLORS.cyan,
-                    height: 4,
-                    px: 0.25,
-                    "& .MuiSlider-rail": {
-                      opacity: 0.28,
-                      backgroundColor: "rgba(148,163,184,0.75)",
-                    },
-                    "& .MuiSlider-track": {
-                      border: 0,
-                      background:
-                        "linear-gradient(90deg, rgba(125,183,255,0.95), rgba(192,132,252,0.9))",
-                    },
-                    "& .MuiSlider-thumb": {
-                      width: 14,
-                      height: 14,
-                      backgroundColor: "#dbeafe",
-                      border: "1px solid rgba(125,183,255,0.72)",
-                      boxShadow: "0 0 0 4px rgba(125,183,255,0.12)",
-                      "&:hover, &.Mui-focusVisible": {
-                        boxShadow: "0 0 0 6px rgba(125,183,255,0.18)",
-                      },
-                    },
+                    display: "grid",
+                    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                    gap: 0.25,
+                    p: 0.25,
+                    borderRadius: 1,
+                    border: "1px solid rgba(125,183,255,0.2)",
+                    backgroundColor: "rgba(8,15,32,0.78)",
                   }}
-                />
+                >
+                  {[
+                    { mode: PERFORMANCE_MODE_SPEED, label: "Prefer Speed" },
+                    { mode: PERFORMANCE_MODE_QUALITY, label: "Prefer Quality" },
+                  ].map((item) => {
+                    const active = performanceMode === item.mode;
+                    return (
+                      <Button
+                        key={item.mode}
+                        size="small"
+                        role="radio"
+                        aria-checked={active}
+                        aria-pressed={active}
+                        onClick={() => handlePerformanceModeSelect(item.mode)}
+                        sx={{
+                          minWidth: 0,
+                          minHeight: 34,
+                          px: 0.75,
+                          py: 0.75,
+                          borderRadius: 0.75,
+                          textTransform: "none",
+                          whiteSpace: "normal",
+                          wordBreak: "normal",
+                          lineHeight: 1.15,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          color: active ? "#e6f2ff" : SIDEBAR_THEME.muted,
+                          background: active
+                            ? "linear-gradient(180deg, rgba(125,183,255,0.24), rgba(125,183,255,0.12))"
+                            : "transparent",
+                          border: `1px solid ${active ? "rgba(125,183,255,0.48)" : "transparent"}`,
+                          boxShadow: active ? "inset 0 0 0 1px rgba(255,255,255,0.04)" : "none",
+                          "&:hover": {
+                            backgroundColor: active ? "rgba(125,183,255,0.18)" : "rgba(255,255,255,0.05)",
+                            borderColor: active ? "rgba(125,183,255,0.58)" : "rgba(148,163,184,0.18)",
+                          },
+                        }}
+                      >
+                        {item.label}
+                      </Button>
+                    );
+                  })}
+                </Box>
               </Box>
               </>
             </SidebarSection>

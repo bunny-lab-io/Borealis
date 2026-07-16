@@ -623,3 +623,22 @@ func TestNormalizePerformancePreferencePreservesSpeedBias(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeVNCImageCodec(t *testing.T) {
+	cases := map[any]string{
+		"jpg":     "jpeg",
+		"jpeg":    "jpeg",
+		"JPEG":    "jpeg",
+		"png":     "png",
+		" PNG ":   "png",
+		"webp":    "",
+		"unknown": "",
+		"":        "",
+		nil:       "",
+	}
+	for input, expected := range cases {
+		if got := normalizeVNCImageCodec(input); got != expected {
+			t.Fatalf("normalizeVNCImageCodec(%#v)=%q want %q", input, got, expected)
+		}
+	}
+}
