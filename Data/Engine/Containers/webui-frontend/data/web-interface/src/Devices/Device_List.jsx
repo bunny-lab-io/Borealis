@@ -82,6 +82,94 @@ const MAGIC_UI = {
 
 const PAGE_ICON = DevicesOtherIcon;
 const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "internalIp", "os"];
+const DEVICE_METADATA_COLUMN_PREFIX = "metadataField";
+const METADATA_FIELD_COUNT = 500;
+
+function normalizeMetadataFieldNumber(value) {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value >= 1 && value <= METADATA_FIELD_COUNT ? value : 0;
+  }
+  const text = String(value || "").trim();
+  if (!text) return 0;
+  const match =
+    text.match(/^metadataField(\d{1,3})$/i) ||
+    text.match(/^field[_\s-]*(\d{1,3})$/i) ||
+    text.match(/^(\d{1,3})$/);
+  if (!match) return 0;
+  const parsed = Number.parseInt(match[1], 10);
+  return parsed >= 1 && parsed <= METADATA_FIELD_COUNT ? parsed : 0;
+}
+
+export function deviceMetadataColumnId(fieldNumber) {
+  const normalized = normalizeMetadataFieldNumber(fieldNumber);
+  return normalized ? `${DEVICE_METADATA_COLUMN_PREFIX}${String(normalized).padStart(3, "0")}` : "";
+}
+
+function deviceMetadataFieldKey(fieldNumber) {
+  const normalized = normalizeMetadataFieldNumber(fieldNumber);
+  return normalized ? `field_${String(normalized).padStart(3, "0")}` : "";
+}
+
+function isDeviceMetadataColumnId(value) {
+  return Boolean(deviceMetadataColumnId(value) && String(value || "").trim() === deviceMetadataColumnId(value));
+}
+
+function normalizeDeviceMetadataValue(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return normalizeDeviceMetadataValue(value.value);
+  }
+  if (value == null) return "";
+  return String(value);
+}
+
+export function buildDeviceListMetadataColumnOptions(fields) {
+  const safeFields = Array.isArray(fields) ? fields : [];
+  const seen = new Set();
+  return safeFields
+    .map((field) => {
+      const fieldNumber = normalizeMetadataFieldNumber(
+        field?.field_number ?? field?.fieldNumber ?? field?.field_key ?? field?.fieldKey
+      );
+      const description = String(field?.description || "").trim();
+      if (!fieldNumber || !description || description.toLowerCase() === "reserved") return null;
+      const id = deviceMetadataColumnId(fieldNumber);
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      return {
+        id,
+        label: description,
+        fieldKey: deviceMetadataFieldKey(fieldNumber),
+        fieldNumber,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.fieldNumber - right.fieldNumber);
+}
+
+function normalizeDeviceMetadataFields(rawFields) {
+  if (!rawFields || typeof rawFields !== "object" || Array.isArray(rawFields)) {
+    return { fieldValues: {}, columnValues: {} };
+  }
+  const fieldValues = {};
+  const columnValues = {};
+  Object.entries(rawFields).forEach(([rawKey, rawValue]) => {
+    const keyFieldNumber = normalizeMetadataFieldNumber(rawKey);
+    const valueFieldNumber = normalizeMetadataFieldNumber(
+      rawValue?.field_number ||
+        rawValue?.fieldNumber ||
+        rawValue?.field_key ||
+        rawValue?.fieldKey
+    );
+    const fieldNumber = keyFieldNumber || valueFieldNumber;
+    if (!fieldNumber) return;
+    const fieldKey = deviceMetadataFieldKey(fieldNumber);
+    const columnId = deviceMetadataColumnId(fieldNumber);
+    const value = normalizeDeviceMetadataValue(rawValue);
+    fieldValues[fieldKey] = value;
+    columnValues[columnId] = value;
+  });
+  return { fieldValues, columnValues };
+}
 
 const getOsIconClass = (osName) => {
   const value = (osName || "").toString().toLowerCase();
@@ -407,7 +495,7 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
-function normalizeDeviceCollection(
+export function normalizeDeviceCollection(
   list,
   {
     tunnelLookup = new Map(),
@@ -513,6 +601,11 @@ function normalizeDeviceCollection(
     const cpuObj =
       (device.cpu && typeof device.cpu === "object" && device.cpu) ||
       (summary.cpu && typeof summary.cpu === "object" ? summary.cpu : {});
+    const metadataSource =
+      (device.metadata_fields && typeof device.metadata_fields === "object" && device.metadata_fields) ||
+      (summary.metadata_fields && typeof summary.metadata_fields === "object" ? summary.metadata_fields : null) ||
+      (device.details?.metadata_fields && typeof device.details.metadata_fields === "object" ? device.details.metadata_fields : null);
+    const metadataFields = normalizeDeviceMetadataFields(metadataSource);
 
     const memoryDisplay = memoryList.length ? `${memoryList.length} module(s)` : "";
     const networkDisplay = networkList.length
@@ -559,6 +652,8 @@ function normalizeDeviceCollection(
       storageRaw: normalizeJson(storageList),
       cpu: cpuDisplay,
       cpuRaw: normalizeJson(cpuObj),
+      metadataFields: metadataFields.fieldValues,
+      ...metadataFields.columnValues,
       summary,
       details: device.details || {},
       connectionType,
@@ -584,19 +679,21 @@ function filterDeviceRowsByMode(rows, filterMode) {
 }
 
 export async function loadDeviceListPageData(request) {
-  const progress = createRouteRequestPlan(request, 5);
+  const progress = createRouteRequestPlan(request, 6);
   try {
     await requireAuthenticatedRequest(request, progress);
-    const [devicesPayload, viewsPayload, sitesPayload] = await Promise.all([
+    const [devicesPayload, viewsPayload, sitesPayload, metadataPayload] = await Promise.all([
       progress.fetchJson("/api/devices"),
       progress.fetchJson("/api/device_list_views").catch(() => ({ views: [] })),
       progress.fetchJson("/api/sites").catch(() => ({ sites: [] })),
+      progress.fetchJson("/api/metadata_fields").catch(() => ({ fields: [] })),
     ]);
 
     return {
       rows: normalizeDeviceCollection(devicesPayload?.devices || []),
       views: Array.isArray(viewsPayload?.views) ? viewsPayload.views : [],
       sites: Array.isArray(sitesPayload?.sites) ? sitesPayload.sites : [],
+      metadataFields: buildDeviceListMetadataColumnOptions(metadataPayload?.fields),
       initialError: "",
     };
   } catch (error) {
@@ -605,6 +702,7 @@ export async function loadDeviceListPageData(request) {
       rows: [],
       views: [],
       sites: [],
+      metadataFields: [],
       initialError: getRouteErrorMessage(error, "Failed to load devices."),
     };
   } finally {
@@ -635,6 +733,10 @@ export default function DeviceList({
     () => (Array.isArray(loaderData?.sites) ? loaderData.sites : []),
     [loaderData?.sites]
   );
+  const initialMetadataFields = useMemo(
+    () => (Array.isArray(loaderData?.metadataFields) ? loaderData.metadataFields : []),
+    [loaderData?.metadataFields]
+  );
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
@@ -645,6 +747,7 @@ export default function DeviceList({
   );
   const initialError = String(loaderData?.initialError || "");
   const [rows, setRows] = useState(() => initialRows);
+  const [metadataFields, setMetadataFields] = useState(() => initialMetadataFields);
   const [loading, setLoading] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState(null);
   const [selected, setSelected] = useState(null);
@@ -735,7 +838,7 @@ export default function DeviceList({
   const [viewActionTarget, setViewActionTarget] = useState(null); // view object for actions
 
   // Column configuration and rearranging state
-  const COL_LABELS = useMemo(
+  const STATIC_COL_LABELS = useMemo(
     () => ({
       status: "Status",
       site: "Site",
@@ -764,6 +867,24 @@ export default function DeviceList({
     }),
     []
   );
+  const COL_LABELS = useMemo(() => {
+    const labels = { ...STATIC_COL_LABELS };
+    metadataFields.forEach((field) => {
+      if (field?.id && field?.label) {
+        labels[field.id] = field.label;
+      }
+    });
+    return labels;
+  }, [STATIC_COL_LABELS, metadataFields]);
+  const selectableColumns = useMemo(
+    () => [
+      ...Object.entries(STATIC_COL_LABELS)
+        .filter(([id]) => id !== "status")
+        .map(([id, label]) => ({ id, label })),
+      ...metadataFields.map((field) => ({ id: field.id, label: field.label })),
+    ],
+    [STATIC_COL_LABELS, metadataFields]
+  );
 
   const defaultColumns = useMemo(
     () => DEFAULT_VISIBLE_COLUMN_IDS.map((id) => ({ id, label: COL_LABELS[id] })),
@@ -776,6 +897,27 @@ export default function DeviceList({
   const tunnelPeerCacheRef = useRef(new Map());
   const tunnelStatusCacheRef = useRef(new Map());
   const routeStatusFilterRef = useRef("");
+
+  useEffect(() => {
+    setColumns((prev) => {
+      let changed = false;
+      const next = [];
+      prev.forEach((col) => {
+        if (isDeviceMetadataColumnId(col.id) && !COL_LABELS[col.id]) {
+          changed = true;
+          return;
+        }
+        const label = COL_LABELS[col.id] || col.label;
+        if (label !== col.label) {
+          changed = true;
+          next.push({ ...col, label });
+          return;
+        }
+        next.push(col);
+      });
+      return changed ? next : prev;
+    });
+  }, [COL_LABELS]);
 
   // Per-column filters
   const [filtersState, setFiltersState] = useState({});
@@ -1013,6 +1155,18 @@ export default function DeviceList({
     });
   }, []);
 
+  const refreshMetadataFields = useCallback(async () => {
+    try {
+      const response = await fetch("/api/metadata_fields", {
+        cache: "no-store",
+        credentials: "include",
+      });
+      if (!response.ok) return;
+      const payload = await response.json();
+      setMetadataFields(buildDeviceListMetadataColumnOptions(payload?.fields));
+    } catch {}
+  }, []);
+
   const fetchDevices = useCallback(async (options = {}) => {
     const { showLoading = true } = options || {};
     if (showLoading) setLoading(true);
@@ -1041,6 +1195,7 @@ export default function DeviceList({
       setRows(filterDeviceRowsByMode(normalized, filterMode));
       setRouteLoadError("");
       if (tunnelTelemetry.fetched) applyTunnelTelemetry(tunnelTelemetry);
+      void refreshMetadataFields();
     } catch (e) {
       console.warn('Failed to load devices:', e);
       setRows([]);
@@ -1048,7 +1203,7 @@ export default function DeviceList({
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [filterMode, fetchTunnelTelemetry, applyTunnelTelemetry]);
+  }, [filterMode, fetchTunnelTelemetry, applyTunnelTelemetry, refreshMetadataFields]);
 
   const hasWireguardColumn = useMemo(
     () => columns.some((col) => col.id === "wireguardPeerIp"),
@@ -1100,8 +1255,9 @@ export default function DeviceList({
     setViews(initialViews);
     setViewsLoaded(initialViews.length > 0);
     setSites(initialSites);
+    setMetadataFields(initialMetadataFields);
     setRouteLoadError(initialError);
-  }, [initialError, initialRows, initialSites, initialViews]);
+  }, [initialError, initialMetadataFields, initialRows, initialSites, initialViews]);
 
   // Sites helper fetch
   const fetchSites = useCallback(async () => {
@@ -1810,6 +1966,16 @@ export default function DeviceList({
 
   const columnDefs = useMemo(() => {
     const defs = columns.map((col) => {
+      if (isDeviceMetadataColumnId(col.id)) {
+        return {
+          field: col.id,
+          headerName: col.label,
+          valueGetter: (params) => params.data?.[col.id] || "",
+          width: 220,
+          minWidth: 180,
+          flex: 0,
+        };
+      }
       switch (col.id) {
         case "status":
           return {
@@ -2427,10 +2593,9 @@ export default function DeviceList({
           },
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1 }}>
-          {Object.entries(COL_LABELS)
-            .filter(([id]) => id !== 'status')
-            .map(([id, label]) => (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1, maxHeight: "70vh", overflowY: "auto" }}>
+          {selectableColumns
+            .map(({ id, label }) => (
               <MenuItem key={id} disableRipple onClick={(e) => e.stopPropagation()} sx={{ gap: 1 }}>
                 <Checkbox
                   size="small"

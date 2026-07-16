@@ -1675,6 +1675,38 @@ func TestDeviceListHandlerReturnsDevicesAndFilters(t *testing.T) {
 	}
 }
 
+func TestDeviceListMetadataPayloadAttachesSparseFields(t *testing.T) {
+	row := deviceRow{
+		GUID:     sql.NullString{String: "2540DA38-E2B1-45B9-9113-BF7CF0E1778A", Valid: true},
+		Hostname: sql.NullString{String: "LAB-OPERATOR-01", Valid: true},
+	}
+	payload := buildDevicePayload(row, 1700000000)
+	fields := deviceListMetadataPayload(
+		map[string]map[string]string{
+			"2540DA38-E2B1-45B9-9113-BF7CF0E1778A": {
+				"field_011": "Asset-123",
+			},
+		},
+		row,
+	)
+	attachDeviceListMetadataFields(payload, fields)
+
+	metadataFields, ok := payload["metadata_fields"].(map[string]any)
+	if !ok || metadataFields["field_011"] != "Asset-123" {
+		t.Fatalf("expected top-level metadata field, got %+v", payload["metadata_fields"])
+	}
+	summary, _ := payload["summary"].(map[string]any)
+	summaryMetadata, _ := summary["metadata_fields"].(map[string]any)
+	if summaryMetadata["field_011"] != "Asset-123" {
+		t.Fatalf("expected summary metadata field, got %+v", summaryMetadata)
+	}
+	details, _ := payload["details"].(map[string]any)
+	detailsMetadata, _ := details["metadata_fields"].(map[string]any)
+	if detailsMetadata["field_011"] != "Asset-123" {
+		t.Fatalf("expected details metadata field, got %+v", detailsMetadata)
+	}
+}
+
 func TestDeviceByGUIDHandlerReturnsDetail(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 	store.deviceDetail = map[string]any{

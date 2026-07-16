@@ -46,6 +46,14 @@ Create recurring scheduled jobs for the reserved assemblies when you want Boreal
 
 Device Filters include a grouped `Metadata Field` selector. Use it when you need dynamic groups based on custom device values.
 
+## Display Fields In Device Inventory
+
+1. Open `Inventory > Devices`.
+2. Open `Columns`.
+3. Select the metadata field description you want to show.
+
+Only metadata fields with non-empty descriptions appear in the Device Inventory column chooser. Fields labeled `Reserved` stay hidden.
+
 ## Agent CLI Usage
 
 Scripts can read or queue values locally through the Agent CLI:
@@ -79,6 +87,8 @@ Blank values queue a clear.
 
     - Metadata API: `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`
     - Shared metadata helpers: `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`
+    - Device list API payload: `Data/Engine/Containers/api-backend/cmd/api-backend/devices.go`
+    - Device list UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Device_List.jsx`
     - Admin UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Metadata_Field_List.jsx`
     - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Metadata.jsx`
     - Shared field cell renderers: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Metadata_Field_Cells.jsx`
@@ -93,6 +103,8 @@ Blank values queue a clear.
     - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
     - `Field 003` through `Field 010` are reserved placeholders named `Reserved` with no linked assemblies.
     - `Metadata_Field_Cells.jsx` renders linked reserved field numbers in both the global Metadata Fields page and device metadata tab. Linked field numbers have no underline, hover with the assembly name, and navigate to the assembly editor. Reserved placeholders without an assembly GUID render as plain field numbers.
+    - `GET /api/devices` includes a sparse decoded `metadata_fields` map for each visible device so Device List can render metadata columns without per-device requests.
+    - `Device_List.jsx` flattens sparse `metadata_fields` values into `metadataField###` row properties. The column chooser appends metadata definitions whose `description` is non-empty and not `Reserved`; saved views persist those dynamic column ids like any other Device List column.
     - The global Metadata Fields grid shows definition audit data from `metadata_field_definitions`: `updated_at` renders as `Modified`, and `updated_by` renders as `Source`. These audit columns track administrator label changes, not per-device metadata value changes.
     - The device metadata grid keeps `Field Number` fixed at 150px with no resize handle, autosizes `Field Description` against visible descriptions, sets fixed widths for `Modified` and `Source`, disables the `Source` resize handle, and leaves `Value` as the only flex column so it consumes remaining grid width.
 

@@ -13,6 +13,7 @@ Device Auditing is the normal starting point for understanding a managed endpoin
 2. Search or filter by hostname, site, connection status, user, type, or operating system.
 3. Select a device hostname to open Device Summary.
 4. Use saved table views when you need repeatable columns and filters for routine audits.
+5. Open `Columns` to add defined Metadata Fields to the table when those values matter for reporting.
 
 ## Read Device Summary
 

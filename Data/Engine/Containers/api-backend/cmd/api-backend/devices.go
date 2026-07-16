@@ -607,11 +607,61 @@ func (s *postgresOperatorStore) listDevices(ctx context.Context, profile operato
 	}
 
 	now := time.Now().Unix()
+	guidCandidates := make([]string, 0, len(rawRows)*2)
+	for _, row := range rawRows {
+		rawGUID := nullString(row.GUID)
+		if rawGUID == "" {
+			continue
+		}
+		guidCandidates = append(guidCandidates, rawGUID)
+		if normalized := normalizeCanonicalGUID(rawGUID); normalized != "" {
+			guidCandidates = append(guidCandidates, normalized)
+		}
+	}
+	metadataByGUID, _ := loadFilterMetadataByGUID(ctx, conn, guidCandidates)
 	devices := make([]map[string]any, 0, len(rawRows))
 	for _, row := range rawRows {
-		devices = append(devices, buildDevicePayload(row, now))
+		payload := buildDevicePayload(row, now)
+		attachDeviceListMetadataFields(payload, deviceListMetadataPayload(metadataByGUID, row))
+		devices = append(devices, payload)
 	}
 	return devices, nil
+}
+
+func deviceListMetadataPayload(metadataByGUID map[string]map[string]string, row deviceRow) map[string]any {
+	fields := map[string]any{}
+	if len(metadataByGUID) == 0 {
+		return fields
+	}
+	rawGUID := nullString(row.GUID)
+	for _, candidate := range []string{
+		rawGUID,
+		normalizeCanonicalGUID(rawGUID),
+		normalizeGUID(rawGUID),
+		strings.ToLower(normalizeCanonicalGUID(rawGUID)),
+	} {
+		values, ok := metadataByGUID[cleanText(candidate)]
+		if !ok {
+			continue
+		}
+		for key, value := range values {
+			fields[key] = value
+		}
+	}
+	return fields
+}
+
+func attachDeviceListMetadataFields(payload map[string]any, metadataFields map[string]any) {
+	if metadataFields == nil {
+		metadataFields = map[string]any{}
+	}
+	payload["metadata_fields"] = metadataFields
+	if summary, ok := payload["summary"].(map[string]any); ok {
+		summary["metadata_fields"] = metadataFields
+	}
+	if details, ok := payload["details"].(map[string]any); ok {
+		details["metadata_fields"] = metadataFields
+	}
 }
 
 func (s *postgresOperatorStore) setDeviceDescription(ctx context.Context, profile operatorProfile, hostname string, description string) (map[string]any, int, error) {
