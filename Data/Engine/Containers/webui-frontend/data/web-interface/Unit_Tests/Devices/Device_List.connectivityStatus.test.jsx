@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildDeviceListColumnGroups,
   buildDeviceListMetadataColumnOptions,
   buildDeviceConnectivityStatusFilter,
   deviceMetadataColumnId,
@@ -53,6 +54,79 @@ describe("device list connectivity status", () => {
       },
     ]);
     expect(deviceMetadataColumnId(11)).toBe("metadataField011");
+  });
+
+  it("groups Device List chooser columns and sorts each group alphabetically", () => {
+    const groups = buildDeviceListColumnGroups({
+      staticLabels: {
+        hostname: "Hostname",
+        os: "OS",
+        type: "Type",
+        uptime: "Uptime",
+        memory: "Memory",
+        storage: "Storage",
+        cpu: "CPU",
+        description: "Description",
+        software: "Software",
+        site: "Site",
+        domain: "Domain",
+        siteDescription: "Site Description",
+        internalIp: "Internal IP",
+        externalIp: "External IP",
+        wireguardVpnStatus: "WireGuard VPN Status",
+        wireguardPeerIp: "WireGuard Peer IP",
+        network: "Network",
+        lastUser: "Last User",
+        lastReboot: "Last Reboot",
+        created: "Created",
+        lastSeen: "Last Seen",
+      },
+      metadataFields: [
+        { id: "metadataField012", label: "Warranty Date" },
+        { id: "metadataField011", label: "Asset Tag" },
+      ],
+    });
+
+    expect(groups.map((group) => group.label)).toEqual([
+      "Device Specs",
+      "Location",
+      "Networking",
+      "Heartbeat",
+      "Metadata",
+    ]);
+    expect(groups.find((group) => group.label === "Device Specs").options.map((option) => option.label)).toEqual([
+      "CPU",
+      "Description",
+      "Hostname",
+      "Memory",
+      "OS",
+      "Software",
+      "Storage",
+      "Type",
+      "Uptime",
+    ]);
+    expect(groups.find((group) => group.label === "Location").options.map((option) => option.label)).toEqual([
+      "Domain",
+      "Site",
+      "Site Description",
+    ]);
+    expect(groups.find((group) => group.label === "Networking").options.map((option) => option.label)).toEqual([
+      "External IP",
+      "Internal IP",
+      "Network",
+      "WireGuard Peer IP",
+      "WireGuard VPN Status",
+    ]);
+    expect(groups.find((group) => group.label === "Heartbeat").options.map((option) => option.label)).toEqual([
+      "Created",
+      "Last Reboot",
+      "Last Seen",
+      "Last User",
+    ]);
+    expect(groups.find((group) => group.label === "Metadata").options.map((option) => option.label)).toEqual([
+      "Asset Tag",
+      "Warranty Date",
+    ]);
   });
 
   it("flattens sparse metadata values into Device List column fields", () => {

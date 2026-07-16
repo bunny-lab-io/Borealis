@@ -84,6 +84,28 @@ const PAGE_ICON = DevicesOtherIcon;
 const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "internalIp", "os"];
 const DEVICE_METADATA_COLUMN_PREFIX = "metadataField";
 const METADATA_FIELD_COUNT = 500;
+const DEVICE_LIST_COLUMN_GROUP_DEFINITIONS = [
+  {
+    id: "deviceSpecs",
+    label: "Device Specs",
+    columnIds: ["hostname", "os", "type", "uptime", "memory", "storage", "cpu", "description", "software"],
+  },
+  {
+    id: "location",
+    label: "Location",
+    columnIds: ["site", "domain", "siteDescription"],
+  },
+  {
+    id: "networking",
+    label: "Networking",
+    columnIds: ["internalIp", "externalIp", "wireguardVpnStatus", "wireguardPeerIp", "network"],
+  },
+  {
+    id: "heartbeat",
+    label: "Heartbeat",
+    columnIds: ["lastUser", "lastReboot", "created", "lastSeen"],
+  },
+];
 
 function normalizeMetadataFieldNumber(value) {
   if (typeof value === "number" && Number.isInteger(value)) {
@@ -144,6 +166,37 @@ export function buildDeviceListMetadataColumnOptions(fields) {
     })
     .filter(Boolean)
     .sort((left, right) => left.fieldNumber - right.fieldNumber);
+}
+
+function sortColumnOptionsByLabel(options) {
+  return [...(Array.isArray(options) ? options : [])].sort((left, right) =>
+    compareAlphaValues(left?.label, right?.label)
+  );
+}
+
+export function buildDeviceListColumnGroups({ staticLabels = {}, metadataFields = [] } = {}) {
+  const groups = DEVICE_LIST_COLUMN_GROUP_DEFINITIONS.map((group) => ({
+    id: group.id,
+    label: group.label,
+    options: sortColumnOptionsByLabel(
+      group.columnIds
+        .map((id) => ({ id, label: staticLabels[id] || "" }))
+        .filter((option) => option.id && option.label)
+    ),
+  }));
+  const metadataOptions = sortColumnOptionsByLabel(
+    (Array.isArray(metadataFields) ? metadataFields : [])
+      .map((field) => ({ id: field?.id || "", label: field?.label || "" }))
+      .filter((option) => option.id && option.label)
+  );
+  if (metadataOptions.length) {
+    groups.push({
+      id: "metadata",
+      label: "Metadata",
+      options: metadataOptions,
+    });
+  }
+  return groups.filter((group) => group.options.length);
 }
 
 function normalizeDeviceMetadataFields(rawFields) {
@@ -849,7 +902,7 @@ export default function DeviceList({
       os: "OS",
       internalIp: "Internal IP",
       externalIp: "External IP",
-      wireguardVpnStatus: "Wireguard VPN Status",
+      wireguardVpnStatus: "WireGuard VPN Status",
       wireguardPeerIp: "WireGuard Peer IP",
       lastReboot: "Last Reboot",
       created: "Created",
@@ -876,13 +929,8 @@ export default function DeviceList({
     });
     return labels;
   }, [STATIC_COL_LABELS, metadataFields]);
-  const selectableColumns = useMemo(
-    () => [
-      ...Object.entries(STATIC_COL_LABELS)
-        .filter(([id]) => id !== "status")
-        .map(([id, label]) => ({ id, label })),
-      ...metadataFields.map((field) => ({ id: field.id, label: field.label })),
-    ],
+  const selectableColumnGroups = useMemo(
+    () => buildDeviceListColumnGroups({ staticLabels: STATIC_COL_LABELS, metadataFields }),
     [STATIC_COL_LABELS, metadataFields]
   );
 
@@ -2238,6 +2286,25 @@ export default function DeviceList({
     []
   );
 
+  const selectedColumnIds = useMemo(
+    () => new Set(columns.map((column) => column.id)),
+    [columns]
+  );
+
+  const toggleColumnSelection = useCallback(
+    (id, label) => {
+      setColumns((prev) => {
+        const exists = prev.some((column) => column.id === id);
+        if (exists) {
+          return prev.filter((column) => column.id !== id);
+        }
+        const nextLabel = COL_LABELS[id] || label || id;
+        return [...prev, { id, label: nextLabel }];
+      });
+    },
+    [COL_LABELS]
+  );
+
   return (
     <Paper
       sx={{
@@ -2582,42 +2649,62 @@ export default function DeviceList({
         anchorEl={colChooserAnchor}
         onClose={() => setColChooserAnchor(null)}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+        transformOrigin={{ vertical: "top", horizontal: "right" }}
         PaperProps={{
           sx: {
+            width: 440,
+            maxWidth: "calc(100vw - 32px)",
             bgcolor: "rgba(8,12,24,0.96)",
+            background:
+              "linear-gradient(135deg, rgba(8,12,24,0.98) 0%, rgba(15,23,42,0.96) 58%, rgba(24,11,34,0.94) 100%)",
             color: "#fff",
-            p: 1,
-            border: "1px solid rgba(148,163,184,0.3)",
-            boxShadow: "0 12px 30px rgba(2,8,23,0.8)",
-            backdropFilter: "blur(14px)",
+            p: 0,
+            border: "1px solid rgba(148,163,184,0.34)",
+            borderRadius: "8px",
+            boxShadow: "0 18px 46px rgba(2,8,23,0.85)",
+            backdropFilter: "blur(16px)",
+            overflow: "hidden",
           },
         }}
       >
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, p: 1, maxHeight: "70vh", overflowY: "auto" }}>
-          {selectableColumns
-            .map(({ id, label }) => (
-              <MenuItem key={id} disableRipple onClick={(e) => e.stopPropagation()} sx={{ gap: 1 }}>
-                <Checkbox
-                  size="small"
-                  checked={columns.some((c) => c.id === id)}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setColumns((prev) => {
-                      const exists = prev.some((c) => c.id === id);
-                      if (checked) {
-                        if (exists) return prev;
-                        const nextLabel = COL_LABELS[id] || label || id;
-                        return [...prev, { id, label: nextLabel }];
-                      }
-                      return prev.filter((c) => c.id !== id);
-                    });
-                  }}
-                  sx={{ p: 0.3, color: '#bbb' }}
-                />
-                <Typography variant="body2" sx={{ color: '#ddd' }}>{label || id}</Typography>
-              </MenuItem>
-            ))}
-          <Box sx={{ display: 'flex', gap: 1, pt: 0.5 }}>
+        <Box
+          sx={{
+            px: 1.5,
+            py: 1.25,
+            borderBottom: "1px solid rgba(148,163,184,0.22)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 1.25,
+          }}
+        >
+          <Box sx={{ minWidth: 0, display: "flex", alignItems: "center", gap: 1 }}>
+            <Box
+              component="span"
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                borderRadius: "8px",
+                color: MAGIC_UI.accentA,
+                backgroundColor: "rgba(125,211,252,0.12)",
+                border: "1px solid rgba(125,211,252,0.24)",
+              }}
+            >
+              <ViewColumnIcon fontSize="small" />
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ color: "#f8fbff", fontWeight: 700, fontSize: "0.92rem", lineHeight: 1.2 }}>
+                Columns
+              </Typography>
+              <Typography sx={{ color: MAGIC_UI.textMuted, fontSize: "0.72rem", lineHeight: 1.25 }}>
+                Device Inventory
+              </Typography>
+            </Box>
+          </Box>
+          <Box sx={{ display: 'flex', flexShrink: 0 }}>
             <Button
               size="small"
               variant="outlined"
@@ -2626,12 +2713,100 @@ export default function DeviceList({
                 textTransform: 'none',
                 borderColor: 'rgba(148,163,184,0.4)',
                 color: MAGIC_UI.textBright,
-                '&:hover': { borderColor: MAGIC_UI.accentA },
+                minHeight: 30,
+                px: 1.25,
+                borderRadius: "8px",
+                '&:hover': {
+                  borderColor: MAGIC_UI.accentA,
+                  backgroundColor: "rgba(125,211,252,0.08)",
+                },
               }}
             >
               Reset Default
             </Button>
           </Box>
+        </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', maxHeight: "min(68vh, 720px)", overflowY: "auto", p: 1 }}>
+          {selectableColumnGroups.map((group, groupIndex) => (
+            <Box
+              key={group.id}
+              sx={{
+                pt: groupIndex === 0 ? 0.25 : 1,
+                mt: groupIndex === 0 ? 0 : 0.75,
+                borderTop: groupIndex === 0 ? "none" : "1px solid rgba(148,163,184,0.16)",
+              }}
+            >
+              <Typography
+                sx={{
+                  px: 1,
+                  pb: 0.4,
+                  color: "#7dd3fc",
+                  fontSize: "0.68rem",
+                  fontWeight: 800,
+                  letterSpacing: 0.55,
+                  lineHeight: 1.25,
+                  textTransform: "uppercase",
+                }}
+              >
+                {group.label}
+              </Typography>
+              {group.options.map(({ id, label }) => {
+                const checked = selectedColumnIds.has(id);
+                return (
+                  <MenuItem
+                    key={id}
+                    disableRipple
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleColumnSelection(id, label);
+                    }}
+                    sx={{
+                      minHeight: 34,
+                      px: 1,
+                      py: 0.45,
+                      gap: 1,
+                      borderRadius: "6px",
+                      color: "#e2e8f0",
+                      "&:hover": {
+                        backgroundColor: "rgba(125,211,252,0.1)",
+                      },
+                    }}
+                  >
+                    <Checkbox
+                      size="small"
+                      checked={checked}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleColumnSelection(id, label);
+                      }}
+                      onChange={() => {}}
+                      sx={{
+                        p: 0.25,
+                        color: "rgba(203,213,225,0.82)",
+                        "&.Mui-checked": {
+                          color: MAGIC_UI.accentA,
+                        },
+                      }}
+                    />
+                    <Typography
+                      variant="body2"
+                      title={label || id}
+                      sx={{
+                        color: checked ? "#f8fbff" : "#cbd5e1",
+                        fontWeight: checked ? 650 : 500,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {label || id}
+                    </Typography>
+                  </MenuItem>
+                );
+              })}
+            </Box>
+          ))}
         </Box>
       </Popover>
       <Menu

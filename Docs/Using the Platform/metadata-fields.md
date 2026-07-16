@@ -54,6 +54,8 @@ Device Filters include a grouped `Metadata Field` selector. Use it when you need
 
 Only metadata fields with non-empty descriptions appear in the Device Inventory column chooser. Fields labeled `Reserved` stay hidden.
 
+The column chooser groups fields by Device Specs, Location, Networking, Heartbeat, and Metadata. Each group is sorted A-Z by display name.
+
 ## Agent CLI Usage
 
 Scripts can read or queue values locally through the Agent CLI:
@@ -105,6 +107,7 @@ Blank values queue a clear.
     - `Metadata_Field_Cells.jsx` renders linked reserved field numbers in both the global Metadata Fields page and device metadata tab. Linked field numbers have no underline, hover with the assembly name, and navigate to the assembly editor. Reserved placeholders without an assembly GUID render as plain field numbers.
     - `GET /api/devices` includes a sparse decoded `metadata_fields` map for each visible device so Device List can render metadata columns without per-device requests.
     - `Device_List.jsx` flattens sparse `metadata_fields` values into `metadataField###` row properties. The column chooser appends metadata definitions whose `description` is non-empty and not `Reserved`; saved views persist those dynamic column ids like any other Device List column.
+    - Device List column chooser groups are codified in `buildDeviceListColumnGroups`: `Device Specs`, `Location`, `Networking`, `Heartbeat`, then `Metadata`. Every group sorts options A-Z by rendered label before display.
     - The global Metadata Fields grid shows definition audit data from `metadata_field_definitions`: `updated_at` renders as `Modified`, and `updated_by` renders as `Source`. These audit columns track administrator label changes, not per-device metadata value changes.
     - The device metadata grid keeps `Field Number` fixed at 150px with no resize handle, autosizes `Field Description` against visible descriptions, sets fixed widths for `Modified` and `Source`, disables the `Source` resize handle, and leaves `Value` as the only flex column so it consumes remaining grid width.
 
