@@ -44,6 +44,9 @@ def test_reserved_metadata_definitions_override_database_labels() -> None:
     assert fields[0]["linked_assembly"]["path"] == "/assemblies/scripts/628f6686-c7c4-477d-bf9a-13c73d8246ba"
     assert fields[1]["label"] == "Bitlocker Drive Encryption"
     assert fields[1]["reserved"] is True
+    assert fields[9]["label"] == "Reserved"
+    assert fields[9]["reserved"] is True
+    assert "linked_assembly" not in fields[9]
 
 
 def test_reserved_metadata_definition_cannot_be_upserted() -> None:

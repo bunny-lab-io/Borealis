@@ -20,6 +20,7 @@ const (
 )
 
 const reservedMetadataFieldTooltip = "Reserved Borealis Metadata Field - Create a scheduled job using the hyperlinked assembly to collect data for this field."
+const reservedMetadataPlaceholderTooltip = "Reserved Borealis Metadata Field - Reserved for future Borealis use."
 
 type reservedMetadataField struct {
 	Description  string
@@ -41,6 +42,14 @@ var reservedMetadataFields = map[int]reservedMetadataField{
 		AssemblyGUID: "c4f97974-1d9c-4e89-8257-8a139637e51f",
 		AssemblyType: "script",
 	},
+	3:  {Description: "Reserved"},
+	4:  {Description: "Reserved"},
+	5:  {Description: "Reserved"},
+	6:  {Description: "Reserved"},
+	7:  {Description: "Reserved"},
+	8:  {Description: "Reserved"},
+	9:  {Description: "Reserved"},
+	10: {Description: "Reserved"},
 }
 
 type metadataDefinitionStore interface {
@@ -705,7 +714,7 @@ func metadataDefinitionPayload(fieldNumber int, description string, updatedAt in
 	defaultLabel := metadataFieldLabel(fieldNumber)
 	cleanDescription := strings.TrimSpace(description)
 	if reserved, ok := reservedMetadataFieldDefinition(fieldNumber); ok {
-		return map[string]any{
+		payload := map[string]any{
 			"field_number":     fieldNumber,
 			"field_key":        metadataFieldKey(fieldNumber),
 			"default_label":    defaultLabel,
@@ -715,18 +724,21 @@ func metadataDefinitionPayload(fieldNumber int, description string, updatedAt in
 			"updated_by":       "Borealis",
 			"value_limit":      metadataValueMaxLength,
 			"reserved":         true,
-			"reserved_tooltip": reservedMetadataFieldTooltip,
-			"linked_assembly": map[string]any{
+			"reserved_tooltip": reservedMetadataTooltip(reserved),
+		}
+		if strings.TrimSpace(reserved.AssemblyGUID) != "" {
+			payload["linked_assembly"] = map[string]any{
 				"guid": reserved.AssemblyGUID,
 				"name": reserved.AssemblyName,
 				"type": reserved.AssemblyType,
 				"path": reservedMetadataAssemblyPath(reserved),
-			},
-			"linked_assembly_guid": reserved.AssemblyGUID,
-			"linked_assembly_name": reserved.AssemblyName,
-			"linked_assembly_type": reserved.AssemblyType,
-			"linked_assembly_path": reservedMetadataAssemblyPath(reserved),
+			}
+			payload["linked_assembly_guid"] = reserved.AssemblyGUID
+			payload["linked_assembly_name"] = reserved.AssemblyName
+			payload["linked_assembly_type"] = reserved.AssemblyType
+			payload["linked_assembly_path"] = reservedMetadataAssemblyPath(reserved)
 		}
+		return payload
 	}
 	label := cleanDescription
 	if label == "" {
@@ -750,7 +762,17 @@ func reservedMetadataFieldDefinition(fieldNumber int) (reservedMetadataField, bo
 	return reserved, ok
 }
 
+func reservedMetadataTooltip(reserved reservedMetadataField) string {
+	if strings.TrimSpace(reserved.AssemblyGUID) == "" {
+		return reservedMetadataPlaceholderTooltip
+	}
+	return reservedMetadataFieldTooltip
+}
+
 func reservedMetadataAssemblyPath(reserved reservedMetadataField) string {
+	if strings.TrimSpace(reserved.AssemblyGUID) == "" {
+		return ""
+	}
 	switch strings.ToLower(strings.TrimSpace(reserved.AssemblyType)) {
 	case "ansible_playbook":
 		return "/assemblies/ansible_playbooks/" + url.PathEscape(reserved.AssemblyGUID)
@@ -765,7 +787,7 @@ func reservedMetadataFieldUpdatePayload(fieldNumber int) map[string]any {
 	reserved, _ := reservedMetadataFieldDefinition(fieldNumber)
 	return map[string]any{
 		"error":   "reserved_metadata_field",
-		"message": reservedMetadataFieldTooltip,
+		"message": reservedMetadataTooltip(reserved),
 		"field":   metadataDefinitionPayload(fieldNumber, reserved.Description, 0, "Borealis"),
 	}
 }

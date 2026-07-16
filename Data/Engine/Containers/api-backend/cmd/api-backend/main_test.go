@@ -3317,14 +3317,14 @@ func TestMetadataFieldDefinitionHandlerUpdatesField(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/metadata_fields/7", strings.NewReader(`{"description":"Location Code"}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/metadata_fields/11", strings.NewReader(`{"description":"Location Code"}`))
 	request.Header.Set("Authorization", "Bearer "+testAuthToken)
 	metadataFieldDefinitionHandler(auth).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.metadataUpdateField != 7 || store.metadataUpdateDesc != "Location Code" || store.metadataUpdateActor != "operator" {
+	if store.metadataUpdateField != 11 || store.metadataUpdateDesc != "Location Code" || store.metadataUpdateActor != "operator" {
 		t.Fatalf("unexpected update capture field=%d desc=%q actor=%q", store.metadataUpdateField, store.metadataUpdateDesc, store.metadataUpdateActor)
 	}
 	var payload map[string]any
@@ -3467,8 +3467,8 @@ func TestMetadataRoutesDoNotShadowUnownedDeviceSubpaths(t *testing.T) {
 
 func TestBuildMetadataDefinitionsReturnsDefaultFiveHundredFields(t *testing.T) {
 	fields := buildMetadataDefinitions(map[int]metadataDefinitionRow{
-		7: {
-			FieldNumber: sql.NullInt64{Int64: 7, Valid: true},
+		11: {
+			FieldNumber: sql.NullInt64{Int64: 11, Valid: true},
 			Description: sql.NullString{String: "Location Code", Valid: true},
 			UpdatedAt:   sql.NullInt64{Int64: 1700000000, Valid: true},
 			UpdatedBy:   sql.NullString{String: "operator", Valid: true},
@@ -3487,8 +3487,14 @@ func TestBuildMetadataDefinitionsReturnsDefaultFiveHundredFields(t *testing.T) {
 	if fields[1]["field_key"] != "field_002" || fields[1]["label"] != "Bitlocker Drive Encryption" || fields[1]["reserved"] != true {
 		t.Fatalf("unexpected second field %+v", fields[1])
 	}
-	if fields[6]["field_key"] != "field_007" || fields[6]["label"] != "Location Code" {
-		t.Fatalf("unexpected custom field %+v", fields[6])
+	if fields[9]["field_key"] != "field_010" || fields[9]["label"] != "Reserved" || fields[9]["reserved"] != true {
+		t.Fatalf("unexpected placeholder reserved field %+v", fields[9])
+	}
+	if _, ok := fields[9]["linked_assembly"]; ok {
+		t.Fatalf("placeholder reserved field should not link assembly %+v", fields[9])
+	}
+	if fields[10]["field_key"] != "field_011" || fields[10]["label"] != "Location Code" || fields[10]["reserved"] != false {
+		t.Fatalf("unexpected custom field %+v", fields[10])
 	}
 }
 

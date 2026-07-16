@@ -18,12 +18,20 @@ Descriptions are global labels. They do not store device values.
 
 ## Reserved Fields
 
-Borealis reserves some fields for standard audit data collected by bundled assemblies. These field descriptions cannot be renamed in the global metadata field editor. The field number links to the assembly that can collect the value.
+Borealis reserves some fields for standard audit data collected by bundled assemblies and future Borealis-managed uses. These field descriptions cannot be renamed in the global metadata field editor. When a reserved field has a linked assembly, the field number opens the assembly that can collect the value.
 
 | Field Number | Field Description | Linked Assembly |
 | :--- | :--- | :--- |
 | Field 001 | Server Roles | `Detect Server Roles [WIN]` |
 | Field 002 | Bitlocker Drive Encryption | `Audit Bitlocker / TPM Status [WIN]` |
+| Field 003 | Reserved | - |
+| Field 004 | Reserved | - |
+| Field 005 | Reserved | - |
+| Field 006 | Reserved | - |
+| Field 007 | Reserved | - |
+| Field 008 | Reserved | - |
+| Field 009 | Reserved | - |
+| Field 010 | Reserved | - |
 
 Create recurring scheduled jobs for the reserved assemblies when you want Borealis to refresh this data on a regular cadence. Borealis does not force collection. Operators still choose which assemblies to run, which targets receive them, and how often values refresh.
 
@@ -82,16 +90,17 @@ Blank values queue a clear.
     - Newest `modified_at` wins. Future agent timestamps are clamped before conflict comparison.
     - Reserved metadata field definitions are API-level constants. Existing database descriptions for reserved fields are ignored during list rendering, and definition updates for reserved fields return `reserved_metadata_field`.
     - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
+    - `Field 003` through `Field 010` are reserved placeholders named `Reserved` with no linked assemblies.
 
     ### Adding reserved fields
 
     When adding another static reserved metadata field, keep the backend constants, WebUI behavior, operator table, and tests synchronized in the same change.
 
     1. Choose an unused field number from `1` through `500`.
-    2. Confirm the linked assembly is bundled or otherwise stable, then record its display name, GUID, and assembly type.
+    2. If the field should link to an assembly, confirm the assembly is bundled or otherwise stable, then record its display name, GUID, and assembly type.
     3. Add the field to `reservedMetadataFields` in `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`.
     4. Add the same field to `RESERVED_METADATA_FIELDS` in `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`.
-    5. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name.
+    5. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name, or `-` when the field is an unlinked placeholder.
     6. Update tests that assert reserved labels, linked assembly metadata, and rename rejection:
         - `Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
         - `Data/Engine/Unit_Tests/test_metadata_fields.py`
@@ -106,8 +115,10 @@ Blank values queue a clear.
 
     - Field number: integer key in both backend maps.
     - Description: immutable metadata field label shown in the admin editor and device metadata grid.
-    - Assembly name: tooltip shown when hovering the linked field number.
-    - Assembly GUID: route target for the linked field number.
-    - Assembly type: `script`, `ansible_playbook`, or `workflow`; this controls the generated `/assemblies/.../<guid>` route.
+    - Assembly name: optional; tooltip shown when hovering a linked field number.
+    - Assembly GUID: optional; route target for the linked field number.
+    - Assembly type: optional unless assembly GUID exists; use `script`, `ansible_playbook`, or `workflow` to control the generated `/assemblies/.../<guid>` route.
+
+    Reserved placeholder fields should set only `Description: "Reserved"` in Go and `"description": "Reserved"` in Python. Do not set assembly name, GUID, type, or path for placeholders. The WebUI treats reserved fields without an assembly GUID as immutable non-links.
 
     Do not add a database migration for reserved labels. Reserved labels intentionally override persisted `metadata_field_definitions` descriptions at render time so existing Engines become consistent without data rewrite. Device values remain editable; only global reserved field descriptions are immutable.
