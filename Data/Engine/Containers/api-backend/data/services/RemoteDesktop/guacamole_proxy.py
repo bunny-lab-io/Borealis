@@ -58,6 +58,13 @@ _GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS: Dict[int, Dict[str, str]] = {
     1: {"compress-level": "7", "quality-level": "8", "force-lossless": ""},
     2: {"compress-level": "9", "quality-level": "9", "force-lossless": "true"},
 }
+_GUACAMOLE_VNC_IMAGE_MIMETYPES: Dict[int, Tuple[str, str, str]] = {
+    -2: ("image/jpeg", "image/webp", "image/png"),
+    -1: ("image/jpeg", "image/webp", "image/png"),
+    0: ("image/png", "image/jpeg", "image/webp"),
+    1: ("image/webp", "image/png", "image/jpeg"),
+    2: ("image/png", "image/webp", "image/jpeg"),
+}
 
 
 @dataclass
@@ -209,6 +216,11 @@ def normalize_guacamole_performance_preference(value: Any) -> int:
 def guacamole_vnc_performance_arguments(preference: Any) -> Dict[str, str]:
     normalized = normalize_guacamole_performance_preference(preference)
     return dict(_GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS.get(normalized) or _GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS[0])
+
+
+def guacamole_vnc_image_mimetypes(preference: Any) -> Tuple[str, str, str]:
+    normalized = normalize_guacamole_performance_preference(preference)
+    return _GUACAMOLE_VNC_IMAGE_MIMETYPES.get(normalized) or _GUACAMOLE_VNC_IMAGE_MIMETYPES[0]
 
 
 class GuacamoleProtocolParser:
@@ -453,7 +465,7 @@ async def _handshake_guacd(
         raise RuntimeError(f"guacd_unexpected_{opcode or 'empty'}")
 
     await _write_instruction(writer, "size", session.width, session.height, session.dpi)
-    await _write_instruction(writer, "image", "image/png", "image/jpeg", "image/webp")
+    await _write_instruction(writer, "image", *guacamole_vnc_image_mimetypes(session.performance_preference))
     await _write_instruction(writer, "timezone", "UTC")
     await _write_instruction(writer, "name", f"Borealis VNC {session.agent_id}")
     await _write_instruction(writer, "connect", *guacamole_connect_arguments(session, args))
@@ -829,6 +841,7 @@ __all__ = [
     "GuacamoleVncSession",
     "encode_instruction",
     "guacamole_connect_arguments",
+    "guacamole_vnc_image_mimetypes",
     "guacamole_vnc_performance_arguments",
     "guacd_health",
     "normalize_guacamole_performance_preference",
