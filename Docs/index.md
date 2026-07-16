@@ -62,7 +62,8 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/de
     Runtime source locations:
 
     - Engine package shim and tests: `Data/Engine/`.
-    - Engine API source code: `Data/Engine/Containers/api-backend/data/`.
+    - Engine API source code: `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Retained Engine Python worker/helper modules: `Data/Engine/Containers/api-backend/data/`.
     - Agent source code: `Data/Agent/`.
     - Web UI source: `Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
     - Runtime copies: `Engine/` and `Agent/`; do not edit directly.

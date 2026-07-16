@@ -35,7 +35,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Alerts](../../Using%20the%20Platform/alerts.md)
 
     ### Source vs runtime
-    - Edit API/backend code in `Data/Engine/Containers/api-backend/data/`.
+    - Edit API/backend code in `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Edit retained Python worker/helper modules in `Data/Engine/Containers/api-backend/data/`; these modules are packaged by `site-worker`, not `api-backend`.
     - Edit WebUI code in `Data/Engine/Containers/webui-frontend/data/web-interface/` for committed source changes. For rapid dev-mode HMR edits, use `Engine/Services/webui-frontend/data/web-interface/`.
     - Keep `Data/Engine/` for package shims, unit tests, and container roots.
     - Container source lives under `Data/Engine/Containers/` for Compose, Dockerfiles, build manifests, service entrypoints, and service-owned source trees.
@@ -50,7 +51,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - The Compose project name is `borealis-engine`.
     - `Engine.sh` computes input hashes from Dockerfiles, build context, container entrypoints, source files, dependency manifests, and mode inputs, then builds images as `borealis-engine/<service>:sha-<hash>`. Hashes use declared service inputs, not the repo-wide Git commit.
     - `api-backend`, `job-scheduler`, and `site-worker-orchestrator` share the Go api-backend binary. `Engine.sh` prepares that binary only after one of those images is known to need a Docker rebuild, then reuses it within the same deploy pass.
-    - `api-backend` uses `alpine:3.24` with `ca-certificates`, `git`, and `tzdata`; Python dependencies, Docker CLI plugins, OCR tooling, and WireGuard command-line tools are not installed in this container. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
+    - `api-backend` uses `alpine:3.24` with `ca-certificates`, `git`, and `tzdata`; retained Python worker/helper modules are not copied into this image, and Python dependencies, Docker CLI plugins, OCR tooling, and WireGuard command-line tools are not installed in this container. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
     - `job-scheduler` uses `alpine:3.24` with Bash, Python 3, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`; Docker Buildx is not installed in this container. The same image also runs `site-worker-orchestrator`, but only the orchestrator service mounts `/var/run/docker.sock`.
     - Go backup/restore routes live in `Data/Engine/Containers/api-backend/cmd/api-backend/server_backup.go` and snapshot allow-listed PostgreSQL tables plus allow-listed Engine secret/config files.
     - Server overview and Sites install metadata expose deployment profile, FQDN aliases, certificate mode, local CA fingerprint/expiry, local CA base64 PEM, and `server_ip_fallback` for Internal-Only Agent install commands.

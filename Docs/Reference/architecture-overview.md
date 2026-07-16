@@ -55,7 +55,8 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     ### Source map
 
     - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
-    - `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
+    - `Data/Engine/Containers/api-backend/cmd/api-backend/` - Go Engine API/backend source (authoritative).
+    - `Data/Engine/Containers/api-backend/data/` - retained Python worker/helper modules packaged by `site-worker`.
     - `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
     - `Data/Agent/` - Agent source (authoritative).
     - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
@@ -68,9 +69,8 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - `Data/Engine/Containers/api-backend/data/Official_Assemblies/` - bundled official assembly seed snapshot.
 
     ### Service map by folder
-    - Engine APIs: `Data/Engine/Containers/api-backend/data/services/API/` (grouped by domain, registered in `Data/Engine/Containers/api-backend/data/services/API/__init__.py`).
-    - Engine realtime: `Data/Engine/Containers/api-backend/data/services/WebSocket/` (Socket.IO events: quick jobs, VPN shell, agent socket registry).
-    - WebUI hosting: `Data/Engine/Containers/api-backend/data/services/WebUI/` (SPA static assets and 404 fallback).
+    - Engine APIs: `Data/Engine/Containers/api-backend/cmd/api-backend/` (Go route handlers registered from `main.go`).
+    - Site-worker realtime helpers: `Data/Engine/Containers/api-backend/data/services/WebSocket/` and `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker_socket.py`.
     - WebUI app shell and router: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/` (providers, route tree, guarded layouts, route adapters, runtime bootstrap).
     - Workflow authoring UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Flow_Editor/` plus `Data/Engine/Containers/webui-frontend/data/web-interface/src/nodes/`.
       The React Router app layer routes into `Flow_Editor/Flow_Editor.jsx`, and the Flow Editor folder owns workflow load/save/run lifecycle, access checks, run snapshot hydration, shared node registration, and the React Flow canvas/sidebar surfaces.
@@ -94,7 +94,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     ### Runtime boundaries
     - Do not edit `Engine/` or `Agent/` directly. They are recreated on each launch.
-    - Edit Engine API source under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
+    - Edit Engine API source under `Data/Engine/Containers/api-backend/cmd/api-backend/`, retained Python worker/helper modules under `Data/Engine/Containers/api-backend/data/`, WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`, and Agent source under `Data/Agent/`; then re-run `Engine.sh` or `Data/Agent/build-agent.sh` as appropriate.
 
     ### What to read first when debugging
     - Start with logs: `Engine/Services/api-backend/logs/engine.log` and `Agent/Logs/Agent/agent.log`.
@@ -108,7 +108,8 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - WireGuard for remote protocol transport (shell, VNC, future protocols).
 
     ### Container service map
-    - `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+    - `api-backend`: `127.0.0.1:5000`, Go Engine API, operator realtime, scheduler/workflow/watchdog API surfaces, VNC broker, WireGuard control integration.
+    - `site-worker`: dynamic Python worker image for Ansible execution plus shell, file-transfer, VNC, and Agent Socket.IO helper runtimes.
     - `webui-frontend`: `127.0.0.1:8000` in production and dev.
     - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
     - `postgres-db`: `127.0.0.1:5432`, persistent database state.

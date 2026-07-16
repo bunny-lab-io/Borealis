@@ -9,9 +9,9 @@ Current tracker for the completed `api-backend` rewrite from Flask/Python to Go.
 | Branch | `feature/rewrite-api-backend-in-golang` |
 | PR | [#232](https://github.com/bunny-lab-io/Borealis/pull/232) |
 | Active milestone | `Done` |
-| Last updated | 2026-06-17 |
-| Current architecture | Go binary owns public loopback `127.0.0.1:5000`; no Python compatibility backend is supervised; no unported route proxy remains. |
-| Latest verified slice | Final cutover removes Python api-backend process supervision, proxy fallback, Flask app factory, Python API route tree, internal Aegis bridge, AssemblyCache bridge, retained workflow helpers, retained scheduled-job API helpers, obsolete Python Flask route tests, and Python remnants from the `job-scheduler` container. Go workflow runtime now dispatches Ansible through active site-worker `/automation/ansible/run` and executes subworkflows natively. |
+| Last updated | 2026-07-16 |
+| Current architecture | Go binary owns public loopback `127.0.0.1:5000`; no Python compatibility backend is supervised; no unported route proxy remains; the `api-backend`, `job-scheduler`, and `site-worker-orchestrator` images do not package retained Python worker/helper source. |
+| Latest verified slice | Final cutover removes Python api-backend process supervision, proxy fallback, Flask app factory, Python API route tree, internal Aegis bridge, AssemblyCache bridge, retained workflow helpers, retained scheduled-job API helpers, obsolete Python Flask route tests, and Python remnants from the `job-scheduler` container. Issue #370 additionally purges retained Python source from the Go-only `api-backend` image, removes stale Python hash inputs from Go-only images, removes stale Python remote-access tests for modules already replaced by Go, and keeps retained Python packaged only by `site-worker`. |
 | Rewrite posture | Complete. api-backend public and internal route behavior is Go-owned; retained Python code is limited to non-api-backend worker/helper runtimes. |
 
 ## Status Legend
@@ -224,4 +224,4 @@ Done. No remaining api-backend rewrite work.
 
     ### Removal guidance
 
-    Python process supervision and compatibility proxy are removed. Retained Python worker/helper runtimes are not api-backend fallback paths.
+    Python process supervision and compatibility proxy are removed. Retained Python worker/helper runtimes are not api-backend fallback paths. `api-backend`, `job-scheduler`, and `site-worker-orchestrator` images must not copy `Data/Engine/Containers/api-backend/data/`; only `site-worker` packages that tree.

@@ -13,6 +13,10 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 COMPOSE_FILE = ROOT / "Data" / "Engine" / "Containers" / "compose.yaml"
 ENV_FILE = ROOT / "Data" / "Engine" / "Containers" / "compose.env.example"
+BUILD_MANIFEST = ROOT / "Data" / "Engine" / "Containers" / "build-manifest.json"
+API_BACKEND_DOCKERFILE = ROOT / "Data" / "Engine" / "Containers" / "api-backend" / "Dockerfile"
+JOB_SCHEDULER_DOCKERFILE = ROOT / "Data" / "Engine" / "Containers" / "job-scheduler" / "Dockerfile"
+SITE_WORKER_DOCKERFILE = ROOT / "Data" / "Engine" / "Containers" / "site-worker" / "Dockerfile"
 ORCHESTRATOR_SOURCE = (
     ROOT
     / "Data"
@@ -46,6 +50,8 @@ CAP_ADD_ALLOWLIST = {
     "traefik-edge": {"NET_BIND_SERVICE"},
     "wireguard-tunnel": {"NET_ADMIN", "NET_RAW"},
 }
+API_BACKEND_PYTHON_DATA_PREFIX = "Data/Engine/Containers/api-backend/data"
+API_BACKEND_BROAD_INPUT = "Data/Engine/Containers/api-backend/**"
 
 
 def fail(message: str) -> None:
@@ -320,6 +326,46 @@ def assert_dynamic_orchestrator_policy() -> None:
         fail("site-worker launch must not allow privileged Docker flags")
 
 
+def manifest_inputs(manifest: dict[str, Any], service: str) -> list[str]:
+    entry = (manifest.get("services") or {}).get(service)
+    if not isinstance(entry, dict):
+        fail(f"build manifest missing service {service}")
+    inputs = entry.get("inputs") or []
+    if not isinstance(inputs, list):
+        fail(f"build manifest inputs for {service} must be a list")
+    return [str(item) for item in inputs]
+
+
+def assert_api_backend_python_source_boundary() -> None:
+    api_dockerfile = API_BACKEND_DOCKERFILE.read_text(encoding="utf-8")
+    scheduler_dockerfile = JOB_SCHEDULER_DOCKERFILE.read_text(encoding="utf-8")
+    site_worker_dockerfile = SITE_WORKER_DOCKERFILE.read_text(encoding="utf-8")
+    forbidden_copy = f"COPY {API_BACKEND_PYTHON_DATA_PREFIX}"
+    if forbidden_copy in api_dockerfile:
+        fail("api-backend image must not copy retained Python worker source")
+    if forbidden_copy in scheduler_dockerfile:
+        fail("job-scheduler image must not copy retained Python worker source")
+    if forbidden_copy not in site_worker_dockerfile:
+        fail("site-worker image must copy retained Python worker source")
+    if "engine-worker-requirements.txt" not in site_worker_dockerfile:
+        fail("site-worker image must install worker Python requirements")
+
+    manifest = json.loads(BUILD_MANIFEST.read_text(encoding="utf-8"))
+    for service in ("api-backend", "job-scheduler"):
+        bad_inputs = [
+            item
+            for item in manifest_inputs(manifest, service)
+            if item == API_BACKEND_BROAD_INPUT or item.startswith(f"{API_BACKEND_PYTHON_DATA_PREFIX}/")
+        ]
+        if bad_inputs:
+            fail(f"{service} build inputs must not track retained Python worker source: {bad_inputs}")
+    if not any(
+        item.startswith(f"{API_BACKEND_PYTHON_DATA_PREFIX}/")
+        for item in manifest_inputs(manifest, "site-worker")
+    ):
+        fail("site-worker build inputs must track retained Python worker source")
+
+
 def main() -> int:
     config = compose_config()
     services = config.get("services") or {}
@@ -327,6 +373,7 @@ def main() -> int:
         fail("docker compose config missing services map")
     assert_static_service_policy(services)
     assert_dynamic_orchestrator_policy()
+    assert_api_backend_python_source_boundary()
     print("POLICY PASS: Engine Compose and orchestrator launch hardening validated")
     return 0
 

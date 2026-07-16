@@ -244,7 +244,8 @@ After deployment finishes:
 
     ### Bootstrap and runtime separation
 
-    - Engine API/backend source lives in `Data/Engine/Containers/api-backend/data/`.
+    - Engine API/backend source lives in `Data/Engine/Containers/api-backend/cmd/api-backend/`.
+    - Retained Engine Python worker/helper modules live in `Data/Engine/Containers/api-backend/data/` and are packaged by the `site-worker` image, not the `api-backend` image.
     - Engine WebUI source lives in `Data/Engine/Containers/webui-frontend/data/web-interface/`.
     - Engine WebUI dev/HMR runtime source lives in `Engine/Services/webui-frontend/data/web-interface/` after first Engine deploy.
     - Agent source code lives in `Data/Agent/`.
@@ -266,9 +267,9 @@ After deployment finishes:
 
     ### Configuration precedence
 
-    Engine config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
+    Retained Python worker config is assembled by `Data/Engine/Containers/api-backend/data/config.py` in this order:
 
-    1. Explicit overrides passed to the app factory.
+    1. Explicit overrides passed to `load_runtime_config`.
     2. Environment variables prefixed with `BOREALIS_`.
     3. Defaults baked into `config.py`.
 

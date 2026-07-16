@@ -1150,7 +1150,7 @@ def upsert_worker_route(
     route_metadata = dict(metadata or {})
     route_metadata.update(
         {
-            "lifecycle_owner": "job-scheduler",
+            "lifecycle_owner": "site-worker-orchestrator",
             "route_kind": "site_worker",
             "worker_guid": normalized_guid,
         }
