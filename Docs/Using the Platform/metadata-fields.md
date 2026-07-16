@@ -82,3 +82,32 @@ Blank values queue a clear.
     - Newest `modified_at` wins. Future agent timestamps are clamped before conflict comparison.
     - Reserved metadata field definitions are API-level constants. Existing database descriptions for reserved fields are ignored during list rendering, and definition updates for reserved fields return `reserved_metadata_field`.
     - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
+
+    ### Adding reserved fields
+
+    When adding another static reserved metadata field, keep the backend constants, WebUI behavior, operator table, and tests synchronized in the same change.
+
+    1. Choose an unused field number from `1` through `500`.
+    2. Confirm the linked assembly is bundled or otherwise stable, then record its display name, GUID, and assembly type.
+    3. Add the field to `reservedMetadataFields` in `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`.
+    4. Add the same field to `RESERVED_METADATA_FIELDS` in `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`.
+    5. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name.
+    6. Update tests that assert reserved labels, linked assembly metadata, and rename rejection:
+        - `Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
+        - `Data/Engine/Unit_Tests/test_metadata_fields.py`
+        - `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/Admin/Metadata_Field_List.reservedFields.test.jsx`
+    7. Run focused validation before handoff:
+        - `/opt/Borealis/Dependencies/Go/go1.23.12/bin/gofmt -w Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
+        - `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.23.12/bin/go test ./cmd/api-backend -run 'TestMetadata'`
+        - `python3 -m py_compile Data/Engine/Containers/api-backend/data/services/metadata_fields.py Data/Engine/Unit_Tests/test_metadata_fields.py`
+        - `./Engine_Unit_Tests.sh --domain webui` when the WebUI runtime test cache exists.
+
+    Reserved field records require these values:
+
+    - Field number: integer key in both backend maps.
+    - Description: immutable metadata field label shown in the admin editor and device metadata grid.
+    - Assembly name: tooltip shown when hovering the linked field number.
+    - Assembly GUID: route target for the linked field number.
+    - Assembly type: `script`, `ansible_playbook`, or `workflow`; this controls the generated `/assemblies/.../<guid>` route.
+
+    Do not add a database migration for reserved labels. Reserved labels intentionally override persisted `metadata_field_definitions` descriptions at render time so existing Engines become consistent without data rewrite. Device values remain editable; only global reserved field descriptions are immutable.
