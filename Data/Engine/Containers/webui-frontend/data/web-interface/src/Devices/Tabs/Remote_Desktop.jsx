@@ -3745,8 +3745,8 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                     gap: 0.25,
                     p: 0.25,
                     borderRadius: 1,
-                    border: "1px solid rgba(125,183,255,0.2)",
-                    backgroundColor: "rgba(8,15,32,0.78)",
+                    border: `1px solid ${NAV_COLORS.line}`,
+                    backgroundColor: "rgba(255,255,255,0.01)",
                   }}
                 >
                   {[
@@ -3764,25 +3764,28 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
                         onClick={() => handlePerformanceModeSelect(item.mode)}
                         sx={{
                           minWidth: 0,
-                          minHeight: 34,
+                          minHeight: 32,
                           px: 0.75,
-                          py: 0.75,
+                          py: 0.65,
                           borderRadius: 0.75,
                           textTransform: "none",
                           whiteSpace: "normal",
                           wordBreak: "normal",
                           lineHeight: 1.15,
                           fontSize: 11,
-                          fontWeight: 800,
-                          color: active ? "#e6f2ff" : SIDEBAR_THEME.muted,
-                          background: active
-                            ? "linear-gradient(180deg, rgba(125,183,255,0.24), rgba(125,183,255,0.12))"
-                            : "transparent",
-                          border: `1px solid ${active ? "rgba(125,183,255,0.48)" : "transparent"}`,
-                          boxShadow: active ? "inset 0 0 0 1px rgba(255,255,255,0.04)" : "none",
+                          fontWeight: active ? 700 : 600,
+                          color: active ? NAV_COLORS.textActive : NAV_COLORS.text,
+                          backgroundColor: active ? "rgba(125,183,255,0.10)" : "transparent",
+                          border: `1px solid ${active ? "rgba(125,183,255,0.24)" : "transparent"}`,
+                          boxShadow: "none",
+                          transition: "background-color 160ms ease, border-color 160ms ease, color 160ms ease",
                           "&:hover": {
-                            backgroundColor: active ? "rgba(125,183,255,0.18)" : "rgba(255,255,255,0.05)",
-                            borderColor: active ? "rgba(125,183,255,0.58)" : "rgba(148,163,184,0.18)",
+                            backgroundColor: active ? "rgba(125,183,255,0.13)" : NAV_COLORS.hover,
+                            borderColor: active ? "rgba(125,183,255,0.30)" : "rgba(148,163,184,0.12)",
+                          },
+                          "&:focus-visible": {
+                            outline: `1px solid ${NAV_COLORS.cyan}`,
+                            outlineOffset: 1,
                           },
                         }}
                       >
