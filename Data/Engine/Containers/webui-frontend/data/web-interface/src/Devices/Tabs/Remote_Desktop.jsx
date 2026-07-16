@@ -3401,10 +3401,7 @@ export default function RemoteDesktopPage({ device: providedDevice = null }) {
               title="Display & Focus"
             >
               <>
-                <Box sx={{ px: 2, py: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
-                <Typography variant="caption" sx={{ color: SIDEBAR_THEME.muted }}>
-                  Viewfinder
-                </Typography>
+                <Box sx={{ px: 2, pt: 1, pb: 1.25, display: "flex", flexDirection: "column", gap: 1 }}>
                 <Box
                   ref={viewfinderShellRef}
                   sx={{
