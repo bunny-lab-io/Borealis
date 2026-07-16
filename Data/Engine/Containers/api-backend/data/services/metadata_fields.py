@@ -20,6 +20,32 @@ from Data.Engine.db import dbapi as sqlite3
 METADATA_FIELD_COUNT = 500
 METADATA_VALUE_MAX_LENGTH = 1024
 METADATA_FUTURE_SKEW_SECONDS = 300
+RESERVED_METADATA_FIELD_TOOLTIP = (
+    "Reserved Borealis Metadata Field - Create a scheduled job using the hyperlinked assembly to collect data for this field."
+)
+RESERVED_METADATA_PLACEHOLDER_TOOLTIP = "Reserved Borealis Metadata Field - Reserved for future Borealis use."
+RESERVED_METADATA_FIELDS = {
+    1: {
+        "description": "Server Roles",
+        "assembly_name": "Detect Server Roles [WIN]",
+        "assembly_guid": "628f6686-c7c4-477d-bf9a-13c73d8246ba",
+        "assembly_type": "script",
+    },
+    2: {
+        "description": "Bitlocker Drive Encryption",
+        "assembly_name": "Audit Bitlocker / TPM Status [WIN]",
+        "assembly_guid": "c4f97974-1d9c-4e89-8257-8a139637e51f",
+        "assembly_type": "script",
+    },
+    3: {"description": "Reserved"},
+    4: {"description": "Reserved"},
+    5: {"description": "Reserved"},
+    6: {"description": "Reserved"},
+    7: {"description": "Reserved"},
+    8: {"description": "Reserved"},
+    9: {"description": "Reserved"},
+    10: {"description": "Reserved"},
+}
 
 _FIELD_KEY_PATTERN = re.compile(r"field[_\s-]*(\d{1,3})$", re.IGNORECASE)
 
@@ -30,6 +56,18 @@ def metadata_field_key(field_number: int) -> str:
 
 def metadata_field_label(field_number: int) -> str:
     return f"Field {int(field_number):03d}"
+
+
+def reserved_metadata_assembly_path(reserved: Mapping[str, Any]) -> str:
+    assembly_type = str(reserved.get("assembly_type") or "script").strip().lower()
+    assembly_guid = str(reserved.get("assembly_guid") or "").strip()
+    if not assembly_guid:
+        return ""
+    if assembly_type == "ansible_playbook":
+        return f"/assemblies/ansible_playbooks/{assembly_guid}"
+    if assembly_type == "workflow":
+        return f"/assemblies/workflows/{assembly_guid}"
+    return f"/assemblies/scripts/{assembly_guid}"
 
 
 def normalize_field_number(value: Any) -> Optional[int]:
@@ -55,6 +93,11 @@ def normalize_field_number(value: Any) -> Optional[int]:
         return None
     parsed = int(text)
     return parsed if 1 <= parsed <= METADATA_FIELD_COUNT else None
+
+
+def reserved_metadata_tooltip(reserved: Mapping[str, Any]) -> str:
+    assembly_guid = str(reserved.get("assembly_guid") or "").strip()
+    return RESERVED_METADATA_FIELD_TOOLTIP if assembly_guid else RESERVED_METADATA_PLACEHOLDER_TOOLTIP
 
 
 def normalize_metadata_value(value: Any) -> str:
@@ -192,6 +235,9 @@ def list_metadata_definitions(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
         default_label = metadata_field_label(field_number)
         definition = descriptions.get(field_number) or {}
         description = str(definition.get("description") or "").strip()
+        reserved = RESERVED_METADATA_FIELDS.get(field_number)
+        if reserved:
+            description = str(reserved["description"])
         fields.append(
             {
                 "field_number": field_number,
@@ -199,12 +245,39 @@ def list_metadata_definitions(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
                 "default_label": default_label,
                 "label": description or default_label,
                 "description": description,
-                "updated_at": int(definition.get("updated_at") or 0),
-                "updated_by": str(definition.get("updated_by") or ""),
+                "updated_at": 0 if reserved else int(definition.get("updated_at") or 0),
+                "updated_by": "Borealis" if reserved else str(definition.get("updated_by") or ""),
                 "value_limit": METADATA_VALUE_MAX_LENGTH,
+                "reserved": bool(reserved),
+                **reserved_metadata_payload(reserved),
             }
         )
     return fields
+
+
+def reserved_metadata_payload(reserved: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    if not reserved:
+        return {}
+    payload: Dict[str, Any] = {"reserved_tooltip": reserved_metadata_tooltip(reserved)}
+    assembly_guid = str(reserved.get("assembly_guid") or "").strip()
+    if assembly_guid:
+        assembly_name = str(reserved.get("assembly_name") or "").strip()
+        assembly_type = str(reserved.get("assembly_type") or "script").strip() or "script"
+        payload.update(
+            {
+                "linked_assembly": {
+                    "guid": assembly_guid,
+                    "name": assembly_name,
+                    "type": assembly_type,
+                    "path": reserved_metadata_assembly_path(reserved),
+                },
+                "linked_assembly_guid": assembly_guid,
+                "linked_assembly_name": assembly_name,
+                "linked_assembly_type": assembly_type,
+                "linked_assembly_path": reserved_metadata_assembly_path(reserved),
+            }
+        )
+    return payload
 
 
 def upsert_metadata_definition(
@@ -218,6 +291,8 @@ def upsert_metadata_definition(
     parsed = normalize_field_number(field_number)
     if parsed is None:
         raise ValueError("field_number must be between 1 and 500")
+    if parsed in RESERVED_METADATA_FIELDS:
+        raise ValueError(reserved_metadata_tooltip(RESERVED_METADATA_FIELDS[parsed]))
     now_ts = int(updated_at if updated_at is not None else time.time())
     clean_description = normalize_metadata_description(description)
     conn.execute(

@@ -19,6 +19,39 @@ const (
 	metadataFieldDefinition = "Field "
 )
 
+const reservedMetadataFieldTooltip = "Reserved Borealis Metadata Field - Create a scheduled job using the hyperlinked assembly to collect data for this field."
+const reservedMetadataPlaceholderTooltip = "Reserved Borealis Metadata Field - Reserved for future Borealis use."
+
+type reservedMetadataField struct {
+	Description  string
+	AssemblyName string
+	AssemblyGUID string
+	AssemblyType string
+}
+
+var reservedMetadataFields = map[int]reservedMetadataField{
+	1: {
+		Description:  "Server Roles",
+		AssemblyName: "Detect Server Roles [WIN]",
+		AssemblyGUID: "628f6686-c7c4-477d-bf9a-13c73d8246ba",
+		AssemblyType: "script",
+	},
+	2: {
+		Description:  "Bitlocker Drive Encryption",
+		AssemblyName: "Audit Bitlocker / TPM Status [WIN]",
+		AssemblyGUID: "c4f97974-1d9c-4e89-8257-8a139637e51f",
+		AssemblyType: "script",
+	},
+	3:  {Description: "Reserved"},
+	4:  {Description: "Reserved"},
+	5:  {Description: "Reserved"},
+	6:  {Description: "Reserved"},
+	7:  {Description: "Reserved"},
+	8:  {Description: "Reserved"},
+	9:  {Description: "Reserved"},
+	10: {Description: "Reserved"},
+}
+
 type metadataDefinitionStore interface {
 	listMetadataDefinitions(ctx context.Context) ([]map[string]any, error)
 	updateMetadataDefinition(ctx context.Context, fieldNumber int, description string, actor string) (map[string]any, int, error)
@@ -106,6 +139,10 @@ func metadataFieldDefinitionHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
+		if _, reserved := reservedMetadataFieldDefinition(fieldNumber); reserved {
+			writeJSON(w, http.StatusConflict, reservedMetadataFieldUpdatePayload(fieldNumber))
+			return
+		}
 		store, ok := auth.store.(metadataDefinitionStore)
 		if !ok {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "metadata_fields_unavailable"})
@@ -149,6 +186,9 @@ func parseMetadataFieldDefinitionPath(path string) (int, bool) {
 func (s *postgresOperatorStore) updateMetadataDefinition(ctx context.Context, fieldNumber int, description string, actor string) (map[string]any, int, error) {
 	if fieldNumber < 1 || fieldNumber > metadataFieldCount {
 		return map[string]any{"error": "invalid_field", "message": "Field number must be between 1 and 500."}, http.StatusBadRequest, nil
+	}
+	if _, reserved := reservedMetadataFieldDefinition(fieldNumber); reserved {
+		return reservedMetadataFieldUpdatePayload(fieldNumber), http.StatusConflict, nil
 	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -673,6 +713,33 @@ func buildMetadataDefinitions(descriptions map[int]metadataDefinitionRow) []map[
 func metadataDefinitionPayload(fieldNumber int, description string, updatedAt int64, updatedBy string) map[string]any {
 	defaultLabel := metadataFieldLabel(fieldNumber)
 	cleanDescription := strings.TrimSpace(description)
+	if reserved, ok := reservedMetadataFieldDefinition(fieldNumber); ok {
+		payload := map[string]any{
+			"field_number":     fieldNumber,
+			"field_key":        metadataFieldKey(fieldNumber),
+			"default_label":    defaultLabel,
+			"label":            reserved.Description,
+			"description":      reserved.Description,
+			"updated_at":       int64(0),
+			"updated_by":       "Borealis",
+			"value_limit":      metadataValueMaxLength,
+			"reserved":         true,
+			"reserved_tooltip": reservedMetadataTooltip(reserved),
+		}
+		if strings.TrimSpace(reserved.AssemblyGUID) != "" {
+			payload["linked_assembly"] = map[string]any{
+				"guid": reserved.AssemblyGUID,
+				"name": reserved.AssemblyName,
+				"type": reserved.AssemblyType,
+				"path": reservedMetadataAssemblyPath(reserved),
+			}
+			payload["linked_assembly_guid"] = reserved.AssemblyGUID
+			payload["linked_assembly_name"] = reserved.AssemblyName
+			payload["linked_assembly_type"] = reserved.AssemblyType
+			payload["linked_assembly_path"] = reservedMetadataAssemblyPath(reserved)
+		}
+		return payload
+	}
 	label := cleanDescription
 	if label == "" {
 		label = defaultLabel
@@ -686,6 +753,42 @@ func metadataDefinitionPayload(fieldNumber int, description string, updatedAt in
 		"updated_at":    updatedAt,
 		"updated_by":    updatedBy,
 		"value_limit":   metadataValueMaxLength,
+		"reserved":      false,
+	}
+}
+
+func reservedMetadataFieldDefinition(fieldNumber int) (reservedMetadataField, bool) {
+	reserved, ok := reservedMetadataFields[fieldNumber]
+	return reserved, ok
+}
+
+func reservedMetadataTooltip(reserved reservedMetadataField) string {
+	if strings.TrimSpace(reserved.AssemblyGUID) == "" {
+		return reservedMetadataPlaceholderTooltip
+	}
+	return reservedMetadataFieldTooltip
+}
+
+func reservedMetadataAssemblyPath(reserved reservedMetadataField) string {
+	if strings.TrimSpace(reserved.AssemblyGUID) == "" {
+		return ""
+	}
+	switch strings.ToLower(strings.TrimSpace(reserved.AssemblyType)) {
+	case "ansible_playbook":
+		return "/assemblies/ansible_playbooks/" + url.PathEscape(reserved.AssemblyGUID)
+	case "workflow":
+		return "/assemblies/workflows/" + url.PathEscape(reserved.AssemblyGUID)
+	default:
+		return "/assemblies/scripts/" + url.PathEscape(reserved.AssemblyGUID)
+	}
+}
+
+func reservedMetadataFieldUpdatePayload(fieldNumber int) map[string]any {
+	reserved, _ := reservedMetadataFieldDefinition(fieldNumber)
+	return map[string]any{
+		"error":   "reserved_metadata_field",
+		"message": reservedMetadataTooltip(reserved),
+		"field":   metadataDefinitionPayload(fieldNumber, reserved.Description, 0, "Borealis"),
 	}
 }
 

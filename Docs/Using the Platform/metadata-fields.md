@@ -16,6 +16,25 @@ Metadata Fields give operators 500 simple custom text fields per device. Use the
 
 Descriptions are global labels. They do not store device values.
 
+## Reserved Fields
+
+Borealis reserves some fields for standard audit data collected by bundled assemblies and future Borealis-managed uses. These field descriptions cannot be renamed in the global metadata field editor. When a reserved field has a linked assembly, the field number opens the assembly that can collect the value.
+
+| Field Number | Field Description | Linked Assembly |
+| :--- | :--- | :--- |
+| Field 001 | Server Roles | `Detect Server Roles [WIN]` |
+| Field 002 | Bitlocker Drive Encryption | `Audit Bitlocker / TPM Status [WIN]` |
+| Field 003 | Reserved | - |
+| Field 004 | Reserved | - |
+| Field 005 | Reserved | - |
+| Field 006 | Reserved | - |
+| Field 007 | Reserved | - |
+| Field 008 | Reserved | - |
+| Field 009 | Reserved | - |
+| Field 010 | Reserved | - |
+
+Create recurring scheduled jobs for the reserved assemblies when you want Borealis to refresh this data on a regular cadence. Borealis does not force collection. Operators still choose which assemblies to run, which targets receive them, and how often values refresh.
+
 ## Fill Device Values
 
 1. Open a device.
@@ -58,9 +77,11 @@ Blank values queue a clear.
 
     ### Source map
 
-    - Metadata API: `Data/Engine/Containers/api-backend/data/services/API/metadata_fields.py`
+    - Metadata API: `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`
+    - Shared metadata helpers: `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`
     - Admin UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Metadata_Field_List.jsx`
     - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Metadata.jsx`
+    - Shared field cell renderers: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Metadata_Field_Cells.jsx`
 
     ### Runtime behavior
 
@@ -68,3 +89,40 @@ Blank values queue a clear.
     - Sparse per-device values live in `device_metadata_fields`.
     - Values are base64-encoded at rest and capped at 1024 decoded characters.
     - Newest `modified_at` wins. Future agent timestamps are clamped before conflict comparison.
+    - Reserved metadata field definitions are API-level constants. Existing database descriptions for reserved fields are ignored during list rendering, and definition updates for reserved fields return `reserved_metadata_field`.
+    - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
+    - `Field 003` through `Field 010` are reserved placeholders named `Reserved` with no linked assemblies.
+    - `Metadata_Field_Cells.jsx` renders linked reserved field numbers in both the global Metadata Fields page and device metadata tab. Linked field numbers have no underline, hover with the assembly name, and navigate to the assembly editor. Reserved placeholders without an assembly GUID render as plain field numbers.
+    - The global Metadata Fields grid shows definition audit data from `metadata_field_definitions`: `updated_at` renders as `Modified`, and `updated_by` renders as `Source`. These audit columns track administrator label changes, not per-device metadata value changes.
+    - The device metadata grid keeps `Field Number` fixed at 150px with no resize handle, autosizes `Field Description` against visible descriptions, sets fixed widths for `Modified` and `Source`, disables the `Source` resize handle, and leaves `Value` as the only flex column so it consumes remaining grid width.
+
+    ### Adding reserved fields
+
+    When adding another static reserved metadata field, keep the backend constants, WebUI behavior, operator table, and tests synchronized in the same change.
+
+    1. Choose an unused field number from `1` through `500`.
+    2. If the field should link to an assembly, confirm the assembly is bundled or otherwise stable, then record its display name, GUID, and assembly type.
+    3. Add the field to `reservedMetadataFields` in `Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go`.
+    4. Add the same field to `RESERVED_METADATA_FIELDS` in `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`.
+    5. Update the visible Reserved Fields table on this page with the field number, description, and linked assembly name, or `-` when the field is an unlinked placeholder.
+    6. Update tests that assert reserved labels, linked assembly metadata, and rename rejection:
+        - `Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
+        - `Data/Engine/Unit_Tests/test_metadata_fields.py`
+        - `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/Admin/Metadata_Field_List.reservedFields.test.jsx`
+    7. Run focused validation before handoff:
+        - `/opt/Borealis/Dependencies/Go/go1.23.12/bin/gofmt -w Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
+        - `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.23.12/bin/go test ./cmd/api-backend -run 'TestMetadata'`
+        - `python3 -m py_compile Data/Engine/Containers/api-backend/data/services/metadata_fields.py Data/Engine/Unit_Tests/test_metadata_fields.py`
+        - `./Engine_Unit_Tests.sh --domain webui` when the WebUI runtime test cache exists.
+
+    Reserved field records require these values:
+
+    - Field number: integer key in both backend maps.
+    - Description: immutable metadata field label shown in the admin editor and device metadata grid.
+    - Assembly name: optional; tooltip shown when hovering a linked field number.
+    - Assembly GUID: optional; route target for the linked field number.
+    - Assembly type: optional unless assembly GUID exists; use `script`, `ansible_playbook`, or `workflow` to control the generated `/assemblies/.../<guid>` route.
+
+    Reserved placeholder fields should set only `Description: "Reserved"` in Go and `"description": "Reserved"` in Python. Do not set assembly name, GUID, type, or path for placeholders. The WebUI treats reserved fields without an assembly GUID as immutable non-links.
+
+    Do not add a database migration for reserved labels. Reserved labels intentionally override persisted `metadata_field_definitions` descriptions at render time so existing Engines become consistent without data rewrite. Device values remain editable; only global reserved field descriptions are immutable.

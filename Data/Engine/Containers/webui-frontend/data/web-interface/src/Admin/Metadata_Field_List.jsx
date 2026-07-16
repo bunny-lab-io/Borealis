@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLoaderData } from "react-router-dom";
-import { Alert, Box, LinearProgress, TextField, Typography } from "@mui/material";
+import { Alert, Box, LinearProgress, TextField, Tooltip, Typography } from "@mui/material";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import {
+  FieldNumberCellRenderer,
+  RESERVED_METADATA_TOOLTIP,
+  isReservedMetadataField,
+} from "../Metadata_Field_Cells.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import {
@@ -60,7 +65,15 @@ const GRID_SX = {
   },
 };
 
-function DescriptionCellRenderer(props) {
+function formatTimestamp(value) {
+  if (!value) return "";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
+export function DescriptionCellRenderer(props) {
   const { data, value, onSaveDescription } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
   const [draft, setDraft] = useState(safeValue);
@@ -93,6 +106,52 @@ function DescriptionCellRenderer(props) {
     }
     setError("Failed to save description");
   }, [data, draft, onSaveDescription, safeValue]);
+
+  if (isReservedMetadataField(data)) {
+    const tooltip = String(data?.reserved_tooltip || RESERVED_METADATA_TOOLTIP);
+    const reservedLabel = safeValue || data?.label || "";
+    return (
+      <Tooltip title={tooltip} arrow placement="top-start">
+        <Box component="span" sx={{ display: "block" }}>
+          <TextField
+            value={reservedLabel}
+            variant="outlined"
+            size="small"
+            fullWidth
+            InputProps={{ readOnly: true }}
+            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onFocus={(event) => event.stopPropagation()}
+            sx={{
+              mt: 0.45,
+              mb: 0.45,
+              "& .MuiOutlinedInput-root": {
+                height: 34,
+                color: "#dff7ff",
+                fontFamily: gridFontFamily,
+                fontSize: "0.875rem",
+                backgroundColor: "rgba(14,116,144,0.18)",
+                "& fieldset": {
+                  borderColor: "rgba(125,211,252,0.45)",
+                },
+                "&:hover fieldset": {
+                  borderColor: "#7dd3fc",
+                },
+                "&.Mui-focused fieldset": {
+                  borderColor: "#7dd3fc",
+                },
+              },
+              "& .MuiOutlinedInput-input": {
+                py: 0.75,
+                px: 1.5,
+                cursor: "help",
+              },
+            }}
+          />
+        </Box>
+      </Tooltip>
+    );
+  }
 
   return (
     <TextField
@@ -185,6 +244,43 @@ export async function loadMetadataFieldsPageData(request) {
   }
 }
 
+export function buildMetadataFieldColumnDefs({ saveDescription }) {
+  return [
+    {
+      headerName: "Field Number",
+      field: "default_label",
+      width: 160,
+      pinned: "left",
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: false,
+      cellRenderer: FieldNumberCellRenderer,
+    },
+    {
+      headerName: "Field Description",
+      field: "description",
+      flex: 1,
+      minWidth: 300,
+      cellRenderer: DescriptionCellRenderer,
+      cellRendererParams: { onSaveDescription: saveDescription },
+    },
+    {
+      headerName: "Modified",
+      field: "updated_at",
+      width: 200,
+      minWidth: 180,
+      valueFormatter: (params) => formatTimestamp(params.value),
+    },
+    {
+      headerName: "Source",
+      field: "updated_by",
+      width: 180,
+      minWidth: 140,
+      valueFormatter: (params) => params.value || "",
+    },
+  ];
+}
+
 export default function MetadataFieldList() {
   const loaderData = useLoaderData();
   const [rows, setRows] = useState(() => (Array.isArray(loaderData?.fields) ? loaderData.fields : []));
@@ -226,6 +322,10 @@ export default function MetadataFieldList() {
     async (row, description) => {
       const fieldNumber = Number(row?.field_number || 0);
       if (!Number.isInteger(fieldNumber) || fieldNumber < 1 || fieldNumber > 500) return false;
+      if (isReservedMetadataField(row)) {
+        void notifyOperator?.(String(row?.reserved_tooltip || RESERVED_METADATA_TOOLTIP), { variant: "warning" });
+        return false;
+      }
       try {
         const response = await fetch(`/api/metadata_fields/${fieldNumber}`, {
           method: "PUT",
@@ -260,27 +360,7 @@ export default function MetadataFieldList() {
     [notifyOperator]
   );
 
-  const columnDefs = useMemo(
-    () => [
-      {
-        headerName: "Field Number",
-        field: "default_label",
-        width: 160,
-        pinned: "left",
-        sortable: true,
-        filter: "agTextColumnFilter",
-      },
-      {
-        headerName: "Field Description",
-        field: "description",
-        flex: 1,
-        minWidth: 300,
-        cellRenderer: DescriptionCellRenderer,
-        cellRendererParams: { onSaveDescription: saveDescription },
-      },
-    ],
-    [saveDescription]
-  );
+  const columnDefs = useMemo(() => buildMetadataFieldColumnDefs({ saveDescription }), [saveDescription]);
 
   const defaultColDef = useMemo(
     () => ({
@@ -297,7 +377,7 @@ export default function MetadataFieldList() {
       {loading ? <LinearProgress /> : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
       <Typography sx={{ color: "#94a3b8", fontSize: "0.86rem" }}>
-        Empty descriptions fall back to Field 001 through Field 500.
+        Empty descriptions fall back to Field 001 through Field 500. Reserved Borealis fields link to the assembly that collects their values.
       </Typography>
     </Box>
   );
