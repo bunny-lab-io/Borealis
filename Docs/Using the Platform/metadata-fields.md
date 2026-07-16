@@ -81,6 +81,7 @@ Blank values queue a clear.
     - Shared metadata helpers: `Data/Engine/Containers/api-backend/data/services/metadata_fields.py`
     - Admin UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Admin/Metadata_Field_List.jsx`
     - Device tab: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Device_Metadata.jsx`
+    - Shared field cell renderers: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Metadata_Field_Cells.jsx`
 
     ### Runtime behavior
 
@@ -91,6 +92,7 @@ Blank values queue a clear.
     - Reserved metadata field definitions are API-level constants. Existing database descriptions for reserved fields are ignored during list rendering, and definition updates for reserved fields return `reserved_metadata_field`.
     - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
     - `Field 003` through `Field 010` are reserved placeholders named `Reserved` with no linked assemblies.
+    - `Metadata_Field_Cells.jsx` renders linked reserved field numbers in both the global Metadata Fields page and device metadata tab. Linked field numbers have no underline, hover with the assembly name, and navigate to the assembly editor. Reserved placeholders without an assembly GUID render as plain field numbers.
 
     ### Adding reserved fields
 

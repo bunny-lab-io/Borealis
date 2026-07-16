@@ -1,11 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link as RouterLink, useLoaderData } from "react-router-dom";
-import { Alert, Box, LinearProgress, Link, TextField, Tooltip, Typography } from "@mui/material";
+import { useLoaderData } from "react-router-dom";
+import { Alert, Box, LinearProgress, TextField, Tooltip, Typography } from "@mui/material";
 import LabelRoundedIcon from "@mui/icons-material/LabelRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
 import PageBodyFrame from "../PageBodyFrame.jsx";
+import {
+  FieldNumberCellRenderer,
+  RESERVED_METADATA_TOOLTIP,
+  isReservedMetadataField,
+} from "../Metadata_Field_Cells.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import {
@@ -15,15 +20,12 @@ import {
   requireAuthenticatedRequest,
   rethrowIfRouteRedirect,
 } from "../app/routes/routeData.js";
-import { APP_PATHS } from "../app/routes/paths.js";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const PAGE_ICON = LabelRoundedIcon;
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
-export const RESERVED_METADATA_TOOLTIP =
-  "Reserved Borealis Metadata Field - Create a scheduled job using the hyperlinked assembly to collect data for this field.";
 
 const gridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -62,57 +64,6 @@ const GRID_SX = {
     backgroundColor: "rgba(73,156,196,0.18) !important",
   },
 };
-
-export function isReservedMetadataField(row) {
-  return Boolean(row?.reserved);
-}
-
-export function getReservedAssemblyPath(row) {
-  const assembly = row?.linked_assembly && typeof row.linked_assembly === "object" ? row.linked_assembly : {};
-  const explicitPath = String(row?.linked_assembly_path || row?.assembly_path || assembly.path || "").trim();
-  if (explicitPath) return explicitPath;
-  const guid = String(row?.linked_assembly_guid || row?.assembly_guid || assembly.guid || "").trim();
-  if (!guid) return "";
-  const type = String(row?.linked_assembly_type || row?.assembly_type || assembly.type || "script")
-    .trim()
-    .toLowerCase();
-  if (type === "ansible_playbook") return APP_PATHS.assemblyAnsible(guid);
-  if (type === "workflow") return APP_PATHS.assemblyWorkflow(guid);
-  return APP_PATHS.assemblyScript(guid);
-}
-
-export function getReservedAssemblyName(row) {
-  const assembly = row?.linked_assembly && typeof row.linked_assembly === "object" ? row.linked_assembly : {};
-  return String(row?.linked_assembly_name || row?.assembly_name || assembly.name || "").trim();
-}
-
-export function FieldNumberCellRenderer(props) {
-  const { data, value } = props;
-  const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
-  const assemblyPath = isReservedMetadataField(data) ? getReservedAssemblyPath(data) : "";
-  if (!assemblyPath) return safeValue;
-  const tooltip = getReservedAssemblyName(data) || safeValue;
-  return (
-    <Tooltip title={tooltip} arrow placement="top-start" describeChild>
-      <Link
-        component={RouterLink}
-        to={assemblyPath}
-        onClick={(event) => event.stopPropagation()}
-        sx={{
-          color: "#7dd3fc",
-          fontWeight: 700,
-          textDecorationColor: "rgba(125,211,252,0.55)",
-          "&:hover": {
-            color: "#bae6fd",
-            textDecorationColor: "#bae6fd",
-          },
-        }}
-      >
-        {safeValue}
-      </Link>
-    </Tooltip>
-  );
-}
 
 export function DescriptionCellRenderer(props) {
   const { data, value, onSaveDescription } = props;

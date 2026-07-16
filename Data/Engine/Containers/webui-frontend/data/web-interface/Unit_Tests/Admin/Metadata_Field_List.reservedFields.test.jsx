@@ -3,13 +3,13 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
+import { DescriptionCellRenderer } from "@/Admin/Metadata_Field_List.jsx";
 import {
-  DescriptionCellRenderer,
   FieldNumberCellRenderer,
   RESERVED_METADATA_TOOLTIP,
   getReservedAssemblyName,
   getReservedAssemblyPath,
-} from "@/Admin/Metadata_Field_List.jsx";
+} from "@/Metadata_Field_Cells.jsx";
 
 const reservedField = {
   field_number: 1,
