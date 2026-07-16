@@ -73,7 +73,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/agent/vpn/ready` (Device Authenticated) - report active WireGuard tunnel, local service, and firewall readiness for scheduled SSH/WinRM dispatch.
     - `GET /api/agent/metadata/<field_number>` (Device Authenticated) - read one decoded metadata field for local Agent CLI.
     - `GET /api/agents` (Token Authenticated) - list online collectors, with upgraded hosts advertising helper-backed current-user capability on their SYSTEM record via `helper_contexts`.
-    - `GET /api/devices` (Token Authenticated) - device summary list, scoped to the operator's assigned sites unless the operator is an admin.
+    - `GET /api/devices` (Token Authenticated) - device summary list with sparse decoded `metadata_fields`, scoped to the operator's assigned sites unless the operator is an admin.
     - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - hostname search matches for the shared header search, scoped to the operator's assigned sites unless the operator is an admin.
     - `GET /api/devices/<guid>` (Token Authenticated) - device summary by GUID, site-scoped for operators.
     - `GET /api/metadata_fields` (Token Authenticated) - list 500 global Agent Metadata Field definitions, default labels, descriptions, and value limits.
