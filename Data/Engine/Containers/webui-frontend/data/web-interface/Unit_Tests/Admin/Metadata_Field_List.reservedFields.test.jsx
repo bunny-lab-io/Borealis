@@ -106,6 +106,8 @@ describe("MetadataFieldList reserved fields", () => {
     expect(columns[modifiedColumnIndex]).toMatchObject({
       headerName: "Modified",
       field: "updated_at",
+      width: 200,
+      minWidth: 180,
     });
     expect(columns[sourceColumnIndex]).toMatchObject({
       headerName: "Source",

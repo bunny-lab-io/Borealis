@@ -267,8 +267,8 @@ export function buildMetadataFieldColumnDefs({ saveDescription }) {
     {
       headerName: "Modified",
       field: "updated_at",
-      width: 170,
-      minWidth: 150,
+      width: 200,
+      minWidth: 180,
       valueFormatter: (params) => formatTimestamp(params.value),
     },
     {

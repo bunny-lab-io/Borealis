@@ -39,14 +39,14 @@ describe("DeviceMetadata reserved fields", () => {
     });
     expect(modifiedColumn).toMatchObject({
       headerName: "Modified",
-      width: 108,
-      minWidth: 108,
+      width: 152,
+      minWidth: 152,
     });
     expect(modifiedColumn).not.toHaveProperty("flex");
     expect(sourceColumn).toMatchObject({
       headerName: "Source",
-      width: 72,
-      minWidth: 72,
+      width: 300,
+      minWidth: 300,
       resizable: false,
     });
     expect(sourceColumn).not.toHaveProperty("flex");
