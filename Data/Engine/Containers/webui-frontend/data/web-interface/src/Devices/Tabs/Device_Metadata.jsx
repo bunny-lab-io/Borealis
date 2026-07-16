@@ -7,6 +7,8 @@ import { FieldNumberCellRenderer } from "../../Metadata_Field_Cells.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
 import { fetchRouteJson, getRouteErrorMessage } from "../../app/routes/routeData.js";
 
+const FIELD_DESCRIPTION_AUTO_SIZE_COLUMNS = ["label"];
+
 function formatTimestamp(value) {
   if (!value) return "";
   const numeric = Number(value);
@@ -126,35 +128,39 @@ export function buildDeviceMetadataColumnDefs({ saveValue, valueLimit }) {
       field: "default_label",
       width: 150,
       pinned: "left",
+      resizable: false,
       cellRenderer: FieldNumberCellRenderer,
     },
     {
       headerName: "Field Description",
       field: "label",
+      width: 260,
       minWidth: 220,
-      flex: 1,
+      maxWidth: 460,
+      suppressSizeToFit: true,
       valueGetter: (params) => params.data?.description || params.data?.default_label || "",
     },
     {
       headerName: "Value",
       field: "value",
       minWidth: 320,
-      flex: 1.8,
+      flex: 1,
       cellRenderer: MetadataValueCell,
       cellRendererParams: { onSaveValue: saveValue, valueLimit },
     },
     {
       headerName: "Modified",
       field: "modified_at",
-      minWidth: 180,
-      flex: 0.8,
+      width: 108,
+      minWidth: 108,
       valueFormatter: (params) => formatTimestamp(params.value),
     },
     {
       headerName: "Source",
       field: "source",
-      minWidth: 120,
-      flex: 0.6,
+      width: 72,
+      minWidth: 72,
+      resizable: false,
       valueFormatter: (params) => params.value || "",
     },
   ];
@@ -243,6 +249,12 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
     [saveValue, valueLimit]
   );
 
+  const autoSizeDescriptionColumn = useCallback((params) => {
+    if (typeof params?.api?.autoSizeColumns === "function") {
+      params.api.autoSizeColumns(FIELD_DESCRIPTION_AUTO_SIZE_COLUMNS, true);
+    }
+  }, []);
+
   const defaultColDef = useMemo(
     () => ({
       sortable: true,
@@ -264,6 +276,8 @@ export default function DeviceMetadata({ deviceId, deviceGuid, hostname }) {
             columnDefs={columnDefs}
             defaultColDef={defaultColDef}
             getRowId={(params) => String(params.data?.field_key || params.data?.field_number)}
+            onFirstDataRendered={autoSizeDescriptionColumn}
+            onRowDataUpdated={autoSizeDescriptionColumn}
             suppressCellFocus
             animateRows
             pagination

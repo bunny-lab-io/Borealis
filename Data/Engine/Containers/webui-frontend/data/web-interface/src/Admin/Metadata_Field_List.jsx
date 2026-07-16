@@ -65,6 +65,14 @@ const GRID_SX = {
   },
 };
 
+function formatTimestamp(value) {
+  if (!value) return "";
+  const numeric = Number(value);
+  const date = Number.isFinite(numeric) && numeric > 0 ? new Date(numeric * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
+}
+
 export function DescriptionCellRenderer(props) {
   const { data, value, onSaveDescription } = props;
   const safeValue = typeof value === "string" ? value : value == null ? "" : String(value);
@@ -236,6 +244,43 @@ export async function loadMetadataFieldsPageData(request) {
   }
 }
 
+export function buildMetadataFieldColumnDefs({ saveDescription }) {
+  return [
+    {
+      headerName: "Field Number",
+      field: "default_label",
+      width: 160,
+      pinned: "left",
+      sortable: true,
+      filter: "agTextColumnFilter",
+      resizable: false,
+      cellRenderer: FieldNumberCellRenderer,
+    },
+    {
+      headerName: "Field Description",
+      field: "description",
+      flex: 1,
+      minWidth: 300,
+      cellRenderer: DescriptionCellRenderer,
+      cellRendererParams: { onSaveDescription: saveDescription },
+    },
+    {
+      headerName: "Modified",
+      field: "updated_at",
+      width: 170,
+      minWidth: 150,
+      valueFormatter: (params) => formatTimestamp(params.value),
+    },
+    {
+      headerName: "Source",
+      field: "updated_by",
+      width: 180,
+      minWidth: 140,
+      valueFormatter: (params) => params.value || "",
+    },
+  ];
+}
+
 export default function MetadataFieldList() {
   const loaderData = useLoaderData();
   const [rows, setRows] = useState(() => (Array.isArray(loaderData?.fields) ? loaderData.fields : []));
@@ -315,28 +360,7 @@ export default function MetadataFieldList() {
     [notifyOperator]
   );
 
-  const columnDefs = useMemo(
-    () => [
-      {
-        headerName: "Field Number",
-        field: "default_label",
-        width: 160,
-        pinned: "left",
-        sortable: true,
-        filter: "agTextColumnFilter",
-        cellRenderer: FieldNumberCellRenderer,
-      },
-      {
-        headerName: "Field Description",
-        field: "description",
-        flex: 1,
-        minWidth: 300,
-        cellRenderer: DescriptionCellRenderer,
-        cellRendererParams: { onSaveDescription: saveDescription },
-      },
-    ],
-    [saveDescription]
-  );
+  const columnDefs = useMemo(() => buildMetadataFieldColumnDefs({ saveDescription }), [saveDescription]);
 
   const defaultColDef = useMemo(
     () => ({

@@ -93,6 +93,8 @@ Blank values queue a clear.
     - `Field 001` maps to script assembly `628f6686-c7c4-477d-bf9a-13c73d8246ba`; `Field 002` maps to script assembly `c4f97974-1d9c-4e89-8257-8a139637e51f`.
     - `Field 003` through `Field 010` are reserved placeholders named `Reserved` with no linked assemblies.
     - `Metadata_Field_Cells.jsx` renders linked reserved field numbers in both the global Metadata Fields page and device metadata tab. Linked field numbers have no underline, hover with the assembly name, and navigate to the assembly editor. Reserved placeholders without an assembly GUID render as plain field numbers.
+    - The global Metadata Fields grid shows definition audit data from `metadata_field_definitions`: `updated_at` renders as `Modified`, and `updated_by` renders as `Source`. These audit columns track administrator label changes, not per-device metadata value changes.
+    - The device metadata grid keeps `Field Number` fixed at 150px with no resize handle, autosizes `Field Description` against visible descriptions, shrinks `Modified` and `Source`, disables the `Source` resize handle, and leaves `Value` as the only flex column so it consumes remaining grid width.
 
     ### Adding reserved fields
 

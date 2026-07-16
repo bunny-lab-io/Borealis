@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import { DescriptionCellRenderer } from "@/Admin/Metadata_Field_List.jsx";
+import { DescriptionCellRenderer, buildMetadataFieldColumnDefs } from "@/Admin/Metadata_Field_List.jsx";
 import {
   FieldNumberCellRenderer,
   RESERVED_METADATA_TOOLTIP,
@@ -83,5 +83,35 @@ describe("MetadataFieldList reserved fields", () => {
 
     expect(screen.getByDisplayValue("Server Roles")).toHaveAttribute("readonly");
     expect(onSaveDescription).not.toHaveBeenCalled();
+  });
+
+  it("keeps field number fixed and exposes global description audit columns", () => {
+    const columns = buildMetadataFieldColumnDefs({ saveDescription: vi.fn() });
+    const fieldNumberColumn = columns.find((column) => column.field === "default_label");
+    const descriptionColumn = columns.find((column) => column.field === "description");
+    const modifiedColumnIndex = columns.findIndex((column) => column.field === "updated_at");
+    const sourceColumnIndex = columns.findIndex((column) => column.field === "updated_by");
+
+    expect(fieldNumberColumn).toMatchObject({
+      headerName: "Field Number",
+      width: 160,
+      resizable: false,
+    });
+    expect(descriptionColumn).toMatchObject({
+      headerName: "Field Description",
+      flex: 1,
+    });
+    expect(modifiedColumnIndex).toBe(columns.findIndex((column) => column.field === "description") + 1);
+    expect(sourceColumnIndex).toBe(modifiedColumnIndex + 1);
+    expect(columns[modifiedColumnIndex]).toMatchObject({
+      headerName: "Modified",
+      field: "updated_at",
+    });
+    expect(columns[sourceColumnIndex]).toMatchObject({
+      headerName: "Source",
+      field: "updated_by",
+    });
+    expect(columns[modifiedColumnIndex].valueFormatter({ value: 1700000000 })).not.toBe("");
+    expect(columns[sourceColumnIndex].valueFormatter({ value: "admin" })).toBe("admin");
   });
 });
