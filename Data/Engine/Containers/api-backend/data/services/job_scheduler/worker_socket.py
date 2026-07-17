@@ -62,6 +62,7 @@ from Data.Engine.services.RemoteDesktop.guacamole_proxy import (
     DEFAULT_GUACD_PORT,
     GUACAMOLE_WS_PATH,
     GuacamoleSessionRegistry,
+    normalize_guacamole_image_codec,
     normalize_guacamole_performance_preference,
 )
 from Data.Engine.services.RemoteDesktop.rfb_probe import (
@@ -974,6 +975,7 @@ class SiteWorkerSocketRuntime:
             except Exception:
                 dpi = 96
             performance_preference = normalize_guacamole_performance_preference(data.get("performance_preference"))
+            image_codec = normalize_guacamole_image_codec(data.get("image_codec"))
             auth_probe_enabled = _normalize_bool(
                 data.get("auth_probe"),
                 _normalize_bool(os.environ.get("BOREALIS_VNC_AUTH_PROBE"), False),
@@ -1127,6 +1129,7 @@ class SiteWorkerSocketRuntime:
                 height=height,
                 dpi=dpi,
                 performance_preference=performance_preference,
+                image_codec=image_codec,
                 confirm_transport=lambda reason: self._notify_vnc_session_event(
                     event="transport_confirm",
                     agent_id=agent_id,

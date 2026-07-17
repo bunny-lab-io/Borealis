@@ -58,6 +58,17 @@ _GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS: Dict[int, Dict[str, str]] = {
     1: {"compress-level": "7", "quality-level": "8", "force-lossless": ""},
     2: {"compress-level": "9", "quality-level": "9", "force-lossless": "true"},
 }
+_GUACAMOLE_VNC_IMAGE_MIMETYPES: Dict[int, Tuple[str, str, str]] = {
+    -2: ("image/jpeg", "image/webp", "image/png"),
+    -1: ("image/jpeg", "image/webp", "image/png"),
+    0: ("image/png", "image/jpeg", "image/webp"),
+    1: ("image/webp", "image/png", "image/jpeg"),
+    2: ("image/png", "image/webp", "image/jpeg"),
+}
+_GUACAMOLE_VNC_CODEC_MIMETYPES: Dict[str, Tuple[str, ...]] = {
+    "jpeg": ("image/jpeg",),
+    "png": ("image/png",),
+}
 
 
 @dataclass
@@ -77,6 +88,7 @@ class GuacamoleVncSession:
     height: int = 768
     dpi: int = 96
     performance_preference: int = 0
+    image_codec: str = ""
     restart_tunnel: Optional[Callable[[str], None]] = None
     confirm_transport: Optional[Callable[[str], None]] = None
     on_open: Optional[Callable[[], None]] = None
@@ -119,6 +131,7 @@ class GuacamoleSessionRegistry:
         height: int = 768,
         dpi: int = 96,
         performance_preference: int = 0,
+        image_codec: str = "",
         restart_tunnel: Optional[Callable[[str], None]] = None,
         confirm_transport: Optional[Callable[[str], None]] = None,
         on_open: Optional[Callable[[], None]] = None,
@@ -143,6 +156,7 @@ class GuacamoleSessionRegistry:
             height=max(1, int(height or 768)),
             dpi=max(1, int(dpi or 96)),
             performance_preference=normalize_guacamole_performance_preference(performance_preference),
+            image_codec=normalize_guacamole_image_codec(image_codec),
             restart_tunnel=restart_tunnel,
             confirm_transport=confirm_transport,
             on_open=on_open,
@@ -206,9 +220,26 @@ def normalize_guacamole_performance_preference(value: Any) -> int:
     return max(-2, min(2, normalized))
 
 
+def normalize_guacamole_image_codec(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"jpg", "jpeg"}:
+        return "jpeg"
+    if normalized == "png":
+        return "png"
+    return ""
+
+
 def guacamole_vnc_performance_arguments(preference: Any) -> Dict[str, str]:
     normalized = normalize_guacamole_performance_preference(preference)
     return dict(_GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS.get(normalized) or _GUACAMOLE_VNC_PERFORMANCE_ARGUMENTS[0])
+
+
+def guacamole_vnc_image_mimetypes(preference: Any, image_codec: Any = "") -> Tuple[str, ...]:
+    codec = normalize_guacamole_image_codec(image_codec)
+    if codec:
+        return _GUACAMOLE_VNC_CODEC_MIMETYPES[codec]
+    normalized = normalize_guacamole_performance_preference(preference)
+    return _GUACAMOLE_VNC_IMAGE_MIMETYPES.get(normalized) or _GUACAMOLE_VNC_IMAGE_MIMETYPES[0]
 
 
 class GuacamoleProtocolParser:
@@ -453,7 +484,7 @@ async def _handshake_guacd(
         raise RuntimeError(f"guacd_unexpected_{opcode or 'empty'}")
 
     await _write_instruction(writer, "size", session.width, session.height, session.dpi)
-    await _write_instruction(writer, "image", "image/png", "image/jpeg", "image/webp")
+    await _write_instruction(writer, "image", *guacamole_vnc_image_mimetypes(session.performance_preference, session.image_codec))
     await _write_instruction(writer, "timezone", "UTC")
     await _write_instruction(writer, "name", f"Borealis VNC {session.agent_id}")
     await _write_instruction(writer, "connect", *guacamole_connect_arguments(session, args))
@@ -829,8 +860,10 @@ __all__ = [
     "GuacamoleVncSession",
     "encode_instruction",
     "guacamole_connect_arguments",
+    "guacamole_vnc_image_mimetypes",
     "guacamole_vnc_performance_arguments",
     "guacd_health",
+    "normalize_guacamole_image_codec",
     "normalize_guacamole_performance_preference",
     "proxy_guacamole_vnc_session",
 ]

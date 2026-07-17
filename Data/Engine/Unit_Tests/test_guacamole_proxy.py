@@ -156,6 +156,21 @@ def test_guacamole_connect_arguments_include_performance_preference() -> None:
     ]
 
 
+def test_guacamole_image_mimetypes_follow_performance_preference() -> None:
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(-2) == ("image/jpeg", "image/webp", "image/png")
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(-1) == ("image/jpeg", "image/webp", "image/png")
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(0) == ("image/png", "image/jpeg", "image/webp")
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(1) == ("image/webp", "image/png", "image/jpeg")
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(2) == ("image/png", "image/webp", "image/jpeg")
+
+
+def test_guacamole_image_mimetypes_honor_explicit_codec() -> None:
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(-2, "jpeg") == ("image/jpeg",)
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(2, "png") == ("image/png",)
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(-2, "jpg") == ("image/jpeg",)
+    assert guacamole_proxy.guacamole_vnc_image_mimetypes(-2, "unknown") == ("image/jpeg", "image/webp", "image/png")
+
+
 def test_guacamole_filters_internal_ping_before_guacd() -> None:
     payload = (
         encode_instruction("sync", "12345")
@@ -239,7 +254,9 @@ def test_guacamole_proxy_retries_until_backend_ready(monkeypatch: pytest.MonkeyP
     assert websocket.sent[0] == encode_instruction("", "uuid-1")
     assert opened == [True]
     handshake = GuacamoleProtocolParser().feed(b"".join(writers[1].writes).decode("utf-8"))
+    image_args = next(args for opcode, args in handshake if opcode == "image")
     connect_args = next(args for opcode, args in handshake if opcode == "connect")
+    assert image_args == ["image/png", "image/jpeg", "image/webp"]
     assert connect_args == [
         guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
         "10.255.0.4",
@@ -300,6 +317,152 @@ def test_guacamole_proxy_does_not_stack_post_ready_backend_error(monkeypatch: py
     assert writers[0].closed is True
     assert websocket.sent == []
     assert first_frames == []
+
+
+def test_guacamole_proxy_prefers_lossy_images_for_speed_bias(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            encode_instruction("ready", "uuid-1").encode("utf-8"),
+        ]
+    )
+    writer = _FakeWriter()
+
+    async def _fake_open_connection(_host: str, _port: int):
+        return reader, writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_BACKEND_VERIFY_SECONDS", 0)
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+        performance_preference=-2,
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    handshake = GuacamoleProtocolParser().feed(b"".join(writer.writes).decode("utf-8"))
+    image_args = next(args for opcode, args in handshake if opcode == "image")
+    assert image_args == ["image/jpeg", "image/webp", "image/png"]
+
+
+def test_guacamole_proxy_uses_explicit_jpeg_codec(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            encode_instruction("ready", "uuid-1").encode("utf-8"),
+        ]
+    )
+    writer = _FakeWriter()
+
+    async def _fake_open_connection(_host: str, _port: int):
+        return reader, writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_BACKEND_VERIFY_SECONDS", 0)
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+        performance_preference=-2,
+        image_codec="jpeg",
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    handshake = GuacamoleProtocolParser().feed(b"".join(writer.writes).decode("utf-8"))
+    image_args = next(args for opcode, args in handshake if opcode == "image")
+    assert image_args == ["image/jpeg"]
+
+
+def test_guacamole_proxy_uses_explicit_png_codec(monkeypatch: pytest.MonkeyPatch) -> None:
+    reader = _FakeReader(
+        [
+            encode_instruction(
+                "args",
+                guacamole_proxy.GUACAMOLE_PROTOCOL_VERSION,
+                "hostname",
+                "port",
+                "password",
+            ).encode("utf-8"),
+            encode_instruction("ready", "uuid-1").encode("utf-8"),
+        ]
+    )
+    writer = _FakeWriter()
+
+    async def _fake_open_connection(_host: str, _port: int):
+        return reader, writer
+
+    monkeypatch.setattr(guacamole_proxy.asyncio, "open_connection", _fake_open_connection)
+    monkeypatch.setattr(guacamole_proxy, "_GUACD_BACKEND_VERIFY_SECONDS", 0)
+    session = GuacamoleVncSession(
+        token="token",
+        agent_id="agent-1",
+        host="10.255.0.4",
+        port=5900,
+        password="secretpw",
+        created_at=0,
+        expires_at=120,
+        session_id="session-1",
+        performance_preference=2,
+        image_codec="png",
+    )
+    websocket = _FakeWebSocket([encode_instruction("disconnect")])
+
+    asyncio.run(
+        guacamole_proxy.proxy_guacamole_vnc_session(
+            websocket=websocket,
+            session=session,
+            logger=logging.getLogger("test.guacamole.proxy"),
+            guacd_host="127.0.0.1",
+            guacd_port=4822,
+        )
+    )
+
+    handshake = GuacamoleProtocolParser().feed(b"".join(writer.writes).decode("utf-8"))
+    image_args = next(args for opcode, args in handshake if opcode == "image")
+    assert image_args == ["image/png"]
 
 
 def test_guacamole_proxy_forwards_ready_coalesced_display_instructions(monkeypatch: pytest.MonkeyPatch) -> None:
