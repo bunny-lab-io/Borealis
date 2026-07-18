@@ -2,11 +2,12 @@
 
 const http = require("http");
 
+const host = process.env.BOREALIS_WEBUI_HEALTH_HOST || "127.0.0.1";
 const port = Number.parseInt(process.env.BOREALIS_WEBUI_UPSTREAM_PORT || "8000", 10);
 
 const request = http.get(
   {
-    host: "127.0.0.1",
+    host,
     port,
     path: "/",
     timeout: 3000,

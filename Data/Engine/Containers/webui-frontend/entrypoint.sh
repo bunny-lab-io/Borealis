@@ -5,11 +5,12 @@ cd /opt/Borealis/Data/Engine/web-interface
 
 mode="${BOREALIS_WEBUI_MODE:-prod}"
 port="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
+bind_host="${BOREALIS_WEBUI_BIND_HOST:-127.0.0.1}"
 case "${mode}" in
   dev|developer)
     export NODE_ENV=development
     export BOREALIS_DEV_UI_PROXY_ENABLED=1
-    exec npm run dev -- --host 127.0.0.1 --port "${port}" --strictPort --no-open
+    exec npm run dev -- --host "${bind_host}" --port "${port}" --strictPort --no-open
     ;;
   prod|production|"")
     export NODE_ENV=production

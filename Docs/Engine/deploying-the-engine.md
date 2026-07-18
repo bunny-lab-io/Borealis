@@ -151,7 +151,7 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
 
     Agent install commands include the local CA bundle automatically (this makes the command larger). Automatically-generated agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator's device or managed trust store before they show the Engine as trusted. Local deployments do not ask for an outer reverse proxy during interactive deployment and assume that there is none.
 
-During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, and starts the Docker Compose stack automatically.
+During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, applies K3s bridge workloads, and starts the Docker Compose stack automatically.
 
 ### Local Redeploy Commands
 After the first install, update and redeploy from the checked-out Borealis repository. Keep the same network mode. Local `Engine.sh` runs use whatever source is already on disk, so pull the current GitHub branch before redeploying when you want newer Engine code.
@@ -193,12 +193,17 @@ K3s keeps bundled Traefik and ServiceLB disabled so Borealis Compose Traefik sta
 
 The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the Compose API backend reaches the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
 
+Bridge-mode `webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. They are not public ingress targets yet. Compose Traefik, Compose API, and the Compose WebUI/guacd containers remain authoritative until later cutover stages. Dev-mode WebUI bridge pods use the same read-only runtime source mounts as Compose so host-side HMR edits can be validated without handing public traffic to K3s.
+
 Quick checks after a deploy:
 ```sh
 sudo systemctl is-active k3s
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get namespace borealis --show-labels
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/borealis-operator
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/webui-frontend
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service webui-frontend remote-desktop-guacd
 sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ```
 
@@ -273,7 +278,7 @@ After deployment finishes:
     ### Launch mechanics
 
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
-    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, defaults to production, and runs Docker Compose with project name `borealis-engine`.
+    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies non-authoritative WebUI/guacd bridge workloads, defaults to production, and runs Docker Compose with project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
     - Stage 1 K3s baseline writes Borealis-owned config to `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, records the config hash in `Engine/Deploy/k3s-baseline.sha256`, installs K3s only when missing, restarts K3s only when the Borealis config changes, and never calls K3s teardown or uninstall helpers.
@@ -281,6 +286,7 @@ After deployment finishes:
     - Stage 2 deploys `borealis-operator` into the `borealis` namespace as a single-replica Deployment, ClusterIP Service, Secret, ServiceAccount, Role, and RoleBinding.
     - Stage 3 keeps runtime services Kubernetes-blind by routing lifecycle work through `borealis-operator`. Its API is `POST /v1/command` with `X-Borealis-Operator-Token`.
     - Operator status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Operator lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
+    - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. Compose still owns public WebUI, API, Traefik, and VNC/Guacamole routing. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs.
     - Compose API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.

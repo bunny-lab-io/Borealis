@@ -47,6 +47,8 @@ BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-opera
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
+K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
+K3S_BRIDGE_WORKLOADS_VERSION="1"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -163,7 +165,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -189,7 +191,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"borealis-operator")
+    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -227,6 +229,8 @@ dashboard_seed_rows() {
   for row in \
     "Ensuring Cluster Exists" \
     "borealis-operator" \
+    "k3s-webui-frontend" \
+    "k3s-remote-desktop-guacd" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -355,6 +359,12 @@ dashboard_row_label() {
     "borealis-operator")
       printf '%s\n' "Borealis Operator"
       ;;
+    "k3s-webui-frontend")
+      printf '%s\n' "WebUI Frontend Bridge"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' "Guacamole Bridge"
+      ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
       ;;
@@ -468,6 +478,8 @@ dashboard_render_table() {
   for row in \
     "Ensuring Cluster Exists" \
     "borealis-operator" \
+    "k3s-webui-frontend" \
+    "k3s-remote-desktop-guacd" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -2074,6 +2086,524 @@ ensure_borealis_operator_bridge() {
   fi
   printf '%s  borealis-operator\n' "${config_hash}" > "${BOREALIS_OPERATOR_CONFIG_HASH_FILE}"
   log_status "borealis-operator" "Ready" "${C_GREEN}"
+}
+
+format_k3s_memory_quantity() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  [[ -n "${raw}" ]] || raw="128Mi"
+  local lower
+  lower="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${lower}" =~ ^([0-9]+)m$ ]]; then
+    printf '%sMi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${lower}" =~ ^([0-9]+)g$ ]]; then
+    printf '%sGi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${lower}" =~ ^([0-9]+)k$ ]]; then
+    printf '%sKi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${raw}" =~ ^[0-9]+([.][0-9]+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$ ]]; then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  die "Unsupported Kubernetes memory quantity '${raw}'. Use values like 256m, 1g, 256Mi, or 1Gi."
+}
+
+format_k3s_cpu_quantity() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  [[ -n "${raw}" ]] || raw="100m"
+  if [[ "${raw}" =~ ^[0-9]+m$ ]]; then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  if [[ "${raw}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    awk -v cpu="${raw}" 'BEGIN { printf "%dm\n", int(cpu * 1000 + 0.5) }'
+    return 0
+  fi
+  die "Unsupported Kubernetes CPU quantity '${raw}'. Use values like 0.50, 1.00, or 500m."
+}
+
+service_image_tag_or_previous() {
+  local service="$1"
+  local fallback="${2:-}"
+  local image="${IMAGE_TAGS[${service}]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag "${service}")"
+  [[ -n "${image}" ]] || image="${fallback}"
+  printf '%s\n' "${image}"
+}
+
+render_k3s_webui_frontend_bridge_manifest() {
+  local image="$1"
+  local mode="$2"
+  local config_hash="$3"
+  local runtime_uid="$4"
+  local runtime_gid="$5"
+  local port="$6"
+  local memory_limit="$7"
+  local cpu_limit="$8"
+  cat <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webui-frontend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: frontend
+    borealis.io/service-key: webui-frontend
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webui-frontend
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webui-frontend
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: frontend
+        borealis.io/service-key: webui-frontend
+        borealis.io/stage: workload-bridge
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webui-frontend
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: ${port}
+              protocol: TCP
+          env:
+            - name: BOREALIS_WEBUI_MODE
+              value: "${mode}"
+            - name: BOREALIS_WEBUI_UPSTREAM_PORT
+              value: "${port}"
+            - name: BOREALIS_WEBUI_BIND_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_WEBUI_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_WEBUI_VITE_CACHE_DIR
+              value: "/tmp/borealis-vite-cache"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-webui-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-webui-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+EOF
+  if [[ "${mode}" == "dev" ]]; then
+    cat <<EOF
+            - name: webui-vite-temp
+              mountPath: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp
+            - name: webui-src
+              mountPath: /opt/Borealis/Data/Engine/web-interface/src
+              readOnly: true
+            - name: webui-public
+              mountPath: /opt/Borealis/Data/Engine/web-interface/public
+              readOnly: true
+            - name: webui-unit-tests
+              mountPath: /opt/Borealis/Data/Engine/web-interface/Unit_Tests
+              readOnly: true
+            - name: webui-index
+              mountPath: /opt/Borealis/Data/Engine/web-interface/index.html
+              readOnly: true
+            - name: webui-package
+              mountPath: /opt/Borealis/Data/Engine/web-interface/package.json
+              readOnly: true
+            - name: webui-tsconfig
+              mountPath: /opt/Borealis/Data/Engine/web-interface/tsconfig.json
+              readOnly: true
+            - name: webui-vite-config
+              mountPath: /opt/Borealis/Data/Engine/web-interface/vite.config.mts
+              readOnly: true
+EOF
+  fi
+  cat <<EOF
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+EOF
+  if [[ "${mode}" == "dev" ]]; then
+    cat <<EOF
+        - name: webui-vite-temp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: webui-src
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/src
+            type: Directory
+        - name: webui-public
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/public
+            type: Directory
+        - name: webui-unit-tests
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/Unit_Tests
+            type: Directory
+        - name: webui-index
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/index.html
+            type: File
+        - name: webui-package
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/package.json
+            type: File
+        - name: webui-tsconfig
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/tsconfig.json
+            type: File
+        - name: webui-vite-config
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/vite.config.mts
+            type: File
+EOF
+  fi
+  cat <<EOF
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webui-frontend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: frontend
+    borealis.io/service-key: webui-frontend
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${port}
+      targetPort: http
+      protocol: TCP
+EOF
+}
+
+render_k3s_remote_desktop_guacd_bridge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local port="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  cat <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remote-desktop-guacd
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: remote-desktop
+    borealis.io/service-key: remote-desktop-guacd
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: remote-desktop-guacd
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: remote-desktop-guacd
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: remote-desktop
+        borealis.io/service-key: remote-desktop-guacd
+        borealis.io/stage: workload-bridge
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: remote-desktop-guacd
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: guacd
+              containerPort: ${port}
+              protocol: TCP
+          env:
+            - name: BOREALIS_GUACD_BIND_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_GUACD_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_GUACD_PORT
+              value: "${port}"
+            - name: BOREALIS_GUACD_LOG_DIR
+              value: "/tmp/borealis-guacd-logs"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-guacd-healthcheck
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-guacd-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: remote-desktop-guacd
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: remote-desktop
+    borealis.io/service-key: remote-desktop-guacd
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: guacd
+      port: ${port}
+      targetPort: guacd
+      protocol: TCP
+EOF
+}
+
+render_k3s_bridge_workloads_manifest() {
+  local webui_image="$1"
+  local guacd_image="$2"
+  local mode="$3"
+  local config_hash="$4"
+  local runtime_uid="$5"
+  local runtime_gid="$6"
+  local webui_port="$7"
+  local guacd_port="$8"
+  local webui_memory_limit="$9"
+  local webui_cpu_limit="${10}"
+  local guacd_memory_limit="${11}"
+  local guacd_cpu_limit="${12}"
+  render_k3s_webui_frontend_bridge_manifest "${webui_image}" "${mode}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${webui_port}" "${webui_memory_limit}" "${webui_cpu_limit}"
+  printf '%s\n' "---"
+  render_k3s_remote_desktop_guacd_bridge_manifest "${guacd_image}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${guacd_port}" "${guacd_memory_limit}" "${guacd_cpu_limit}"
+}
+
+ensure_k3s_bridge_workloads() {
+  local mode="$1"
+  local webui_image
+  local guacd_image
+  webui_image="$(service_image_tag_or_previous webui-frontend borealis-engine/webui-frontend:local)"
+  guacd_image="$(service_image_tag_or_previous remote-desktop-guacd borealis-engine/remote-desktop-guacd:local)"
+  [[ -n "${webui_image}" ]] || die "WebUI frontend image tag unavailable."
+  [[ -n "${guacd_image}" ]] || die "Remote desktop guacd image tag unavailable."
+
+  local runtime_uid
+  local runtime_gid
+  local webui_port
+  local guacd_port
+  local webui_memory_limit
+  local webui_cpu_limit
+  local guacd_memory_limit
+  local guacd_cpu_limit
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  webui_port="$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)"
+  webui_port="${webui_port:-8000}"
+  guacd_port="$(read_env_value BOREALIS_GUACD_PORT)"
+  guacd_port="${guacd_port:-4822}"
+  webui_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT)")"
+  webui_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_CPU_LIMIT)")"
+  guacd_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT)")"
+  guacd_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT)")"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_BRIDGE_WORKLOADS_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "webui_image=${webui_image}" \
+      "webui_port=${webui_port}" \
+      "webui_memory_limit=${webui_memory_limit}" \
+      "webui_cpu_limit=${webui_cpu_limit}" \
+      "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
+      "guacd_image=${guacd_image}" \
+      "guacd_port=${guacd_port}" \
+      "guacd_memory_limit=${guacd_memory_limit}" \
+      "guacd_cpu_limit=${guacd_cpu_limit}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "webui-frontend" "${webui_image}" "k3s-webui-frontend"
+  import_k3s_local_image_into_k3s "remote-desktop-guacd" "${guacd_image}" "k3s-remote-desktop-guacd"
+
+  log_status "k3s-webui-frontend" "Applying Manifests" "${C_YELLOW}"
+  log_status "k3s-remote-desktop-guacd" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-bridge-workloads.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_bridge_workloads_manifest \
+    "${webui_image}" \
+    "${guacd_image}" \
+    "${mode}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${webui_port}" \
+    "${guacd_port}" \
+    "${webui_memory_limit}" \
+    "${webui_cpu_limit}" \
+    "${guacd_memory_limit}" \
+    "${guacd_cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-webui-frontend" "Apply Failed" "${C_RED}"
+    log_status "k3s-remote-desktop-guacd" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s bridge workload manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-webui-frontend" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/webui-frontend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
+    die "K3s WebUI bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  log_status "k3s-webui-frontend" "Ready" "${C_GREEN}"
+
+  log_status "k3s-remote-desktop-guacd" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/remote-desktop-guacd" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-remote-desktop-guacd" "Rollout Failed" "${C_RED}"
+    die "K3s guacd bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  log_status "k3s-remote-desktop-guacd" "Ready" "${C_GREEN}"
+
+  printf '%s  k3s-bridge-workloads\n' "${config_hash}" > "${K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE}"
 }
 
 normalize_mode() {
@@ -4514,6 +5044,7 @@ deploy_engine() {
   export_image_manifest_env
   write_image_manifest "${mode}"
   ensure_borealis_operator_bridge
+  ensure_k3s_bridge_workloads "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
   log_section "Service Reconciliation"

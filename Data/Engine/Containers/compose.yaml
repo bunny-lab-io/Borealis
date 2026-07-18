@@ -163,6 +163,9 @@ services:
     mem_limit: ${BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT:-256m}
     cpus: "${BOREALIS_WEBUI_FRONTEND_CPU_LIMIT:-0.50}"
     pids_limit: ${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-128}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     env_file:
       - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
     environment:

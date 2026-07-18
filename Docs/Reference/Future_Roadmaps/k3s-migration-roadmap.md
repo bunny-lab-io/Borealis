@@ -69,16 +69,16 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 4: First Low-Risk Workloads
 
-- [ ] Move `webui-frontend` dev workload into K3s bridge mode.
-    - [ ] Preserve dev HMR path where practical.
-    - [ ] Keep Compose Traefik/API authoritative.
-- [ ] Move `remote-desktop-guacd` into K3s bridge mode.
-    - [ ] Keep ClusterIP-only exposure.
-    - [ ] Preserve existing VNC/Guacamole API behavior.
-- [ ] Validation:
-    - [ ] WebUI dev path works.
-    - [ ] Guacd readiness passes.
-    - [ ] Existing Compose fallback remains available.
+- [x] Move `webui-frontend` dev workload into K3s bridge mode.
+    - [x] Preserve dev HMR path where practical.
+    - [x] Keep Compose Traefik/API authoritative.
+- [x] Move `remote-desktop-guacd` into K3s bridge mode.
+    - [x] Keep ClusterIP-only exposure.
+    - [x] Preserve existing VNC/Guacamole API behavior.
+- [x] Validation:
+    - [x] WebUI dev path works.
+    - [x] Guacd readiness passes.
+    - [x] Existing Compose fallback remains available.
 
 ## Stage 5: Site Worker Migration
 
