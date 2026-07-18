@@ -53,18 +53,18 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 3: Workload Rollout Interface
 
-- [ ] Add restricted operator lifecycle verbs.
-    - [ ] `RolloutKnownWorkload(service_key, image_ref)`
-    - [ ] `RestartKnownWorkload(service_key)`
-    - [ ] `ScaleKnownWorkload(service_key, replicas)`
-    - [ ] `LaunchSiteWorker(site_id, worker_guid, image_ref, resource_profile)`
-    - [ ] `RetireSiteWorker(worker_guid, reason)`
-- [ ] Add image allowlist and digest/hash validation.
-- [ ] Keep build work in `Engine.sh`, not runtime services.
-- [ ] Validation:
-    - [ ] Known service rollout succeeds with valid image.
-    - [ ] Unknown service/image is rejected.
-    - [ ] Failed rollout leaves previous healthy workload serving.
+- [x] Add restricted operator lifecycle verbs.
+    - [x] `RolloutKnownWorkload(service_key, image_ref)`
+    - [x] `RestartKnownWorkload(service_key)`
+    - [x] `ScaleKnownWorkload(service_key, replicas)`
+    - [x] `LaunchSiteWorker(site_id, worker_guid, image_ref, resource_profile)`
+    - [x] `RetireSiteWorker(worker_guid, reason)`
+- [x] Add image allowlist and digest/hash validation.
+- [x] Keep build work in `Engine.sh`, not runtime services.
+- [x] Validation:
+    - [x] Known service rollout succeeds with valid image.
+    - [x] Unknown service/image is rejected.
+    - [x] Failed rollout leaves previous healthy workload serving.
 
 ## Stage 4: First Low-Risk Workloads
 
@@ -199,10 +199,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - Stage 1 deploy script changes start with `bash -n Engine.sh`.
     - Compose-sensitive changes include `python3 Data/Engine/Containers/check-compose-policy.py`.
     - Runtime cutover stages require deploy twice back to back, cluster health checks, Compose fallback validation, and narrow Engine tests for touched backend areas.
+    - Stage 3 validation includes a no-op live rollout against the current `borealis-operator` image, rejection checks for unknown services and unallowlisted mutable images, RBAC `can-i` checks for allowed named workload patching and denied Secret/Node access, and unit coverage for failed rollout rollback.
 
     ### Security constraints
 
-    - `borealis-operator` is the only planned K3s writer.
+    - `borealis-operator` is the planned runtime K3s writer. `Engine.sh` remains the deployment-time writer for cluster bootstrap and fixed operator manifests.
     - Runtime services call operator verbs, not Kubernetes APIs.
     - Operator verbs must map to known Borealis workloads and fixed pod templates.
     - No raw YAML apply, arbitrary pod spec, arbitrary image/env/volume/service account, or broad host access should be exposed through runtime APIs.

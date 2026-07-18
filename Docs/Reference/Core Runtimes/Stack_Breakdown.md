@@ -6,7 +6,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 - Linux Engine only.
 - Docker Engine plus Docker Compose plugin.
 - No Docker Desktop.
-- Single-node K3s baseline plus the read-only `borealis-operator` bridge are reconciled by `Engine.sh`; Docker Compose remains source of truth for user-facing workloads until explicit workload cutover.
+- Single-node K3s baseline plus the restricted `borealis-operator` bridge are reconciled by `Engine.sh`; Docker Compose remains source of truth for user-facing workloads until explicit workload cutover.
 - Compose project name: `borealis-engine`.
 - Compose source of truth: `Data/Engine/Containers/compose.yaml`.
 - Runtime state: `Engine/`.
@@ -31,9 +31,9 @@ Most Engine containers use `network_mode: host`. Loopback assumptions are intent
 ## K3s Bridge Workloads
 | Workload | K3s object | Main responsibility | Network endpoint |
 | --- | --- | --- | --- |
-| `borealis-operator` | Deployment, ServiceAccount, Role, RoleBinding, Secret, ClusterIP Service | Read-only internal bridge for Borealis cluster status verbs | `borealis-operator.borealis.svc`, port `8088` |
+| `borealis-operator` | Deployment, ServiceAccount, Role, RoleBinding, Secret, ClusterIP Service | Internal bridge for Borealis cluster status and restricted lifecycle verbs | `borealis-operator.borealis.svc`, port `8088` |
 
-`borealis-operator` is the first K3s-hosted Borealis workload. It receives a namespace-scoped ServiceAccount and read-only Role for pods, services, Deployments, ReplicaSets, and StatefulSets in the `borealis` namespace. It exposes `POST /v1/command` behind `X-Borealis-Operator-Token` and currently accepts only `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. It has no raw YAML, arbitrary pod spec, secret, node, or mutation verb path.
+`borealis-operator` is the first K3s-hosted Borealis workload. It receives a namespace-scoped ServiceAccount with read-only status access plus restricted lifecycle access in the `borealis` namespace. It exposes `POST /v1/command` behind `X-Borealis-Operator-Token`. Status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`. Lifecycle calls accept only known service keys, immutable allowlisted Borealis image refs, and fixed templates; there is still no raw YAML, arbitrary pod spec, secret, node, hostPath, privileged pod, arbitrary service account, or arbitrary env/volume path.
 
 Compose `api-backend` can query the operator through `BOREALIS_OPERATOR_BASE_URL`, which `Engine.sh` resolves from the K3s Service ClusterIP after the operator Service exists. Runtime services do not receive kubeconfig or kubectl access.
 
@@ -523,7 +523,10 @@ K3s operator bridge:
 ```sh
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/borealis-operator
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator list pods -n borealis
-sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator create pods -n borealis
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator patch deployment/borealis-operator -n borealis
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator patch deployment/not-borealis -n borealis
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator get secrets -n borealis
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator list nodes
 docker exec borealis-engine-api-backend borealis-api-backend-go borealis-operator-healthcheck
 ```
 
@@ -599,7 +602,7 @@ bash Engine.sh --network-mode local deploy prod
 ## Operational Notes
 - `Engine.sh --network-mode public|local deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
 - K3s baseline reconcile is idempotent for unchanged config: deploys do not reinstall K3s, restart K3s, delete cluster state, rotate secrets, or delete PVCs unless later migration stages explicitly add a controlled workflow.
-- `borealis-operator` reconcile is idempotent for unchanged image, namespace, port, and secret. Normal deploys apply fixed manifests, wait for rollout, and preserve the existing operator secret.
+- `borealis-operator` reconcile is idempotent for unchanged image, namespace, port, secret, RBAC, and image allowlists. Normal deploys apply fixed manifests, wait for rollout, and preserve the existing operator secret.
 - Unchanged image hashes skip Docker builds.
 - Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
 - Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
@@ -729,7 +732,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     `Engine/Deploy/k3s-baseline.sha256` records the Borealis-owned K3s config hash for `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`. Kubernetes namespace and node annotations carry the same hash under `borealis.io/k3s-config-hash`.
 
-    `Engine/Deploy/borealis-operator.sha256` records the operator manifest inputs: image tag, namespace, Service name, listen port, and HMAC secret.
+    `Engine/Deploy/borealis-operator.sha256` records the operator manifest inputs: image tag, namespace, Service name, listen port, HMAC secret, and generated immutable image allowlists.
 
     Use these files to confirm whether source changes are actually deployed.
 
@@ -743,14 +746,17 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
     python3 Data/Engine/Containers/check-compose-policy.py
     ```
-    - Validate Stage 1/2 K3s runtime only on a host where installing/reconciling K3s is acceptable:
+    - Validate Stage 1-3 K3s runtime only on a host where installing/reconciling K3s is acceptable:
     ```sh
     sudo bash Engine.sh --network-mode local deploy prod
     sudo bash Engine.sh --network-mode local deploy prod
     sudo systemctl is-active k3s
     sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
     sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/borealis-operator
-    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator create pods -n borealis
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator patch deployment/borealis-operator -n borealis
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator patch deployment/not-borealis -n borealis
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator get secrets -n borealis
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml auth can-i --as=system:serviceaccount:borealis:borealis-operator list nodes
     docker exec borealis-engine-api-backend borealis-api-backend-go borealis-operator-healthcheck
     sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
     ```

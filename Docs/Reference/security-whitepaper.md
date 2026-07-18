@@ -43,7 +43,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 ### Runtime and Container Boundaries
 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
-- K3s adds a single-node Kubernetes control plane on the Engine host. User-facing Borealis workloads still run under Docker Compose until explicit cutover; K3s currently hosts only the read-only `borealis-operator` bridge.
+- K3s adds a single-node Kubernetes control plane on the Engine host. User-facing Borealis workloads still run under Docker Compose until explicit cutover; K3s currently hosts the restricted `borealis-operator` bridge.
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
 - Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
 - Cross-service bind mounts are narrowed to explicit runtime contracts. `job-scheduler` owns site-worker Traefik route files, while dynamic `site-worker-*` containers do not mount Traefik config and cannot write those route files. WebUI source mounts are read-only inside the container.
@@ -118,16 +118,16 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 
 K3s is a host-level control-plane baseline plus a locked-down bridge, not a broad workload cutover. It gives Borealis a future migration target while keeping Compose authoritative for user-facing Engine services.
 
-- `Engine.sh` is the only K3s writer during deployment. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access.
+- `Engine.sh` writes K3s bootstrap and fixed operator manifests during deployment. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access; they must call `borealis-operator` for allowlisted K3s lifecycle work.
 - Borealis writes its K3s config as `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml` and records the desired hash in `Engine/Deploy/k3s-baseline.sha256`.
 - Bundled K3s Traefik and ServiceLB stay disabled so the existing Borealis Compose Traefik edge remains the only ingress owner.
 - K3s kubeconfig is rendered root-only by default. Deploy fails if the kubeconfig is group-readable or world-readable.
 - `borealis-k3s-api-firewall.service` installs a host iptables chain for TCP `6443`, allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
 - K3s Secret encryption at rest is enabled for Kubernetes objects, but Aegis remains the Borealis security model for protected operator, credential, token, and signing material.
 - The `borealis` namespace and K3s nodes receive Borealis labels plus `borealis.io/k3s-config-hash` annotations for ownership and drift review.
-- `borealis-operator` runs as a K3s Deployment with a namespace-scoped ServiceAccount, read-only Role, non-root user, dropped capabilities, read-only root filesystem, `no-new-privileges`, `RuntimeDefault` seccomp, probes, and resource caps.
-- `borealis-operator` RBAC allows only `get` and `list` for pods, services, Deployments, ReplicaSets, and StatefulSets inside the `borealis` namespace. It has no Kubernetes Secret, node, cluster-scope, create, update, patch, or delete permission.
-- The operator API is ClusterIP-only and HMAC authenticated with `X-Borealis-Operator-Token`. Current verbs are read-only: `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`.
+- `borealis-operator` runs as a K3s Deployment with a namespace-scoped ServiceAccount, non-root user, dropped capabilities, read-only root filesystem, `no-new-privileges`, `RuntimeDefault` seccomp, probes, and resource caps.
+- `borealis-operator` RBAC allows `get` and `list` for pods, services, Deployments, ReplicaSets, and StatefulSets inside the `borealis` namespace. Lifecycle permissions add `patch` only for named Borealis Deployments/StatefulSets, plus pod `create`/`delete` for fixed site-worker pod lifecycle. It has no Kubernetes Secret, node, cluster-scope, arbitrary service account, raw YAML, hostPath, or privileged pod permission through the Borealis API.
+- The operator API is ClusterIP-only and HMAC authenticated with `X-Borealis-Operator-Token`. Status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
 - The Compose API backend can query operator status through `BOREALIS_OPERATOR_BASE_URL`, but it remains Kubernetes-blind and exposes only an authenticated admin status endpoint to operators.
 
 ### Operator Authentication
@@ -217,7 +217,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
 - Keep Engine host patched, backed up, and firewalled.
 - Expose only required public ports: HTTP/HTTPS for Traefik and UDP WireGuard for remote operations.
 - Keep K3s API TCP `6443` protected by the Borealis firewall rule unless a later multi-node design explicitly opens a narrow node-to-node path.
-- Keep `borealis-operator` ClusterIP-only and verify its ServiceAccount cannot create pods, read secrets, or list nodes before adding lifecycle verbs.
+- Keep `borealis-operator` ClusterIP-only and verify its ServiceAccount cannot read Secrets, list Nodes, or patch unknown workloads after lifecycle verbs are added.
 - Use a real FQDN for agents and browsers. Externally Accessible deployments need public DNS and public CA certificates. Internal-Only deployments should use private DNS, Borealis local CA distribution to agents, and browser trust store installation for operators. Agents without private DNS can use the generated IP fallback while preserving FQDN TLS validation.
 - Keep Aegis Cipher recoverable by trusted administrators.
 - Require MFA for operators and prefer passkeys where possible.
@@ -303,7 +303,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
     - WireGuard tunnel container boundary: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
     - Engine deployment identity, ownership repair, profile caps, and Compose env rendering: `Engine.sh`.
     - K3s baseline reconcile, config hash, API firewall unit, namespace labels, and node annotations: `Engine.sh`.
-    - K3s operator bridge process, HMAC command API, Compose client, admin status route, and client healthcheck: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
+    - K3s operator bridge process, HMAC command API, restricted lifecycle verbs, Compose client, admin status route, and client healthcheck: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
     - K3s operator image: `Data/Engine/Containers/borealis-operator/Dockerfile`.
     - Static container hardening and service mount contracts: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/compose.env.example`.
     - Container policy validation: `Data/Engine/Containers/check-compose-policy.py` and `.github/workflows/engine-container-policy.yml`.
@@ -316,9 +316,9 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
 
     - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
     - Stage 1 K3s config hash: `Engine/Deploy/k3s-baseline.sha256`.
-    - Stage 2 operator manifest input hash: `Engine/Deploy/borealis-operator.sha256`.
+    - Operator manifest input hash: `Engine/Deploy/borealis-operator.sha256`.
     - Stage 1 K3s kubeconfig: `/etc/rancher/k3s/k3s.yaml`.
-    - Stage 2 operator HMAC secret: `BOREALIS_OPERATOR_SECRET` in `Engine/Deploy/runtime.env`, `Engine/Deploy/compose.env`, and K3s Secret `borealis-operator-auth`.
+    - Operator HMAC secret: `BOREALIS_OPERATOR_SECRET` in `Engine/Deploy/runtime.env`, `Engine/Deploy/compose.env`, and K3s Secret `borealis-operator-auth`.
     - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.
     - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
     - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.

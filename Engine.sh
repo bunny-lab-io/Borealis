@@ -1749,35 +1749,79 @@ k3s_containerd_image_present() {
     | awk -v exact="${image}" -v normalized="${normalized_image}" '$0 == exact || $0 == normalized {found=1} END {exit found ? 0 : 1}'
 }
 
-import_borealis_operator_image_into_k3s() {
-  local image="$1"
+import_k3s_local_image_into_k3s() {
+  local service="$1"
+  local image="$2"
+  local status_row="${3:-}"
   if k3s_containerd_image_present "${image}"; then
+    printf '[%s] %s image already available in K3s containerd: %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
     return 0
   fi
   if ! docker image inspect "${image}" >/dev/null 2>&1; then
-    log_status "borealis-operator" "Image Missing" "${C_RED}"
-    die "Borealis operator image ${image} is missing from Docker before K3s import."
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Missing" "${C_RED}"
+    fi
+    die "${service} image ${image} is missing from Docker before K3s import."
   fi
-  log_status "borealis-operator" "Importing Image" "${C_YELLOW}"
+  if [[ -n "${status_row}" ]]; then
+    log_status "${status_row}" "Importing Image" "${C_YELLOW}"
+  fi
   local image_archive
-  image_archive="$(mktemp "${DEPLOY_DIR}/borealis-operator-image.XXXXXX.tar")"
+  image_archive="$(mktemp "${DEPLOY_DIR}/${service}-image.XXXXXX.tar")"
   if ! docker image save "${image}" -o "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${image_archive}"
-    log_status "borealis-operator" "Image Export Failed" "${C_RED}"
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Export Failed" "${C_RED}"
+    fi
     die "Failed to export ${image} before K3s import. See ${BUILD_LOG}."
   fi
   if ! k3s_ctr images import "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${image_archive}"
-    log_status "borealis-operator" "Image Import Failed" "${C_RED}"
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Import Failed" "${C_RED}"
+    fi
     die "Failed to import ${image} into K3s containerd. See ${BUILD_LOG}."
   fi
   rm -f "${image_archive}"
+}
+
+import_borealis_operator_image_into_k3s() {
+  import_k3s_local_image_into_k3s "borealis-operator" "$1" "borealis-operator"
+}
+
+borealis_operator_workload_image_allowlist() {
+  local service=""
+  local image=""
+  local entries=()
+  for service in \
+    "api-backend" \
+    "borealis-operator" \
+    "job-scheduler" \
+    "postgres-db" \
+    "remote-desktop-guacd" \
+    "webui-frontend" \
+    "wireguard-tunnel"; do
+    image="${IMAGE_TAGS[${service}]:-}"
+    [[ -n "${image}" ]] || image="$(previous_image_tag "${service}")"
+    [[ -n "${image}" ]] || continue
+    entries+=("${service}=${image}")
+  done
+  (IFS=,; printf '%s\n' "${entries[*]}")
+}
+
+borealis_operator_site_worker_image_allowlist() {
+  local image="${IMAGE_TAGS[site-worker]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag site-worker)"
+  [[ -n "${image}" ]] || return 0
+  printf '%s\n' "${image}"
 }
 
 render_borealis_operator_manifest() {
   local image="$1"
   local secret="$2"
   local config_hash="$3"
+  local workload_image_allowlist="$4"
+  local site_worker_image_allowlist="$5"
   local secret_b64
   local runtime_uid
   local runtime_gid
@@ -1825,9 +1869,20 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "services"]
     verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]
     verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api-backend", "borealis-operator", "job-scheduler", "remote-desktop-guacd", "webui-frontend", "wireguard-tunnel"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["postgres-db"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -1919,6 +1974,14 @@ spec:
                 secretKeyRef:
                   name: ${BOREALIS_OPERATOR_SECRET_NAME}
                   key: BOREALIS_OPERATOR_SECRET
+            - name: BOREALIS_OPERATOR_WORKLOAD_IMAGE_ALLOWLIST
+              value: "${workload_image_allowlist}"
+            - name: BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST
+              value: "${site_worker_image_allowlist}"
+            - name: BOREALIS_ENGINE_RUNTIME_OWNER_UID
+              value: "${runtime_uid}"
+            - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
+              value: "${runtime_gid}"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -1981,15 +2044,22 @@ ensure_borealis_operator_bridge() {
   local secret
   secret="$(read_env_value BOREALIS_OPERATOR_SECRET)"
   [[ -n "${secret}" ]] || die "Borealis operator secret unavailable after runtime env render."
+  local workload_image_allowlist
+  local site_worker_image_allowlist
+  workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
+  site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
+  if [[ -n "${site_worker_image_allowlist}" ]]; then
+    import_k3s_local_image_into_k3s "site-worker" "${site_worker_image_allowlist}" ""
+  fi
   log_status "borealis-operator" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
   manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-operator.XXXXXX.yaml")"
   chmod 0600 "${manifest_file}" 2>/dev/null || true
-  render_borealis_operator_manifest "${image}" "${secret}" "${config_hash}" > "${manifest_file}"
+  render_borealis_operator_manifest "${image}" "${secret}" "${config_hash}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
     log_status "borealis-operator" "Apply Failed" "${C_RED}"

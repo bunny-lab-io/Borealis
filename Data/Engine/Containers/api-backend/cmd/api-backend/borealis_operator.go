@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -29,12 +31,27 @@ const (
 	borealisOperatorDefaultWorkload = "borealis-operator"
 )
 
-var borealisOperatorAllowedVerbs = []string{
+var borealisOperatorReadOnlyVerbs = []string{
 	"GetClusterSummary",
 	"ListWorkloads",
 	"GetWorkloadStatus",
 	"ListSiteWorkers",
 }
+
+var borealisOperatorMutationVerbs = []string{
+	"RolloutKnownWorkload",
+	"RestartKnownWorkload",
+	"ScaleKnownWorkload",
+	"LaunchSiteWorker",
+	"RetireSiteWorker",
+}
+
+var borealisOperatorAllowedVerbs = append(append([]string{}, borealisOperatorReadOnlyVerbs...), borealisOperatorMutationVerbs...)
+
+var (
+	borealisOperatorImmutableImageRefPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*(?::sha-[A-Fa-f0-9]{12,64}|@sha256:[A-Fa-f0-9]{64})$`)
+	borealisOperatorKubernetesNamePattern    = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+)
 
 type borealisOperator struct {
 	secret    []byte
@@ -57,6 +74,50 @@ type kubernetesAPIClient struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+}
+
+type borealisOperatorKnownWorkload struct {
+	ServiceKey    string
+	Kind          string
+	APIGroup      string
+	Resource      string
+	Name          string
+	ContainerName string
+	MinReplicas   int64
+	MaxReplicas   int64
+}
+
+type borealisOperatorRolloutRequest struct {
+	ServiceKey string `json:"service_key"`
+	ImageRef   string `json:"image_ref"`
+}
+
+type borealisOperatorRestartRequest struct {
+	ServiceKey string `json:"service_key"`
+}
+
+type borealisOperatorScaleRequest struct {
+	ServiceKey string `json:"service_key"`
+	Replicas   int64  `json:"replicas"`
+}
+
+type borealisOperatorLaunchSiteWorkerRequest struct {
+	SiteID          int64  `json:"site_id"`
+	WorkerGUID      string `json:"worker_guid"`
+	ImageRef        string `json:"image_ref"`
+	ResourceProfile string `json:"resource_profile"`
+}
+
+type borealisOperatorRetireSiteWorkerRequest struct {
+	WorkerGUID string `json:"worker_guid"`
+	Reason     string `json:"reason"`
+}
+
+type borealisOperatorResourceProfile struct {
+	RequestCPU    string
+	RequestMemory string
+	LimitCPU      string
+	LimitMemory   string
 }
 
 func borealisOperatorMode() bool {
@@ -200,6 +261,36 @@ func (o *borealisOperator) executeCommand(ctx context.Context, verb string, para
 			return nil, http.StatusBadGateway, err
 		}
 		return map[string]any{"workers": workers}, http.StatusOK, nil
+	case "RolloutKnownWorkload":
+		var req borealisOperatorRolloutRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.rolloutKnownWorkload(ctx, req)
+	case "RestartKnownWorkload":
+		var req borealisOperatorRestartRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.restartKnownWorkload(ctx, req)
+	case "ScaleKnownWorkload":
+		var req borealisOperatorScaleRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.scaleKnownWorkload(ctx, req)
+	case "LaunchSiteWorker":
+		var req borealisOperatorLaunchSiteWorkerRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.launchSiteWorker(ctx, req)
+	case "RetireSiteWorker":
+		var req borealisOperatorRetireSiteWorkerRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.retireSiteWorker(ctx, req)
 	default:
 		return nil, http.StatusBadRequest, fmt.Errorf("unsupported Borealis operator verb %q", verb)
 	}
@@ -225,7 +316,8 @@ func (o *borealisOperator) clusterSummary(ctx context.Context) (map[string]any, 
 	return map[string]any{
 		"namespace":         o.namespace,
 		"rbac_scope":        "namespace",
-		"mutation_verbs":    []any{},
+		"mutation_verbs":    borealisOperatorMutationVerbs,
+		"read_only_verbs":   borealisOperatorReadOnlyVerbs,
 		"allowed_verbs":     borealisOperatorAllowedVerbs,
 		"workload_count":    len(workloads),
 		"pod_count":         len(pods),
@@ -259,14 +351,241 @@ func (o *borealisOperator) getWorkloadStatus(ctx context.Context, serviceKey str
 	if serviceKey == "" {
 		return nil, http.StatusBadRequest, errors.New("service_key is required")
 	}
-	if serviceKey != borealisOperatorDefaultWorkload {
+	spec, ok := borealisOperatorKnownWorkloadForService(serviceKey)
+	if !ok {
 		return nil, http.StatusBadRequest, fmt.Errorf("unsupported workload service_key %q", serviceKey)
 	}
-	item, err := o.kubeGet(ctx, "apps", "deployments", borealisOperatorDefaultWorkload)
+	item, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
-	return summarizeKubernetesWorkload("Deployment", item), http.StatusOK, nil
+	return summarizeKubernetesWorkload(spec.Kind, item), http.StatusOK, nil
+}
+
+func (o *borealisOperator) rolloutKnownWorkload(ctx context.Context, req borealisOperatorRolloutRequest) (map[string]any, int, error) {
+	spec, status, err := o.requireKnownWorkload(req.ServiceKey)
+	if err != nil {
+		return nil, status, err
+	}
+	imageRef := strings.TrimSpace(req.ImageRef)
+	if !borealisOperatorImageAllowedForService(spec.ServiceKey, imageRef) {
+		return nil, http.StatusForbidden, fmt.Errorf("image_ref %q is not allowed for %s", imageRef, spec.ServiceKey)
+	}
+	before, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	previousImage := kubernetesWorkloadContainerImage(before, spec.ContainerName)
+	if previousImage == "" {
+		return nil, http.StatusConflict, fmt.Errorf("container %q missing from %s", spec.ContainerName, spec.Name)
+	}
+	if previousImage == imageRef {
+		return map[string]any{
+			"ok":             true,
+			"changed":        false,
+			"service_key":    spec.ServiceKey,
+			"image_ref":      imageRef,
+			"previous_image": previousImage,
+			"workload":       summarizeKubernetesWorkload(spec.Kind, before),
+		}, http.StatusOK, nil
+	}
+	patch := borealisOperatorWorkloadImagePatch(spec.ContainerName, imageRef, map[string]string{
+		"borealis.io/rollout-at":    time.Now().UTC().Format(time.RFC3339Nano),
+		"borealis.io/rollout-image": imageRef,
+	})
+	patched, err := o.kubePatch(ctx, spec.APIGroup, spec.Resource, spec.Name, patch)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if err := o.waitForWorkloadRollout(ctx, spec); err != nil {
+		rollbackPatch := borealisOperatorWorkloadImagePatch(spec.ContainerName, previousImage, map[string]string{
+			"borealis.io/rollback-at":     time.Now().UTC().Format(time.RFC3339Nano),
+			"borealis.io/rollback-reason": "rollout_failed",
+		})
+		_, rollbackErr := o.kubePatch(context.Background(), spec.APIGroup, spec.Resource, spec.Name, rollbackPatch)
+		if rollbackErr == nil {
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), borealisOperatorRollbackTimeout())
+			_ = o.waitForWorkloadRollout(rollbackCtx, spec)
+			cancel()
+		}
+		return nil, http.StatusBadGateway, fmt.Errorf("rollout failed for %s: %v; rollback_error=%v", spec.ServiceKey, err, rollbackErr)
+	}
+	current, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+	if err != nil {
+		current = patched
+	}
+	return map[string]any{
+		"ok":             true,
+		"changed":        true,
+		"service_key":    spec.ServiceKey,
+		"image_ref":      imageRef,
+		"previous_image": previousImage,
+		"workload":       summarizeKubernetesWorkload(spec.Kind, current),
+	}, http.StatusOK, nil
+}
+
+func (o *borealisOperator) restartKnownWorkload(ctx context.Context, req borealisOperatorRestartRequest) (map[string]any, int, error) {
+	spec, status, err := o.requireKnownWorkload(req.ServiceKey)
+	if err != nil {
+		return nil, status, err
+	}
+	restartedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	patch := map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"annotations": map[string]string{
+						"borealis.io/restarted-at": restartedAt,
+					},
+				},
+			},
+		},
+	}
+	patched, err := o.kubePatch(ctx, spec.APIGroup, spec.Resource, spec.Name, patch)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if err := o.waitForWorkloadRollout(ctx, spec); err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	current, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+	if err != nil {
+		current = patched
+	}
+	return map[string]any{
+		"ok":           true,
+		"service_key":  spec.ServiceKey,
+		"restarted_at": restartedAt,
+		"workload":     summarizeKubernetesWorkload(spec.Kind, current),
+	}, http.StatusOK, nil
+}
+
+func (o *borealisOperator) scaleKnownWorkload(ctx context.Context, req borealisOperatorScaleRequest) (map[string]any, int, error) {
+	spec, status, err := o.requireKnownWorkload(req.ServiceKey)
+	if err != nil {
+		return nil, status, err
+	}
+	if req.Replicas < spec.MinReplicas || req.Replicas > spec.MaxReplicas {
+		return nil, http.StatusBadRequest, fmt.Errorf("replicas for %s must be between %d and %d", spec.ServiceKey, spec.MinReplicas, spec.MaxReplicas)
+	}
+	before, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	previousReplicas := coerceInt64(nestedMap(before, "spec")["replicas"])
+	if previousReplicas == req.Replicas {
+		return map[string]any{
+			"ok":                true,
+			"changed":           false,
+			"service_key":       spec.ServiceKey,
+			"replicas":          req.Replicas,
+			"previous_replicas": previousReplicas,
+			"workload":          summarizeKubernetesWorkload(spec.Kind, before),
+		}, http.StatusOK, nil
+	}
+	patch := map[string]any{"spec": map[string]any{"replicas": req.Replicas}}
+	patched, err := o.kubePatch(ctx, spec.APIGroup, spec.Resource, spec.Name, patch)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if err := o.waitForWorkloadRollout(ctx, spec); err != nil {
+		_, rollbackErr := o.kubePatch(context.Background(), spec.APIGroup, spec.Resource, spec.Name, map[string]any{"spec": map[string]any{"replicas": previousReplicas}})
+		return nil, http.StatusBadGateway, fmt.Errorf("scale failed for %s: %v; rollback_error=%v", spec.ServiceKey, err, rollbackErr)
+	}
+	current, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+	if err != nil {
+		current = patched
+	}
+	return map[string]any{
+		"ok":                true,
+		"changed":           true,
+		"service_key":       spec.ServiceKey,
+		"replicas":          req.Replicas,
+		"previous_replicas": previousReplicas,
+		"workload":          summarizeKubernetesWorkload(spec.Kind, current),
+	}, http.StatusOK, nil
+}
+
+func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOperatorLaunchSiteWorkerRequest) (map[string]any, int, error) {
+	workerGUID := strings.ToLower(cleanText(req.WorkerGUID))
+	if req.SiteID <= 0 || workerGUID == "" {
+		return nil, http.StatusBadRequest, errors.New("site_id and worker_guid are required")
+	}
+	if !borealisOperatorKubernetesNameAllowed(workerGUID) {
+		return nil, http.StatusBadRequest, errors.New("worker_guid must be a Kubernetes DNS label segment")
+	}
+	imageRef := strings.TrimSpace(req.ImageRef)
+	if !borealisOperatorImageAllowedForService("site-worker", imageRef) {
+		return nil, http.StatusForbidden, fmt.Errorf("image_ref %q is not allowed for site-worker", imageRef)
+	}
+	profileName := strings.ToLower(firstText(cleanText(req.ResourceProfile), "standard"))
+	profile, ok := borealisOperatorSiteWorkerResourceProfile(profileName)
+	if !ok {
+		return nil, http.StatusBadRequest, fmt.Errorf("unsupported resource_profile %q", profileName)
+	}
+	existing, err := o.siteWorkerPodsByGUID(ctx, workerGUID)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if len(existing) > 0 {
+		return nil, http.StatusConflict, fmt.Errorf("site-worker %s already has %d K3s pod(s)", workerGUID, len(existing))
+	}
+	podName := "site-worker-" + workerGUID
+	pod := o.siteWorkerPodManifest(podName, req.SiteID, workerGUID, imageRef, profileName, profile)
+	created, err := o.kubeCreate(ctx, "core", "pods", pod)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	return map[string]any{
+		"ok":               true,
+		"launched":         true,
+		"pod_name":         podName,
+		"worker_guid":      workerGUID,
+		"site_id":          req.SiteID,
+		"image_ref":        imageRef,
+		"resource_profile": profileName,
+		"pod":              summarizeKubernetesPod(created),
+	}, http.StatusAccepted, nil
+}
+
+func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOperatorRetireSiteWorkerRequest) (map[string]any, int, error) {
+	workerGUID := strings.ToLower(cleanText(req.WorkerGUID))
+	if workerGUID == "" {
+		return nil, http.StatusBadRequest, errors.New("worker_guid is required")
+	}
+	if !borealisOperatorKubernetesNameAllowed(workerGUID) {
+		return nil, http.StatusBadRequest, errors.New("worker_guid must be a Kubernetes DNS label segment")
+	}
+	pods, err := o.siteWorkerPodsByGUID(ctx, workerGUID)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if len(pods) == 0 {
+		return map[string]any{"ok": true, "missing": true, "worker_guid": workerGUID}, http.StatusOK, nil
+	}
+	retired := make([]string, 0, len(pods))
+	for _, pod := range pods {
+		metadata := nestedMap(pod, "metadata")
+		name := cleanText(metadata["name"])
+		if name == "" {
+			continue
+		}
+		if err := o.kubeDelete(ctx, "core", "pods", name, map[string]any{
+			"apiVersion":         "v1",
+			"kind":               "DeleteOptions",
+			"gracePeriodSeconds": 15,
+		}); err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+		retired = append(retired, name)
+	}
+	return map[string]any{
+		"ok":            true,
+		"worker_guid":   workerGUID,
+		"reason":        cleanText(req.Reason),
+		"retired_pods":  retired,
+		"retired_count": len(retired),
+	}, http.StatusOK, nil
 }
 
 func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]any, error) {
@@ -287,6 +606,409 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 		workers = append(workers, summarizeKubernetesPod(pod))
 	}
 	return workers, nil
+}
+
+func (o *borealisOperator) requireKnownWorkload(serviceKey string) (borealisOperatorKnownWorkload, int, error) {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	if serviceKey == "" {
+		return borealisOperatorKnownWorkload{}, http.StatusBadRequest, errors.New("service_key is required")
+	}
+	spec, ok := borealisOperatorKnownWorkloadForService(serviceKey)
+	if !ok {
+		return borealisOperatorKnownWorkload{}, http.StatusBadRequest, fmt.Errorf("unsupported workload service_key %q", serviceKey)
+	}
+	return spec, http.StatusOK, nil
+}
+
+func borealisOperatorKnownWorkloadForService(serviceKey string) (borealisOperatorKnownWorkload, bool) {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	workloads := map[string]borealisOperatorKnownWorkload{
+		"borealis-operator": {
+			ServiceKey:    "borealis-operator",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "borealis-operator",
+			ContainerName: "borealis-operator",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
+		"webui-frontend": {
+			ServiceKey:    "webui-frontend",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "webui-frontend",
+			ContainerName: "webui-frontend",
+			MinReplicas:   1,
+			MaxReplicas:   4,
+		},
+		"remote-desktop-guacd": {
+			ServiceKey:    "remote-desktop-guacd",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "remote-desktop-guacd",
+			ContainerName: "remote-desktop-guacd",
+			MinReplicas:   1,
+			MaxReplicas:   2,
+		},
+		"api-backend": {
+			ServiceKey:    "api-backend",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "api-backend",
+			ContainerName: "api-backend",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
+		"job-scheduler": {
+			ServiceKey:    "job-scheduler",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "job-scheduler",
+			ContainerName: "job-scheduler",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
+		"postgres-db": {
+			ServiceKey:    "postgres-db",
+			Kind:          "StatefulSet",
+			APIGroup:      "apps",
+			Resource:      "statefulsets",
+			Name:          "postgres-db",
+			ContainerName: "postgres-db",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
+		"wireguard-tunnel": {
+			ServiceKey:    "wireguard-tunnel",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "wireguard-tunnel",
+			ContainerName: "wireguard-tunnel",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
+	}
+	spec, ok := workloads[serviceKey]
+	return spec, ok
+}
+
+func borealisOperatorKnownWorkloadNames(resource string) []string {
+	names := map[string]bool{}
+	for _, serviceKey := range borealisOperatorKnownServiceKeys() {
+		spec, ok := borealisOperatorKnownWorkloadForService(serviceKey)
+		if ok && spec.Resource == resource {
+			names[spec.Name] = true
+		}
+	}
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func borealisOperatorKnownServiceKeys() []string {
+	keys := []string{
+		"api-backend",
+		"borealis-operator",
+		"job-scheduler",
+		"postgres-db",
+		"remote-desktop-guacd",
+		"webui-frontend",
+		"wireguard-tunnel",
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func borealisOperatorImageAllowedForService(serviceKey string, imageRef string) bool {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	imageRef = strings.TrimSpace(imageRef)
+	if !borealisOperatorImmutableImageRefPattern.MatchString(imageRef) {
+		return false
+	}
+	allowed := map[string]bool{}
+	if serviceKey == "site-worker" {
+		for _, image := range borealisOperatorSplitAllowlist(os.Getenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST")) {
+			allowed[image] = true
+		}
+	} else {
+		for key, image := range borealisOperatorParseWorkloadImageAllowlist(os.Getenv("BOREALIS_OPERATOR_WORKLOAD_IMAGE_ALLOWLIST")) {
+			if key == serviceKey || key == "*" {
+				allowed[image] = true
+			}
+		}
+	}
+	return allowed[imageRef]
+}
+
+func borealisOperatorParseWorkloadImageAllowlist(raw string) map[string]string {
+	result := map[string]string{}
+	for _, token := range borealisOperatorSplitAllowlist(raw) {
+		key, value, ok := strings.Cut(token, "=")
+		if !ok {
+			continue
+		}
+		key = strings.ToLower(strings.TrimSpace(key))
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		result[key] = value
+	}
+	return result
+}
+
+func borealisOperatorSplitAllowlist(raw string) []string {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t' || r == ' '
+	})
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func borealisOperatorWorkloadImagePatch(containerName string, imageRef string, annotations map[string]string) map[string]any {
+	metadata := map[string]any{}
+	if len(annotations) > 0 {
+		metadata["annotations"] = annotations
+	}
+	return map[string]any{
+		"spec": map[string]any{
+			"template": map[string]any{
+				"metadata": metadata,
+				"spec": map[string]any{
+					"containers": []map[string]any{
+						{
+							"name":  containerName,
+							"image": imageRef,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func (o *borealisOperator) waitForWorkloadRollout(ctx context.Context, spec borealisOperatorKnownWorkload) error {
+	deadline := time.NewTimer(borealisOperatorRolloutTimeout())
+	defer deadline.Stop()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		item, err := o.kubeGet(ctx, spec.APIGroup, spec.Resource, spec.Name)
+		if err == nil && kubernetesWorkloadRolloutReady(item) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("%s rollout timed out", spec.ServiceKey)
+		case <-ticker.C:
+		}
+	}
+}
+
+func borealisOperatorRolloutTimeout() time.Duration {
+	seconds := parseEnvIntMin("BOREALIS_OPERATOR_ROLLOUT_TIMEOUT_SECONDS", 90, 5)
+	return time.Duration(seconds) * time.Second
+}
+
+func borealisOperatorRollbackTimeout() time.Duration {
+	seconds := parseEnvIntMin("BOREALIS_OPERATOR_ROLLBACK_TIMEOUT_SECONDS", 45, 5)
+	return time.Duration(seconds) * time.Second
+}
+
+func kubernetesWorkloadContainerImage(item map[string]any, containerName string) string {
+	podSpec := nestedMap(nestedMap(nestedMap(item, "spec"), "template"), "spec")
+	containers, _ := podSpec["containers"].([]any)
+	for _, raw := range containers {
+		container, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cleanText(container["name"]) == containerName {
+			return cleanText(container["image"])
+		}
+	}
+	return ""
+}
+
+func kubernetesWorkloadRolloutReady(item map[string]any) bool {
+	metadata := nestedMap(item, "metadata")
+	spec := nestedMap(item, "spec")
+	status := nestedMap(item, "status")
+	generation := coerceInt64(metadata["generation"])
+	observedGeneration := coerceInt64(status["observedGeneration"])
+	replicas := coerceInt64(spec["replicas"])
+	if replicas == 0 {
+		return observedGeneration >= generation
+	}
+	ready := coerceInt64(status["readyReplicas"])
+	available := coerceInt64(status["availableReplicas"])
+	updated := coerceInt64(status["updatedReplicas"])
+	return observedGeneration >= generation && ready >= replicas && available >= replicas && updated >= replicas
+}
+
+func borealisOperatorKubernetesNameAllowed(value string) bool {
+	return len(value) <= 48 && borealisOperatorKubernetesNamePattern.MatchString(value)
+}
+
+func borealisOperatorSiteWorkerResourceProfile(name string) (borealisOperatorResourceProfile, bool) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "small":
+		return borealisOperatorResourceProfile{RequestCPU: "25m", RequestMemory: "96Mi", LimitCPU: "250m", LimitMemory: "256Mi"}, true
+	case "", "standard":
+		return borealisOperatorResourceProfile{RequestCPU: "50m", RequestMemory: "128Mi", LimitCPU: "1000m", LimitMemory: "512Mi"}, true
+	case "large":
+		return borealisOperatorResourceProfile{RequestCPU: "100m", RequestMemory: "256Mi", LimitCPU: "2000m", LimitMemory: "1024Mi"}, true
+	default:
+		return borealisOperatorResourceProfile{}, false
+	}
+}
+
+func (o *borealisOperator) siteWorkerPodsByGUID(ctx context.Context, workerGUID string) ([]map[string]any, error) {
+	pods, err := o.kubeListItems(ctx, "core", "pods")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0)
+	for _, pod := range pods {
+		metadata := nestedMap(pod, "metadata")
+		labels := mapStringAny(metadata["labels"])
+		if cleanText(labels["borealis.io/worker-guid"]) != workerGUID {
+			continue
+		}
+		if strings.ToLower(cleanText(labels["app.kubernetes.io/component"])) != "site-worker" {
+			continue
+		}
+		if cleanText(labels["app.kubernetes.io/managed-by"]) != "borealis-operator" {
+			continue
+		}
+		result = append(result, pod)
+	}
+	return result, nil
+}
+
+func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata": map[string]any{
+			"name":      podName,
+			"namespace": o.namespace,
+			"labels": map[string]string{
+				"app.kubernetes.io/name":       "site-worker",
+				"app.kubernetes.io/part-of":    "borealis",
+				"app.kubernetes.io/managed-by": "borealis-operator",
+				"app.kubernetes.io/component":  "site-worker",
+				"borealis.io/workload":         "site-worker",
+				"borealis.io/worker-guid":      workerGUID,
+				"borealis.io/site-id":          fmt.Sprintf("%d", siteID),
+				"borealis.io/resource-profile": profileName,
+			},
+			"annotations": map[string]string{
+				"borealis.io/image-ref":   imageRef,
+				"borealis.io/created-at":  time.Now().UTC().Format(time.RFC3339Nano),
+				"borealis.io/stage":       "operator-lifecycle",
+				"borealis.io/route-owner": "pending-stage-5",
+			},
+		},
+		"spec": map[string]any{
+			"automountServiceAccountToken": false,
+			"enableServiceLinks":           false,
+			"restartPolicy":                "Never",
+			"securityContext": map[string]any{
+				"runAsNonRoot": true,
+				"runAsUser":    borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_UID", 64646),
+				"runAsGroup":   borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", 64646),
+				"fsGroup":      borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", 64646),
+				"seccompProfile": map[string]any{
+					"type": "RuntimeDefault",
+				},
+			},
+			"containers": []map[string]any{
+				{
+					"name":            "site-worker",
+					"image":           imageRef,
+					"imagePullPolicy": "IfNotPresent",
+					"env": []map[string]any{
+						{"name": "BOREALIS_PROCESS_ROLE", "value": "site-worker"},
+						{"name": "BOREALIS_SITE_WORKER_GUID", "value": workerGUID},
+						{"name": "BOREALIS_SITE_WORKER_SITE_ID", "value": fmt.Sprintf("%d", siteID)},
+						{"name": "BOREALIS_SITE_WORKER_CONTAINER_NAME", "value": podName},
+						{"name": "BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "value": "0"},
+						{"name": "BOREALIS_SITE_WORKER_RESOURCE_PROFILE", "value": profileName},
+						{"name": "BOREALIS_K3S_SITE_WORKER_BRIDGE", "value": "1"},
+						{"name": "HOME", "value": "/tmp"},
+					},
+					"resources": map[string]any{
+						"requests": map[string]string{
+							"cpu":    profile.RequestCPU,
+							"memory": profile.RequestMemory,
+						},
+						"limits": map[string]string{
+							"cpu":    profile.LimitCPU,
+							"memory": profile.LimitMemory,
+						},
+					},
+					"securityContext": map[string]any{
+						"allowPrivilegeEscalation": false,
+						"readOnlyRootFilesystem":   true,
+						"capabilities": map[string]any{
+							"drop": []string{"ALL"},
+						},
+					},
+					"volumeMounts": []map[string]any{
+						{"name": "tmp", "mountPath": "/tmp"},
+					},
+				},
+			},
+			"volumes": []map[string]any{
+				{
+					"name": "tmp",
+					"emptyDir": map[string]any{
+						"medium":    "Memory",
+						"sizeLimit": "128Mi",
+					},
+				},
+			},
+		},
+	}
+}
+
+func borealisOperatorRuntimeIDEnv(name string, fallback int64) int64 {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" || value == "0" {
+		return fallback
+	}
+	var parsed int64
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return fallback
+		}
+		parsed = parsed*10 + int64(ch-'0')
+	}
+	if parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (o *borealisOperator) kubeListItems(ctx context.Context, apiGroup string, resource string) ([]map[string]any, error) {
@@ -408,6 +1130,29 @@ func decodeBorealisOperatorJSON(r *http.Request, out any) error {
 	return nil
 }
 
+func decodeBorealisOperatorParams(params map[string]any, out any) error {
+	if params == nil {
+		params = map[string]any{}
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("params must contain one JSON object")
+		}
+		return err
+	}
+	return nil
+}
+
 func goBorealisOperatorToken(secret []byte) string {
 	if len(secret) == 0 {
 		return ""
@@ -448,17 +1193,52 @@ func newInClusterKubernetesAPIClient() (*kubernetesAPIClient, error) {
 }
 
 func (c *kubernetesAPIClient) getJSON(ctx context.Context, path string, out any) error {
+	return c.doJSON(ctx, http.MethodGet, path, nil, "", out, 10*time.Second)
+}
+
+func (o *borealisOperator) kubePatch(ctx context.Context, apiGroup string, resource string, name string, body any) (map[string]any, error) {
+	var payload map[string]any
+	err := o.kube.doJSON(ctx, http.MethodPatch, o.kubePath(apiGroup, resource, name), body, "application/strategic-merge-patch+json", &payload, 30*time.Second)
+	return payload, err
+}
+
+func (o *borealisOperator) kubeCreate(ctx context.Context, apiGroup string, resource string, body any) (map[string]any, error) {
+	var payload map[string]any
+	err := o.kube.doJSON(ctx, http.MethodPost, o.kubePath(apiGroup, resource, ""), body, "application/json", &payload, 30*time.Second)
+	return payload, err
+}
+
+func (o *borealisOperator) kubeDelete(ctx context.Context, apiGroup string, resource string, name string, body any) error {
+	var payload map[string]any
+	return o.kube.doJSON(ctx, http.MethodDelete, o.kubePath(apiGroup, resource, name), body, "application/json", &payload, 30*time.Second)
+}
+
+func (c *kubernetesAPIClient) doJSON(ctx context.Context, method string, path string, body any, contentType string, out any, timeout time.Duration) error {
 	if c == nil || c.httpClient == nil {
 		return errors.New("Kubernetes client unavailable")
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, strings.TrimRight(c.baseURL, "/")+path, nil)
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(requestCtx, method, strings.TrimRight(c.baseURL, "/")+path, reader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", firstText(contentType, "application/json"))
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
@@ -467,6 +1247,13 @@ func (c *kubernetesAPIClient) getJSON(ctx context.Context, path string, out any)
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("Kubernetes API %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	if out == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<20))
+		return nil
+	}
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(out)
 }
@@ -512,6 +1299,42 @@ func (c *borealisOperatorClient) command(ctx context.Context, verb string, param
 		return payload, fmt.Errorf("borealis-operator %s returned HTTP %d", verb, resp.StatusCode)
 	}
 	return payload, nil
+}
+
+func (c *borealisOperatorClient) rolloutKnownWorkload(ctx context.Context, serviceKey string, imageRef string) (map[string]any, error) {
+	return c.command(ctx, "RolloutKnownWorkload", map[string]any{
+		"service_key": serviceKey,
+		"image_ref":   imageRef,
+	})
+}
+
+func (c *borealisOperatorClient) restartKnownWorkload(ctx context.Context, serviceKey string) (map[string]any, error) {
+	return c.command(ctx, "RestartKnownWorkload", map[string]any{
+		"service_key": serviceKey,
+	})
+}
+
+func (c *borealisOperatorClient) scaleKnownWorkload(ctx context.Context, serviceKey string, replicas int64) (map[string]any, error) {
+	return c.command(ctx, "ScaleKnownWorkload", map[string]any{
+		"service_key": serviceKey,
+		"replicas":    replicas,
+	})
+}
+
+func (c *borealisOperatorClient) launchSiteWorker(ctx context.Context, siteID int64, workerGUID string, imageRef string, resourceProfile string) (map[string]any, error) {
+	return c.command(ctx, "LaunchSiteWorker", map[string]any{
+		"site_id":          siteID,
+		"worker_guid":      workerGUID,
+		"image_ref":        imageRef,
+		"resource_profile": resourceProfile,
+	})
+}
+
+func (c *borealisOperatorClient) retireSiteWorker(ctx context.Context, workerGUID string, reason string) (map[string]any, error) {
+	return c.command(ctx, "RetireSiteWorker", map[string]any{
+		"worker_guid": workerGUID,
+		"reason":      reason,
+	})
 }
 
 func runBorealisOperatorClientHealthcheck(ctx context.Context, _ gatewayConfig) error {
@@ -584,7 +1407,7 @@ func borealisOperatorStatusHandler(auth *authService) http.HandlerFunc {
 			payload["workloads_error"] = workloadErr.Error()
 		}
 		if workerErr == nil {
-			payload["site_workers"] = borealisOperatorResultValue(siteWorkers, "site_workers")
+			payload["site_workers"] = borealisOperatorResultValue(siteWorkers, "workers")
 		} else {
 			payload["site_workers_error"] = workerErr.Error()
 		}
