@@ -81,6 +81,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine.sh --network-mode public deploy prod`: production WebUI with public DNS and ACME/Let's Encrypt.
     - `Engine.sh --network-mode local deploy prod`: production WebUI with private DNS/VPN reachability and Borealis local CA.
     - `Engine.sh --network-mode public|local deploy prod|dev`: reconciles Stage 1 K3s baseline before Compose. It writes `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, installs K3s only when the binary and `k3s.service` are missing, restarts K3s only after Borealis-owned config changes, creates the `borealis` namespace, and applies namespace/node labels plus `borealis.io/k3s-config-hash` annotations.
+    - K3s startup config uses only `borealis.io/*` node labels. `Engine.sh` applies `app.kubernetes.io/part-of=borealis` later through admin `kubectl` because kubelet rejects `app.kubernetes.io/*` labels passed through `--node-labels`.
     - Stage 1 K3s baseline keeps bundled Traefik and ServiceLB disabled and owns `borealis-k3s-api-firewall.service` for TCP `6443` host firewall enforcement.
     - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
     - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.

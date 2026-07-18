@@ -1398,7 +1398,6 @@ disable:
   - "servicelb"
 secrets-encryption: true
 node-label:
-  - "app.kubernetes.io/part-of=borealis"
   - "borealis.io/engine-node=true"
 EOF
 }
