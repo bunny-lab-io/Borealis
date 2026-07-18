@@ -184,8 +184,8 @@ After the first install, update and redeploy from the checked-out Borealis repos
 
     Do not enroll agents with raw IP `--server-url` values. Use the Engine FQDN as the URL. Local-mode agents will automatically attempt to use the generated `--server-ip-fallback` route hint when DNS is unavailable.
 
-### K3s Baseline
-Every full Engine deploy now creates or repairs a single-node K3s baseline before Docker Compose reconciliation. K3s does not host Borealis workloads in this stage; Compose remains authoritative until each workload reaches its own cutover stage.
+### K3s Cluster
+Every full Engine deploy now creates or repairs a single-node K3s cluster baseline before Docker Compose reconciliation. K3s does not host Borealis workloads in this stage; Compose remains authoritative until each workload reaches its own cutover stage.
 
 `Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down the cluster.
 

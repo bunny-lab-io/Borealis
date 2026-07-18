@@ -210,7 +210,7 @@ Build output follows `Engine.sh` service domains. `docker-proxy` is an external 
 | Networking | Traefik Reverse Proxy |
 | Networking | WireGuard Server |
 | Database | PostgreSQL DB |
-| Reconciliation | K3s Baseline |
+| k3s Cluster | Ensuring Cluster Exists |
 
 Build domains are not the same as runtime dependency order.
 
@@ -246,11 +246,12 @@ Deploy output:
 - Service rows start as `Pending...` and update in place as deploy stages run.
 - Service rows render in one table with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
 - `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
-- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `Reconciliation`, `Housekeeping`, and `Complete`.
+- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, `Reconciliation`, `Housekeeping`, and `Complete`.
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
 - Service rows use compact status values such as `Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Ready - Image (Re)Built`, `Starting`, `Running`, `Running - Healthy`, `Reconciling Stack`, `Stack Reconciled`, or `Complete`.
 - Shared build-artifact or image-reuse relationships appear only in transient status text. For example, the `Job Scheduler` row may show `[Shares API Backend Image] -> (Re)Building Container Image`, and the `Site Worker Orchestrator` row may show `[Shares Job Scheduler Image] -> Ready - Shared Image`. Runtime health updates later replace those sharing notes with `Starting`, `Running`, or `Running - Healthy`.
 - Database schema setup updates the `PostgreSQL DB` row with table-level progress such as `Ensuring Table "devices" Exists`, writes each table progress line to `Engine/Deploy/build.log`, then returns the row to Docker health status after maintenance completes.
+- K3s cluster status uses the `k3s Cluster` domain. Stage 1 reports cluster reconcile progress through the `Ensuring Cluster Exists` row until later migration stages add more cluster-owned rows.
 - Compose status uses the `Reconciliation` domain. Compose uses `Reconciling <service...>` for scoped service updates and `Reconciling Stack` only when shared Compose metadata must be applied. Services are not bulk-marked as `Starting` before Compose runs; after Compose exits, Engine polls transient Docker states and updates only rows whose runtime state actually changes.
 - Image/cache pruning uses the `Housekeeping` domain.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.

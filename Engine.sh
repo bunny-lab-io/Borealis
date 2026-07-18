@@ -155,7 +155,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"K3s Baseline"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -178,8 +178,11 @@ dashboard_row_section() {
     "postgres-db"|"Profile")
       printf '%s\n' "Database"
       ;;
-    "K3s Baseline"|"Docker Compose")
+    "Docker Compose")
       printf '%s\n' "Reconciliation"
+      ;;
+    "Ensuring Cluster Exists")
+      printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
       printf '%s\n' "Housekeeping"
@@ -224,7 +227,7 @@ dashboard_seed_rows() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "K3s Baseline" \
+    "Ensuring Cluster Exists" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -337,8 +340,8 @@ dashboard_row_label() {
     "postgres-db")
       printf '%s\n' "PostgreSQL DB"
       ;;
-    "K3s Baseline")
-      printf '%s\n' "K3s Baseline"
+    "Ensuring Cluster Exists")
+      printf '%s\n' "Ensuring Cluster Exists"
       ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
@@ -461,7 +464,7 @@ dashboard_render_table() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "K3s Baseline" \
+    "Ensuring Cluster Exists" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -1514,33 +1517,33 @@ write_k3s_api_firewall_files() {
 }
 
 ensure_k3s_api_firewall() {
-  log_status "K3s Baseline" "Reconciling API Firewall" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Reconciling API Firewall" "${C_YELLOW}"
   if write_k3s_api_firewall_files; then
     run_privileged systemctl daemon-reload
   else
     run_privileged systemctl daemon-reload >/dev/null 2>&1 || true
   fi
   if ! run_privileged systemctl enable "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
-    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
     die "Failed to enable ${K3S_FIREWALL_SERVICE}. See ${BUILD_LOG}."
   fi
   if ! run_privileged systemctl restart "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
-    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
     die "Failed to apply K3s API firewall. See ${BUILD_LOG}."
   fi
   if ! run_privileged iptables -C INPUT -p tcp --dport "${K3S_API_PORT}" -j BOREALIS-K3S-API >/dev/null 2>&1; then
-    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
     die "K3s API firewall rule missing after reconcile."
   fi
 }
 
 install_k3s_if_missing() {
   if k3s_cluster_installed; then
-    log_status "K3s Baseline" "Installed" "${C_GREEN}"
+    log_status "Ensuring Cluster Exists" "Installed" "${C_GREEN}"
     return 1
   fi
 
-  log_status "K3s Baseline" "Installing K3s" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Installing K3s" "${C_YELLOW}"
   local install_env=(INSTALL_K3S_EXEC="server")
   if [[ -n "${K3S_INSTALL_VERSION}" ]]; then
     install_env+=(INSTALL_K3S_VERSION="${K3S_INSTALL_VERSION}")
@@ -1548,27 +1551,27 @@ install_k3s_if_missing() {
     install_env+=(INSTALL_K3S_CHANNEL="${K3S_INSTALL_CHANNEL}")
   fi
   if ! run_privileged env "${install_env[@]}" bash -c 'set -o pipefail; curl -sfL "$1" | sh -' bash "${K3S_INSTALL_SCRIPT_URL}" >> "${BUILD_LOG}" 2>&1; then
-    log_status "K3s Baseline" "Install Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Install Failed" "${C_RED}"
     die "K3s install failed. See ${BUILD_LOG}."
   fi
-  log_status "K3s Baseline" "Installed" "${C_GREEN}"
+  log_status "Ensuring Cluster Exists" "Installed" "${C_GREEN}"
   return 0
 }
 
 ensure_k3s_service_running() {
-  log_status "K3s Baseline" "Starting K3s Service" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Starting K3s Service" "${C_YELLOW}"
   if ! run_privileged systemctl enable --now "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
-    log_status "K3s Baseline" "Service Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Service Failed" "${C_RED}"
     die "Failed to enable/start ${K3S_SERVICE_NAME}.service. See ${BUILD_LOG}."
   fi
   if ! run_privileged systemctl is-active --quiet "${K3S_SERVICE_NAME}.service"; then
-    log_status "K3s Baseline" "Service Failed" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Service Failed" "${C_RED}"
     die "${K3S_SERVICE_NAME}.service is not active after reconcile."
   fi
 }
 
 wait_for_k3s_nodes_ready() {
-  log_status "K3s Baseline" "Waiting For Node Readiness" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Waiting For Node Readiness" "${C_YELLOW}"
   local attempt
   local output=""
   for attempt in {1..90}; do
@@ -1579,13 +1582,13 @@ wait_for_k3s_nodes_ready() {
     sleep 2
   done
   printf '[%s] K3s node readiness timed out. Last output:\n%s\n' "$(date +%FT%T)" "${output}" >> "${BUILD_LOG}"
-  log_status "K3s Baseline" "Node Not Ready" "${C_RED}"
+  log_status "Ensuring Cluster Exists" "Node Not Ready" "${C_RED}"
   die "K3s node readiness timed out. See ${BUILD_LOG}."
 }
 
 verify_k3s_kubeconfig() {
   if ! run_privileged test -s "${K3S_KUBECONFIG}"; then
-    log_status "K3s Baseline" "Kubeconfig Missing" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Kubeconfig Missing" "${C_RED}"
     die "K3s kubeconfig missing at ${K3S_KUBECONFIG}."
   fi
   local mode
@@ -1596,7 +1599,7 @@ verify_k3s_kubeconfig() {
   group_digit="${mode: -2:1}"
   other_digit="${mode: -1}"
   if [[ "${group_digit}" != "0" || "${other_digit}" != "0" ]]; then
-    log_status "K3s Baseline" "Kubeconfig Too Open" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Kubeconfig Too Open" "${C_RED}"
     die "K3s kubeconfig ${K3S_KUBECONFIG} must not be group/world readable; current mode is ${mode}."
   fi
 }
@@ -1605,17 +1608,17 @@ verify_k3s_container_runtime() {
   local runtimes
   runtimes="$(k3s_kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.containerRuntimeVersion}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)"
   if [[ -z "${runtimes}" ]]; then
-    log_status "K3s Baseline" "Runtime Unknown" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Runtime Unknown" "${C_RED}"
     die "K3s node container runtime is not reported."
   fi
   if ! grep -Eq '^containerd://' <<< "${runtimes}"; then
-    log_status "K3s Baseline" "Runtime Unexpected" "${C_RED}"
+    log_status "Ensuring Cluster Exists" "Runtime Unexpected" "${C_RED}"
     die "K3s node container runtime must be containerd in Stage 1; saw: ${runtimes}"
   fi
 }
 
 verify_k3s_packaged_ingress_disabled() {
-  log_status "K3s Baseline" "Verifying Ingress Disabled" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Verifying Ingress Disabled" "${C_YELLOW}"
   local attempt
   local traefik_deployment
   local traefik_service
@@ -1627,7 +1630,7 @@ verify_k3s_packaged_ingress_disabled() {
     fi
     sleep 2
   done
-  log_status "K3s Baseline" "Bundled Ingress Active" "${C_RED}"
+  log_status "Ensuring Cluster Exists" "Bundled Ingress Active" "${C_RED}"
   die "K3s bundled Traefik remains active; Borealis keeps ingress disabled until cutover."
 }
 
@@ -1636,7 +1639,7 @@ ensure_k3s_namespace() {
   config_hash="$(awk '{print $1; exit}' "${K3S_CONFIG_HASH_FILE}" 2>/dev/null || true)"
   [[ -n "${config_hash}" ]] || config_hash="unknown"
 
-  log_status "K3s Baseline" "Reconciling Namespace" "${C_YELLOW}"
+  log_status "Ensuring Cluster Exists" "Reconciling Namespace" "${C_YELLOW}"
   if ! k3s_kubectl get namespace "${K3S_NAMESPACE}" >/dev/null 2>&1; then
     k3s_kubectl create namespace "${K3S_NAMESPACE}" >> "${BUILD_LOG}" 2>&1
   fi
@@ -1675,7 +1678,7 @@ label_k3s_nodes() {
 }
 
 ensure_k3s_cluster_baseline() {
-  log_section "K3s Baseline"
+  log_section "k3s Cluster"
   validate_k3s_baseline_settings
   ensure_systemctl_for_k3s
   ensure_k3s_install_dependencies
@@ -1683,9 +1686,9 @@ ensure_k3s_cluster_baseline() {
   local config_changed=0
   if write_k3s_borealis_config; then
     config_changed=1
-    log_status "K3s Baseline" "Config Updated" "${C_YELLOW}"
+    log_status "Ensuring Cluster Exists" "Config Updated" "${C_YELLOW}"
   else
-    log_status "K3s Baseline" "Config Up-to-Date" "${C_GREEN}"
+    log_status "Ensuring Cluster Exists" "Config Up-to-Date" "${C_GREEN}"
   fi
 
   ensure_k3s_api_firewall
@@ -1696,9 +1699,9 @@ ensure_k3s_cluster_baseline() {
   fi
 
   if [[ "${installed_now}" -eq 0 && "${config_changed}" -eq 1 ]]; then
-    log_status "K3s Baseline" "Restarting For Config" "${C_YELLOW}"
+    log_status "Ensuring Cluster Exists" "Restarting For Config" "${C_YELLOW}"
     if ! run_privileged systemctl restart "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
-      log_status "K3s Baseline" "Restart Failed" "${C_RED}"
+      log_status "Ensuring Cluster Exists" "Restart Failed" "${C_RED}"
       die "Failed to restart ${K3S_SERVICE_NAME}.service after config reconcile. See ${BUILD_LOG}."
     fi
   fi
@@ -1710,7 +1713,7 @@ ensure_k3s_cluster_baseline() {
   verify_k3s_packaged_ingress_disabled
   ensure_k3s_namespace
   label_k3s_nodes
-  log_status "K3s Baseline" "Ready" "${C_GREEN}"
+  log_status "Ensuring Cluster Exists" "Ready" "${C_GREEN}"
 }
 
 normalize_mode() {
