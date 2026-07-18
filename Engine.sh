@@ -2606,6 +2606,27 @@ ensure_k3s_bridge_workloads() {
   printf '%s  k3s-bridge-workloads\n' "${config_hash}" > "${K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE}"
 }
 
+service_has_k3s_bridge_workload() {
+  case "$1" in
+    webui-frontend|remote-desktop-guacd)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+reconcile_k3s_bridge_for_scoped_rebuild() {
+  local service="$1"
+  local mode="$2"
+  service_has_k3s_bridge_workload "${service}" || return 0
+
+  printf '[%s] Reconciling K3s bridge workloads after scoped %s rebuild\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  ensure_k3s_cluster_baseline
+  ensure_borealis_operator_bridge
+  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
+  ensure_k3s_bridge_workloads "${mode}"
+}
+
 normalize_mode() {
   local raw="${1:-prod}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
@@ -5135,6 +5156,7 @@ service_action() {
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
       log_status "${service}" "Recreating Container" "${C_YELLOW}"
       compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
+      reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url

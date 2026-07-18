@@ -75,10 +75,16 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Move `remote-desktop-guacd` into K3s bridge mode.
     - [x] Keep ClusterIP-only exposure.
     - [x] Preserve existing VNC/Guacamole API behavior.
+- [x] Add scoped service-action bridge reconciliation.
+    - [x] Reconcile K3s bridge workloads after `webui-frontend` rebuilds.
+    - [x] Reconcile K3s bridge workloads after `remote-desktop-guacd` rebuilds.
+    - [x] Keep Compose routing authoritative while refreshing K3s bridge images.
 - [x] Validation:
-    - [x] WebUI dev path works.
+    - [ ] WebUI dev path works.
     - [x] Guacd readiness passes.
     - [x] Existing Compose fallback remains available.
+    - [x] Scoped WebUI and guacd rebuilds refresh bridge workloads without full deploy.
+    - [x] Unchanged bridge pod UIDs stay stable during scoped bridge reconciliation.
 
 ## Stage 5: Site Worker Migration
 

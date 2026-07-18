@@ -193,7 +193,7 @@ K3s keeps bundled Traefik and ServiceLB disabled so Borealis Compose Traefik sta
 
 The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the Compose API backend reaches the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
 
-Bridge-mode `webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. They are not public ingress targets yet. Compose Traefik, Compose API, and the Compose WebUI/guacd containers remain authoritative until later cutover stages. Dev-mode WebUI bridge pods use the same read-only runtime source mounts as Compose so host-side HMR edits can be validated without handing public traffic to K3s.
+Bridge-mode `webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. They are not public ingress targets yet. Compose Traefik, Compose API, and the Compose WebUI/guacd containers remain authoritative until later cutover stages. Dev-mode WebUI bridge pods use the same read-only runtime source mounts as Compose so host-side HMR edits can be validated without handing public traffic to K3s. Scoped WebUI and guacd rebuilds also refresh the K3s bridge so it follows the current image manifest before the next full deploy.
 
 Quick checks after a deploy:
 ```sh
@@ -286,7 +286,7 @@ After deployment finishes:
     - Stage 2 deploys `borealis-operator` into the `borealis` namespace as a single-replica Deployment, ClusterIP Service, Secret, ServiceAccount, Role, and RoleBinding.
     - Stage 3 keeps runtime services Kubernetes-blind by routing lifecycle work through `borealis-operator`. Its API is `POST /v1/command` with `X-Borealis-Operator-Token`.
     - Operator status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Operator lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
-    - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. Compose still owns public WebUI, API, Traefik, and VNC/Guacamole routing. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs.
+    - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. Compose still owns public WebUI, API, Traefik, and VNC/Guacamole routing. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs. Scoped `webui-frontend` and `remote-desktop-guacd` rebuilds reconcile the K3s baseline, operator, and bridge manifests after the Compose service refresh.
     - Compose API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.

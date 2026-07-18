@@ -420,7 +420,7 @@ Action support:
 | Action | Supported services | Effect |
 | --- | --- | --- |
 | `restart` | any Engine service | Runs `docker compose restart <service>` after refreshing runtime env. |
-| `rebuild` | any Engine service | Rebuilds selected image, updates image manifest/env, recreates service with `up -d --no-deps`. |
+| `rebuild` | any Engine service | Rebuilds selected image, updates image manifest/env, recreates service with `up -d --no-deps`. WebUI and guacd rebuilds also reconcile K3s bridge workloads. |
 | `reload` | `traefik-edge` only | Restarts Traefik after config/env changes. |
 | `reconcile` | `wireguard-tunnel` only | Runs `borealis-wireguard-control-client reconcile` inside tunnel container. |
 
@@ -624,6 +624,7 @@ bash Engine.sh --network-mode local deploy prod
 - Unchanged image hashes skip Docker builds.
 - Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
 - Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
+- Service-specific WebUI and guacd rebuilds also reconcile the K3s baseline, operator, and bridge workload manifests so bridge pods follow the current image manifest without requiring a full deploy.
 - `restart` does not rebuild images.
 - `reload` is currently a Traefik restart.
 - `reconcile` is currently WireGuard-only.
@@ -753,7 +754,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     `Engine/Deploy/borealis-operator.sha256` records the operator manifest inputs: image tag, namespace, Service name, listen port, HMAC secret, and generated immutable image allowlists.
 
-    `Engine/Deploy/k3s-bridge-workloads.sha256` records Stage 4 bridge workload inputs: WebUI image, guacd image, deploy mode, namespace, runtime owner IDs, ports, source path, and profile resource caps.
+    `Engine/Deploy/k3s-bridge-workloads.sha256` records Stage 4 bridge workload inputs: WebUI image, guacd image, deploy mode, namespace, runtime owner IDs, ports, source path, and profile resource caps. Full deploys and scoped `webui-frontend` or `remote-desktop-guacd` rebuilds both refresh this bridge state.
 
     Use these files to confirm whether source changes are actually deployed.
 

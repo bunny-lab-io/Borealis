@@ -90,10 +90,11 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
     - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
     - `Engine.sh --network-mode public|local --service api-backend restart`: restart API container only.
-    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container only.
+    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container, then reconcile K3s bridge workloads so the non-authoritative WebUI bridge follows the current image.
     - `Engine.sh --network-mode public|local --service traefik-edge reload`: restart Traefik edge after config/env changes.
     - `Engine.sh --network-mode public|local --service postgres-db restart`: restart PostgreSQL container.
     - `Engine.sh --network-mode public|local --service remote-desktop-guacd restart`: restart guacd container.
+    - `Engine.sh --network-mode public|local --service remote-desktop-guacd rebuild dev|prod`: rebuild and recreate guacd container, then reconcile K3s bridge workloads so the non-authoritative guacd bridge follows the current image.
     - `Engine.sh --network-mode public|local --service wireguard-tunnel reconcile`: query the WireGuard control socket from the tunnel container.
 
     ### One-shot legacy migration helpers
