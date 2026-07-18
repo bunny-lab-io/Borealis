@@ -24,10 +24,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Disable bundled public ingress features until Borealis owns cutover path.
     - [x] Create `borealis` namespace.
     - [x] Add managed labels/annotations for ownership and config hashes.
-- [ ] Validation:
-    - [ ] Run deploy twice back to back and confirm no cluster teardown or pod churn.
-    - [ ] Confirm existing Compose Engine remains healthy.
-    - [ ] Confirm K3s API not publicly exposed.
+- [x] Validation:
+    - [x] Run deploy twice back to back and confirm no cluster teardown or pod churn.
+    - [x] Confirm existing Compose Engine remains healthy.
+    - [x] Confirm K3s API not publicly exposed.
 
 ## Stage 2: `borealis-operator` Bridge
 
