@@ -193,7 +193,7 @@ K3s keeps bundled Traefik and ServiceLB disabled so Borealis Compose Traefik sta
 
 The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the Compose API backend reaches the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
 
-Bridge-mode `webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. They are not public ingress targets yet. Compose Traefik, Compose API, and the Compose WebUI/guacd containers remain authoritative until later cutover stages. Dev-mode WebUI bridge pods use the same read-only runtime source mounts as Compose so host-side HMR edits can be validated without handing public traffic to K3s. Scoped WebUI and guacd rebuilds also refresh the K3s bridge so it follows the current image manifest before the next full deploy.
+Bridge-mode `webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. They are not public ingress targets yet. Compose Traefik, Compose API, and the Compose WebUI/guacd containers remain authoritative until later cutover stages. Dev-mode WebUI bridge pods use the same read-only runtime source mounts as Compose plus memory-backed Vite dependency cache mounts, so host-side HMR edits can be validated without handing public traffic to K3s. Scoped WebUI and guacd rebuilds also refresh the K3s bridge so it follows the current image manifest before the next full deploy.
 
 Quick checks after a deploy:
 ```sh

@@ -48,7 +48,7 @@ BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operato
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
-K3S_BRIDGE_WORKLOADS_VERSION="1"
+K3S_BRIDGE_WORKLOADS_VERSION="2"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -2215,7 +2215,7 @@ spec:
             - name: BOREALIS_WEBUI_HEALTH_HOST
               value: "127.0.0.1"
             - name: BOREALIS_WEBUI_VITE_CACHE_DIR
-              value: "/tmp/borealis-vite-cache"
+              value: "/opt/Borealis/Data/Engine/web-interface/node_modules/.vite"
             - name: HOME
               value: "/tmp"
           livenessProbe:
@@ -2252,6 +2252,8 @@ spec:
 EOF
   if [[ "${mode}" == "dev" ]]; then
     cat <<EOF
+            - name: webui-vite-cache
+              mountPath: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite
             - name: webui-vite-temp
               mountPath: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp
             - name: webui-src
@@ -2286,6 +2288,10 @@ EOF
 EOF
   if [[ "${mode}" == "dev" ]]; then
     cat <<EOF
+        - name: webui-vite-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
         - name: webui-vite-temp
           emptyDir:
             medium: Memory
@@ -2552,6 +2558,8 @@ ensure_k3s_bridge_workloads() {
       "webui_memory_limit=${webui_memory_limit}" \
       "webui_cpu_limit=${webui_cpu_limit}" \
       "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
+      "webui_vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
+      "webui_vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
       "guacd_image=${guacd_image}" \
       "guacd_port=${guacd_port}" \
       "guacd_memory_limit=${guacd_memory_limit}" \

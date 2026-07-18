@@ -165,11 +165,12 @@ services:
     pids_limit: ${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-128}
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+      - /opt/Borealis/Data/Engine/web-interface/node_modules/.vite:rw,noexec,nosuid,nodev,size=256m,mode=1777
       - /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp:rw,noexec,nosuid,nodev,size=128m,mode=1777
     env_file:
       - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
     environment:
-      BOREALIS_WEBUI_VITE_CACHE_DIR: /tmp/borealis-vite-cache
+      BOREALIS_WEBUI_VITE_CACHE_DIR: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite
       HOME: /tmp
     volumes:
       - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src:ro
