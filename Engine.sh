@@ -217,6 +217,7 @@ dashboard_ensure_row() {
 dashboard_seed_rows() {
   local row=""
   for row in \
+    "Ensuring Cluster Exists" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -227,7 +228,6 @@ dashboard_seed_rows() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "Ensuring Cluster Exists" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -454,6 +454,7 @@ dashboard_render_table() {
   local row=""
   dashboard_render_table_header
   for row in \
+    "Ensuring Cluster Exists" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -464,7 +465,6 @@ dashboard_render_table() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
-    "Ensuring Cluster Exists" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do

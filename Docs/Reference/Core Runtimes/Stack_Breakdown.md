@@ -201,6 +201,7 @@ Borealis uses host bind mounts for runtime ownership clarity, not named volumes 
 Build output follows `Engine.sh` service domains. `docker-proxy` is an external image and is not locally built.
 | Domain | Item |
 | --- | --- |
+| k3s Cluster | Ensuring Cluster Exists |
 | Frontend | WebUI Frontend |
 | Backend | API Backend |
 | Backend | Job Scheduler |
@@ -210,7 +211,6 @@ Build output follows `Engine.sh` service domains. `docker-proxy` is an external 
 | Networking | Traefik Reverse Proxy |
 | Networking | WireGuard Server |
 | Database | PostgreSQL DB |
-| k3s Cluster | Ensuring Cluster Exists |
 
 Build domains are not the same as runtime dependency order.
 
@@ -245,6 +245,7 @@ Deploy output:
 - The dashboard title shows `Production` or `Development`, the Engine network mode, the detected sizing `Profile`, and the active build log path.
 - Service rows start as `Pending...` and update in place as deploy stages run.
 - Service rows render in one table with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
+- The `k3s Cluster` / `Ensuring Cluster Exists` row renders first because Engine deploy reconciles the cluster before Docker Compose.
 - `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
 - Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, `Reconciliation`, `Housekeeping`, and `Complete`.
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Site Worker Orchestrator`, `Traefik Reverse Proxy`, `WireGuard Server`, and `PostgreSQL DB`.
