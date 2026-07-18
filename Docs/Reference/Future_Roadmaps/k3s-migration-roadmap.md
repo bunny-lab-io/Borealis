@@ -8,13 +8,13 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Principles
 
-- [ ] Keep `Engine.sh deploy` idempotent: reconcile, do not recreate healthy K3s state.
-- [ ] Start with single-node non-HA K3s.
-- [ ] Keep Compose Engine authoritative until each workload reaches explicit cutover.
+- [x] Keep `Engine.sh deploy` idempotent: reconcile, do not recreate healthy K3s state.
+- [x] Start with single-node non-HA K3s.
+- [x] Keep Compose Engine authoritative until each workload reaches explicit cutover.
 - [ ] Introduce `borealis-operator` as only K3s writer.
-- [ ] Keep `api-backend`, `job-scheduler`, and migrated workloads Kubernetes-blind or operator-API-only.
-- [ ] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
-- [ ] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
+- [x] Keep `api-backend`, `job-scheduler`, and migrated workloads Kubernetes-blind or operator-API-only.
+- [x] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
+- [x] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
 
 ## Stage 1: K3s Baseline
 
@@ -31,25 +31,25 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 2: `borealis-operator` Bridge
 
-- [ ] Add `borealis-operator` workload in K3s.
+- [x] Add `borealis-operator` workload in K3s.
     - [ ] Replace future `site-worker-orchestrator` role.
-    - [ ] Expose internal HMAC-authenticated Borealis API.
-    - [ ] Grant namespace-scoped RBAC only.
-    - [ ] Support read-only status verbs first.
-- [ ] Allowed verbs:
-    - [ ] `GetClusterSummary`
-    - [ ] `ListWorkloads`
-    - [ ] `GetWorkloadStatus`
-    - [ ] `ListSiteWorkers`
-- [ ] Blocked verbs:
-    - [ ] raw YAML apply
-    - [ ] arbitrary pod spec
-    - [ ] arbitrary image/env/volume/service account
-    - [ ] hostPath or privileged pod creation outside fixed allowlist
-- [ ] Validation:
-    - [ ] Compose `api-backend` can query operator status.
-    - [ ] Operator rejects unauthenticated and unsupported requests.
-    - [ ] Operator RBAC cannot mutate resources outside Borealis namespace.
+    - [x] Expose internal HMAC-authenticated Borealis API.
+    - [x] Grant namespace-scoped RBAC only.
+    - [x] Support read-only status verbs first.
+- [x] Allowed verbs:
+    - [x] `GetClusterSummary`
+    - [x] `ListWorkloads`
+    - [x] `GetWorkloadStatus`
+    - [x] `ListSiteWorkers`
+- [x] Blocked verbs:
+    - [x] raw YAML apply
+    - [x] arbitrary pod spec
+    - [x] arbitrary image/env/volume/service account
+    - [x] hostPath or privileged pod creation outside fixed allowlist
+- [x] Validation:
+    - [x] Compose `api-backend` can query operator status.
+    - [x] Operator rejects unauthenticated and unsupported requests.
+    - [x] Operator RBAC cannot mutate resources outside Borealis namespace.
 
 ## Stage 3: Workload Rollout Interface
 

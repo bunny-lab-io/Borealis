@@ -1,5 +1,17 @@
 {
   "services": {
+    "borealis-operator": {
+      "dockerfile": "Data/Engine/Containers/borealis-operator/Dockerfile",
+      "context": ".",
+      "inputs": [
+        ".dockerignore",
+        "Data/Engine/Containers/api-backend/go.mod",
+        "Data/Engine/Containers/api-backend/go.sum",
+        "Data/Engine/Containers/api-backend/cmd/**",
+        "Data/Engine/Containers/api-backend/build-api-backend.sh",
+        "Data/Engine/Containers/borealis-operator/**"
+      ]
+    },
     "api-backend": {
       "dockerfile": "Data/Engine/Containers/api-backend/Dockerfile",
       "context": ".",

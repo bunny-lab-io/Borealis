@@ -1046,9 +1046,21 @@ func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select orchestrator healthcheck only")
 	}
 
+	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
+	os.Args = []string{"api-backend"}
+	if !borealisOperatorMode() || borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || siteWorkerOrchestratorMode() {
+		t.Fatalf("expected borealis-operator role to select operator mode")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
+	os.Args = []string{"api-backend", "borealis-operator-healthcheck"}
+	if borealisOperatorMode() || !borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || siteWorkerOrchestratorMode() {
+		t.Fatalf("expected borealis-operator-healthcheck arg to override inherited operator role")
+	}
+
 	t.Setenv("BOREALIS_PROCESS_ROLE", "")
 	os.Args = []string{"api-backend", "api-healthcheck"}
-	if schedulerManagerMode() || schedulerHealthcheckMode() || !apiHealthcheckMode() {
+	if schedulerManagerMode() || schedulerHealthcheckMode() || borealisOperatorClientHealthcheckMode() || !apiHealthcheckMode() {
 		t.Fatalf("expected api-healthcheck arg to select API healthcheck only")
 	}
 }

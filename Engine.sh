@@ -43,6 +43,10 @@ K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
 K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
 K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
 K3S_BASELINE_VERSION="1"
+BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
+BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
+BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
+BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -82,6 +86,7 @@ SERVICE_ROLES=(
   "wireguard-tunnel"
 )
 BUILD_ROLES=(
+  "borealis-operator"
   "api-backend"
   "job-scheduler"
   "traefik-edge"
@@ -93,6 +98,9 @@ BUILD_ROLES=(
 )
 BUILD_SECTION_FRONTEND=(
   "webui-frontend"
+)
+BUILD_SECTION_K3S_CLUSTER=(
+  "borealis-operator"
 )
 BUILD_SECTION_BACKEND=(
   "api-backend"
@@ -155,7 +163,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -181,7 +189,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists")
+    "Ensuring Cluster Exists"|"borealis-operator")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -218,6 +226,7 @@ dashboard_seed_rows() {
   local row=""
   for row in \
     "Ensuring Cluster Exists" \
+    "borealis-operator" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -343,6 +352,9 @@ dashboard_row_label() {
     "Ensuring Cluster Exists")
       printf '%s\n' "Ensuring Cluster Exists"
       ;;
+    "borealis-operator")
+      printf '%s\n' "Borealis Operator"
+      ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
       ;;
@@ -455,6 +467,7 @@ dashboard_render_table() {
   dashboard_render_table_header
   for row in \
     "Ensuring Cluster Exists" \
+    "borealis-operator" \
     "webui-frontend" \
     "api-backend" \
     "api-backend > job-scheduler" \
@@ -1539,7 +1552,7 @@ ensure_k3s_api_firewall() {
 
 install_k3s_if_missing() {
   if k3s_cluster_installed; then
-    log_status "Ensuring Cluster Exists" "Installed" "${C_GREEN}"
+    log_status "Ensuring Cluster Exists" "Already Installed" "${C_GREEN}"
     return 1
   fi
 
@@ -1559,7 +1572,11 @@ install_k3s_if_missing() {
 }
 
 ensure_k3s_service_running() {
-  log_status "Ensuring Cluster Exists" "Starting K3s Service" "${C_YELLOW}"
+  if run_privileged systemctl is-active --quiet "${K3S_SERVICE_NAME}.service"; then
+    log_status "Ensuring Cluster Exists" "Service Running" "${C_GREEN}"
+  else
+    log_status "Ensuring Cluster Exists" "Starting K3s Service" "${C_YELLOW}"
+  fi
   if ! run_privileged systemctl enable --now "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
     log_status "Ensuring Cluster Exists" "Service Failed" "${C_RED}"
     die "Failed to enable/start ${K3S_SERVICE_NAME}.service. See ${BUILD_LOG}."
@@ -1716,6 +1733,279 @@ ensure_k3s_cluster_baseline() {
   log_status "Ensuring Cluster Exists" "Ready" "${C_GREEN}"
 }
 
+k3s_ctr() {
+  local k3s_bin
+  k3s_bin="$(k3s_binary_path)" || die "K3s binary missing after install."
+  run_privileged "${k3s_bin}" ctr -n k8s.io "$@"
+}
+
+k3s_containerd_image_present() {
+  local image="$1"
+  local normalized_image="${image}"
+  if [[ "${image}" != */*/* && "${image}" != localhost/* ]]; then
+    normalized_image="docker.io/${image}"
+  fi
+  k3s_ctr images ls -q 2>/dev/null \
+    | awk -v exact="${image}" -v normalized="${normalized_image}" '$0 == exact || $0 == normalized {found=1} END {exit found ? 0 : 1}'
+}
+
+import_borealis_operator_image_into_k3s() {
+  local image="$1"
+  if k3s_containerd_image_present "${image}"; then
+    return 0
+  fi
+  if ! docker image inspect "${image}" >/dev/null 2>&1; then
+    log_status "borealis-operator" "Image Missing" "${C_RED}"
+    die "Borealis operator image ${image} is missing from Docker before K3s import."
+  fi
+  log_status "borealis-operator" "Importing Image" "${C_YELLOW}"
+  local image_archive
+  image_archive="$(mktemp "${DEPLOY_DIR}/borealis-operator-image.XXXXXX.tar")"
+  if ! docker image save "${image}" -o "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${image_archive}"
+    log_status "borealis-operator" "Image Export Failed" "${C_RED}"
+    die "Failed to export ${image} before K3s import. See ${BUILD_LOG}."
+  fi
+  if ! k3s_ctr images import "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${image_archive}"
+    log_status "borealis-operator" "Image Import Failed" "${C_RED}"
+    die "Failed to import ${image} into K3s containerd. See ${BUILD_LOG}."
+  fi
+  rm -f "${image_archive}"
+}
+
+render_borealis_operator_manifest() {
+  local image="$1"
+  local secret="$2"
+  local config_hash="$3"
+  local secret_b64
+  local runtime_uid
+  local runtime_gid
+  secret_b64="$(printf '%s' "${secret}" | base64 -w 0 2>/dev/null || printf '%s' "${secret}" | base64 | tr -d '\n')"
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_OPERATOR_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+type: Opaque
+data:
+  BOREALIS_OPERATOR_SECRET: "${secret_b64}"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+subjects:
+  - kind: ServiceAccount
+    name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+    namespace: ${K3S_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: operator
+    borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: borealis-operator
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: borealis-operator
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: operator
+        borealis.io/stage: operator-bridge
+      annotations:
+        borealis.io/operator-config-hash: "${config_hash}"
+    spec:
+      serviceAccountName: ${BOREALIS_OPERATOR_SERVICE_NAME}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: borealis-operator
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          args: ["borealis-operator"]
+          ports:
+            - name: http
+              containerPort: ${BOREALIS_OPERATOR_PORT}
+              protocol: TCP
+          env:
+            - name: BOREALIS_PROCESS_ROLE
+              value: "borealis-operator"
+            - name: BOREALIS_OPERATOR_LISTEN_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_OPERATOR_LISTEN_PORT
+              value: "${BOREALIS_OPERATOR_PORT}"
+            - name: BOREALIS_OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BOREALIS_OPERATOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ${BOREALIS_OPERATOR_SECRET_NAME}
+                  key: BOREALIS_OPERATOR_SECRET
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 250m
+              memory: 160Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: operator
+    borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${BOREALIS_OPERATOR_PORT}
+      targetPort: http
+      protocol: TCP
+EOF
+}
+
+ensure_borealis_operator_bridge() {
+  local image="${IMAGE_TAGS[borealis-operator]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag borealis-operator)"
+  [[ -n "${image}" ]] || die "Borealis operator image tag unavailable."
+  local secret
+  secret="$(read_env_value BOREALIS_OPERATOR_SECRET)"
+  [[ -n "${secret}" ]] || die "Borealis operator secret unavailable after runtime env render."
+  local config_hash
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" | sha256sum | awk '{print $1}')"
+
+  import_borealis_operator_image_into_k3s "${image}"
+  log_status "borealis-operator" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-operator.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_borealis_operator_manifest "${image}" "${secret}" "${config_hash}" > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "borealis-operator" "Apply Failed" "${C_RED}"
+    die "Failed to apply Borealis operator manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "borealis-operator" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${BOREALIS_OPERATOR_SERVICE_NAME}" --timeout=90s >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Rollout Failed" "${C_RED}"
+    die "Borealis operator rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  borealis-operator\n' "${config_hash}" > "${BOREALIS_OPERATOR_CONFIG_HASH_FILE}"
+  log_status "borealis-operator" "Ready" "${C_GREEN}"
+}
+
 normalize_mode() {
   local raw="${1:-prod}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
@@ -1735,6 +2025,27 @@ read_env_value() {
   local file="${2:-${COMPOSE_ENV}}"
   [[ -f "${file}" ]] || return 0
   awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
+}
+
+borealis_operator_service_cluster_ip() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get service "${BOREALIS_OPERATOR_SERVICE_NAME}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+}
+
+resolve_borealis_operator_base_url() {
+  local override="${BOREALIS_OPERATOR_BASE_URL:-}"
+  if [[ -n "${override}" ]]; then
+    printf '%s\n' "${override}"
+    return 0
+  fi
+  local cluster_ip
+  cluster_ip="$(borealis_operator_service_cluster_ip)"
+  if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
+    printf 'http://%s:%s\n' "${cluster_ip}" "${BOREALIS_OPERATOR_PORT}"
+    return 0
+  fi
+  read_env_value BOREALIS_OPERATOR_BASE_URL
 }
 
 env_key_exists() {
@@ -2886,6 +3197,11 @@ write_compose_env() {
   local postgres_password
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   [[ -n "${postgres_password}" && "${postgres_password}" != "change-me" ]] || postgres_password="$(generate_secret)"
+  local operator_secret
+  operator_secret="$(read_env_value BOREALIS_OPERATOR_SECRET)"
+  [[ -n "${operator_secret}" ]] || operator_secret="$(generate_secret)"
+  local operator_base_url
+  operator_base_url="$(resolve_borealis_operator_base_url)"
 
   local db_name
   local db_user
@@ -2986,6 +3302,11 @@ BOREALIS_ENGINE_NETWORK_MODE=${engine_network_mode}
 BOREALIS_ENGINE_NETWORK_MODE_LABEL=${engine_network_mode_label}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE=${engine_profile}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL=${engine_profile_label}
+BOREALIS_OPERATOR_NAMESPACE=${K3S_NAMESPACE}
+BOREALIS_OPERATOR_SERVICE_NAME=${BOREALIS_OPERATOR_SERVICE_NAME}
+BOREALIS_OPERATOR_PORT=${BOREALIS_OPERATOR_PORT}
+BOREALIS_OPERATOR_BASE_URL=${operator_base_url}
+BOREALIS_OPERATOR_SECRET=${operator_secret}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -3116,6 +3437,7 @@ EOF
 
   cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
   cat >> "${COMPOSE_ENV}" <<EOF
+BOREALIS_OPERATOR_IMAGE=${IMAGE_TAGS[borealis-operator]:-borealis-engine/borealis-operator:local}
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
 BOREALIS_JOB_SCHEDULER_IMAGE=${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}
 BOREALIS_SITE_WORKER_IMAGE=${IMAGE_TAGS[site-worker]:-borealis-engine/site-worker:local}
@@ -3289,7 +3611,7 @@ collect_build_cache_exports() {
 prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
-    api-backend|job-scheduler)
+    api-backend|job-scheduler|borealis-operator)
       if [[ "${GO_API_BACKEND_BINARY_PREPARED}" == "1" ]]; then
         printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
         return 0
@@ -3426,6 +3748,7 @@ build_images() {
     validate_build_role "${service}"
   done
   CURRENT_BUILD_SELECTION=("${selected[@]}")
+  build_section_images "${mode}" "K3s Cluster Services" "${BUILD_SECTION_K3S_CLUSTER[@]}"
   build_section_images "${mode}" "Frontend Services" "${BUILD_SECTION_FRONTEND[@]}"
   build_section_images "${mode}" "Backend Services" "${BUILD_SECTION_BACKEND[@]}"
   build_section_images "${mode}" "Networking Services" "${BUILD_SECTION_NETWORKING[@]}"
@@ -3468,6 +3791,26 @@ prune_stale_site_worker_images() {
     fi
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
       printf '[%s] Failed to remove stale site-worker image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
+    fi
+  done
+}
+
+prune_stale_borealis_operator_images() {
+  local active_tag="${IMAGE_TAGS[borealis-operator]:-}"
+  [[ -n "${active_tag}" ]] || return 0
+  local stale_images=()
+  mapfile -t stale_images < <(
+    docker image ls \
+      --filter "label=io.borealis.service=borealis-operator" \
+      --format '{{.Repository}}:{{.Tag}}' \
+      | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
+  )
+  ((${#stale_images[@]} > 0)) || return 0
+  log_status "Docker Cleanup" "Pruning Stale Operator Images" "${C_YELLOW}"
+  local image=""
+  for image in "${stale_images[@]}"; do
+    if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
+      printf '[%s] Failed to remove stale borealis-operator image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
     fi
   done
 }
@@ -3583,12 +3926,13 @@ prune_engine_docker_storage() {
 
   local cleanup_failed=0
   log_status "Docker Cleanup" "Pruning Inactive Container Images" "${C_YELLOW}"
-  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" >> "${BUILD_LOG}" 2>&1; then
+  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" --filter "label!=io.borealis.service=borealis-operator" >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
     log_status "Docker Cleanup" "Image Prune Failed" "${C_RED}"
   fi
 
   prune_stale_site_worker_images
+  prune_stale_borealis_operator_images
   restore_required_engine_images "${mode}"
 
   if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then
@@ -3751,6 +4095,7 @@ def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool =
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_OPERATOR_IMAGE",
         "BOREALIS_JOB_SCHEDULER_IMAGE",
         "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
@@ -3830,6 +4175,7 @@ def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool =
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_OPERATOR_IMAGE",
         "BOREALIS_JOB_SCHEDULER_IMAGE",
         "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
@@ -3905,6 +4251,7 @@ def env_settings_hash(path: pathlib.Path) -> str:
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_OPERATOR_IMAGE",
         "BOREALIS_JOB_SCHEDULER_IMAGE",
         "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
@@ -4096,6 +4443,7 @@ deploy_engine() {
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
+  ensure_borealis_operator_bridge
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
   log_section "Service Reconciliation"

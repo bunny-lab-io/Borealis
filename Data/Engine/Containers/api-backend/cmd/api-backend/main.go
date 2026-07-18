@@ -67,9 +67,24 @@ func main() {
 		return
 	}
 
+	if borealisOperatorClientHealthcheckMode() {
+		if err := runBorealisOperatorClientHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("borealis-operator client healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if siteWorkerOrchestratorMode() {
 		if err := runSiteWorkerOrchestrator(rootCtx, cfg); err != nil {
 			log.Fatalf("site-worker orchestrator exited: %v", err)
+		}
+		return
+	}
+
+	if borealisOperatorMode() {
+		if err := runBorealisOperator(rootCtx, cfg); err != nil {
+			log.Fatalf("borealis-operator exited: %v", err)
 		}
 		return
 	}
@@ -111,6 +126,7 @@ func main() {
 	registerServerTimeRoutes(mux, auth)
 	registerAgentReleaseChannelRoutes(mux, auth, fallback)
 	registerServerOverviewRoutes(mux, auth, operatorRealtime, fallback)
+	registerBorealisOperatorRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, fallback)
 	registerServerWorkerRoutes(mux, auth, fallback)
 	registerServerActionRoutes(mux, auth, fallback)
@@ -251,6 +267,8 @@ func explicitHealthcheckArgMode() bool {
 		"scheduler-healthcheck",
 		"site-worker-orchestrator-healthcheck",
 		"worker-orchestrator-healthcheck",
+		"borealis-operator-healthcheck",
+		"operator-healthcheck",
 	)
 }
 

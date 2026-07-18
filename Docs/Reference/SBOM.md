@@ -56,6 +56,10 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
 | api-backend | github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) | [MIT](https://github.com/x448/float16/blob/master/LICENSE) |
 | api-backend | golang.org/x/sys v0.30.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| borealis-operator | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
+| borealis-operator | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
+| borealis-operator | Go standard library/runtime (compiled into the Go `api-backend` binary in operator mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| borealis-operator | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | job-scheduler / site-worker-orchestrator | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
 | job-scheduler / site-worker-orchestrator | Bash | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | job-scheduler / site-worker-orchestrator | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
