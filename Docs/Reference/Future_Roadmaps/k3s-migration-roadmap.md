@@ -18,12 +18,12 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 1: K3s Baseline
 
-- [ ] Add K3s detection/install/reconcile phase inside existing `Engine.sh deploy`.
-    - [ ] Install K3s only when missing.
-    - [ ] Verify K3s service, kubeconfig, node readiness, container runtime.
-    - [ ] Disable bundled public ingress features until Borealis owns cutover path.
-    - [ ] Create `borealis` namespace.
-    - [ ] Add managed labels/annotations for ownership and config hashes.
+- [x] Add K3s detection/install/reconcile phase inside existing `Engine.sh deploy`.
+    - [x] Install K3s only when missing.
+    - [x] Verify K3s service, kubeconfig, node readiness, container runtime.
+    - [x] Disable bundled public ingress features until Borealis owns cutover path.
+    - [x] Create `borealis` namespace.
+    - [x] Add managed labels/annotations for ownership and config hashes.
 - [ ] Validation:
     - [ ] Run deploy twice back to back and confirm no cluster teardown or pod churn.
     - [ ] Confirm existing Compose Engine remains healthy.

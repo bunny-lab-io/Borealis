@@ -151,7 +151,7 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
 
     Agent install commands include the local CA bundle automatically (this makes the command larger). Automatically-generated agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator's device or managed trust store before they show the Engine as trusted. Local deployments do not ask for an outer reverse proxy during interactive deployment and assume that there is none.
 
-During deployment, Borealis installs missing dependencies, prepares runtime configuration, builds changed service container images, and starts the Docker Compose stack automatically.
+During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, and starts the Docker Compose stack automatically.
 
 ### Local Redeploy Commands
 After the first install, update and redeploy from the checked-out Borealis repository. Keep the same network mode. Local `Engine.sh` runs use whatever source is already on disk, so pull the current GitHub branch before redeploying when you want newer Engine code.
@@ -183,6 +183,21 @@ After the first install, update and redeploy from the checked-out Borealis repos
 !!! warning
 
     Do not enroll agents with raw IP `--server-url` values. Use the Engine FQDN as the URL. Local-mode agents will automatically attempt to use the generated `--server-ip-fallback` route hint when DNS is unavailable.
+
+### K3s Baseline
+Every full Engine deploy now creates or repairs a single-node K3s baseline before Docker Compose reconciliation. K3s does not host Borealis workloads in this stage; Compose remains authoritative until each workload reaches its own cutover stage.
+
+`Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down the cluster.
+
+Stage 1 keeps the bundled K3s Traefik and ServiceLB components disabled so Borealis Compose Traefik stays the only public ingress. Borealis also installs `borealis-k3s-api-firewall.service`, which applies a host iptables chain for TCP `6443`. The rule allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
+
+Quick checks after a deploy:
+```sh
+sudo systemctl is-active k3s
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get namespace borealis --show-labels
+sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
+```
 
 ### Docker Storage Cleanup
 Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
@@ -255,9 +270,11 @@ After deployment finishes:
     ### Launch mechanics
 
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
-    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, defaults to production, and runs Docker Compose with project name `borealis-engine`.
+    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline, defaults to production, and runs Docker Compose with project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
+    - Stage 1 K3s baseline writes Borealis-owned config to `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, records the config hash in `Engine/Deploy/k3s-baseline.sha256`, installs K3s only when missing, restarts K3s only when the Borealis config changes, and never calls K3s teardown or uninstall helpers.
+    - Stage 1 K3s baseline owns `borealis-k3s-api-firewall.service`, which reapplies the TCP `6443` iptables guard on boot and deploy.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
     - Production (`Engine.sh --network-mode public|local deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the WebUI frontend container, and publishes the app through Traefik.

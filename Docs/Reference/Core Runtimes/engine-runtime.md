@@ -7,6 +7,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - Configuration loader: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (environment-first defaults).
 - API registration: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (Go route registrars).
 - Site-worker orchestrator: Go `site-worker-orchestrator` mode from the shared api-backend binary; it owns Docker write access for site-worker containers and allowlisted Engine service actions.
+- K3s baseline: `Engine.sh` installs and reconciles a single-node K3s control plane for migration bridge work; no Borealis workloads run there until staged cutover.
 - WebUI serving: `webui-frontend` container owns production static serving and dev Vite HMR; the Engine WebUI fallback remains for non-container and test paths.
 - Realtime events: `Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go` and `remote_shell.go` (quick job results, VPN shell bridge).
 - VPN orchestration: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go` and `server_wireguard.go` (WireGuard runtime + tunnel service).
@@ -40,7 +41,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Keep `Data/Engine/` for package shims, unit tests, and container roots.
     - Container source lives under `Data/Engine/Containers/` for Compose, Dockerfiles, build manifests, service entrypoints, and service-owned source trees.
     - `Engine/` is generated runtime state. Do not edit it directly.
-    - Deploy state lives in `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, and `Engine/Deploy/build.log`.
+    - Deploy state lives in `Engine/Deploy/compose.env`, `Engine/Deploy/runtime.env`, `Engine/Deploy/webui-frontend.env`, `Engine/Deploy/image-manifest.json`, `Engine/Deploy/deploy-manifest.json`, `Engine/Deploy/k3s-baseline.sha256`, and `Engine/Deploy/build.log`.
     - Service state lives in `Engine/Services/<role>/` with only directories used by that service.
     - Traefik ACME state lives under `Engine/Services/traefik-edge/state/acme.json` for Externally Accessible deployments. Internal-Only deployments store Borealis local CA material under `Engine/Services/traefik-edge/state/local-ca/` and managed leaf material under `Engine/Services/traefik-edge/state/local-certs/`.
     - Logs live under `Engine/Services/<role>/logs/`; api-backend writes API and domain logs under `Engine/Services/api-backend/logs/`.
@@ -79,6 +80,8 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### Launcher commands
     - `Engine.sh --network-mode public deploy prod`: production WebUI with public DNS and ACME/Let's Encrypt.
     - `Engine.sh --network-mode local deploy prod`: production WebUI with private DNS/VPN reachability and Borealis local CA.
+    - `Engine.sh --network-mode public|local deploy prod|dev`: reconciles Stage 1 K3s baseline before Compose. It writes `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, installs K3s only when the binary and `k3s.service` are missing, restarts K3s only after Borealis-owned config changes, creates the `borealis` namespace, and applies namespace/node labels plus `borealis.io/k3s-config-hash` annotations.
+    - Stage 1 K3s baseline keeps bundled Traefik and ServiceLB disabled and owns `borealis-k3s-api-firewall.service` for TCP `6443` host firewall enforcement.
     - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
     - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
     - `Engine.sh --network-mode public|local --service api-backend restart`: restart API container only.
@@ -173,7 +176,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     Use this section for Engine work (successor to the legacy server). Shared guidance is consolidated in `Docs/Reference/ui-and-notifications.md` and other knowledgebase pages.
 
     #### Scope and runtime paths
-    - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
+    - Staging / launch: `Engine.sh` handles Linux first install, dependency checks, K3s baseline reconcile, Engine container build, and Compose deployment. (`Agent.exe` is Windows Agent-only.)
     - Edit in `Data/Engine` and `Data/Engine/Containers`; use `Engine.sh --network-mode public|local deploy dev|prod` when source changes need to reach the running service.
     - Container redeploys use committed source JSON for `software_icons_overrides.json`, `software_uninstall_overrides.json`, and `software_uninstall_blocklist.json`; commit operator-tested hotloaded rules that must survive image rebuilds.
     - Raw one-line or repo-option `Engine.sh` runs sync first, then re-execs the installed `Engine.sh`; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source and does not update git.

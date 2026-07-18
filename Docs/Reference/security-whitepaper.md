@@ -43,6 +43,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 ### Runtime and Container Boundaries
 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
+- Stage 1 K3s baseline adds a single-node Kubernetes control plane on the Engine host, but Borealis workloads still run under Docker Compose until explicit cutover.
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses an authenticated Unix socket for lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
 - Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
 - Cross-service bind mounts are narrowed to explicit runtime contracts. `job-scheduler` owns site-worker Traefik route files, while dynamic `site-worker-*` containers do not mount Traefik config and cannot write those route files. WebUI source mounts are read-only inside the container.
@@ -112,6 +113,18 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 - `remote-desktop-guacd` runs non-root, has no host bind mounts, binds guacd to `127.0.0.1`, and does not mount the Docker socket.
 - WebUI source mounts are read-only inside the WebUI container; dev-mode edits happen from the host runtime source directory, while Vite cache writes stay under `/tmp`.
 - Cross-service mounts use explicit path contracts. `job-scheduler` is the single writer for site-worker Traefik route files; site workers keep database state but cannot write route files.
+
+### K3s Baseline Security
+
+Stage 1 K3s is a host-level control-plane baseline, not a workload cutover. It gives Borealis a future bridge target while keeping Compose authoritative for Engine services.
+
+- `Engine.sh` is the only Stage 1 K3s writer. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access.
+- Borealis writes its K3s config as `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml` and records the desired hash in `Engine/Deploy/k3s-baseline.sha256`.
+- Bundled K3s Traefik and ServiceLB stay disabled so the existing Borealis Compose Traefik edge remains the only ingress owner.
+- K3s kubeconfig is rendered root-only by default. Deploy fails if the kubeconfig is group-readable or world-readable.
+- `borealis-k3s-api-firewall.service` installs a host iptables chain for TCP `6443`, allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
+- K3s Secret encryption at rest is enabled for Kubernetes objects, but Aegis remains the Borealis security model for protected operator, credential, token, and signing material.
+- The `borealis` namespace and K3s nodes receive Borealis labels plus `borealis.io/k3s-config-hash` annotations for ownership and drift review.
 
 ### Operator Authentication
 
@@ -199,6 +212,7 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 
 - Keep Engine host patched, backed up, and firewalled.
 - Expose only required public ports: HTTP/HTTPS for Traefik and UDP WireGuard for remote operations.
+- Keep K3s API TCP `6443` protected by the Borealis firewall rule unless a later multi-node design explicitly opens a narrow node-to-node path.
 - Use a real FQDN for agents and browsers. Externally Accessible deployments need public DNS and public CA certificates. Internal-Only deployments should use private DNS, Borealis local CA distribution to agents, and browser trust store installation for operators. Agents without private DNS can use the generated IP fallback while preserving FQDN TLS validation.
 - Keep Aegis Cipher recoverable by trusted administrators.
 - Require MFA for operators and prefer passkeys where possible.
@@ -283,6 +297,7 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
     - WireGuard control socket: `Data/Engine/Containers/wireguard-tunnel/control_server.py`.
     - WireGuard tunnel container boundary: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/wireguard-tunnel/Dockerfile`.
     - Engine deployment identity, ownership repair, profile caps, and Compose env rendering: `Engine.sh`.
+    - K3s baseline reconcile, config hash, API firewall unit, namespace labels, and node annotations: `Engine.sh`.
     - Static container hardening and service mount contracts: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/compose.env.example`.
     - Container policy validation: `Data/Engine/Containers/check-compose-policy.py` and `.github/workflows/engine-container-policy.yml`.
     - Site-worker orchestrator runtime and Docker command construction: `Data/Engine/Containers/api-backend/cmd/api-backend/site_worker_orchestrator.go`.
@@ -293,6 +308,8 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
     ### Key material locations
 
     - Embedded edge ACME state: `Engine/Services/traefik-edge/state/acme.json`.
+    - Stage 1 K3s config hash: `Engine/Deploy/k3s-baseline.sha256`.
+    - Stage 1 K3s kubeconfig: `/etc/rancher/k3s/k3s.yaml`.
     - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.
     - Operator session secret: `Engine/Services/api-backend/secrets/engine_secret.txt`.
     - Script signing keys: `Engine/Services/api-backend/secrets/Certificates/Code-Signing/borealis-script-ed25519.key` and `.pub`.

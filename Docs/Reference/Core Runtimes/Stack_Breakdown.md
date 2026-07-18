@@ -6,6 +6,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 - Linux Engine only.
 - Docker Engine plus Docker Compose plugin.
 - No Docker Desktop.
+- Single-node K3s baseline is reconciled by `Engine.sh`; Docker Compose remains workload source of truth until explicit workload cutover.
 - Compose project name: `borealis-engine`.
 - Compose source of truth: `Data/Engine/Containers/compose.yaml`.
 - Runtime state: `Engine/`.
@@ -179,22 +180,23 @@ Borealis uses host bind mounts for runtime ownership clarity, not named volumes 
 1. Parse launch options.
 2. If repo/release/branch options were supplied, sync the repository and re-exec installed `Engine.sh`.
 3. Install or verify Engine dependencies.
-4. Check for host PostgreSQL conflict on `127.0.0.1:5432`.
-5. Create or repair `borealis-engine` runtime identity, then create service runtime tree under `Engine/Services/`.
-6. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
-7. Prune empty legacy runtime paths.
-8. Resolve Engine FQDN, network mode, and certificate mode. Public resolves ACME email; Local generates or renews Borealis local CA/leaf certificate material.
-9. Detect sizing profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
-10. Compute service input hashes from each service's declared source, Dockerfile, build context, target mode, and dependency inputs.
-11. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
-12. Write `Engine/Deploy/image-manifest.json`.
-13. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
-14. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
-15. Skip Compose if nothing changed and all containers are running.
-16. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
-17. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
-18. Write `Engine/Deploy/deploy-manifest.json`.
-19. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports older than 7 days after successful reconciliation.
+4. Reconcile single-node K3s baseline. Install K3s only when missing, apply Borealis K3s config, apply IPv4 TCP `6443` firewall guard, verify service/kubeconfig/node/container-runtime state, disable bundled Traefik/ServiceLB, and create the `borealis` namespace.
+5. Check for host PostgreSQL conflict on `127.0.0.1:5432`.
+6. Create or repair `borealis-engine` runtime identity, then create service runtime tree under `Engine/Services/`.
+7. Seed runtime WebUI source under `Engine/Services/webui-frontend/data/web-interface/` when missing.
+8. Prune empty legacy runtime paths.
+9. Resolve Engine FQDN, network mode, and certificate mode. Public resolves ACME email; Local generates or renews Borealis local CA/leaf certificate material.
+10. Detect sizing profile from vCPU/RAM and render `Engine/Deploy/runtime.env` for shared container runtime settings, mode-scoped `webui-frontend.env`, and `Engine/Deploy/compose.env` for Compose interpolation plus profile-managed DB/site-worker tuning.
+11. Compute service input hashes from each service's declared source, Dockerfile, build context, target mode, and dependency inputs.
+12. Build changed local images as `borealis-engine/<service>:sha-<hash>`.
+13. Write `Engine/Deploy/image-manifest.json`.
+14. Re-render `compose.env` with resolved image tags while keeping service runtime env files free of image tag variables.
+15. Compare compose/env/image hashes against `Engine/Deploy/deploy-manifest.json`.
+16. Skip Compose if nothing changed and all containers are running.
+17. Run scoped Compose `up -d --no-deps --no-build <service...>` when only service images changed or when switching prod/dev WebUI mode.
+18. Run full Compose `up -d --no-build` when compose config, shared runtime env, or container state requires it.
+19. Write `Engine/Deploy/deploy-manifest.json`.
+20. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports older than 7 days after successful reconciliation.
 
 Build output follows `Engine.sh` service domains. `docker-proxy` is an external image and is not locally built.
 | Domain | Item |
@@ -208,6 +210,7 @@ Build output follows `Engine.sh` service domains. `docker-proxy` is an external 
 | Networking | Traefik Reverse Proxy |
 | Networking | WireGuard Server |
 | Database | PostgreSQL DB |
+| Reconciliation | K3s Baseline |
 
 Build domains are not the same as runtime dependency order.
 
@@ -493,6 +496,15 @@ sudo ss -lunp | grep ':30000'
 sudo wg show borealis-wg
 ```
 
+K3s baseline:
+```sh
+sudo systemctl is-active k3s
+sudo systemctl is-active borealis-k3s-api-firewall
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get namespace borealis --show-labels
+sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
+```
+
 ## Logs
 Container build log:
 ```text
@@ -564,6 +576,7 @@ bash Engine.sh --network-mode local deploy prod
 
 ## Operational Notes
 - `Engine.sh --network-mode public|local deploy` is idempotent for unchanged inputs and skips Compose when deploy manifest, env, image hashes, and running containers already match.
+- K3s baseline reconcile is idempotent for unchanged config: deploys do not reinstall K3s, restart K3s, delete cluster state, rotate secrets, or delete PVCs unless later migration stages explicitly add a controlled workflow.
 - Unchanged image hashes skip Docker builds.
 - Service image changes use scoped Compose `up -d --no-deps --no-build <service...>` when compose config and non-image env settings are unchanged.
 - Service-specific `rebuild` uses `--no-deps --no-build`, so dependent services are not intentionally restarted and Compose does not rebuild images Borealis already built.
@@ -633,6 +646,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     Engine/Deploy/webui-frontend.env
     Engine/Deploy/image-manifest.json
     Engine/Deploy/deploy-manifest.json
+    Engine/Deploy/k3s-baseline.sha256
     Engine/Deploy/build.log
     ```
 
@@ -689,6 +703,8 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     - service list
     - deploy timestamp
 
+    `Engine/Deploy/k3s-baseline.sha256` records the Borealis-owned K3s config hash for `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`. Kubernetes namespace and node annotations carry the same hash under `borealis.io/k3s-config-hash`.
+
     Use these files to confirm whether source changes are actually deployed.
 
     - Edit Docker/Compose source under `Data/Engine/Containers/`.
@@ -700,5 +716,13 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     bash -n Engine.sh
     docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
     python3 Data/Engine/Containers/check-compose-policy.py
+    ```
+    - Validate Stage 1 K3s runtime only on a host where installing/reconciling K3s is acceptable:
+    ```sh
+    sudo bash Engine.sh --network-mode local deploy prod
+    sudo bash Engine.sh --network-mode local deploy prod
+    sudo systemctl is-active k3s
+    sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+    sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
     ```
     - Update this page when adding a service, port, volume, service action, or load-order dependency.

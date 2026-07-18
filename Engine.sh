@@ -27,6 +27,22 @@ WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
+K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
+K3S_SERVICE_NAME="${BOREALIS_K3S_SERVICE_NAME:-k3s}"
+K3S_CONFIG_DIR="${BOREALIS_K3S_CONFIG_DIR:-/etc/rancher/k3s/config.yaml.d}"
+K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.yaml}"
+K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
+K3S_FIREWALL_SCRIPT="${BOREALIS_K3S_FIREWALL_SCRIPT:-/usr/local/lib/borealis/k3s-api-firewall.sh}"
+K3S_FIREWALL_SERVICE="${BOREALIS_K3S_FIREWALL_SERVICE:-borealis-k3s-api-firewall.service}"
+K3S_API_PORT="${BOREALIS_K3S_API_PORT:-6443}"
+K3S_CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
+K3S_SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
+K3S_KUBECONFIG_MODE="${BOREALIS_K3S_KUBECONFIG_MODE:-0600}"
+K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
+K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
+K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
+K3S_BASELINE_VERSION="1"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -139,7 +155,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"K3s Baseline"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -162,7 +178,7 @@ dashboard_row_section() {
     "postgres-db"|"Profile")
       printf '%s\n' "Database"
       ;;
-    "Docker Compose")
+    "K3s Baseline"|"Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
     "Docker Cleanup")
@@ -208,6 +224,7 @@ dashboard_seed_rows() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
+    "K3s Baseline" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -319,6 +336,9 @@ dashboard_row_label() {
       ;;
     "postgres-db")
       printf '%s\n' "PostgreSQL DB"
+      ;;
+    "K3s Baseline")
+      printf '%s\n' "K3s Baseline"
       ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
@@ -441,6 +461,7 @@ dashboard_render_table() {
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
+    "K3s Baseline" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -1277,6 +1298,420 @@ ensure_engine_dependencies() {
 
   require_python
   require_docker
+}
+
+validate_k3s_baseline_settings() {
+  [[ "${K3S_API_PORT}" =~ ^[0-9]+$ && "${K3S_API_PORT}" -ge 1 && "${K3S_API_PORT}" -le 65535 ]] \
+    || die "BOREALIS_K3S_API_PORT must be a numeric TCP port from 1 through 65535."
+  [[ "${K3S_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_NAMESPACE must be a valid Kubernetes namespace name."
+  [[ "${K3S_KUBECONFIG_MODE}" =~ ^0?[0-7]{3}$ ]] \
+    || die "BOREALIS_K3S_KUBECONFIG_MODE must be an octal file mode like 0600."
+  [[ "${K3S_CLUSTER_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
+    || die "BOREALIS_K3S_CLUSTER_CIDR must be an IPv4 CIDR, for example 10.42.0.0/16."
+  [[ "${K3S_SERVICE_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
+    || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
+}
+
+ensure_systemctl_for_k3s() {
+  command_exists systemctl || die "Borealis-managed K3s baseline currently requires systemd/systemctl."
+}
+
+ensure_k3s_install_dependencies() {
+  local needs_install=0
+  command_exists curl || needs_install=1
+  command_exists iptables || needs_install=1
+  [[ "${needs_install}" -eq 1 ]] || return 0
+
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt-get update -qq
+      run_privileged apt-get install -y ca-certificates curl iptables
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y ca-certificates curl iptables
+      else
+        run_privileged yum install -y ca-certificates curl iptables
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm ca-certificates curl iptables
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install ca-certificates curl iptables
+      ;;
+    *)
+      die "Unsupported distro '${DISTRO_ID}'. Install curl, ca-certificates, and iptables before K3s baseline reconcile."
+      ;;
+  esac
+}
+
+k3s_binary_path() {
+  if command_exists k3s; then
+    command -v k3s
+    return 0
+  fi
+  if [[ -x /usr/local/bin/k3s ]]; then
+    printf '%s\n' "/usr/local/bin/k3s"
+    return 0
+  fi
+  if [[ -x /usr/bin/k3s ]]; then
+    printf '%s\n' "/usr/bin/k3s"
+    return 0
+  fi
+  return 1
+}
+
+k3s_service_unit_exists() {
+  ensure_systemctl_for_k3s
+  if systemctl list-unit-files "${K3S_SERVICE_NAME}.service" --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${K3S_SERVICE_NAME}.service"; then
+    return 0
+  fi
+  [[ -f "/etc/systemd/system/${K3S_SERVICE_NAME}.service" \
+    || -f "/lib/systemd/system/${K3S_SERVICE_NAME}.service" \
+    || -f "/usr/lib/systemd/system/${K3S_SERVICE_NAME}.service" ]]
+}
+
+k3s_cluster_installed() {
+  k3s_binary_path >/dev/null 2>&1 || return 1
+  k3s_service_unit_exists
+}
+
+k3s_kubectl() {
+  local k3s_bin
+  k3s_bin="$(k3s_binary_path)" || die "K3s binary missing after install."
+  run_privileged "${k3s_bin}" kubectl --kubeconfig "${K3S_KUBECONFIG}" "$@"
+}
+
+render_k3s_borealis_config() {
+  cat <<EOF
+# Borealis-managed K3s baseline. Engine.sh owns this file.
+write-kubeconfig-mode: "${K3S_KUBECONFIG_MODE}"
+cluster-cidr: "${K3S_CLUSTER_CIDR}"
+service-cidr: "${K3S_SERVICE_CIDR}"
+disable:
+  - "traefik"
+  - "servicelb"
+secrets-encryption: true
+node-label:
+  - "app.kubernetes.io/part-of=borealis"
+  - "borealis.io/engine-node=true"
+EOF
+}
+
+render_k3s_api_firewall_script() {
+  cat <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+CHAIN="BOREALIS-K3S-API"
+PORT="${BOREALIS_K3S_API_PORT:-6443}"
+CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
+SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
+
+iptables -N "${CHAIN}" 2>/dev/null || true
+iptables -F "${CHAIN}"
+iptables -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A "${CHAIN}" -i lo -j ACCEPT
+iptables -A "${CHAIN}" -s 127.0.0.0/8 -j ACCEPT
+for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
+  iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
+  iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
+done
+iptables -A "${CHAIN}" -j DROP
+
+if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
+  iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"
+fi
+EOF
+}
+
+render_k3s_api_firewall_unit() {
+  cat <<EOF
+[Unit]
+Description=Borealis K3s API firewall
+Wants=network-online.target
+After=network-online.target
+Before=${K3S_SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+Environment=BOREALIS_K3S_API_PORT=${K3S_API_PORT}
+Environment=BOREALIS_K3S_CLUSTER_CIDR=${K3S_CLUSTER_CIDR}
+Environment=BOREALIS_K3S_SERVICE_CIDR=${K3S_SERVICE_CIDR}
+ExecStart=${K3S_FIREWALL_SCRIPT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+install_temp_file_if_changed() {
+  local temp_file="$1"
+  local target="$2"
+  local mode="$3"
+  local desired_hash
+  local current_hash=""
+  desired_hash="$(sha256sum "${temp_file}" | awk '{print $1}')"
+  if run_privileged test -f "${target}"; then
+    current_hash="$(run_privileged sha256sum "${target}" 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  if [[ "${current_hash}" == "${desired_hash}" ]]; then
+    return 1
+  fi
+  run_privileged install -m "${mode}" -D "${temp_file}" "${target}"
+  return 0
+}
+
+write_k3s_borealis_config() {
+  mkdir -p "${DEPLOY_DIR}"
+  local temp_file
+  local desired_hash
+  temp_file="$(mktemp)"
+  render_k3s_borealis_config > "${temp_file}"
+  desired_hash="$(sha256sum "${temp_file}" | awk '{print $1}')"
+
+  local changed=0
+  if install_temp_file_if_changed "${temp_file}" "${K3S_BOREALIS_CONFIG}" 0644; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+  printf '%s  %s\n' "${desired_hash}" "${K3S_BOREALIS_CONFIG}" > "${K3S_CONFIG_HASH_FILE}"
+  if [[ "${changed}" -eq 1 ]]; then
+    printf '[%s] K3s Borealis config reconciled as %s\n' "$(date +%FT%T)" "${K3S_BOREALIS_CONFIG}" >> "${BUILD_LOG}"
+    return 0
+  fi
+  printf '[%s] K3s Borealis config unchanged as %s\n' "$(date +%FT%T)" "${K3S_BOREALIS_CONFIG}" >> "${BUILD_LOG}"
+  return 1
+}
+
+write_k3s_api_firewall_files() {
+  local changed=0
+  local temp_file
+
+  temp_file="$(mktemp)"
+  render_k3s_api_firewall_script > "${temp_file}"
+  if install_temp_file_if_changed "${temp_file}" "${K3S_FIREWALL_SCRIPT}" 0755; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+
+  temp_file="$(mktemp)"
+  render_k3s_api_firewall_unit > "${temp_file}"
+  if install_temp_file_if_changed "${temp_file}" "/etc/systemd/system/${K3S_FIREWALL_SERVICE}" 0644; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+
+  if [[ "${changed}" -eq 1 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+ensure_k3s_api_firewall() {
+  log_status "K3s Baseline" "Reconciling API Firewall" "${C_YELLOW}"
+  if write_k3s_api_firewall_files; then
+    run_privileged systemctl daemon-reload
+  else
+    run_privileged systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  if ! run_privileged systemctl enable "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    die "Failed to enable ${K3S_FIREWALL_SERVICE}. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged systemctl restart "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    die "Failed to apply K3s API firewall. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged iptables -C INPUT -p tcp --dport "${K3S_API_PORT}" -j BOREALIS-K3S-API >/dev/null 2>&1; then
+    log_status "K3s Baseline" "Firewall Failed" "${C_RED}"
+    die "K3s API firewall rule missing after reconcile."
+  fi
+}
+
+install_k3s_if_missing() {
+  if k3s_cluster_installed; then
+    log_status "K3s Baseline" "Installed" "${C_GREEN}"
+    return 1
+  fi
+
+  log_status "K3s Baseline" "Installing K3s" "${C_YELLOW}"
+  local install_env=(INSTALL_K3S_EXEC="server")
+  if [[ -n "${K3S_INSTALL_VERSION}" ]]; then
+    install_env+=(INSTALL_K3S_VERSION="${K3S_INSTALL_VERSION}")
+  else
+    install_env+=(INSTALL_K3S_CHANNEL="${K3S_INSTALL_CHANNEL}")
+  fi
+  if ! run_privileged env "${install_env[@]}" bash -c 'set -o pipefail; curl -sfL "$1" | sh -' bash "${K3S_INSTALL_SCRIPT_URL}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "K3s Baseline" "Install Failed" "${C_RED}"
+    die "K3s install failed. See ${BUILD_LOG}."
+  fi
+  log_status "K3s Baseline" "Installed" "${C_GREEN}"
+  return 0
+}
+
+ensure_k3s_service_running() {
+  log_status "K3s Baseline" "Starting K3s Service" "${C_YELLOW}"
+  if ! run_privileged systemctl enable --now "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
+    log_status "K3s Baseline" "Service Failed" "${C_RED}"
+    die "Failed to enable/start ${K3S_SERVICE_NAME}.service. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged systemctl is-active --quiet "${K3S_SERVICE_NAME}.service"; then
+    log_status "K3s Baseline" "Service Failed" "${C_RED}"
+    die "${K3S_SERVICE_NAME}.service is not active after reconcile."
+  fi
+}
+
+wait_for_k3s_nodes_ready() {
+  log_status "K3s Baseline" "Waiting For Node Readiness" "${C_YELLOW}"
+  local attempt
+  local output=""
+  for attempt in {1..90}; do
+    output="$(k3s_kubectl get nodes --no-headers 2>>"${BUILD_LOG}" || true)"
+    if [[ -n "${output}" ]] && awk 'NF < 2 || $2 !~ /(^|,)Ready(,|$)/ {bad=1} END {exit bad}' <<< "${output}"; then
+      return 0
+    fi
+    sleep 2
+  done
+  printf '[%s] K3s node readiness timed out. Last output:\n%s\n' "$(date +%FT%T)" "${output}" >> "${BUILD_LOG}"
+  log_status "K3s Baseline" "Node Not Ready" "${C_RED}"
+  die "K3s node readiness timed out. See ${BUILD_LOG}."
+}
+
+verify_k3s_kubeconfig() {
+  if ! run_privileged test -s "${K3S_KUBECONFIG}"; then
+    log_status "K3s Baseline" "Kubeconfig Missing" "${C_RED}"
+    die "K3s kubeconfig missing at ${K3S_KUBECONFIG}."
+  fi
+  local mode
+  mode="$(run_privileged stat -c '%a' "${K3S_KUBECONFIG}" 2>/dev/null || true)"
+  [[ -n "${mode}" ]] || die "Unable to read K3s kubeconfig mode at ${K3S_KUBECONFIG}."
+  local group_digit
+  local other_digit
+  group_digit="${mode: -2:1}"
+  other_digit="${mode: -1}"
+  if [[ "${group_digit}" != "0" || "${other_digit}" != "0" ]]; then
+    log_status "K3s Baseline" "Kubeconfig Too Open" "${C_RED}"
+    die "K3s kubeconfig ${K3S_KUBECONFIG} must not be group/world readable; current mode is ${mode}."
+  fi
+}
+
+verify_k3s_container_runtime() {
+  local runtimes
+  runtimes="$(k3s_kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.containerRuntimeVersion}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)"
+  if [[ -z "${runtimes}" ]]; then
+    log_status "K3s Baseline" "Runtime Unknown" "${C_RED}"
+    die "K3s node container runtime is not reported."
+  fi
+  if ! grep -Eq '^containerd://' <<< "${runtimes}"; then
+    log_status "K3s Baseline" "Runtime Unexpected" "${C_RED}"
+    die "K3s node container runtime must be containerd in Stage 1; saw: ${runtimes}"
+  fi
+}
+
+verify_k3s_packaged_ingress_disabled() {
+  log_status "K3s Baseline" "Verifying Ingress Disabled" "${C_YELLOW}"
+  local attempt
+  local traefik_deployment
+  local traefik_service
+  for attempt in {1..30}; do
+    traefik_deployment="$(k3s_kubectl -n kube-system get deployment traefik --ignore-not-found --no-headers 2>>"${BUILD_LOG}" || true)"
+    traefik_service="$(k3s_kubectl -n kube-system get service traefik --ignore-not-found --no-headers 2>>"${BUILD_LOG}" || true)"
+    if [[ -z "${traefik_deployment}" && -z "${traefik_service}" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "K3s Baseline" "Bundled Ingress Active" "${C_RED}"
+  die "K3s bundled Traefik remains active; Borealis keeps ingress disabled until cutover."
+}
+
+ensure_k3s_namespace() {
+  local config_hash
+  config_hash="$(awk '{print $1; exit}' "${K3S_CONFIG_HASH_FILE}" 2>/dev/null || true)"
+  [[ -n "${config_hash}" ]] || config_hash="unknown"
+
+  log_status "K3s Baseline" "Reconciling Namespace" "${C_YELLOW}"
+  if ! k3s_kubectl get namespace "${K3S_NAMESPACE}" >/dev/null 2>&1; then
+    k3s_kubectl create namespace "${K3S_NAMESPACE}" >> "${BUILD_LOG}" 2>&1
+  fi
+  k3s_kubectl label namespace "${K3S_NAMESPACE}" \
+    app.kubernetes.io/name=borealis \
+    app.kubernetes.io/part-of=borealis \
+    app.kubernetes.io/managed-by=Engine.sh \
+    borealis.io/stage=k3s-baseline \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+  k3s_kubectl annotate namespace "${K3S_NAMESPACE}" \
+    borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
+    borealis.io/k3s-config-hash="${config_hash}" \
+    borealis.io/k3s-config-path="${K3S_BOREALIS_CONFIG}" \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+}
+
+label_k3s_nodes() {
+  local config_hash
+  local node_ref
+  local -a k3s_node_refs=()
+  config_hash="$(awk '{print $1; exit}' "${K3S_CONFIG_HASH_FILE}" 2>/dev/null || true)"
+  [[ -n "${config_hash}" ]] || config_hash="unknown"
+
+  mapfile -t k3s_node_refs < <(k3s_kubectl get nodes -o name 2>>"${BUILD_LOG}" || true)
+  ((${#k3s_node_refs[@]} > 0)) || die "K3s reported no nodes after readiness check."
+  for node_ref in "${k3s_node_refs[@]}"; do
+    k3s_kubectl label "${node_ref}" \
+      app.kubernetes.io/part-of=borealis \
+      borealis.io/engine-node=true \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    k3s_kubectl annotate "${node_ref}" \
+      borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
+      borealis.io/k3s-config-hash="${config_hash}" \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+  done
+}
+
+ensure_k3s_cluster_baseline() {
+  log_section "K3s Baseline"
+  validate_k3s_baseline_settings
+  ensure_systemctl_for_k3s
+  ensure_k3s_install_dependencies
+
+  local config_changed=0
+  if write_k3s_borealis_config; then
+    config_changed=1
+    log_status "K3s Baseline" "Config Updated" "${C_YELLOW}"
+  else
+    log_status "K3s Baseline" "Config Up-to-Date" "${C_GREEN}"
+  fi
+
+  ensure_k3s_api_firewall
+
+  local installed_now=0
+  if install_k3s_if_missing; then
+    installed_now=1
+  fi
+
+  if [[ "${installed_now}" -eq 0 && "${config_changed}" -eq 1 ]]; then
+    log_status "K3s Baseline" "Restarting For Config" "${C_YELLOW}"
+    if ! run_privileged systemctl restart "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
+      log_status "K3s Baseline" "Restart Failed" "${C_RED}"
+      die "Failed to restart ${K3S_SERVICE_NAME}.service after config reconcile. See ${BUILD_LOG}."
+    fi
+  fi
+
+  ensure_k3s_service_running
+  verify_k3s_kubeconfig
+  wait_for_k3s_nodes_ready
+  verify_k3s_container_runtime
+  verify_k3s_packaged_ingress_disabled
+  ensure_k3s_namespace
+  label_k3s_nodes
+  log_status "K3s Baseline" "Ready" "${C_GREEN}"
 }
 
 normalize_mode() {
@@ -3653,6 +4088,7 @@ deploy_engine() {
   network_mode="$(resolve_engine_network_mode)"
   log_deploy_header "${mode}" "${network_mode}"
   ensure_engine_dependencies
+  ensure_k3s_cluster_baseline
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   build_images "${mode}"
