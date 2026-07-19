@@ -102,6 +102,8 @@ func TestBorealisOperatorClusterSummaryUsesReadOnlyNamespaceAPI(t *testing.T) {
 			writeJSON(w, http.StatusOK, map[string]any{"items": []any{
 				map[string]any{"metadata": map[string]any{"name": "borealis-operator"}},
 			}})
+		case "/apis/metrics.k8s.io/v1beta1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
 		default:
 			t.Fatalf("unexpected Kubernetes path %s", r.URL.Path)
 		}
@@ -406,6 +408,112 @@ func TestBorealisOperatorLaunchSiteWorkerKeepsFullUUIDAsWorkerIdentity(t *testin
 	labels := nestedMap(metadata, "labels")
 	if cleanText(labels["borealis.io/worker-guid"]) != workerGUID {
 		t.Fatalf("expected worker guid label to retain identity: %#v", labels)
+	}
+}
+
+func TestBorealisOperatorListSiteWorkersAttachesKubernetesMetrics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":              "site-worker-bunny-lab",
+							"namespace":         "borealis",
+							"creationTimestamp": "2026-07-19T03:00:00Z",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/workload":         "site-worker",
+								"borealis.io/worker-guid":      "worker-1",
+								"borealis.io/site-id":          "7",
+								"borealis.io/resource-profile": "standard",
+							},
+							"annotations": map[string]any{
+								"borealis.io/image-ref":           "borealis-engine/site-worker:sha-cccccccccccc",
+								"borealis.io/remote-ops-port":     "56001",
+								"borealis.io/remote-desktop-port": "61001",
+								"borealis.io/remote-ops-host":     "127.0.0.1",
+								"borealis.io/network-mode":        "host-loopback",
+							},
+						},
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "site-worker",
+									"image": "borealis-engine/site-worker:sha-cccccccccccc",
+									"resources": map[string]any{
+										"limits": map[string]any{
+											"cpu":    "1000m",
+											"memory": "256Mi",
+										},
+									},
+								},
+							},
+						},
+						"status": map[string]any{
+							"phase":     "Running",
+							"startTime": "2026-07-19T03:00:00Z",
+							"conditions": []any{
+								map[string]any{"type": "Ready", "status": "True"},
+							},
+						},
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/apis/metrics.k8s.io/v1beta1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata":  map[string]any{"name": "site-worker-bunny-lab", "namespace": "borealis"},
+						"timestamp": "2026-07-19T03:01:00Z",
+						"window":    "15s",
+						"containers": []any{
+							map[string]any{
+								"name": "site-worker",
+								"usage": map[string]any{
+									"cpu":    "125m",
+									"memory": "64Mi",
+								},
+							},
+						},
+					},
+				},
+			})
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	operator := borealisOperatorTestClient(server)
+	workers, err := operator.listSiteWorkers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workers) != 1 {
+		t.Fatalf("expected one worker, got %#v", workers)
+	}
+	stats := schedulerAnyMap(workers[0]["docker_stats"])
+	if got := stats["source"]; got != "metrics.k8s.io" {
+		t.Fatalf("expected metrics source, got %#v", stats)
+	}
+	if got := stats["cpu_percent"]; got != 12.5 {
+		t.Fatalf("expected cpu percent 12.5, got %#v", stats)
+	}
+	if got := stats["memory_usage_bytes"]; got != int64(64*1024*1024) {
+		t.Fatalf("expected memory usage, got %#v", stats)
+	}
+	if got := stats["memory_limit_bytes"]; got != int64(256*1024*1024) {
+		t.Fatalf("expected memory limit, got %#v", stats)
+	}
+	if got := stats["memory_percent"]; got != float64(25) {
+		t.Fatalf("expected memory percent 25, got %#v", stats)
+	}
+	metrics := schedulerAnyMap(workers[0]["kubernetes_metrics"])
+	if got := metrics["cpu_usage_millicores"]; got != float64(125) {
+		t.Fatalf("expected millicore summary, got %#v", metrics)
 	}
 }
 

@@ -335,6 +335,19 @@ function formatPercent(value) {
   return `${num.toFixed(num >= 10 ? 0 : 1)}%`;
 }
 
+function workerResourceSummary(row) {
+  const stats = row?.docker_stats;
+  if (!stats || typeof stats !== "object" || !Object.keys(stats).length) return "";
+  const source = String(stats?.source || row?.container_metrics_source || "").trim();
+  const sourceLabel = source === "metrics.k8s.io" ? "K3s" : "Docker";
+  const memoryUsage = Number(stats?.memory_usage_bytes || 0);
+  const memoryLimit = Number(stats?.memory_limit_bytes || 0);
+  const memoryLabel = memoryLimit > 0
+    ? `${formatBytes(memoryUsage)} / ${formatBytes(memoryLimit)}`
+    : formatBytes(memoryUsage);
+  return `${sourceLabel} CPU ${formatPercent(stats?.cpu_percent)} · RAM ${memoryLabel}`;
+}
+
 function formatDateTime(value) {
   const raw = String(value || "").trim();
   if (!raw) return "Unavailable";
@@ -1569,10 +1582,12 @@ export default function ServerInfo() {
       const isManager = Number(row?.site_id || 0) <= 0;
       const firstLink = links.find((link) => String(link?.path || "").trim());
       const taskLabels = links.map((link) => String(link?.label || link?.kind || "").trim()).filter(Boolean).join(", ");
+      const resourceSummary = workerResourceSummary(row);
       const detailParts = [
         isManager ? "Manager" : `Site ${row?.site_id || "—"}`,
         lanes,
         taskLabels,
+        resourceSummary,
         `claimed ${Number(row?.claimed_count || 0)}`,
       ].filter(Boolean);
       return {

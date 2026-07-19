@@ -1111,6 +1111,8 @@ export function siteWorkerContainerRefreshValue(row) {
     row?.site_worker_container_id,
     row?.site_worker_status,
     row?.site_worker_resource_history_key,
+    row?.raw_site_worker?.container_metrics_source,
+    stats?.source,
     latest?.sampledAtMs,
     stats?.read_at,
     stats?.cpu_percent,
@@ -1524,6 +1526,9 @@ function SiteWorkerStatsCell(params) {
       </Typography>
     );
   }
+  const source = String(stats?.source || params?.data?.raw_site_worker?.container_metrics_source || "").trim();
+  const kubernetesStats = source === "metrics.k8s.io";
+  const sourceLabel = kubernetesStats ? "K3s Metrics Server" : "Docker";
   const history = Array.isArray(params?.data?.site_worker_resource_history) ? params.data.site_worker_resource_history : [];
   const fallbackSample = {
     cpuPercent: Math.max(0, Number(stats.cpu_percent || 0)),
@@ -1552,7 +1557,7 @@ function SiteWorkerStatsCell(params) {
       label: "CPU",
       value: formatDockerStatPercent(latest.cpuPercent),
       scaleLabel: formatDockerStatPercent(cpuMax),
-      tooltip: `Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
+      tooltip: `${sourceLabel} | Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
       color: "#7dd3fc",
       valueKey: "cpuPercent",
       maxValue: cpuMax,
@@ -1562,40 +1567,44 @@ function SiteWorkerStatsCell(params) {
       value: formatDockerStatBytes(latest.memoryUsageBytes),
       scaleLabel: latest.memoryLimitBytes > 0 ? formatDockerStatBytes(latest.memoryLimitBytes) : formatDockerStatBytes(ramMax),
       tooltip: latest.memoryLimitBytes > 0
-        ? `${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
-        : `${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
+        ? `${sourceLabel} | ${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
+        : `${sourceLabel} | ${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
       color: "#c084fc",
       valueKey: "memoryUsageBytes",
       maxValue: ramMax,
     },
-    {
-      label: "NET",
-      value: formatDockerStatRate(latest.netTotalBps),
-      scaleLabel: formatDockerStatRate(netMax),
-      tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
-      color: "#34d399",
-      valueKey: "netTotalBps",
-      maxValue: netMax,
-    },
-    {
-      label: "DISK",
-      value: formatDockerStatBytes(latest.diskUsageBytes),
-      scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
-      tooltip: latest.diskLimitBytes > 0
-        ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
-        : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
-      color: "#fbbf24",
-      valueKey: "diskUsageBytes",
-      maxValue: diskMax,
-    },
   ];
+  if (!kubernetesStats) {
+    metrics.push(
+      {
+        label: "NET",
+        value: formatDockerStatRate(latest.netTotalBps),
+        scaleLabel: formatDockerStatRate(netMax),
+        tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
+        color: "#34d399",
+        valueKey: "netTotalBps",
+        maxValue: netMax,
+      },
+      {
+        label: "DISK",
+        value: formatDockerStatBytes(latest.diskUsageBytes),
+        scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
+        tooltip: latest.diskLimitBytes > 0
+          ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
+          : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
+        color: "#fbbf24",
+        valueKey: "diskUsageBytes",
+        maxValue: diskMax,
+      },
+    );
+  }
   return (
     <Box
       sx={{
         width: "100%",
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gridTemplateColumns: kubernetesStats ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))",
         gap: 0.4,
       }}
     >

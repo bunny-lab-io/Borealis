@@ -31,9 +31,9 @@ Onboarding jobs still send agents through Device Approvals. Successful remote in
 
 ## Read Worker Resource Usage
 
-The Sites grid shows live Docker resource usage for each active site-worker when Engine Docker metadata is available. Use CPU, RAM, NET, and DISK mini-trends inside the Site Worker Container column to spot workers under load.
+The Sites grid shows live resource usage for each active site-worker when Engine runtime metadata is available. Docker-backed workers show CPU, RAM, NET, and DISK mini-trends. K3s bridge workers show CPU and RAM from Metrics Server through `borealis-operator`.
 
-Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, then starts worker polling immediately after the first render without blocking site names or descriptions. Site Worker Container shows `Polling Site Worker Metrics` and Connected Devices shows `Analyzing Agent Connections` until the first successful worker payload arrives. Mini-trends and connection bars display as soon as Docker stats are available. K3s bridge workers can be active before Borealis has Kubernetes-native resource metrics; those rows show `Worker Metrics Unavailable` instead of `Site Worker Not Running`. Navigating away from Sites clears that short history. Sites with no active site worker show `Site Worker Not Running`.
+Resource mini-trends refresh with the site-worker payload every 5 seconds and keep only the last 60 seconds in the browser. On page load, Sites renders site records first, then starts worker polling immediately after the first render without blocking site names or descriptions. Site Worker Container shows `Polling Site Worker Metrics` and Connected Devices shows `Analyzing Agent Connections` until the first successful worker payload arrives. Mini-trends and connection bars display as soon as Docker stats or K3s pod metrics are available. K3s Metrics Server does not provide pod network or filesystem stats, so K3s bridge rows render CPU/RAM only. Navigating away from Sites clears that short history. Sites with no active site worker show `Site Worker Not Running`.
 
 The Connected Devices bar uses the last known connected breakdown for a short grace window before showing an all-disconnected state. This prevents one missed site-worker heartbeat or zero-connected poll from briefly turning healthy sites red.
 
@@ -54,7 +54,7 @@ Select any colored section of the Connected Devices bar, or its `Connected`, `Di
     - `POST /api/sites/assign` - assign devices to site.
     - `POST /api/sites/rename` - rename site.
     - `POST /api/sites/<site_id>/auto-approval` - set or clear temporary site auto-approval.
-    - `GET /api/server/workers?history_seconds=300` - active/recent worker state used by Sites, including site-worker Docker stats and Docker inspect size metadata when `docker-proxy` responds.
+    - `GET /api/server/workers?history_seconds=300` - active/recent worker state used by Sites, including site-worker Docker stats and Docker inspect size metadata when `docker-proxy` responds, plus K3s CPU/RAM pod metrics when `borealis-operator` can read Metrics Server.
 
     ### Related documentation
 
@@ -78,7 +78,7 @@ Select any colored section of the Connected Devices bar, or its `Connected`, `Di
     - `GET /api/sites` returns install-command metadata: `public_base_url`, `public_hostname`, `deployment_profile`, `engine_ca_required`, Internal-Only `engine_ca.pem_b64`, and Internal-Only `server_ip_fallback`. Site rows include `site_worker_slug` and `site_worker_name` so K3s bridge naming can be inspected from the API.
     - `POST /api/sites` and `POST /api/sites/rename` reject names whose normalized K3s worker slug is empty, longer than 51 characters, or duplicates another site's slug.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
-    - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. K3s bridge workers currently keep worker registration and connected-device reporting, but resource mini-trends remain unavailable until Borealis adds a Kubernetes-native metrics source. Sites does not fetch worker metrics from the route loader; browser polling starts immediately after the page renders and continues every 5 seconds.
-    - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.
+    - Site-worker resource usage comes from Docker stats/Docker inspect for Docker-backed workers and K3s Metrics Server podmetrics for K3s bridge workers. Sites does not fetch worker metrics from the route loader; browser polling starts immediately after the page renders and continues every 5 seconds.
+    - Docker rows render CPU, RAM, NET, and DISK. K3s rows render CPU/RAM only because Metrics Server does not expose pod network counters or writable-layer disk usage.
     - The Connected Devices bar caches the last non-zero connected breakdown in browser state and reuses it for brief zero-connected worker polls. Sustained zero-connected payloads still render as disconnected after the grace window.
     - Connected Devices bar segments and labels deep-link to `/devices?site=<site_id>&status=<connected|disconnected|offline>`.

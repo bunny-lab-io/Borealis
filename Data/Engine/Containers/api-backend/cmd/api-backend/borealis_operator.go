@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -614,6 +615,7 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 	if err != nil {
 		return nil, err
 	}
+	podMetricsByName, _ := o.kubernetesPodMetricsByName(ctx)
 	workers := make([]map[string]any, 0)
 	for _, pod := range pods {
 		metadata := nestedMap(pod, "metadata")
@@ -624,9 +626,30 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 		if component != "site-worker" && workload != "site-worker" && !strings.HasPrefix(name, "site-worker-") {
 			continue
 		}
-		workers = append(workers, summarizeBorealisSiteWorkerPod(pod))
+		worker := summarizeBorealisSiteWorkerPod(pod)
+		if metrics := podMetricsByName[name]; len(metrics) > 0 {
+			attachKubernetesPodMetrics(worker, pod, metrics)
+		}
+		workers = append(workers, worker)
 	}
 	return workers, nil
+}
+
+func (o *borealisOperator) kubernetesPodMetricsByName(ctx context.Context) (map[string]map[string]any, error) {
+	items, err := o.kubeListItems(ctx, "metrics.k8s.io", "pods")
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		metadata := nestedMap(item, "metadata")
+		name := cleanText(metadata["name"])
+		if name == "" {
+			continue
+		}
+		result[name] = item
+	}
+	return result, nil
 }
 
 func (o *borealisOperator) requireKnownWorkload(serviceKey string) (borealisOperatorKnownWorkload, int, error) {
@@ -1114,6 +1137,12 @@ func (o *borealisOperator) kubePath(apiGroup string, resource string, name strin
 		}
 		return fmt.Sprintf("/apis/apps/v1/namespaces/%s/%s", o.namespace, resource)
 	}
+	if apiGroup == "metrics.k8s.io" {
+		if name != "" {
+			return fmt.Sprintf("/apis/metrics.k8s.io/v1beta1/namespaces/%s/%s/%s", o.namespace, resource, name)
+		}
+		return fmt.Sprintf("/apis/metrics.k8s.io/v1beta1/namespaces/%s/%s", o.namespace, resource)
+	}
 	if name != "" {
 		return fmt.Sprintf("/api/v1/namespaces/%s/%s/%s", o.namespace, resource, name)
 	}
@@ -1188,6 +1217,194 @@ func summarizeBorealisSiteWorkerPod(pod map[string]any) map[string]any {
 	summary["docker_state"] = phase
 	summary["lifecycle_owner"] = "borealis-operator"
 	return summary
+}
+
+func attachKubernetesPodMetrics(summary map[string]any, pod map[string]any, metrics map[string]any) {
+	if summary == nil || pod == nil || metrics == nil {
+		return
+	}
+	cpuCores, memoryBytes := kubernetesPodMetricUsage(metrics, "site-worker")
+	if cpuCores <= 0 && memoryBytes <= 0 {
+		return
+	}
+	spec := nestedMap(pod, "spec")
+	memoryLimitBytes := kubernetesPodContainerMemoryLimitBytes(spec, "site-worker")
+	cpuLimitCores := kubernetesPodContainerCPULimitCores(spec, "site-worker")
+	memoryPercent := float64(0)
+	if memoryLimitBytes > 0 && memoryBytes >= 0 {
+		memoryPercent = round2((float64(memoryBytes) / float64(memoryLimitBytes)) * 100)
+	}
+	timestamp := cleanText(metrics["timestamp"])
+	window := cleanText(metrics["window"])
+	stats := map[string]any{
+		"source":             "metrics.k8s.io",
+		"cpu_percent":        round2(cpuCores * 100),
+		"memory_usage_bytes": maxInt64(memoryBytes, 0),
+		"memory_limit_bytes": maxInt64(memoryLimitBytes, 0),
+		"memory_percent":     memoryPercent,
+		"net_input_bytes":    int64(0),
+		"net_output_bytes":   int64(0),
+		"block_input_bytes":  int64(0),
+		"block_output_bytes": int64(0),
+		"pids":               int64(0),
+	}
+	if timestamp != "" {
+		stats["read_at"] = timestamp
+	}
+	if window != "" {
+		stats["window"] = window
+	}
+	kubernetesMetrics := map[string]any{
+		"source":                 "metrics.k8s.io",
+		"timestamp":              timestamp,
+		"window":                 window,
+		"cpu_usage_cores":        cpuCores,
+		"cpu_usage_millicores":   round2(cpuCores * 1000),
+		"cpu_limit_cores":        cpuLimitCores,
+		"memory_usage_bytes":     maxInt64(memoryBytes, 0),
+		"memory_limit_bytes":     maxInt64(memoryLimitBytes, 0),
+		"memory_usage_percent":   memoryPercent,
+		"network_metrics_status": "unavailable",
+		"disk_metrics_status":    "unavailable",
+	}
+	summary["docker_stats"] = stats
+	summary["kubernetes_metrics"] = kubernetesMetrics
+	summary["container_metrics_source"] = "metrics.k8s.io"
+}
+
+func kubernetesPodMetricUsage(metrics map[string]any, preferredContainer string) (float64, int64) {
+	containers, _ := metrics["containers"].([]any)
+	var totalCPU float64
+	var totalMemory int64
+	var foundPreferred bool
+	for _, rawContainer := range containers {
+		container := mapStringAny(rawContainer)
+		if len(container) == 0 {
+			continue
+		}
+		name := cleanText(container["name"])
+		if preferredContainer != "" && name == preferredContainer {
+			usage := mapStringAny(container["usage"])
+			return parseKubernetesCPUQuantityCores(usage["cpu"]), parseKubernetesByteQuantity(usage["memory"])
+		}
+		usage := mapStringAny(container["usage"])
+		totalCPU += parseKubernetesCPUQuantityCores(usage["cpu"])
+		totalMemory += parseKubernetesByteQuantity(usage["memory"])
+		if preferredContainer == "" || name == preferredContainer {
+			foundPreferred = true
+		}
+	}
+	if foundPreferred || preferredContainer == "" {
+		return totalCPU, totalMemory
+	}
+	return totalCPU, totalMemory
+}
+
+func kubernetesPodContainerMemoryLimitBytes(spec map[string]any, containerName string) int64 {
+	return parseKubernetesByteQuantity(kubernetesPodContainerResourceQuantity(spec, containerName, "limits", "memory"))
+}
+
+func kubernetesPodContainerCPULimitCores(spec map[string]any, containerName string) float64 {
+	return parseKubernetesCPUQuantityCores(kubernetesPodContainerResourceQuantity(spec, containerName, "limits", "cpu"))
+}
+
+func kubernetesPodContainerResourceQuantity(spec map[string]any, containerName string, bucket string, resource string) any {
+	containers, _ := spec["containers"].([]any)
+	for _, rawContainer := range containers {
+		container := mapStringAny(rawContainer)
+		if len(container) == 0 || cleanText(container["name"]) != containerName {
+			continue
+		}
+		resources := mapStringAny(container["resources"])
+		values := mapStringAny(resources[bucket])
+		return values[resource]
+	}
+	return nil
+}
+
+func parseKubernetesCPUQuantityCores(value any) float64 {
+	raw := strings.TrimSpace(cleanText(value))
+	if raw == "" {
+		return 0
+	}
+	multiplier := float64(1)
+	numeric := raw
+	for _, unit := range []struct {
+		suffix     string
+		multiplier float64
+	}{
+		{"n", 0.000000001},
+		{"u", 0.000001},
+		{"m", 0.001},
+	} {
+		if strings.HasSuffix(raw, unit.suffix) {
+			multiplier = unit.multiplier
+			numeric = strings.TrimSuffix(raw, unit.suffix)
+			break
+		}
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(numeric), 64)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return parsed * multiplier
+}
+
+func parseKubernetesByteQuantity(value any) int64 {
+	switch typed := value.(type) {
+	case nil:
+		return 0
+	case int:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err == nil {
+			return parsed
+		}
+		floatParsed, err := typed.Float64()
+		if err == nil {
+			return int64(floatParsed)
+		}
+	}
+	raw := strings.TrimSpace(cleanText(value))
+	if raw == "" {
+		return 0
+	}
+	units := []struct {
+		suffix     string
+		multiplier float64
+	}{
+		{"Ki", 1024},
+		{"Mi", 1024 * 1024},
+		{"Gi", 1024 * 1024 * 1024},
+		{"Ti", 1024 * 1024 * 1024 * 1024},
+		{"Pi", 1024 * 1024 * 1024 * 1024 * 1024},
+		{"Ei", 1024 * 1024 * 1024 * 1024 * 1024 * 1024},
+		{"K", 1000},
+		{"M", 1000 * 1000},
+		{"G", 1000 * 1000 * 1000},
+		{"T", 1000 * 1000 * 1000 * 1000},
+		{"P", 1000 * 1000 * 1000 * 1000 * 1000},
+		{"E", 1000 * 1000 * 1000 * 1000 * 1000 * 1000},
+	}
+	multiplier := float64(1)
+	numeric := raw
+	for _, unit := range units {
+		if strings.HasSuffix(raw, unit.suffix) {
+			multiplier = unit.multiplier
+			numeric = strings.TrimSuffix(raw, unit.suffix)
+			break
+		}
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(numeric), 64)
+	if err != nil || parsed <= 0 {
+		return 0
+	}
+	return int64(parsed * multiplier)
 }
 
 func kubernetesPodContainerImage(spec map[string]any, containerName string) string {

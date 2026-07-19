@@ -200,3 +200,41 @@ func TestDockerInspectStorageLimitPrefersDiskQuota(t *testing.T) {
 		t.Fatalf("expected disk quota storage limit, got limit=%d source=%q", limit, source)
 	}
 }
+
+func TestMergeK3sSiteWorkerMetadataAttachesMetrics(t *testing.T) {
+	row := map[string]any{
+		"worker_guid":    "worker-1",
+		"container_name": "site-worker-bunny-lab",
+		"site_id":        int64(7),
+	}
+	worker := map[string]any{
+		"name":                     "site-worker-bunny-lab",
+		"container_name":           "site-worker-bunny-lab",
+		"configured_image":         "borealis-engine/site-worker:sha-cccccccccccc",
+		"container_metrics_source": "metrics.k8s.io",
+		"kubernetes_phase":         "Running",
+		"docker_stats": map[string]any{
+			"source":             "metrics.k8s.io",
+			"cpu_percent":        12.5,
+			"memory_usage_bytes": int64(64 * 1024 * 1024),
+		},
+		"kubernetes_metrics": map[string]any{
+			"cpu_usage_millicores": float64(125),
+		},
+	}
+
+	mergeK3sSiteWorkerMetadata(row, worker)
+
+	if got := row["container_metrics_source"]; got != "metrics.k8s.io" {
+		t.Fatalf("expected metrics source, got %#v", row)
+	}
+	if got := schedulerAnyMap(row["docker_stats"])["cpu_percent"]; got != 12.5 {
+		t.Fatalf("expected docker_stats merge, got %#v", row["docker_stats"])
+	}
+	if got := schedulerAnyMap(row["kubernetes_metrics"])["cpu_usage_millicores"]; got != float64(125) {
+		t.Fatalf("expected kubernetes_metrics merge, got %#v", row["kubernetes_metrics"])
+	}
+	if got := row["container_id"]; got != "site-worker-bunny-lab" {
+		t.Fatalf("expected pod name as container id fallback, got %#v", row)
+	}
+}

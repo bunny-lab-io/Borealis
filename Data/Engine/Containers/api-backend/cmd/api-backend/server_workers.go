@@ -165,7 +165,7 @@ func (s *postgresOperatorStore) serverWorkerPayload(ctx context.Context, history
 
 	enrichWorkerReferences(rows, activeWork, recentWork, siteNames, siteDeviceCounts, siteOnlineDeviceCounts, jobNames)
 	if includeContainerMetadata {
-		rows = attachWorkerContainerMetadata(rows)
+		rows = attachWorkerContainerMetadata(ctx, rows)
 	}
 
 	activeSiteWorkers := 0
@@ -712,7 +712,7 @@ func enrichWorkerReferences(rows []map[string]any, activeWork []map[string]any, 
 	}
 }
 
-func attachWorkerContainerMetadata(rows []map[string]any) []map[string]any {
+func attachWorkerContainerMetadata(ctx context.Context, rows []map[string]any) []map[string]any {
 	for _, row := range rows {
 		containerName := cleanText(row["container_name"])
 		if containerName == "" {
@@ -737,7 +737,83 @@ func attachWorkerContainerMetadata(rows []map[string]any) []map[string]any {
 	attachDockerStatsToRows(rows, func(row map[string]any) string {
 		return cleanText(row["container_name"])
 	})
+	attachK3sSiteWorkerMetadata(ctx, rows)
 	return rows
+}
+
+func attachK3sSiteWorkerMetadata(ctx context.Context, rows []map[string]any) {
+	if len(rows) == 0 {
+		return
+	}
+	client, configured := newBorealisOperatorClientFromEnv()
+	if !configured {
+		return
+	}
+	workers, err := client.listSiteWorkers(ctx)
+	if err != nil || len(workers) == 0 {
+		return
+	}
+	byGUID := make(map[string]map[string]any, len(workers))
+	byName := make(map[string]map[string]any, len(workers))
+	for _, worker := range workers {
+		if guid := cleanText(worker["worker_guid"]); guid != "" {
+			byGUID[guid] = worker
+		}
+		if name := cleanText(worker["container_name"]); name != "" {
+			byName[name] = worker
+		}
+		if name := cleanText(worker["name"]); name != "" {
+			byName[name] = worker
+		}
+	}
+	for _, row := range rows {
+		if coerceInt64(row["site_id"]) <= 0 {
+			continue
+		}
+		worker := byGUID[cleanText(row["worker_guid"])]
+		if len(worker) == 0 {
+			worker = byName[cleanText(row["container_name"])]
+		}
+		if len(worker) == 0 {
+			continue
+		}
+		mergeK3sSiteWorkerMetadata(row, worker)
+	}
+}
+
+func mergeK3sSiteWorkerMetadata(row map[string]any, worker map[string]any) {
+	if row == nil || worker == nil {
+		return
+	}
+	for _, key := range []string{
+		"configured_image",
+		"container_metrics_source",
+		"kubernetes_phase",
+		"lifecycle_owner",
+		"network_mode",
+		"node_name",
+		"pod_ip",
+		"ready",
+		"restart_count",
+	} {
+		if value, ok := worker[key]; ok {
+			row[key] = value
+		}
+	}
+	if name := firstText(cleanText(worker["container_name"]), cleanText(worker["name"])); name != "" {
+		row["container_name"] = name
+		row["container_id"] = name
+		row["container_id_full"] = name
+	}
+	if image := cleanText(worker["configured_image"]); image != "" {
+		row["container_image"] = image
+	}
+	if stats := schedulerAnyMap(worker["docker_stats"]); len(stats) > 0 {
+		row["docker_stats"] = stats
+	}
+	if metrics := schedulerAnyMap(worker["kubernetes_metrics"]); len(metrics) > 0 {
+		row["kubernetes_metrics"] = metrics
+	}
 }
 
 func dockerInspectContainer(containerName string) map[string]any {
