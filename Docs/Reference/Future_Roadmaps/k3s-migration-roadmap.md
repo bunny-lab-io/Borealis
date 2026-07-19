@@ -110,7 +110,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Retire terminal K3s site-worker pods so failed pods do not block replacement workers.
     - [x] Restart K3s site-worker containers on nonzero exit while preserving idle TTL clean exits.
     - [x] Treat persistent transient heartbeat deadlocks as skipped heartbeat cycles instead of fatal worker exits.
-    - [ ] Preserve Agent Socket.IO registration after live redeploy validation.
+    - [x] Preserve Agent Socket.IO registration after live redeploy validation.
 - [x] Replace Traefik route-file behavior with a controlled host-loopback bridge route while Compose API/PostgreSQL stay localhost-only.
     - [x] Keep route files owned by `job-scheduler`.
     - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.
@@ -118,10 +118,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Validation:
     - [x] Focused operator/scheduler unit tests pass.
     - [x] Static `Engine.sh` and Python worker checks pass.
-    - [ ] Agents connect to site worker through existing enrollment/token flow.
+    - [x] Agents connect to site worker through existing enrollment/token flow.
     - [ ] Remote shell, file management, service/process actions work.
     - [ ] Worker metrics appear in Sites and Server Info.
-    - [ ] Stale workers retire cleanly.
+    - [x] Stale workers retire cleanly.
 
 ## Stage 6: Production WebUI Cutover
 
