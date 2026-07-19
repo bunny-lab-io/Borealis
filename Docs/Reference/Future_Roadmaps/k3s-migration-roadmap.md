@@ -83,6 +83,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Mount `node_modules/.vite` as writable memory-backed cache for Compose WebUI.
     - [x] Mount `node_modules/.vite` as writable memory-backed cache for K3s WebUI bridge pods.
     - [x] Keep WebUI runtime source mounts read-only.
+- [x] Fix DEV-mode WebUI runtime source staging.
+    - [x] Sync staged WebUI source into `Engine/Services/webui-frontend/data/web-interface/` on every `deploy dev`.
+    - [x] Sync staged WebUI source during `--service webui-frontend rebuild dev`.
+    - [x] Keep production deploys on seed-if-missing behavior unless `BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE=1`.
 - [x] Validation:
     - [x] WebUI dev path works.
     - [x] Guacd readiness passes.
@@ -92,6 +96,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] DEV Vite dependency modules return JavaScript MIME through public Traefik after scoped WebUI rebuild.
     - [x] DEV bootstrap runtime no longer opens root `/socket.io` during normal page load or operator-presence sync.
     - [x] `/api/server/timezones` reaches authenticated Go backend route instead of returning an API 404.
+    - [ ] DEV HMR source sync verified after next operator redeploy.
 
 ## Stage 5: Site Worker Migration
 

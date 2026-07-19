@@ -273,13 +273,13 @@ After deployment finishes:
     - Agent source code lives in `Data/Agent/`.
     - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
     - Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
-    - Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For rapid WebUI HMR testing, edit `Engine/Services/webui-frontend/data/web-interface/` while running `Engine.sh --network-mode public|local deploy dev`.
+    - Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For WebUI HMR testing, edit `Data/Engine/Containers/webui-frontend/data/web-interface/`, then run `Engine.sh --network-mode public|local deploy dev` or `Engine.sh --network-mode public|local --service webui-frontend rebuild dev` to sync the HMR runtime copy.
 
     ### Launch mechanics
 
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
     - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies non-authoritative WebUI/guacd bridge workloads, defaults to production, and runs Docker Compose with project name `borealis-engine`.
-    - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik. Switching between prod and dev should only recreate WebUI after the stack is already current.
+    - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik and refreshes the runtime HMR source from staged WebUI source. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
     - Stage 1 K3s baseline writes Borealis-owned config to `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, records the config hash in `Engine/Deploy/k3s-baseline.sha256`, installs K3s only when missing, restarts K3s only when the Borealis config changes, and never calls K3s teardown or uninstall helpers.
     - Stage 1 K3s baseline owns `borealis-k3s-api-firewall.service`, which reapplies the TCP `6443` iptables guard on boot and deploy.

@@ -2915,11 +2915,17 @@ ensure_service_tree() {
 }
 
 seed_webui_runtime_source() {
+  local mode="${1:-prod}"
   [[ -d "${WEBUI_STAGED_SOURCE_DIR}" ]] || die "WebUI staged source missing: ${WEBUI_STAGED_SOURCE_DIR}"
-  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" != "1" ]]; then
+  local refresh_source="${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}"
+  local sync_existing=0
+  if [[ "${mode}" == "dev" || "${refresh_source}" == "1" ]]; then
+    sync_existing=1
+  fi
+  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${sync_existing}" != "1" ]]; then
     return 0
   fi
-  if [[ "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
+  if [[ "${refresh_source}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
     rm -rf "${WEBUI_RUNTIME_SOURCE_DIR}"
   fi
   mkdir -p "${WEBUI_RUNTIME_SOURCE_DIR}"
@@ -2933,7 +2939,18 @@ seed_webui_runtime_source() {
       --exclude .eslintcache \
       "${WEBUI_STAGED_SOURCE_DIR}/" \
       "${WEBUI_RUNTIME_SOURCE_DIR}/"
+    printf '[%s] WebUI runtime source synced mode=%s staged=%s runtime=%s\n' "$(date +%FT%T)" "${mode}" "${WEBUI_STAGED_SOURCE_DIR}" "${WEBUI_RUNTIME_SOURCE_DIR}" >> "${BUILD_LOG}"
     return 0
+  fi
+  if [[ "${sync_existing}" == "1" ]]; then
+    find "${WEBUI_RUNTIME_SOURCE_DIR}" -mindepth 1 -maxdepth 1 \
+      ! -name node_modules \
+      ! -name build \
+      ! -name dist \
+      ! -name .vite \
+      ! -name coverage \
+      ! -name .eslintcache \
+      -exec rm -rf {} + 2>/dev/null || true
   fi
   (
     cd "${WEBUI_STAGED_SOURCE_DIR}"
@@ -2949,6 +2966,7 @@ seed_webui_runtime_source() {
     cd "${WEBUI_RUNTIME_SOURCE_DIR}"
     tar -xf -
   )
+  printf '[%s] WebUI runtime source seeded mode=%s staged=%s runtime=%s\n' "$(date +%FT%T)" "${mode}" "${WEBUI_STAGED_SOURCE_DIR}" "${WEBUI_RUNTIME_SOURCE_DIR}" >> "${BUILD_LOG}"
 }
 
 prune_empty_legacy_runtime_paths() {
@@ -5086,7 +5104,7 @@ prepare_runtime() {
   local mode="$1"
   ensure_engine_runtime_identity
   ensure_service_tree
-  seed_webui_runtime_source
+  seed_webui_runtime_source "${mode}"
   prune_empty_legacy_runtime_paths
   load_existing_image_tags
   local public_host
