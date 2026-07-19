@@ -193,7 +193,7 @@ K3s keeps bundled Traefik and ServiceLB disabled so Borealis Compose Traefik sta
 
 The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the Compose API backend reaches the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
 
-`webui-frontend` and `remote-desktop-guacd` workloads are also reconciled into K3s as single-replica ClusterIP-only Deployments. Production and dev WebUI traffic is routed by the existing Compose Traefik edge to the K3s `webui-frontend` ClusterIP after that Service is ready. Compose Traefik still owns HTTP/HTTPS, ACME or local CA certificate state, and watched dynamic route files under `Engine/Services/traefik-edge/config/dynamic/`. Compose API and Compose guacd remain authoritative until later cutover stages. Stage 6 retires the Compose WebUI service; later deploys remove any stale `borealis-engine-webui-frontend` container instead of recreating it. Scoped WebUI and guacd rebuilds refresh the K3s workloads so they follow the current image manifest before the next full deploy.
+`api-backend`, `webui-frontend`, and `remote-desktop-guacd` workloads are also reconciled into K3s during migration. The API backend currently runs as a non-authoritative bridge on host loopback port `5001` with background loops disabled, while Compose API remains the traffic owner on `127.0.0.1:5000`. Production and dev WebUI traffic is routed by the existing Compose Traefik edge to the K3s `webui-frontend` ClusterIP after that Service is ready. Compose Traefik still owns HTTP/HTTPS, ACME or local CA certificate state, and watched dynamic route files under `Engine/Services/traefik-edge/config/dynamic/`. Compose guacd remains authoritative until later cutover stages. Stage 6 retires the Compose WebUI service; later deploys remove any stale `borealis-engine-webui-frontend` container instead of recreating it. Scoped WebUI, API, and guacd rebuilds refresh the K3s bridge workloads so they follow the current image manifest before the next full deploy.
 
 Quick checks after a deploy:
 ```sh
@@ -201,9 +201,11 @@ sudo systemctl is-active k3s
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get namespace borealis --show-labels
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/borealis-operator
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/api-backend
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/webui-frontend
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service webui-frontend remote-desktop-guacd
+curl -fsS http://127.0.0.1:5001/health
 rg "BOREALIS_WEBUI_TRAFFIC_OWNER|BOREALIS_WEBUI_UPSTREAM_HOST" Engine/Deploy/compose.env
 sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ```
@@ -279,7 +281,7 @@ After deployment finishes:
     ### Launch mechanics
 
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
-    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies WebUI/guacd K3s workloads, defaults to production, and runs Docker Compose with project name `borealis-engine`.
+    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies API/WebUI/guacd K3s workloads, defaults to production, and runs Docker Compose with project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik and refreshes the runtime HMR source from staged WebUI source. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
     - Stage 1 K3s baseline writes Borealis-owned config to `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, records the config hash in `Engine/Deploy/k3s-baseline.sha256`, installs K3s only when missing, restarts K3s only when the Borealis config changes, and never calls K3s teardown or uninstall helpers.
@@ -288,6 +290,7 @@ After deployment finishes:
     - Stage 3 keeps runtime services Kubernetes-blind by routing lifecycle work through `borealis-operator`. Its API is `POST /v1/command` with `X-Borealis-Operator-Token`.
     - Operator status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Operator lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
     - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs. Scoped `webui-frontend` and `remote-desktop-guacd` rebuilds reconcile the K3s baseline, operator, and workload manifests after image refresh.
+    - Stage 7 starts with a non-authoritative K3s `api-backend` bridge pod. It uses `Engine/Deploy/k3s-api-backend.sha256`, host-network loopback port `5001`, fixed API/Traefik/WireGuard hostPath mounts, generated Secret env mirroring, and `BOREALIS_API_BACKGROUND_LOOPS=0` so it can validate runtime readiness without duplicating watchdog evaluation while Compose API still owns traffic.
     - Stage 6 WebUI cutover keeps Compose Traefik as the only public edge and dynamic route-file reader, then changes its core WebUI upstream to the K3s `webui-frontend` ClusterIP by writing `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` and `BOREALIS_WEBUI_UPSTREAM_HOST=<cluster-ip>` into `Engine/Deploy/compose.env`. Production and dev WebUI traffic both use this K3s route. `Engine.sh` removes stale Compose WebUI containers during deploy.
     - Compose API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.

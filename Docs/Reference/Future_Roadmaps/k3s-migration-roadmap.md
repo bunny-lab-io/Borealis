@@ -148,15 +148,24 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Static assets and SPA route handling work in public network mode.
     - [x] Guacamole dynamic Traefik route still works after WebUI cutover.
     - [x] Repeated deploys do not restart unchanged WebUI pod.
-    - [ ] Compose `webui-frontend` container is removed after a public-mode redeploy.
+    - [x] Compose `webui-frontend` container is removed after a public-mode redeploy.
 
 ## Stage 7: API Backend Cutover
 
 - [ ] Move `api-backend` into K3s as one replica.
+    - [x] Add non-authoritative K3s `api-backend` bridge Deployment.
+    - [x] Bind bridge API to host loopback port `5001` while Compose API owns `127.0.0.1:5000`.
+    - [x] Mirror generated runtime env into `borealis-api-backend-runtime-env`.
+    - [x] Disable API-owned background loops in the bridge pod with `BOREALIS_API_BACKGROUND_LOOPS=0`.
+    - [ ] Make K3s `api-backend` authoritative.
+    - [ ] Remove Compose `api-backend` after route/internal-caller validation.
     - [ ] Preserve Aegis bootstrap/unlock behavior.
     - [ ] Preserve internal API token behavior.
-    - [ ] Preserve logs/secrets/cache path contracts through Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
+    - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
+    - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
 - [ ] Validation:
+    - [ ] Bridge pod rollout passes.
+    - [ ] `curl -fsS http://127.0.0.1:5001/health` passes.
     - [ ] `/health` passes.
     - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
     - [ ] Realtime SSE works with one replica.

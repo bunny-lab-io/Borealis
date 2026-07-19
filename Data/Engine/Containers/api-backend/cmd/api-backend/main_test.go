@@ -1001,6 +1001,23 @@ func TestEnvDurationSecondsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestAPIBackgroundLoopsEnabledDefaultsOnAndAllowsExplicitOff(t *testing.T) {
+	t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", "")
+	if !apiBackgroundLoopsEnabled() {
+		t.Fatalf("expected API background loops enabled by default")
+	}
+	for _, value := range []string{"0", "false", "no", "off"} {
+		t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", value)
+		if apiBackgroundLoopsEnabled() {
+			t.Fatalf("expected API background loops disabled for %q", value)
+		}
+	}
+	t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", "unexpected")
+	if !apiBackgroundLoopsEnabled() {
+		t.Fatalf("expected invalid API background loop value to fall back enabled")
+	}
+}
+
 func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 	originalArgs := os.Args
 	t.Cleanup(func() { os.Args = originalArgs })

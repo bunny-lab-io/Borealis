@@ -46,9 +46,13 @@ K3S_BASELINE_VERSION="1"
 BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
+BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME:-borealis-api-backend-runtime-env}"
+BOREALIS_API_BACKEND_K3S_BRIDGE_PORT="${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
+K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
+K3S_API_BACKEND_BRIDGE_VERSION="1"
 K3S_BRIDGE_WORKLOADS_VERSION="3"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
@@ -169,7 +173,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -195,7 +199,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -233,6 +237,7 @@ dashboard_seed_rows() {
   for row in \
     "Ensuring Cluster Exists" \
     "borealis-operator" \
+    "k3s-api-backend" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
     "webui-frontend" \
@@ -363,6 +368,9 @@ dashboard_row_label() {
     "borealis-operator")
       printf '%s\n' "Borealis Operator"
       ;;
+    "k3s-api-backend")
+      printf '%s\n' "K3s API Backend"
+      ;;
     "k3s-webui-frontend")
       printf '%s\n' "K3s WebUI Frontend"
       ;;
@@ -482,6 +490,7 @@ dashboard_render_table() {
   for row in \
     "Ensuring Cluster Exists" \
     "borealis-operator" \
+    "k3s-api-backend" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
     "webui-frontend" \
@@ -1837,6 +1846,21 @@ base64_inline() {
   printf '%s' "${value}" | base64 -w 0 2>/dev/null || printf '%s' "${value}" | base64 | tr -d '\n'
 }
 
+borealis_runtime_env_secret_data() {
+  local file="${1:-${RUNTIME_ENV}}"
+  local line=""
+  local key=""
+  local value=""
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" && "${line}" != \#* && "${line}" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "${value}")"
+  done < "${file}"
+}
+
 borealis_site_worker_runtime_secret_data() {
   local key
   for key in \
@@ -2185,6 +2209,20 @@ format_k3s_cpu_quantity() {
   die "Unsupported Kubernetes CPU quantity '${raw}'. Use values like 0.50, 1.00, or 500m."
 }
 
+format_k3s_tcp_port() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  local port_value=0
+  if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+    port_value=$((10#${raw}))
+  fi
+  if [[ "${raw}" =~ ^[0-9]+$ ]] && ((port_value >= 1 && port_value <= 65535)); then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  die "Unsupported TCP port '${raw}'. Use a number from 1 to 65535."
+}
+
 service_image_tag_or_previous() {
   local service="$1"
   local fallback="${2:-}"
@@ -2192,6 +2230,270 @@ service_image_tag_or_previous() {
   [[ -n "${image}" ]] || image="$(previous_image_tag "${service}")"
   [[ -n "${image}" ]] || image="${fallback}"
   printf '%s\n' "${image}"
+}
+
+render_k3s_api_backend_bridge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local port="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: api-backend-bridge
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-backend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "host-loopback"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-backend
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-backend
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: backend
+        borealis.io/service-key: api-backend
+        borealis.io/stage: api-backend-bridge
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/network-mode: "host-loopback"
+        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/listen-host: "127.0.0.1"
+        borealis.io/listen-port: "${port}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api-backend
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: ${port}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
+          env:
+            - name: BOREALIS_GO_API_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_GO_API_PORT
+              value: "${port}"
+            - name: BOREALIS_API_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_API_HEALTH_PORT
+              value: "${port}"
+            - name: BOREALIS_INTERNAL_API_BASE_URL
+              value: "http://127.0.0.1:${port}"
+            - name: BOREALIS_API_BACKGROUND_LOOPS
+              value: "0"
+            - name: BOREALIS_K3S_API_BACKEND_BRIDGE
+              value: "1"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-api-backend-go
+                - api-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-api-backend-go
+                - api-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: api-backend-runtime
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: traefik-edge-config
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
+            - name: traefik-edge-env
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/env
+            - name: traefik-edge-logs
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/logs
+            - name: traefik-edge-state
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/state
+            - name: wireguard-config
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/config
+            - name: wireguard-run
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
+            - name: wireguard-secrets
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: api-backend-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend
+            type: Directory
+        - name: traefik-edge-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/config
+            type: Directory
+        - name: traefik-edge-env
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/env
+            type: Directory
+        - name: traefik-edge-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/logs
+            type: Directory
+        - name: traefik-edge-state
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/state
+            type: Directory
+        - name: wireguard-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/config
+            type: Directory
+        - name: wireguard-run
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/run
+            type: Directory
+        - name: wireguard-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
+            type: Directory
+EOF
+}
+
+ensure_k3s_api_backend_bridge() {
+  local mode="$1"
+  local image
+  image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
+  [[ -n "${image}" ]] || die "API backend image tag unavailable."
+
+  local runtime_uid
+  local runtime_gid
+  local port
+  local memory_limit
+  local cpu_limit
+  local runtime_env_hash
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_API_BACKEND_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_API_BACKEND_BRIDGE_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "port=${port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
+      "project_root=${SCRIPT_DIR}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "api-backend" "${image}" "k3s-api-backend"
+
+  log_status "k3s-api-backend" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-api-backend.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_api_backend_bridge_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-api-backend" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s API backend bridge manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-api-backend" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/api-backend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-api-backend" "Rollout Failed" "${C_RED}"
+    die "K3s API backend bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-api-backend\n' "${config_hash}" > "${K3S_API_BACKEND_CONFIG_HASH_FILE}"
+  log_status "k3s-api-backend" "Ready - Bridge" "${C_GREEN}"
 }
 
 render_k3s_webui_frontend_bridge_manifest() {
@@ -2687,7 +2989,7 @@ ensure_k3s_bridge_workloads() {
 
 service_has_k3s_bridge_workload() {
   case "$1" in
-    webui-frontend|remote-desktop-guacd)
+    api-backend|webui-frontend|remote-desktop-guacd)
       return 0
       ;;
   esac
@@ -2703,7 +3005,11 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
   ensure_k3s_cluster_baseline
   ensure_borealis_operator_bridge
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-  ensure_k3s_bridge_workloads "${mode}"
+  if [[ "${service}" == "api-backend" ]]; then
+    ensure_k3s_api_backend_bridge "${mode}"
+  else
+    ensure_k3s_bridge_workloads "${mode}"
+  fi
 }
 
 normalize_mode() {
@@ -4133,6 +4439,7 @@ BOREALIS_DOCKER_PROXY_PIDS_LIMIT=${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-${PROFILE_D
 BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
 BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
+BOREALIS_API_BACKEND_K3S_BRIDGE_PORT=${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}
 BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT=${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-${PROFILE_JOB_SCHEDULER_MEMORY_LIMIT}}
 BOREALIS_JOB_SCHEDULER_CPU_LIMIT=${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-${PROFILE_JOB_SCHEDULER_CPU_LIMIT}}
 BOREALIS_JOB_SCHEDULER_PIDS_LIMIT=${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-${PROFILE_JOB_SCHEDULER_PIDS_LIMIT}}
@@ -5256,6 +5563,7 @@ deploy_engine() {
   ensure_k3s_bridge_workloads "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
+  ensure_k3s_api_backend_bridge "${mode}"
   log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)

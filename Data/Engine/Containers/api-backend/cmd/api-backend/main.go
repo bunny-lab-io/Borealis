@@ -159,7 +159,11 @@ func main() {
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, fallback)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
-	startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
+	if apiBackgroundLoopsEnabled() {
+		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
+	} else {
+		log.Printf("Go api-backend background loops disabled")
+	}
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),
@@ -324,6 +328,18 @@ func loadConfig() (gatewayConfig, error) {
 		AuthTokenTTL:     envDurationSeconds("BOREALIS_TOKEN_TTL_SECONDS", 30*24*time.Hour),
 		ShutdownTimeout:  envDurationSeconds("BOREALIS_GO_API_SHUTDOWN_TIMEOUT_SECONDS", 20*time.Second),
 	}, nil
+}
+
+func apiBackgroundLoopsEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_API_BACKGROUND_LOOPS")))
+	switch value {
+	case "", "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func envDefault(name, fallback string) string {
