@@ -631,6 +631,11 @@ function isActiveWorker(worker) {
   return ["starting", "running", "idle"].includes(normalized);
 }
 
+function isActiveSiteWorkerRow(row) {
+  const status = String(row?.site_worker_status || row?.raw_site_worker?.status || "").trim().toLowerCase();
+  return Boolean(row?.site_worker_guid || row?.site_worker_container_name) && ["starting", "running", "idle"].includes(status);
+}
+
 function workIdentity(work) {
   const id = String(work?.id ?? "").trim();
   if (id) return `id:${id}`;
@@ -933,6 +938,7 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_storage_limit_bytes: Number(worker?.container_storage_limit_bytes || 0),
         site_worker_container_storage_limit_source: String(worker?.container_storage_limit_source || "").trim(),
         site_worker_docker_stats: worker?.docker_stats || null,
+        site_worker_status: String(worker?.status || "").trim(),
         connected_devices: deviceCounts.connected_devices,
         site_device_count: deviceCounts.site_device_count,
         site_online_device_count: deviceCounts.site_online_device_count,
@@ -990,6 +996,7 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_storage_limit_bytes: 0,
         site_worker_container_storage_limit_source: "",
         site_worker_docker_stats: null,
+        site_worker_status: "",
         connected_devices: 0,
         site_device_count: total,
         site_online_device_count: online,
@@ -1042,6 +1049,7 @@ export function siteWorkerContainerRefreshValue(row) {
   return [
     row?.site_worker_payload_ready ? "ready" : "pending",
     row?.site_worker_container_id,
+    row?.site_worker_status,
     row?.site_worker_resource_history_key,
     latest?.sampledAtMs,
     stats?.read_at,
@@ -1288,10 +1296,11 @@ function SiteWorkerContainerCell(params) {
     );
   }
   if (!hasDockerStats(row.site_worker_docker_stats)) {
+    const activeWorker = isActiveSiteWorkerRow(row);
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
         <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-          Site Worker Not Running
+          {activeWorker ? "Worker Metrics Unavailable" : "Site Worker Not Running"}
         </Typography>
       </Box>
     );

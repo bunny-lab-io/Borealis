@@ -122,8 +122,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remote shell works through K3s site workers.
     - [x] File management works through K3s site workers.
     - [x] Process management works through K3s site workers.
-    - [ ] Service management works through K3s site workers.
-    - [ ] Worker metrics appear in Sites and Server Info.
+    - [x] Service management works through K3s site workers.
+    - [x] Connected Devices column reflects K3s worker registrations.
+    - [ ] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
 
 ## Stage 6: Production WebUI Cutover
