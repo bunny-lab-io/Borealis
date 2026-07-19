@@ -67,10 +67,6 @@ const COMPOSE_SERVICE_ACTIONS = Object.freeze({
   "api-backend": [{ id: "restart", label: "Restart", action: "restart" }],
   "site-worker-orchestrator": [],
   "job-scheduler": [{ id: "restart", label: "Restart", action: "restart" }],
-  "webui-frontend": [
-    { id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" },
-    { id: "rebuild_dev", label: "Rebuild Dev", action: "rebuild", mode: "dev" },
-  ],
   "traefik-edge": [{ id: "reload", label: "Reload", action: "reload" }],
   "postgres-db": [{ id: "restart", label: "Restart", action: "restart" }],
   "remote-desktop-guacd": [{ id: "restart", label: "Restart", action: "restart" }],

@@ -138,6 +138,9 @@ func (s *postgresOperatorStore) queueServerServiceAction(ctx context.Context, se
 }
 
 func knownComposeService(serviceKey string) bool {
+	if serviceKey == "webui-frontend" {
+		return true
+	}
 	for _, spec := range composeServiceSpecs {
 		if spec.key == serviceKey {
 			return true

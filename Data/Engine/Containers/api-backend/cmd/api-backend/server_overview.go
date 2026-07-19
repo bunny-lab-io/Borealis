@@ -30,7 +30,6 @@ var composeServiceSpecs = []struct {
 	{"api-backend", "API Backend"},
 	{"site-worker-orchestrator", "Site Worker Orchestrator"},
 	{"job-scheduler", "Job Scheduler"},
-	{"webui-frontend", "WebUI Frontend"},
 	{"traefik-edge", "Traefik Edge"},
 	{"postgres-db", "PostgreSQL"},
 	{"remote-desktop-guacd", "Guacamole"},
@@ -171,33 +170,6 @@ func collectOverviewServiceRows() []map[string]any {
 		if spec.key == "docker-proxy" {
 			containerName = "borealis-engine-docker-proxy"
 		}
-		if overviewComposeServiceDisabled(spec.key) {
-			rows = append(rows, map[string]any{
-				"key":                spec.key,
-				"label":              spec.label,
-				"instance":           nil,
-				"unit_name":          containerName,
-				"compose_service":    spec.key,
-				"runtime":            "compose",
-				"docker_state":       "disabled",
-				"docker_health":      nil,
-				"docker_status":      "Disabled",
-				"docker_status_text": "K3s owner",
-				"display_status":     "Disabled",
-				"active_state":       "inactive",
-				"sub_state":          "k3s-owner",
-				"enabled_state":      "disabled",
-				"main_pid":           int64(0),
-				"started_at":         nil,
-				"fragment_path":      nil,
-				"restart_supported":  false,
-				"actions":            overviewServiceActions(spec.key),
-				"pending_action":     nil,
-				"status":             "unknown",
-				"container_image":    strings.TrimSpace(os.Getenv("BOREALIS_WEBUI_FRONTEND_IMAGE")),
-			})
-			continue
-		}
 		inspected := dockerInspectContainer(containerName)
 		statePayload, _ := inspected["State"].(map[string]any)
 		configPayload, _ := inspected["Config"].(map[string]any)
@@ -236,10 +208,6 @@ func collectOverviewServiceRows() []map[string]any {
 		})
 	}
 	return rows
-}
-
-func overviewComposeServiceDisabled(serviceKey string) bool {
-	return serviceKey == "webui-frontend" && normalizeOverviewWebUITrafficOwner(os.Getenv("BOREALIS_WEBUI_TRAFFIC_OWNER")) == "k3s"
 }
 
 func collectOverviewWireGuardPayload(ctx context.Context, store operatorStore) map[string]any {
@@ -870,10 +838,8 @@ func normalizeOverviewWebUIMode(value string) string {
 
 func normalizeOverviewWebUITrafficOwner(value string) string {
 	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))) {
-	case "k3s", "kubernetes":
+	case "", "auto", "k3s", "kubernetes", "compose", "docker", "docker-compose":
 		return "k3s"
-	case "compose", "docker", "docker-compose":
-		return "docker-compose"
 	default:
 		return "unknown"
 	}

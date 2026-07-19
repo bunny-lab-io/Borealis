@@ -61,7 +61,7 @@ DEFAULT_ENGINE_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_ENGINE_UPSTREAM_PORT = 5000
 DEFAULT_WEBUI_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_WEBUI_UPSTREAM_PORT = 8000
-DEFAULT_WEBUI_TRAFFIC_OWNER = "docker-compose"
+DEFAULT_WEBUI_TRAFFIC_OWNER = "k3s"
 DEFAULT_VNC_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_VNC_UPSTREAM_PORT = 4823
 DEFAULT_VITE_UPSTREAM_HOST = "127.0.0.1"
@@ -211,10 +211,10 @@ def _normalize_base_url(value: Any, *, fqdn: str, https_port: int) -> str:
 
 def _normalize_webui_traffic_owner(value: Any) -> str:
     text = _normalize_text(value).lower().replace("_", "-")
-    if text in {"k3s", "kubernetes"}:
+    if text in {"", "auto", "k3s", "kubernetes"}:
         return "k3s"
     if text in {"compose", "docker", "docker-compose"}:
-        return "docker-compose"
+        return "k3s"
     return DEFAULT_WEBUI_TRAFFIC_OWNER
 
 

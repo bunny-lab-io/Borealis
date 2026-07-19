@@ -100,31 +100,17 @@ func TestCollectOverviewHostPayloadReportsWebUITrafficOwner(t *testing.T) {
 	}
 }
 
-func TestCollectOverviewServiceRowsMarksComposeWebUIDisabledWhenK3sOwner(t *testing.T) {
+func TestCollectOverviewServiceRowsOmitsRetiredComposeWebUI(t *testing.T) {
 	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
 	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
 	t.Setenv("BOREALIS_WEBUI_FRONTEND_IMAGE", "borealis-engine/webui-frontend:sha-test")
 
 	rows := collectOverviewServiceRows()
 	for _, row := range rows {
-		if row["key"] != "webui-frontend" {
-			continue
+		if row["key"] == "webui-frontend" {
+			t.Fatalf("retired Compose webui-frontend row should be omitted: %#v", row)
 		}
-		if got := row["enabled_state"]; got != "disabled" {
-			t.Fatalf("enabled_state = %#v", got)
-		}
-		if got := row["display_status"]; got != "Disabled" {
-			t.Fatalf("display_status = %#v", got)
-		}
-		if got := row["container_image"]; got != "borealis-engine/webui-frontend:sha-test" {
-			t.Fatalf("container_image = %#v", got)
-		}
-		if got := row["restart_supported"]; got != false {
-			t.Fatalf("restart_supported = %#v", got)
-		}
-		return
 	}
-	t.Fatal("webui-frontend row missing")
 }
 
 func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {

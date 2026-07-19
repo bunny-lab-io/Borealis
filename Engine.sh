@@ -82,11 +82,14 @@ SERVICE_ROLES=(
   "api-backend"
   "site-worker-orchestrator"
   "job-scheduler"
-  "webui-frontend"
   "traefik-edge"
   "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
+)
+SERVICE_ACTION_ROLES=(
+  "${SERVICE_ROLES[@]}"
+  "webui-frontend"
 )
 BUILD_ROLES=(
   "borealis-operator"
@@ -2754,34 +2757,20 @@ normalize_webui_traffic_owner() {
   local raw="${1:-auto}"
   raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
   case "${raw}" in
-    ""|auto)
-      printf '%s\n' "auto"
-      ;;
-    k3s|kubernetes)
+    ""|auto|k3s|kubernetes)
       printf '%s\n' "k3s"
       ;;
     docker-compose|compose|docker)
-      printf '%s\n' "docker-compose"
+      die "Compose WebUI runtime has been retired. Use K3s-owned WebUI."
       ;;
     *)
-      die "Unsupported BOREALIS_WEBUI_TRAFFIC_OWNER '${1}'. Use auto, k3s, or docker-compose."
+      die "Unsupported BOREALIS_WEBUI_TRAFFIC_OWNER '${1}'. Use k3s."
       ;;
   esac
 }
 
 resolve_webui_traffic_owner() {
-  local mode="$1"
-  local owner
-  owner="$(normalize_webui_traffic_owner "${BOREALIS_WEBUI_TRAFFIC_OWNER:-auto}")"
-  if [[ "${owner}" != "auto" ]]; then
-    printf '%s\n' "${owner}"
-    return 0
-  fi
-  if [[ "${mode}" == "prod" ]]; then
-    printf '%s\n' "k3s"
-    return 0
-  fi
-  printf '%s\n' "docker-compose"
+  normalize_webui_traffic_owner "${BOREALIS_WEBUI_TRAFFIC_OWNER:-auto}"
 }
 
 resolve_webui_upstream_host() {
@@ -2797,62 +2786,35 @@ resolve_webui_upstream_host() {
   printf '%s\n' "127.0.0.1"
 }
 
-compose_webui_enabled_for_mode() {
-  local mode="$1"
-  [[ "$(resolve_webui_traffic_owner "${mode}")" == "docker-compose" ]]
-}
-
-compose_service_active_for_mode() {
+compose_service_managed() {
   local service="$1"
-  local mode="$2"
-  if [[ "${service}" == "webui-frontend" ]] && ! compose_webui_enabled_for_mode "${mode}"; then
-    return 1
-  fi
-  return 0
-}
-
-active_compose_services() {
-  local mode="$1"
-  local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
-    compose_service_active_for_mode "${service}" "${mode}" && printf '%s\n' "${service}"
+  local candidate=""
+  for candidate in "${SERVICE_ROLES[@]}"; do
+    [[ "${candidate}" == "${service}" ]] && return 0
   done
+  return 1
 }
 
-inactive_compose_services() {
-  local mode="$1"
-  local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
-    compose_service_active_for_mode "${service}" "${mode}" || printf '%s\n' "${service}"
-  done
-}
-
-filter_active_compose_services() {
-  local mode="$1"
-  shift || true
+filter_compose_services() {
   local service=""
   for service in "$@"; do
-    compose_service_active_for_mode "${service}" "${mode}" && printf '%s\n' "${service}"
+    compose_service_managed "${service}" && printf '%s\n' "${service}"
   done | awk 'NF && !seen[$0]++'
 }
 
-stop_inactive_compose_services() {
-  local mode="$1"
-  local service=""
-  while IFS= read -r service; do
-    [[ -n "${service}" ]] || continue
-    local subject
-    subject="$(dashboard_subject_for_service "${service}")"
-    if docker inspect "borealis-engine-${service}" >/dev/null 2>&1; then
-      log_status "${subject}" "Disabling - K3s Owner" "${C_YELLOW}"
-      compose_base stop "${service}" >> "${BUILD_LOG}" 2>&1 || true
-      if ! compose_base rm -f "${service}" >> "${BUILD_LOG}" 2>&1; then
-        log_status "${subject}" "Disable Failed" "${C_RED}"
-        die "Failed to remove disabled Compose service '${service}'. See ${BUILD_LOG}."
-      fi
+retire_compose_webui_container() {
+  local service="webui-frontend"
+  local container="borealis-engine-webui-frontend"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose WebUI container '${container}'. See ${BUILD_LOG}."
     fi
-    log_status "${subject}" "Disabled - K3s Owner" "${C_DIM}"
-  done < <(inactive_compose_services "${mode}")
+  fi
+  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
 }
 
 env_key_exists() {
@@ -4876,6 +4838,9 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[webui-frontend]:-}" == "built" ]]; then
+    printf '%s\n' webui-frontend
+  fi
   if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
     printf '%s\n' site-worker-orchestrator
   fi
@@ -5128,7 +5093,6 @@ services = [
     "api-backend",
     "site-worker-orchestrator",
     "job-scheduler",
-    "webui-frontend",
     "traefik-edge",
     "postgres-db",
     "remote-desktop-guacd",
@@ -5222,10 +5186,16 @@ PY
 validate_service() {
   local service="$1"
   local candidate=""
-  for candidate in "${SERVICE_ROLES[@]}"; do
+  for candidate in "${SERVICE_ACTION_ROLES[@]}"; do
     [[ "${candidate}" == "${service}" ]] && return 0
   done
   die "Unknown Engine service '${service}'."
+}
+
+validate_compose_service() {
+  local service="$1"
+  compose_service_managed "${service}" && return 0
+  die "Engine service '${service}' is not managed by Docker Compose."
 }
 
 validate_build_role() {
@@ -5287,8 +5257,6 @@ deploy_engine() {
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
   log_section "Service Reconciliation"
-  local active_services=()
-  mapfile -t active_services < <(active_compose_services "${mode}")
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
   local previous_mode=""
@@ -5306,15 +5274,16 @@ deploy_engine() {
   if [[ -n "${target_service_lines}" ]]; then
     mapfile -t target_services <<< "${target_service_lines}"
   fi
-  local active_target_services=()
+  local requested_target_services=("${target_services[@]}")
+  local compose_target_services=()
   if ((${#target_services[@]} > 0)); then
-    mapfile -t active_target_services < <(filter_active_compose_services "${mode}" "${target_services[@]}")
-    target_services=("${active_target_services[@]}")
+    mapfile -t compose_target_services < <(filter_compose_services "${target_services[@]}")
+    target_services=("${compose_target_services[@]}")
   fi
-  if deploy_state_matches "${mode}" && all_engine_containers_running "${active_services[@]}"; then
+  if deploy_state_matches "${mode}" && all_engine_containers_running "${SERVICE_ROLES[@]}"; then
     log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
-    refresh_compose_service_statuses "${active_services[@]}"
-    stop_inactive_compose_services "${mode}"
+    refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
+    retire_compose_webui_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -5322,14 +5291,25 @@ deploy_engine() {
     log_webui_url
     return 0
   fi
-  if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running "${active_services[@]}"; then
+  if ((${#requested_target_services[@]} > 0)) && ((${#target_services[@]} == 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running "${SERVICE_ROLES[@]}"; then
+    log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
+    refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
+    retire_compose_webui_container
+    write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
+    log_section "Docker Housekeeping"
+    prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
+    log_webui_url
+    return 0
+  fi
+  if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running "${SERVICE_ROLES[@]}"; then
     log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
     if ! compose_base up -d --no-deps --no-build "${target_services[@]}" >> "${BUILD_LOG}" 2>&1; then
       log_status "Docker Compose" "Failed" "${C_RED}"
       die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
     fi
     wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
-    stop_inactive_compose_services "${mode}"
+    retire_compose_webui_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
@@ -5339,12 +5319,12 @@ deploy_engine() {
     return 0
   fi
   log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
-  if ! compose_base up -d --no-build "${active_services[@]}" >> "${BUILD_LOG}" 2>&1; then
+  if ! compose_base up -d --no-build "${SERVICE_ROLES[@]}" >> "${BUILD_LOG}" 2>&1; then
     log_status "Docker Compose" "Failed" "${C_RED}"
     die "Docker Compose stack reconciliation failed. See ${BUILD_LOG}."
   fi
-  wait_for_compose_services_to_settle 90 "${active_services[@]}" || true
-  stop_inactive_compose_services "${mode}"
+  wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
+  retire_compose_webui_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
@@ -5355,7 +5335,7 @@ deploy_engine() {
 
 service_compose_name() {
   local service="$1"
-  validate_service "${service}"
+  validate_compose_service "${service}"
   printf '%s\n' "${service}"
 }
 
@@ -5371,11 +5351,8 @@ service_action() {
   prepare_runtime "${mode}"
   case "${action}" in
     restart)
-      if compose_service_active_for_mode "${service}" "${mode}"; then
-        compose_base restart "$(service_compose_name "${service}")"
-      else
-        stop_inactive_compose_services "${mode}"
-      fi
+      [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
+      compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
       local build_service="${service}"
@@ -5386,14 +5363,14 @@ service_action() {
       export_image_manifest_env
       write_image_manifest "${mode}"
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-      if compose_service_active_for_mode "${service}" "${mode}"; then
+      if compose_service_managed "${service}"; then
         log_status "${service}" "Recreating Container" "${C_YELLOW}"
         compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
       else
-        log_status "${service}" "Skipping Compose - K3s Owner" "${C_DIM}"
+        log_status "${service}" "Skipping Compose - Retired" "${C_DIM}"
       fi
       reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
-      stop_inactive_compose_services "${mode}"
+      retire_compose_webui_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url

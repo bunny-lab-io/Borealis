@@ -153,40 +153,6 @@ services:
       retries: 12
       start_period: 10s
 
-  webui-frontend:
-    <<: *borealis-hardened-service
-    image: ${BOREALIS_WEBUI_FRONTEND_IMAGE:-borealis-engine/webui-frontend:local}
-    container_name: borealis-engine-webui-frontend
-    network_mode: host
-    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
-    restart: unless-stopped
-    mem_limit: ${BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT:-256m}
-    cpus: "${BOREALIS_WEBUI_FRONTEND_CPU_LIMIT:-0.50}"
-    pids_limit: ${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-128}
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
-      - /opt/Borealis/Data/Engine/web-interface/node_modules/.vite:rw,noexec,nosuid,nodev,size=256m,mode=1777
-      - /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp:rw,noexec,nosuid,nodev,size=128m,mode=1777
-    env_file:
-      - ${BOREALIS_WEBUI_ENV_FILE:-compose.env.example}
-    environment:
-      BOREALIS_WEBUI_VITE_CACHE_DIR: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite
-      HOME: /tmp
-    volumes:
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/Unit_Tests:/opt/Borealis/Data/Engine/web-interface/Unit_Tests:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/package.json:/opt/Borealis/Data/Engine/web-interface/package.json:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/tsconfig.json:/opt/Borealis/Data/Engine/web-interface/tsconfig.json:ro
-      - ${BOREALIS_WEBUI_RUNTIME_SOURCE_DIR:-/opt/Borealis/Engine/Services/webui-frontend/data/web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts:ro
-    healthcheck:
-      test: ["CMD", "borealis-webui-healthcheck"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
   traefik-edge:
     <<: *borealis-hardened-service
     image: ${BOREALIS_TRAEFIK_EDGE_IMAGE:-borealis-engine/traefik-edge:local}

@@ -1,6 +1,6 @@
 # K3s Migration Roadmap
 
-Borealis will migrate the Engine runtime from Docker Compose into single-node K3s through staged bridge rollout. The existing Engine deployment command shape stays intact while each workload moves only after explicit validation and rollback planning.
+Borealis will migrate the Engine runtime from Docker Compose into single-node K3s through staged bridge rollout. The existing Engine deployment command shape stays intact while each workload moves only after explicit validation and one-way retirement planning for the old runtime equivalent.
 
 ## Goal
 
@@ -80,7 +80,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Reconcile K3s bridge workloads after `remote-desktop-guacd` rebuilds.
     - [x] Keep Compose routing authoritative while refreshing K3s bridge images.
 - [x] Fix DEV-mode Vite dependency cache mounts.
-    - [x] Mount `node_modules/.vite` as writable memory-backed cache for Compose WebUI.
+    - [x] Mount `node_modules/.vite` as writable memory-backed cache for the transitional Compose WebUI path before Stage 6 retirement.
     - [x] Mount `node_modules/.vite` as writable memory-backed cache for K3s WebUI bridge pods.
     - [x] Keep WebUI runtime source mounts read-only.
 - [x] Fix DEV-mode WebUI runtime source staging.
@@ -90,7 +90,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Validation:
     - [x] WebUI dev path works.
     - [x] Guacd readiness passes.
-    - [x] Existing Compose fallback remains available.
+    - [x] Existing Compose path remained available until Stage 6 WebUI cutover removed it.
     - [x] Scoped WebUI and guacd rebuilds refresh bridge workloads without full deploy.
     - [x] Unchanged bridge pod UIDs stay stable during scoped bridge reconciliation.
     - [x] DEV Vite dependency modules return JavaScript MIME through public Traefik after scoped WebUI rebuild.
@@ -101,7 +101,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Stage 5: Site Worker Migration
 
 - [x] Move dynamic site workers from Docker launch to operator-managed K3s pods.
-    - [x] Add `job-scheduler` lifecycle mode switch with Docker fallback through `BOREALIS_SITE_WORKER_LIFECYCLE_MODE`.
+    - [x] Add `job-scheduler` lifecycle mode switch for bridge validation before K3s site-worker ownership became default.
     - [x] Route K3s site-worker launch/retire/list operations through `borealis-operator` allowlisted verbs.
     - [x] Preserve one active worker per site in v1 through scheduler reconciliation.
     - [x] Preserve worker idle TTL and stale worker retirement in the K3s bridge path.
@@ -133,19 +133,20 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 6: Production WebUI Cutover
 
-- [ ] Make K3s `webui-frontend` authoritative.
+- [x] Make K3s `webui-frontend` authoritative.
     - [x] Add production `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` route owner that renders Compose Traefik's core WebUI upstream to the K3s `webui-frontend` ClusterIP.
-    - [x] Keep dev mode on Compose/HMR route by default unless `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` is explicitly set.
+    - [x] Route dev mode through the K3s `webui-frontend` workload as well.
     - [x] Keep Compose Traefik as HTTP/HTTPS, certificate, and watched dynamic-route owner.
-    - [x] Stop/disable Compose WebUI counterpart when production WebUI traffic owner is `k3s`.
-    - [x] Keep rollback path to Compose through `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose`.
+    - [x] Remove Compose `webui-frontend` from `compose.yaml`.
+    - [x] Reject `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose` in `Engine.sh`.
+    - [x] Remove stale `borealis-engine-webui-frontend` container during deploy.
 - [ ] Validation:
     - [x] Public network mode serves WebUI through K3s route owner.
     - [ ] Local network mode serves WebUI through K3s route owner. Deferred to [Technical Debt #374](https://github.com/bunny-lab-io/Borealis/issues/374) because active public-mode agents may reject the local CA trust plane during live testing.
-    - [x] Static assets and SPA fallback work in public network mode.
+    - [x] Static assets and SPA route handling work in public network mode.
     - [x] Guacamole dynamic Traefik route still works after WebUI cutover.
     - [x] Repeated deploys do not restart unchanged WebUI pod.
-    - [ ] Compose `webui-frontend` container is removed after a public-mode redeploy with `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s`.
+    - [ ] Compose `webui-frontend` container is removed after a public-mode redeploy.
 
 ## Stage 7: API Backend Cutover
 
@@ -157,7 +158,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [ ] `/health` passes.
     - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
     - [ ] Realtime SSE works with one replica.
-    - [ ] Compose fallback path remains documented until retired.
+    - [ ] Compose API removal plan is documented after K3s API validation passes.
 
 ## Stage 8: Scheduler Cutover
 
@@ -197,7 +198,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Stage 11: Compose Retirement
 
 - [ ] Remove Compose ownership only after all K3s-owned services are stable.
-- [ ] Keep migration/rollback docs until stable release.
+- [ ] Keep migration and recovery docs until stable release.
 - [ ] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
     - [ ] Fresh install path works.
@@ -247,7 +248,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - Roadmap-only changes require documentation review, path review, and `git status --short --branch`.
     - Stage 1 deploy script changes start with `bash -n Engine.sh`.
     - Compose-sensitive changes include `python3 Data/Engine/Containers/check-compose-policy.py`.
-    - Runtime cutover stages require deploy twice back to back, cluster health checks, Compose fallback validation, and narrow Engine tests for touched backend areas.
+    - Runtime cutover stages require deploy twice back to back, cluster health checks, old-runtime retirement validation, and narrow Engine tests for touched backend areas.
     - Stage 3 validation includes a no-op live rollout against the current `borealis-operator` image, rejection checks for unknown services and unallowlisted mutable images, RBAC `can-i` checks for allowed named workload patching and denied Secret/Node access, and unit coverage for failed rollout rollback.
     - Longhorn validation starts before the first PVC-backed workload cutover. Confirm StorageClass presence, Longhorn manager/CSI pod readiness, volume attachment, pod restart persistence, and no PVC/volume deletion during repeated Engine deploys.
 

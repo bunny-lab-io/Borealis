@@ -29,7 +29,6 @@ EXPECTED_SERVICES = {
     "api-backend",
     "job-scheduler",
     "site-worker-orchestrator",
-    "webui-frontend",
     "traefik-edge",
     "postgres-db",
     "remote-desktop-guacd",
@@ -289,19 +288,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/logs/site-workers", read_only=False)
             require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/secrets", read_only=True)
             require_mount(mounts, name, "/opt/Borealis/Engine/Services/site-worker-orchestrator/run", read_only=False)
-        if name == "webui-frontend":
-            vite_cache = "/opt/Borealis/Data/Engine/web-interface/node_modules/.vite"
-            vite_temp = "/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp"
-            if not has_tmpfs_path(service, vite_cache):
-                fail("webui-frontend missing tmpfs node_modules/.vite")
-            if not has_tmpfs_path(service, vite_temp):
-                fail("webui-frontend missing tmpfs node_modules/.vite-temp")
-            if service_env(service, "BOREALIS_WEBUI_VITE_CACHE_DIR") != vite_cache:
-                fail("webui-frontend Vite cache must use tmpfs node_modules/.vite")
-            for _, target, read_only in (volume_parts(entry) for entry in service.get("volumes") or []):
-                if target.startswith("/opt/Borealis/Data/Engine/web-interface/") and not read_only:
-                    fail(f"webui-frontend source mount must be read-only: {target}")
-
 
 def assert_dynamic_orchestrator_policy() -> None:
     source = ORCHESTRATOR_SOURCE.read_text(encoding="utf-8")

@@ -249,15 +249,8 @@ func TestComposeJobSchedulerDoesNotMountDockerSocket(t *testing.T) {
 		}
 	}
 	webuiBlock := composeServiceBlock(string(content), "webui-frontend")
-	for _, mount := range []string{
-		"web-interface}/src:/opt/Borealis/Data/Engine/web-interface/src:ro",
-		"web-interface}/public:/opt/Borealis/Data/Engine/web-interface/public:ro",
-		"web-interface}/index.html:/opt/Borealis/Data/Engine/web-interface/index.html:ro",
-		"web-interface}/vite.config.mts:/opt/Borealis/Data/Engine/web-interface/vite.config.mts:ro",
-	} {
-		if !strings.Contains(webuiBlock, mount) {
-			t.Fatalf("webui mount should be read-only %q:\n%s", mount, webuiBlock)
-		}
+	if webuiBlock != "" {
+		t.Fatalf("Compose webui-frontend service should be retired after K3s cutover:\n%s", webuiBlock)
 	}
 }
 
