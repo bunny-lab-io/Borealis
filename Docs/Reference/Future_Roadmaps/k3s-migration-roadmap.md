@@ -84,7 +84,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Mount `node_modules/.vite` as writable memory-backed cache for K3s WebUI bridge pods.
     - [x] Keep WebUI runtime source mounts read-only.
 - [x] Validation:
-    - [ ] WebUI dev path works.
+    - [x] WebUI dev path works.
     - [x] Guacd readiness passes.
     - [x] Existing Compose fallback remains available.
     - [x] Scoped WebUI and guacd rebuilds refresh bridge workloads without full deploy.
