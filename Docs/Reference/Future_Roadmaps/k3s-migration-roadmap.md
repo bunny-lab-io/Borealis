@@ -127,6 +127,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Service management works through K3s site workers.
     - [x] Connected Devices column reflects K3s worker registrations.
     - [x] Add Metrics Server-backed K3s site-worker CPU/RAM plumbing through `borealis-operator`.
+    - [x] `/api/server/workers` returns `metrics.k8s.io` CPU/RAM payloads for every active K3s site worker.
     - [ ] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
 
