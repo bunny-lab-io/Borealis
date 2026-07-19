@@ -119,7 +119,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Focused operator/scheduler unit tests pass.
     - [x] Static `Engine.sh` and Python worker checks pass.
     - [x] Agents connect to site worker through existing enrollment/token flow.
-    - [ ] Remote shell, file management, service/process actions work.
+    - [x] Remote shell works through K3s site workers.
+    - [x] File management works through K3s site workers.
+    - [x] Process management works through K3s site workers.
+    - [ ] Service management works through K3s site workers.
     - [ ] Worker metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
 
