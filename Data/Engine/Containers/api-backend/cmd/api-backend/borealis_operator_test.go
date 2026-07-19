@@ -367,6 +367,43 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	}
 }
 
+func TestBorealisOperatorLaunchSiteWorkerAllowsFullUUIDWithSiteSlug(t *testing.T) {
+	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
+	var createdPod map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			if err := json.NewDecoder(r.Body).Decode(&createdPod); err != nil {
+				t.Fatal(err)
+			}
+			writeJSON(w, http.StatusCreated, createdPod)
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	operator := borealisOperatorTestClient(server)
+	workerGUID := "11111111-2222-3333-4444-555555555555"
+	payload, status, err := operator.launchSiteWorker(context.Background(), borealisOperatorLaunchSiteWorkerRequest{
+		SiteID:            1,
+		SiteName:          "Bunny Lab",
+		WorkerGUID:        workerGUID,
+		ImageRef:          "borealis-engine/site-worker:sha-cccccccccccc",
+		ResourceProfile:   "standard",
+		RemoteOpsPort:     56001,
+		RemoteDesktopPort: 61001,
+	})
+	if err != nil || status != http.StatusAccepted {
+		t.Fatalf("expected full UUID site-worker launch accepted status=%d payload=%#v err=%v", status, payload, err)
+	}
+	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-bunny-lab-"+workerGUID {
+		t.Fatalf("unexpected full UUID site-worker pod name: %#v", nestedMap(createdPod, "metadata"))
+	}
+}
+
 func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing.T) {
 	deleted := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

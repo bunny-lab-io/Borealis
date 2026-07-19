@@ -544,7 +544,7 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	siteName := cleanText(req.SiteName)
 	siteSlug := siteWorkerSiteSlug(req.SiteID, siteName)
 	podName := siteWorkerNameForSite(req.SiteID, siteName, workerGUID)
-	if len(podName) > siteWorkerKubernetesNameMax || !borealisOperatorKubernetesNameAllowed(podName) {
+	if !borealisOperatorKubernetesObjectNameAllowed(podName) {
 		return nil, http.StatusBadRequest, errors.New("generated site-worker pod name must be a Kubernetes DNS label segment")
 	}
 	pod := o.siteWorkerPodManifest(podName, req.SiteID, siteName, siteSlug, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
@@ -889,6 +889,10 @@ func kubernetesWorkloadRolloutReady(item map[string]any) bool {
 
 func borealisOperatorKubernetesNameAllowed(value string) bool {
 	return len(value) <= 48 && borealisOperatorKubernetesNamePattern.MatchString(value)
+}
+
+func borealisOperatorKubernetesObjectNameAllowed(value string) bool {
+	return len(value) <= siteWorkerKubernetesNameMax && borealisOperatorKubernetesNamePattern.MatchString(value)
 }
 
 func borealisOperatorSiteWorkerResourceProfile(name string) (borealisOperatorResourceProfile, bool) {
