@@ -870,7 +870,7 @@ finally:
 
     #### `job_scheduler_work_items`
     - Status: Active.
-    - Purpose: Durable work queue for `job-scheduler` and `site-worker-<uuid>` containers.
+    - Purpose: Durable work queue for `job-scheduler` and dynamic site-worker containers or pods.
     - Columns: `id`, `dedupe_key`, `kind`, `site_id`, `lane`, `job_id`, `run_id`, `target_id`, `payload_json`, `status`, `attempt_count`, `priority`, `available_at`, `lease_owner`, `lease_expires_at`, `heartbeat_at`, `worker_guid`, `container_name`, `error`, `created_at`, `updated_at`, `started_at`, `finished_at`.
     - Used by:
     - `job-scheduler` scheduled ticking and service-action dispatch.
@@ -890,7 +890,7 @@ finally:
     - Sites Active Site Workers canvas.
     - Task-scheduler worker reconciliation.
     - Notes:
-    - Worker container names use random UUIDs (`site-worker-<uuid>`) and do not include site names.
+    - Docker-backed worker container names use random UUIDs (`site-worker-<uuid>`). K3s bridge worker pod names use deterministic site slugs (`site-worker-<sanitized-site-name>`), while `worker_guid` remains the stable worker identity for route records, labels, and lifecycle reconciliation.
     - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 60 seconds), and `/api/server/workers?history_seconds=60` hides old terminal rows even if legacy rows lack `stopped_at`.
 
     #### `job_scheduler_worker_routes`

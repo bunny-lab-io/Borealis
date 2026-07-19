@@ -111,7 +111,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Restart K3s site-worker containers on nonzero exit while preserving idle TTL clean exits.
     - [x] Treat persistent transient heartbeat deadlocks as skipped heartbeat cycles instead of fatal worker exits.
     - [x] Preserve Agent Socket.IO registration after live redeploy validation.
-    - [x] Name new K3s site-worker pods with sanitized site slugs for operator-readable Kubernetes and Server Info views.
+    - [x] Name new K3s site-worker pods with deterministic sanitized site slugs for operator-readable Kubernetes and Server Info views.
+    - [x] Enforce unique, bounded site-worker slugs on site create and rename so K3s worker names do not need UUID suffixes.
 - [x] Replace Traefik route-file behavior with a controlled host-loopback bridge route while Compose API/PostgreSQL stay localhost-only.
     - [x] Keep route files owned by `job-scheduler`.
     - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.

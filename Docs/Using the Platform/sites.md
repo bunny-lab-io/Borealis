@@ -17,6 +17,8 @@ Sites group devices for enrollment, operator visibility, targeting, onboarding, 
 
 Each site has its own enrollment code. Agent install commands include the selected Engine URL and site enrollment code. Internal-Only Engine commands also include Borealis local CA data so the Agent can validate the Engine FQDN without disabling TLS verification. Internal-Only commands also include an Engine IP fallback so agents without private DNS can enroll and reconnect while keeping the FQDN as the trusted HTTPS identity. Linux agents also use that fallback to start WireGuard when endpoint DNS fails.
 
+Site names also feed K3s bridge site-worker pod names. Borealis strips symbols, converts whitespace to dashes, and requires the resulting worker slug to be unique and no longer than 51 characters. For example, `Bunny's Lab` becomes `site-worker-bunnys-lab`.
+
 ## Assign Devices
 
 Use site assignment actions when a device was approved without the expected site, moved between customers, or needs admin review. Devices without site assignment are admin-only.
@@ -73,7 +75,8 @@ Select any colored section of the Connected Devices bar, or its `Connected`, `Di
     - Sites live in `sites`.
     - Device membership lives in `device_sites`.
     - Enrollment codes live on `sites.enrollment_code`.
-    - `GET /api/sites` returns install-command metadata: `public_base_url`, `public_hostname`, `deployment_profile`, `engine_ca_required`, Internal-Only `engine_ca.pem_b64`, and Internal-Only `server_ip_fallback`.
+    - `GET /api/sites` returns install-command metadata: `public_base_url`, `public_hostname`, `deployment_profile`, `engine_ca_required`, Internal-Only `engine_ca.pem_b64`, and Internal-Only `server_ip_fallback`. Site rows include `site_worker_slug` and `site_worker_name` so K3s bridge naming can be inspected from the API.
+    - `POST /api/sites` and `POST /api/sites/rename` reject names whose normalized K3s worker slug is empty, longer than 51 characters, or duplicates another site's slug.
     - Operators with no assigned sites see no normal device/site inventory unless they are admins.
     - Site-worker resource usage comes from the Docker stats payload and Docker inspect size metadata attached to each worker row by the Engine API. K3s bridge workers currently keep worker registration and connected-device reporting, but resource mini-trends remain unavailable until Borealis adds a Kubernetes-native metrics source. Sites does not fetch worker metrics from the route loader; browser polling starts immediately after the page renders and continues every 5 seconds.
     - CPU uses Docker CPU percent, RAM uses memory usage bytes, NET is browser-calculated throughput from cumulative Docker network counters, and DISK uses Docker `SizeRootFs`.

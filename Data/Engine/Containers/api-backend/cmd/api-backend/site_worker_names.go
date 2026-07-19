@@ -8,29 +8,23 @@ import (
 const (
 	siteWorkerNamePrefix        = "site-worker-"
 	siteWorkerKubernetesNameMax = 63
+	siteWorkerSiteSlugMax       = siteWorkerKubernetesNameMax - len(siteWorkerNamePrefix)
 )
 
 func siteWorkerNameForSite(siteID int64, siteName string, workerGUID string) string {
-	workerGUID = strings.ToLower(cleanText(workerGUID))
-	if workerGUID == "" {
-		return strings.TrimSuffix(siteWorkerNamePrefix, "-")
-	}
-	baseName := siteWorkerNamePrefix + workerGUID
 	slug := siteWorkerSiteSlug(siteID, siteName)
-	if slug == "" {
-		return baseName
+	if len(slug) > siteWorkerSiteSlugMax {
+		slug = strings.Trim(slug[:siteWorkerSiteSlugMax], "-")
 	}
-	maxSlugLength := siteWorkerKubernetesNameMax - len(siteWorkerNamePrefix) - len(workerGUID) - 1
-	if maxSlugLength <= 0 {
-		return baseName
+	if slug != "" {
+		return siteWorkerNamePrefix + slug
 	}
-	if len(slug) > maxSlugLength {
-		slug = strings.Trim(slug[:maxSlugLength], "-")
+
+	workerGUID = strings.ToLower(cleanText(workerGUID))
+	if workerGUID != "" {
+		return siteWorkerNamePrefix + workerGUID
 	}
-	if slug == "" {
-		return baseName
-	}
-	return siteWorkerNamePrefix + slug + "-" + workerGUID
+	return strings.TrimSuffix(siteWorkerNamePrefix, "-")
 }
 
 func siteWorkerSiteSlug(siteID int64, siteName string) string {

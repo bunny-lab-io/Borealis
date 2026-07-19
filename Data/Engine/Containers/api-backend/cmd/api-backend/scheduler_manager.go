@@ -1473,12 +1473,13 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 	if err != nil {
 		log.Printf("site-worker site name lookup failed site_id=%d: %v", siteID, err)
 	}
-	containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
 	remoteOpsPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
 	remoteDesktopPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
 	if schedulerSiteWorkerLifecycleMode() == "k3s" {
+		containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
 		return m.spawnK3sSiteWorker(ctx, siteID, siteName, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 	}
+	containerName := siteWorkerNamePrefix + strings.ToLower(cleanText(workerGUID))
 	return m.spawnDockerSiteWorker(ctx, siteID, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 }
 

@@ -358,7 +358,7 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("expected site-worker launch accepted status=%d payload=%#v err=%v", status, payload, err)
 	}
-	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-bunnys-lab-worker-safe" {
+	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-bunnys-lab" {
 		t.Fatalf("unexpected site-worker pod name: %#v", nestedMap(createdPod, "metadata"))
 	}
 	annotations := nestedMap(nestedMap(createdPod, "metadata"), "annotations")
@@ -367,7 +367,7 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	}
 }
 
-func TestBorealisOperatorLaunchSiteWorkerAllowsFullUUIDWithSiteSlug(t *testing.T) {
+func TestBorealisOperatorLaunchSiteWorkerKeepsFullUUIDAsWorkerIdentity(t *testing.T) {
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	var createdPod map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -399,8 +399,13 @@ func TestBorealisOperatorLaunchSiteWorkerAllowsFullUUIDWithSiteSlug(t *testing.T
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("expected full UUID site-worker launch accepted status=%d payload=%#v err=%v", status, payload, err)
 	}
-	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-bunny-lab-"+workerGUID {
+	metadata := nestedMap(createdPod, "metadata")
+	if cleanText(metadata["name"]) != "site-worker-bunny-lab" {
 		t.Fatalf("unexpected full UUID site-worker pod name: %#v", nestedMap(createdPod, "metadata"))
+	}
+	labels := nestedMap(metadata, "labels")
+	if cleanText(labels["borealis.io/worker-guid"]) != workerGUID {
+		t.Fatalf("expected worker guid label to retain identity: %#v", labels)
 	}
 }
 

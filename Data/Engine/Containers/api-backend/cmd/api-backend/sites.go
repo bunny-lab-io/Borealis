@@ -38,6 +38,8 @@ type siteRow struct {
 	AutoApproveUntil sql.NullInt64
 }
 
+const siteWorkerSlugMutationLockKey int64 = 27183465015098201
+
 func registerSiteRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("/api/sites", siteListHandler(auth))
 	mux.HandleFunc("/api/sites/device_map", siteDeviceMapHandler(auth))
@@ -194,15 +196,19 @@ func (s *postgresOperatorStore) listSites(ctx context.Context, profile operatorP
 	sites := make([]map[string]any, 0, len(rawRows))
 	for _, row := range rawRows {
 		autoApproveUntil := nullInt(row.AutoApproveUntil)
+		siteID := nullInt(row.ID)
+		siteName := nullString(row.Name)
 		sites = append(sites, map[string]any{
-			"id":                   nullInt(row.ID),
-			"name":                 nullString(row.Name),
+			"id":                   siteID,
+			"name":                 siteName,
 			"description":          nullString(row.Description),
 			"created_at":           nullInt(row.CreatedAt),
 			"device_count":         nullInt(row.DeviceCount),
 			"enrollment_code":      nullString(row.EnrollmentCode),
 			"auto_approve_until":   autoApproveUntil,
 			"auto_approval_active": autoApproveUntil > now,
+			"site_worker_slug":     siteWorkerSiteSlug(siteID, siteName),
+			"site_worker_name":     siteWorkerNameForSite(siteID, siteName, ""),
 		})
 	}
 	return sites, nil
@@ -377,6 +383,10 @@ func (s *postgresOperatorStore) createSite(ctx context.Context, name string, des
 	if name == "" {
 		return map[string]any{"error": "name is required"}, http.StatusBadRequest, nil
 	}
+	siteSlug, validationPayload, validationStatus := validateSiteWorkerCompatibleSiteName(name)
+	if validationPayload != nil {
+		return validationPayload, validationStatus, nil
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, 0, errors.Join(errOperatorStoreDown, err)
@@ -387,6 +397,15 @@ func (s *postgresOperatorStore) createSite(ctx context.Context, name string, des
 		return nil, 0, err
 	}
 	defer rollbackQuietly(tx)
+
+	if err := lockSiteWorkerSlugMutationsTx(ctx, tx); err != nil {
+		return nil, 0, err
+	}
+	if payload, status, err := s.validateSiteWorkerSiteSlugAvailableTx(ctx, tx, siteSlug, 0); err != nil {
+		return nil, 0, err
+	} else if payload != nil {
+		return payload, status, nil
+	}
 
 	now := time.Now().Unix()
 	var siteID int64
@@ -509,6 +528,10 @@ func (s *postgresOperatorStore) renameSite(ctx context.Context, siteID int64, ne
 	if newName == "" {
 		return map[string]any{"error": "new_name is required"}, http.StatusBadRequest, nil
 	}
+	siteSlug, validationPayload, validationStatus := validateSiteWorkerCompatibleSiteName(newName)
+	if validationPayload != nil {
+		return validationPayload, validationStatus, nil
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, 0, errors.Join(errOperatorStoreDown, err)
@@ -519,6 +542,14 @@ func (s *postgresOperatorStore) renameSite(ctx context.Context, siteID int64, ne
 		return nil, 0, err
 	}
 	defer rollbackQuietly(tx)
+	if err := lockSiteWorkerSlugMutationsTx(ctx, tx); err != nil {
+		return nil, 0, err
+	}
+	if payload, status, err := s.validateSiteWorkerSiteSlugAvailableTx(ctx, tx, siteSlug, siteID); err != nil {
+		return nil, 0, err
+	} else if payload != nil {
+		return payload, status, nil
+	}
 	result, err := tx.ExecContext(ctx, "UPDATE engine.sites SET name = $1 WHERE id = $2", newName, siteID)
 	if err != nil {
 		if isPostgresUniqueViolation(err) {
@@ -618,16 +649,80 @@ func fetchSiteRowTx(ctx context.Context, tx *sql.Tx, siteID int64) (siteRow, boo
 
 func siteRowPayload(row siteRow) map[string]any {
 	autoApproveUntil := nullInt(row.AutoApproveUntil)
+	siteID := nullInt(row.ID)
+	siteName := nullString(row.Name)
 	return map[string]any{
-		"id":                   nullInt(row.ID),
-		"name":                 nullString(row.Name),
+		"id":                   siteID,
+		"name":                 siteName,
 		"description":          nullString(row.Description),
 		"created_at":           nullInt(row.CreatedAt),
 		"device_count":         nullInt(row.DeviceCount),
 		"enrollment_code":      nullString(row.EnrollmentCode),
 		"auto_approve_until":   autoApproveUntil,
 		"auto_approval_active": autoApproveUntil > time.Now().Unix(),
+		"site_worker_slug":     siteWorkerSiteSlug(siteID, siteName),
+		"site_worker_name":     siteWorkerNameForSite(siteID, siteName, ""),
 	}
+}
+
+func validateSiteWorkerCompatibleSiteName(siteName string) (string, map[string]any, int) {
+	siteSlug := siteWorkerSiteSlug(0, siteName)
+	if siteSlug == "" {
+		return "", map[string]any{
+			"error":   "site_worker_name_invalid",
+			"message": "Site name must contain at least one ASCII letter or number for the site-worker pod name.",
+		}, http.StatusBadRequest
+	}
+	if len(siteSlug) > siteWorkerSiteSlugMax {
+		return "", map[string]any{
+			"error":                       "site_worker_name_too_long",
+			"message":                     "Site name is too long for the site-worker pod name.",
+			"site_worker_slug":            siteSlug,
+			"max_site_worker_slug_length": siteWorkerSiteSlugMax,
+			"site_worker_name_prefix":     siteWorkerNamePrefix,
+		}, http.StatusBadRequest
+	}
+	return siteSlug, nil, 0
+}
+
+func lockSiteWorkerSlugMutationsTx(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", siteWorkerSlugMutationLockKey)
+	return err
+}
+
+func (s *postgresOperatorStore) validateSiteWorkerSiteSlugAvailableTx(ctx context.Context, tx *sql.Tx, siteSlug string, excludeSiteID int64) (map[string]any, int, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT id, name FROM engine.sites")
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var existingID sql.NullInt64
+		var existingName sql.NullString
+		if err := rows.Scan(&existingID, &existingName); err != nil {
+			return nil, 0, err
+		}
+		if !existingID.Valid {
+			continue
+		}
+		if excludeSiteID > 0 && existingID.Int64 == excludeSiteID {
+			continue
+		}
+		if siteWorkerSiteSlug(existingID.Int64, nullString(existingName)) != siteSlug {
+			continue
+		}
+		return map[string]any{
+			"error":            "site_worker_name_conflict",
+			"message":          "Site name conflicts with an existing site-worker pod name.",
+			"conflicting_site": nullString(existingName),
+			"site_worker_slug": siteSlug,
+			"site_worker_name": siteWorkerNamePrefix + siteSlug,
+		}, http.StatusConflict, nil
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return nil, 0, nil
 }
 
 func siteDeviceMapHandler(auth *authService) http.HandlerFunc {

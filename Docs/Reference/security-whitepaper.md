@@ -377,7 +377,8 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
 
     `site-worker-orchestrator` builds the `docker run` command for Docker-backed dynamic `site-worker-*` containers. Stage 5 K3s bridge mode routes site-worker lifecycle through `borealis-operator` instead, with `site-worker-orchestrator` retained only as the Docker boundary for draining legacy Docker workers after K3s worker listing succeeds. Callers do not supply arbitrary Docker flags, Kubernetes pod specs, or raw manifests in either path.
 
-    - Container and K3s pod names must use the `site-worker-` prefix. New workers include a bounded sanitized site-name slug before the worker GUID when the scheduler can resolve the site name.
+    - Container and K3s pod names must use the `site-worker-` prefix. Docker-backed workers keep `site-worker-<worker_guid>` names to avoid stale Docker name collisions during fallback. K3s bridge workers use deterministic `site-worker-<sanitized-site-name>` pod names when the scheduler can resolve the site name; the worker GUID remains in labels, environment, route metadata, and database records.
+    - Site create and rename requests reject names that would produce an empty K3s worker slug, duplicate another site's normalized slug, or exceed the K3s object-name budget.
     - Images must match `BOREALIS_SITE_WORKER_IMAGE` or `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`.
     - Workers run with host networking because current Traefik routes target per-worker loopback ports.
     - Workers run as the Borealis runtime UID/GID from `compose.env`.

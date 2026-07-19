@@ -140,12 +140,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device_list_views` (Token Authenticated) - create saved view.
     - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
     - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs.
-    - `POST /api/sites` (Admin) - create site.
+    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs. Site rows include `site_worker_slug` and `site_worker_name` for K3s bridge naming visibility.
+    - `POST /api/sites` (Admin) - create site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/delete` (Admin) - delete sites.
     - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.
     - `POST /api/sites/assign` (Admin) - assign devices to site.
-    - `POST /api/sites/rename` (Admin) - rename site.
+    - `POST /api/sites/rename` (Admin) - rename site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
     - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash for optional `repo`, `branch`, and `ttl` query parameters; feature branch refs with slashes are supported.
     - `GET /api/agent/hash` (Device Authenticated) - get agent hash.

@@ -78,6 +78,66 @@ const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const CONNECTED_DEVICES_COLUMN_ID = "connected_devices";
 const RUNNING_TASKS_COLUMN_ID = "assigned_task_groups";
 const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, CONNECTED_DEVICES_COLUMN_ID];
+export const SITE_WORKER_NAME_PREFIX = "site-worker-";
+export const SITE_WORKER_KUBERNETES_NAME_MAX = 63;
+export const SITE_WORKER_SITE_SLUG_MAX = SITE_WORKER_KUBERNETES_NAME_MAX - SITE_WORKER_NAME_PREFIX.length;
+
+export function siteWorkerSiteSlug(siteName) {
+  const normalized = String(siteName || "").trim().toLowerCase();
+  let slug = "";
+  let lastWasSeparator = false;
+  for (const item of normalized) {
+    const code = item.charCodeAt(0);
+    const isAlpha = code >= 97 && code <= 122;
+    const isNumber = code >= 48 && code <= 57;
+    if (isAlpha || isNumber) {
+      slug += item;
+      lastWasSeparator = false;
+      continue;
+    }
+    if (item === " " || item === "\t" || item === "\n" || item === "\r" || item === "-" || item === "_") {
+      if (slug.length > 0 && !lastWasSeparator) {
+        slug += "-";
+        lastWasSeparator = true;
+      }
+    }
+  }
+  return slug.replace(/^-+|-+$/g, "");
+}
+
+export function validateSiteWorkerSiteName(siteName, sites = [], excludeSiteId = null) {
+  const siteSlug = siteWorkerSiteSlug(siteName);
+  if (!siteSlug) {
+    return {
+      title: "Site Name Invalid",
+      message: "Site name must contain at least one ASCII letter or number.",
+    };
+  }
+  if (siteSlug.length > SITE_WORKER_SITE_SLUG_MAX) {
+    return {
+      title: "Site Name Too Long",
+      message: `Site name creates <b>${siteSlug.length}</b> site-worker slug characters. Maximum is <b>${SITE_WORKER_SITE_SLUG_MAX}</b>.`,
+    };
+  }
+  const conflict = (sites || []).find((site) => {
+    const siteID = site?.id ?? site?.site_id;
+    if (excludeSiteId != null && String(siteID) === String(excludeSiteId)) {
+      return false;
+    }
+    return siteWorkerSiteSlug(site?.name) === siteSlug;
+  });
+  if (conflict) {
+    return {
+      title: "Site Name Already Used",
+      message: `Site name maps to existing worker name <b>${SITE_WORKER_NAME_PREFIX}${siteSlug}</b>. Rename <b>${conflict?.name || "the existing site"}</b> first.`,
+    };
+  }
+  return null;
+}
+
+function siteMutationErrorMessage(payload, fallback) {
+  return String(payload?.message || payload?.error || fallback || "Site update failed.");
+}
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -3285,16 +3345,27 @@ export default function SiteList() {
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onCreate={async (name, description) => {
+          const validation = validateSiteWorkerSiteName(name, rows);
+          if (validation) {
+            await sendNotification({
+              title: validation.title,
+              message: validation.message,
+              icon: "warning",
+              variant: "error",
+            });
+            return;
+          }
           try {
             const res = await fetch("/api/sites", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ name, description }),
             });
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
               setCreateOpen(false);
               if (name) {
-                sendNotification({
+                await sendNotification({
                   title: "Site Created",
                   message: `Site ${name} Created Successfully. Configure patch coverage at <b>${APP_PATHS.patchManagementSitePolicies}</b>.`,
                   icon: "success",
@@ -3302,8 +3373,22 @@ export default function SiteList() {
                 });
               }
               fetchSites();
+              return;
             }
-          } catch {}
+            await sendNotification({
+              title: "Site Not Created",
+              message: siteMutationErrorMessage(data, "Unable to create site."),
+              icon: "warning",
+              variant: "error",
+            });
+          } catch {
+            await sendNotification({
+              title: "Site Not Created",
+              message: "Unable to reach Borealis API.",
+              icon: "warning",
+              variant: "error",
+            });
+          }
         }}
       />
 
@@ -3344,19 +3429,44 @@ export default function SiteList() {
           const selId = renameSiteId ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
           if (!selId) return;
           const oldName = rows.find((r) => r.id === selId)?.name || "Site";
+          const validation = validateSiteWorkerSiteName(newName, rows, selId);
+          if (validation) {
+            await sendNotification({
+              title: validation.title,
+              message: validation.message,
+              icon: "warning",
+              variant: "error",
+            });
+            return;
+          }
           try {
             const res = await fetch("/api/sites/rename", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id: selId, new_name: newName }),
             });
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
               setRenameOpen(false);
               setRenameSiteId(null);
-              sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
+              await sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
               fetchSites();
+              return;
             }
-          } catch {}
+            await sendNotification({
+              title: "Site Not Renamed",
+              message: siteMutationErrorMessage(data, "Unable to rename site."),
+              icon: "warning",
+              variant: "error",
+            });
+          } catch {
+            await sendNotification({
+              title: "Site Not Renamed",
+              message: "Unable to reach Borealis API.",
+              icon: "warning",
+              variant: "error",
+            });
+          }
         }}
       />
 
