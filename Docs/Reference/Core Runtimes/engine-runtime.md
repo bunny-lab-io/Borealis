@@ -20,6 +20,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### API endpoints
 
     - `GET /health` (No Authentication) - Engine liveness probe.
+    - `GET /api/server/timezones` (Operator Session) - current Engine timezone metadata used by Server Info.
     - The Engine hosts all `/api/*` endpoints listed in [API Reference](../Data%20and%20Schema/api-reference.md).
 
     ### Related documentation
@@ -129,6 +130,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     ### WebUI hosting and dev mode
     - Production UI is served by the `webui-frontend` container from its built static output.
     - Dev UI runs Vite HMR behind `traefik-edge`.
+    - WebUI app-wide realtime uses `/api/realtime/events` SSE through `bootstrapClientRuntime.js`. Root `/socket.io` is not opened on normal page load or operator-presence sync; only explicitly allowlisted legacy workflow-node events can connect to that root Socket.IO path.
     - The WebUI image uses Node Alpine stages. The production target copies only built static output plus the dependency-free static server into the final image, while the development target keeps Vite and `node_modules` for HMR.
     - The API backend sets `BOREALIS_WEBUI_EXTERNAL=1` in container mode so `Data.Engine.bootstrapper` skips Engine-side WebUI staging/build.
     - The SPA fallback in `Data/Engine/Containers/api-backend/data/services/WebUI/__init__.py` remains for tests and non-container execution.

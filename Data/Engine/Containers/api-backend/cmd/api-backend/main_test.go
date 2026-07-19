@@ -3579,6 +3579,53 @@ func TestServerTimeHandlerReturnsNativePayload(t *testing.T) {
 	}
 }
 
+func TestServerTimezonesHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
+	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "Authentication required") {
+		t.Fatalf("expected normalized auth message, got %s", recorder.Body.String())
+	}
+}
+
+func TestServerTimezonesHandlerReturnsMetadata(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	t.Setenv("TZ", "Etc/UTC")
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["current_timezone"]; got != "America/Denver" {
+		t.Fatalf("unexpected current_timezone %q", got)
+	}
+	if got := payload["timezone_id"]; got != "America/Denver" {
+		t.Fatalf("unexpected timezone_id %q", got)
+	}
+	if got := payload["change_supported"]; got != false {
+		t.Fatalf("expected change_supported false, got %v", got)
+	}
+	timezones, ok := payload["timezones"].([]any)
+	if !ok || len(timezones) != 1 || timezones[0] != "America/Denver" {
+		t.Fatalf("unexpected timezones %+v", payload["timezones"])
+	}
+}
+
 func TestSerializeServerTimeMatchesPythonShape(t *testing.T) {
 	location := time.FixedZone("MST", -7*60*60)
 	nowLocal := time.Date(2026, 6, 2, 13, 4, 5, 123456789, location)

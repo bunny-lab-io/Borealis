@@ -90,6 +90,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Scoped WebUI and guacd rebuilds refresh bridge workloads without full deploy.
     - [x] Unchanged bridge pod UIDs stay stable during scoped bridge reconciliation.
     - [x] DEV Vite dependency modules return JavaScript MIME through public Traefik after scoped WebUI rebuild.
+    - [x] DEV bootstrap runtime no longer opens root `/socket.io` during normal page load or operator-presence sync.
+    - [x] `/api/server/timezones` reaches authenticated Go backend route instead of returning an API 404.
 
 ## Stage 5: Site Worker Migration
 

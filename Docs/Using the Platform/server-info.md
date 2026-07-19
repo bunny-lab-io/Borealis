@@ -41,6 +41,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     - `GET /api/server/overview` - dashboard snapshot.
     - `GET /api/server/time` - server clock.
+    - `GET /api/server/timezones` - current Engine timezone metadata. Timezone changes are handled on the host, then applied through Engine redeploy.
     - `GET /api/server/workers` - active/recent worker state.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `GET /api/server/agent-release-channels` - read Agent update channel targets.

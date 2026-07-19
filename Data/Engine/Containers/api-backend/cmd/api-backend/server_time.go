@@ -13,6 +13,7 @@ import (
 
 func registerServerTimeRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("/api/server/time", serverTimeHandler(auth))
+	mux.HandleFunc("/api/server/timezones", serverTimezonesHandler(auth))
 }
 
 func serverTimeHandler(auth *authService) http.HandlerFunc {
@@ -40,6 +41,30 @@ func serializeServerTime(nowLocal, nowUTC time.Time, timezoneID string) map[stri
 		"timezone":    nowLocal.Format("MST"),
 		"timezone_id": strings.TrimSpace(timezoneID),
 		"display":     nowLocal.Format("2006-01-02 15:04:05 MST"),
+	}
+}
+
+func serverTimezonesHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		if _, failure := requireUser(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+
+		timezoneID := strings.TrimSpace(currentTimezoneID())
+		if timezoneID == "" {
+			timezoneID = time.Now().Local().Format("MST")
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"current_timezone": timezoneID,
+			"timezone_id":      timezoneID,
+			"change_supported": false,
+			"timezones":        []string{timezoneID},
+		})
 	}
 }
 
