@@ -9,6 +9,8 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +214,49 @@ func TestSchedulerK3sSiteWorkerTerminalPhase(t *testing.T) {
 		if schedulerK3sSiteWorkerTerminal(map[string]any{"kubernetes_phase": phase}) {
 			t.Fatalf("phase %s should not be terminal", phase)
 		}
+	}
+}
+
+func TestSchedulerK3sSiteWorkerGUIDStableBySite(t *testing.T) {
+	first := schedulerK3sSiteWorkerGUID(7)
+	second := schedulerK3sSiteWorkerGUID(7)
+	other := schedulerK3sSiteWorkerGUID(8)
+	if first == "" {
+		t.Fatal("expected stable worker guid")
+	}
+	if first != second {
+		t.Fatalf("site worker guid changed for same site: %q != %q", first, second)
+	}
+	if first == other {
+		t.Fatalf("site worker guid should differ per site: %q", first)
+	}
+	if !borealisOperatorKubernetesNameAllowed(first) {
+		t.Fatalf("site worker guid must remain Kubernetes label-safe: %q", first)
+	}
+}
+
+func TestSchedulerRemoveOrphanRouteFiles(t *testing.T) {
+	routeDir := t.TempDir()
+	t.Setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", routeDir)
+	active := filepath.Join(routeDir, "site-worker-active.yml")
+	orphan := filepath.Join(routeDir, "site-worker-orphan.yml")
+	other := filepath.Join(routeDir, "core.yml")
+	for _, path := range []string{active, orphan, other} {
+		if err := os.WriteFile(path, []byte("http: {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	schedulerRemoveOrphanRouteFiles([]string{active})
+
+	if _, err := os.Stat(active); err != nil {
+		t.Fatalf("active route removed: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan route still present or unexpected error: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("non-site-worker route removed: %v", err)
 	}
 }
 

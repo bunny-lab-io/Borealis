@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,7 @@ const (
 	schedulerDefaultRemoteOpsPortRange  = 5000
 	schedulerDefaultRemoteDeskPortBase  = 61000
 	schedulerDefaultRemoteDeskPortRange = 3000
+	schedulerK3sWorkerGUIDNamespace     = "borealis:k3s:site-worker"
 )
 
 type goSchedulerManager struct {
@@ -1398,7 +1400,23 @@ func (m *goSchedulerManager) pruneWorkerHistory(ctx context.Context, retentionSe
 		 WHERE status IN ($1,$2)
 		   AND COALESCE(stopped_at, updated_at, last_seen_at) < $3
 	`, schedulerWorkerStatusStopped, schedulerWorkerStatusLost, cutoff)
-	return err
+	if err != nil {
+		return err
+	}
+	routeFiles, err := schedulerRouteFilesForTerminalRoutes(ctx, conn, cutoff)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `
+		DELETE FROM engine.job_scheduler_worker_routes
+		 WHERE status IN ($1,$2)
+		   AND COALESCE(retired_at, updated_at, created_at) < $3
+	`, schedulerRouteStatusRetired, schedulerRouteStatusLost, cutoff)
+	if err != nil {
+		return err
+	}
+	schedulerRemoveRouteFiles(routeFiles)
+	return nil
 }
 
 func (m *goSchedulerManager) siteIDsNeedingWorkers(ctx context.Context) ([]int64, error) {
@@ -1472,6 +1490,9 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 	siteName, err := m.siteNameForSite(ctx, siteID)
 	if err != nil {
 		log.Printf("site-worker site name lookup failed site_id=%d: %v", siteID, err)
+	}
+	if schedulerSiteWorkerLifecycleMode() == "k3s" {
+		workerGUID = schedulerK3sSiteWorkerGUID(siteID)
 	}
 	remoteOpsPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
 	remoteDesktopPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
@@ -1668,7 +1689,10 @@ func (m *goSchedulerManager) reconcileDockerSiteWorkers(ctx context.Context) err
 			return err
 		}
 	}
-	return m.markMissingWorkersLost(ctx, live)
+	if err := m.markMissingWorkersLost(ctx, live); err != nil {
+		return err
+	}
+	return m.pruneOrphanSiteWorkerRouteFiles(ctx)
 }
 
 func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error {
@@ -1718,6 +1742,16 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			continue
 		}
 		containerName := firstText(cleanText(snapshot["container_name"]), cleanText(snapshot["name"]), "site-worker-"+workerGUID)
+		expectedWorkerGUID := schedulerK3sSiteWorkerGUID(siteID)
+		if expectedWorkerGUID != "" && workerGUID != expectedWorkerGUID {
+			if _, err := client.retireSiteWorker(ctx, workerGUID, "stable_site_worker_guid_migration"); err != nil {
+				log.Printf("failed to retire K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s: %v", containerName, workerGUID, expectedWorkerGUID, err)
+			} else {
+				log.Printf("retired K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s", containerName, workerGUID, expectedWorkerGUID)
+			}
+			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			continue
+		}
 		if schedulerK3sSiteWorkerTerminal(snapshot) {
 			phase := cleanText(snapshot["kubernetes_phase"])
 			if _, err := client.retireSiteWorker(ctx, workerGUID, "terminal_phase"); err != nil {
@@ -1773,7 +1807,10 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			return err
 		}
 	}
-	return m.markMissingWorkersLost(ctx, live)
+	if err := m.markMissingWorkersLost(ctx, live); err != nil {
+		return err
+	}
+	return m.pruneOrphanSiteWorkerRouteFiles(ctx)
 }
 
 func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Context) error {
@@ -3057,6 +3094,45 @@ func schedulerRouteFilesForStaleWorkers(ctx context.Context, conn *sql.Conn, sta
 	return schedulerCollectRouteFilePaths(rows)
 }
 
+func schedulerRouteFilesForTerminalRoutes(ctx context.Context, conn *sql.Conn, cutoff int64) ([]string, error) {
+	rows, err := conn.QueryContext(ctx, `
+		SELECT route_file_path
+		  FROM engine.job_scheduler_worker_routes
+		 WHERE status IN ($1,$2)
+		   AND COALESCE(retired_at, updated_at, created_at) < $3
+	`, schedulerRouteStatusRetired, schedulerRouteStatusLost, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	return schedulerCollectRouteFilePaths(rows)
+}
+
+func (m *goSchedulerManager) pruneOrphanSiteWorkerRouteFiles(ctx context.Context) error {
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return errors.Join(errOperatorStoreDown, err)
+	}
+	rows, err := conn.QueryContext(ctx, `
+		SELECT route_file_path
+		  FROM engine.job_scheduler_worker_routes
+		 WHERE status=$1
+	`, schedulerRouteStatusActive)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	activeFiles, err := schedulerCollectRouteFilePaths(rows)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	if err := conn.Close(); err != nil {
+		return err
+	}
+	schedulerRemoveOrphanRouteFiles(activeFiles)
+	return nil
+}
+
 func schedulerCollectRouteFilePaths(rows *sql.Rows) ([]string, error) {
 	defer rows.Close()
 	paths := []string{}
@@ -3090,6 +3166,45 @@ func schedulerRemoveRouteFiles(paths []string) {
 			log.Printf("failed to remove retired site-worker route file %s: %v", path, err)
 		}
 	}
+}
+
+func schedulerRemoveOrphanRouteFiles(activePaths []string) {
+	routeDir := strings.TrimSpace(os.Getenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR"))
+	if routeDir == "" {
+		routeDir = filepath.Join(envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"), "Engine", "Services", "traefik-edge", "config", "dynamic")
+	}
+	active := map[string]struct{}{}
+	for _, rawPath := range activePaths {
+		path := strings.TrimSpace(rawPath)
+		if path == "" {
+			continue
+		}
+		active[filepath.Clean(path)] = struct{}{}
+	}
+	matches, err := filepath.Glob(filepath.Join(routeDir, "site-worker-*.yml"))
+	if err != nil {
+		return
+	}
+	remove := []string{}
+	for _, path := range matches {
+		cleaned := filepath.Clean(path)
+		if _, ok := active[cleaned]; ok {
+			continue
+		}
+		remove = append(remove, cleaned)
+	}
+	schedulerRemoveRouteFiles(remove)
+}
+
+func schedulerK3sSiteWorkerGUID(siteID int64) string {
+	if siteID <= 0 {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("%s:%d", schedulerK3sWorkerGUIDNamespace, siteID)))
+	raw := digest[:16]
+	raw[6] = (raw[6] & 0x0f) | 0x50
+	raw[8] = (raw[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }
 
 func envListLookup(values []any) map[string]string {

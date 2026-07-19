@@ -378,7 +378,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     `site-worker-orchestrator` builds the `docker run` command for Docker-backed dynamic `site-worker-*` containers. Stage 5 K3s bridge mode routes site-worker lifecycle through `borealis-operator` instead, with `site-worker-orchestrator` retained only as the Docker boundary for draining legacy Docker workers after K3s worker listing succeeds. Callers do not supply arbitrary Docker flags, Kubernetes pod specs, or raw manifests in either path.
 
-    - Container and K3s pod names must use the `site-worker-` prefix. Docker-backed workers keep `site-worker-<worker_guid>` names to avoid stale Docker name collisions during fallback. K3s bridge workers use deterministic `site-worker-<sanitized-site-name>` pod names when the scheduler can resolve the site name; the worker GUID remains in labels, environment, route metadata, and database records.
+    - Container and K3s pod names must use the `site-worker-` prefix. Docker-backed workers keep `site-worker-<worker_guid>` names until Docker-backed mode is retired. K3s bridge workers use deterministic `site-worker-<sanitized-site-name>` pod names when the scheduler can resolve the site name; their worker GUID is deterministic per site so Agent Socket.IO route URLs stay stable across deploys and pod replacement.
     - Site create and rename requests reject names that would produce an empty K3s worker slug, duplicate another site's normalized slug, or exceed the K3s object-name budget.
     - Images must match `BOREALIS_SITE_WORKER_IMAGE` or `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`.
     - Workers run with host networking because current Traefik routes target per-worker loopback ports.
@@ -400,8 +400,9 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     - `job-scheduler` is the only writer for dynamic site-worker Traefik route files.
     - Route files use `Engine/Services/traefik-edge/config/dynamic/site-worker-<worker_guid>.yml`.
-    - Route metadata records `lifecycle_owner=site-worker-orchestrator`.
-    - When a worker is retired or reconciled away, `job-scheduler` removes the route file and asks the orchestrator to stop/remove the container.
+    - Route metadata records the current lifecycle owner, either `site-worker-orchestrator` or `borealis-operator`.
+    - When a worker is retired or reconciled away, `job-scheduler` removes the route file and asks the orchestrator/operator to stop/remove the workload.
+    - Scheduler reconciliation prunes terminal route rows and orphaned `site-worker-*.yml` files that no longer have active database routes.
     - Dynamic workers keep host-service runtime behavior, remote operations, Ansible execution, file-transfer helpers, and database state updates, but do not write their own Traefik routes.
 
     #### Service-action helper exception
