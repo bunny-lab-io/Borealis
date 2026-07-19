@@ -202,6 +202,19 @@ func TestSchedulerManagerSiteWorkerImageMatch(t *testing.T) {
 	}
 }
 
+func TestSchedulerK3sSiteWorkerTerminalPhase(t *testing.T) {
+	for _, phase := range []string{"Failed", "failed", "Succeeded", "succeeded"} {
+		if !schedulerK3sSiteWorkerTerminal(map[string]any{"kubernetes_phase": phase}) {
+			t.Fatalf("phase %s should be terminal", phase)
+		}
+	}
+	for _, phase := range []string{"Running", "Pending", ""} {
+		if schedulerK3sSiteWorkerTerminal(map[string]any{"kubernetes_phase": phase}) {
+			t.Fatalf("phase %s should not be terminal", phase)
+		}
+	}
+}
+
 func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	t.Setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "")
 	if got := schedulerSiteWorkerSocketIOAsyncMode(); got != "eventlet" {

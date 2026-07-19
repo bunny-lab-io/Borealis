@@ -200,7 +200,7 @@ def test_site_worker_heartbeat_retries_transient_db_deadlock(monkeypatch) -> Non
 
     monkeypatch.setattr(site_worker, "heartbeat_worker", fake_heartbeat)
 
-    site_worker._commit_worker_heartbeat(
+    result = site_worker._commit_worker_heartbeat(
         logging.getLogger("test.site_worker"),
         conn,
         worker_guid="worker-deadlock-retry",
@@ -216,6 +216,37 @@ def test_site_worker_heartbeat_retries_transient_db_deadlock(monkeypatch) -> Non
     assert conn.rollbacks == 1
     assert conn.commits == 1
     assert sleeps == [0.25]
+    assert result is True
+
+
+def test_site_worker_heartbeat_skips_persistent_transient_db_deadlock(monkeypatch) -> None:
+    conn = _HeartbeatFakeConn()
+    calls = []
+    sleeps = []
+
+    def fake_heartbeat(_conn, **kwargs):
+        calls.append(kwargs)
+        raise sqlite3.Error("deadlock detected")
+
+    monkeypatch.setattr(site_worker, "heartbeat_worker", fake_heartbeat)
+
+    result = site_worker._commit_worker_heartbeat(
+        logging.getLogger("test.site_worker"),
+        conn,
+        worker_guid="worker-deadlock-skip",
+        status=WORKER_STATUS_RUNNING,
+        lanes=[site_worker.LANE_AGENT_SOCKETS],
+        task_links=[],
+        idle_since=None,
+        claimed_count=0,
+        sleep_fn=sleeps.append,
+    )
+
+    assert result is False
+    assert len(calls) == 3
+    assert conn.rollbacks == 3
+    assert conn.commits == 0
+    assert sleeps == [0.25, 0.5]
 
 
 def test_site_worker_heartbeat_does_not_retry_non_transient_db_error(monkeypatch) -> None:
@@ -273,7 +304,7 @@ def test_register_worker_creates_active_route_record(tmp_path: Path, monkeypatch
         assert route["upstream_scheme"] == "http"
         assert route["upstream_host"] == "127.0.0.1"
         assert route["upstream_port"] == 0
-        assert route["metadata"]["lifecycle_owner"] == "site-worker-orchestrator"
+        assert route["metadata"]["lifecycle_owner"] == "job-scheduler"
         assert route["metadata"]["route_kind"] == "site_worker"
 
         active = active_worker_route_for_site(conn, site_id=7)

@@ -1691,6 +1691,16 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			continue
 		}
 		containerName := firstText(cleanText(snapshot["container_name"]), cleanText(snapshot["name"]), "site-worker-"+workerGUID)
+		if schedulerK3sSiteWorkerTerminal(snapshot) {
+			phase := cleanText(snapshot["kubernetes_phase"])
+			if _, err := client.retireSiteWorker(ctx, workerGUID, "terminal_phase"); err != nil {
+				log.Printf("failed to retire terminal K3s site-worker pod=%s worker_guid=%s phase=%s: %v", containerName, workerGUID, phase, err)
+			} else {
+				log.Printf("retired terminal K3s site-worker pod=%s worker_guid=%s phase=%s", containerName, workerGUID, phase)
+			}
+			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			continue
+		}
 		if !schedulerSiteWorkerImageMatches(snapshot, desiredImage) {
 			if _, err := client.retireSiteWorker(ctx, workerGUID, "stale_image"); err != nil {
 				log.Printf("failed to retire stale K3s site-worker pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
@@ -2618,6 +2628,11 @@ func schedulerServiceActionHelperImage() string {
 
 func schedulerSiteWorkerSocketIOAsyncMode() string {
 	return envDefault("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "eventlet")
+}
+
+func schedulerK3sSiteWorkerTerminal(snapshot map[string]any) bool {
+	phase := strings.ToLower(cleanText(snapshot["kubernetes_phase"]))
+	return phase == "failed" || phase == "succeeded"
 }
 
 func schedulerSiteWorkerLifecycleMode() string {

@@ -956,7 +956,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 			"enableServiceLinks":           false,
 			"hostNetwork":                  true,
 			"dnsPolicy":                    "ClusterFirstWithHostNet",
-			"restartPolicy":                "Never",
+			"restartPolicy":                "OnFailure",
 			"securityContext": map[string]any{
 				"runAsNonRoot": true,
 				"runAsUser":    borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_UID", 64646),

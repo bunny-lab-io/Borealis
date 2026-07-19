@@ -388,6 +388,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
     - Workers mount API logs/site-worker logs read-write, API cache read-write, API config read-only, and API secrets read-only.
     - K3s bridge workers receive the same runtime path contract through a fixed operator-authored pod template. Runtime env is projected through the `borealis-site-worker-runtime-env` K3s Secret so the operator does not need Kubernetes Secret read permission.
     - K3s bridge workers use `hostNetwork: true` and bind remote-op listeners to `127.0.0.1` only because Compose `api-backend` and `postgres-db` still bind localhost. Remove this exception when API/PostgreSQL cutover makes ClusterIP-only site workers practical.
+    - K3s bridge worker pods use `restartPolicy: OnFailure` so transient worker crashes restart without granting the pod Kubernetes API access. Clean idle TTL exits still complete, and scheduler reconcile retires terminal pods before replacement.
     - Workers do not mount `/var/run/docker.sock`.
     - Workers do not mount Traefik config.
     - Workers do not receive privileged mode, added capabilities, devices, namespace overrides, command overrides, or caller-provided environment overrides through the orchestrator API.

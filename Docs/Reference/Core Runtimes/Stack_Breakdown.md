@@ -152,6 +152,8 @@ Engine/Services/traefik-edge/config/dynamic -> /opt/Borealis/Engine/Services/tra
 
 `job-scheduler` is the single writer for site-worker Traefik route files. In Docker lifecycle mode it writes and retires `site-worker-<worker_guid>.yml` files under the dynamic Traefik config directory, then asks `site-worker-orchestrator` to launch or stop the corresponding Docker container. In K3s lifecycle mode it uses `borealis-operator` for worker launch/list/retire and uses `site-worker-orchestrator` only to drain legacy Docker site-worker containers after K3s worker listing succeeds. `site-worker-*` containers set `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0` so legacy Python route helpers keep database state only and do not write files.
 
+K3s site-worker pods use `restartPolicy: OnFailure` so transient nonzero worker exits restart inside the same pod, while normal idle TTL exits still complete cleanly. Scheduler reconcile retires terminal K3s worker pods and marks their worker rows lost so demand reconciliation can create replacement workers.
+
 `postgres-db`:
 ```text
 Engine/Services/postgres-db/state -> /var/lib/postgresql/data

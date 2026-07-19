@@ -119,7 +119,7 @@ def _commit_worker_heartbeat(
     claimed_count: int,
     max_attempts: int = 3,
     sleep_fn=time.sleep,
-) -> None:
+) -> bool:
     attempt = 1
     while True:
         try:
@@ -133,11 +133,19 @@ def _commit_worker_heartbeat(
                 claimed_count=claimed_count,
             )
             conn.commit()
-            return
+            return True
         except Exception as exc:
             _rollback_quietly(conn)
-            if attempt >= max_attempts or not _is_transient_heartbeat_db_error(exc):
+            if not _is_transient_heartbeat_db_error(exc):
                 raise
+            if attempt >= max_attempts:
+                logger.warning(
+                    "site worker heartbeat transient db error; skipping heartbeat worker_guid=%s attempts=%s err=%s",
+                    worker_guid,
+                    max_attempts,
+                    exc,
+                )
+                return False
             logger.warning(
                 "site worker heartbeat transient db error; retrying worker_guid=%s attempt=%s/%s err=%s",
                 worker_guid,
