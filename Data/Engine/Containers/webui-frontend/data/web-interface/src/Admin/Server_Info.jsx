@@ -1564,7 +1564,10 @@ export default function ServerInfo() {
         value: row?.runtime === "compose" ? "Docker Compose" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
         health: String(row?.docker_health || row?.status || "").trim().toLowerCase(),
         state: serviceState ? formatTitleCase(serviceState) : formatTitleCase(row?.active_state),
-        enabled: row?.runtime === "compose" ? "Compose" : formatTitleCase(row?.enabled_state),
+        enabled:
+          row?.runtime === "compose" && String(row?.enabled_state || "compose").trim().toLowerCase() === "compose"
+            ? "Compose"
+            : formatTitleCase(row?.enabled_state),
         started: row?.started_at ? formatDateTime(row.started_at) : "Unavailable",
         actions,
         sort_order: index,

@@ -8,7 +8,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - API registration: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (Go route registrars).
 - Site-worker orchestrator: Go `site-worker-orchestrator` mode from the shared api-backend binary; it owns Docker write access for site-worker containers and allowlisted Engine service actions.
 - K3s baseline and bridge workloads: `Engine.sh` installs and reconciles a single-node K3s control plane, restricted `borealis-operator`, K3s WebUI workload, and guacd bridge workload for migration work.
-- WebUI serving: production public traffic is routed by Compose Traefik to K3s `webui-frontend`; dev Vite HMR defaults to the Compose WebUI path unless the K3s owner override is set. The Engine WebUI fallback remains for non-container and test paths.
+- WebUI serving: production public traffic is routed by Compose Traefik to K3s `webui-frontend`; dev Vite HMR defaults to the Compose WebUI path unless the K3s owner override is set. Production K3s ownership disables the Compose WebUI container, and rollback recreates it with `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose`. The Engine WebUI fallback remains for non-container and test paths.
 - Realtime events: `Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go` and `remote_shell.go` (quick job results, VPN shell bridge).
 - VPN orchestration: `Data/Engine/Containers/api-backend/cmd/api-backend/vpn_tunnel.go` and `server_wireguard.go` (WireGuard runtime + tunnel service).
 - Remote desktop proxy: `Data/Engine/Containers/api-backend/cmd/api-backend/vnc.go` and `vnc_runtime.go` (Apache Guacamole VNC bridge through local `guacd`).
@@ -76,7 +76,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `site-worker-orchestrator` owns the host Docker socket in container mode. It listens on `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock`, requires `X-Borealis-Internal-Token`, accepts strict JSON, launches only allowlisted site-worker images, and enforces fixed host networking plus fixed Borealis bind mounts.
     - `job-scheduler` owns the scheduled-job tick loop, Postgres work leases, service action queueing, and site-worker reconciliation. Docker-backed workers keep `site-worker-<uuid>` container names; K3s bridge workers use deterministic `site-worker-<sanitized-site-name>` pod names while retaining the worker UUID in labels, route metadata, and database records. It does not mount the host Docker socket; it asks `site-worker-orchestrator` or `borealis-operator` to launch, list, inspect, stop, and remove site workers and to run allowlisted Engine service actions.
     - Site workers execute site-scoped pressure work such as automatic local-network onboarding outside the API process. They do not mount the Docker socket.
-    - Compose `webui-frontend` serves dev Vite HMR and remains the production rollback standby on stable loopback port `127.0.0.1:8000`. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
+    - Compose `webui-frontend` serves dev Vite HMR on stable loopback port `127.0.0.1:8000`. Production K3s ownership disables and removes this Compose container; rollback owner `docker-compose` recreates it before Traefik points WebUI traffic back to loopback. Dev mode bind-mounts `Engine/Services/webui-frontend/data/web-interface/` into the container for host-side UI edits.
     - `traefik-edge` owns public HTTP/HTTPS on `80/443`, ACME or Borealis local CA TLS identity, Traefik config, UI/API/Socket.IO/VNC routing, and edge logs.
     - `postgres-db` owns PostgreSQL state under `Engine/Services/postgres-db/state` and binds `127.0.0.1:5432`.
     - `remote-desktop-guacd` runs VNC-only `guacd` on `127.0.0.1:4822`.
@@ -91,7 +91,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Local deploy writes `BOREALIS_ENGINE_IP_FALLBACK` into runtime env from an explicit override or the host default IPv4 route. Sites uses that value for Linux Agent install commands only when Engine network mode is Local.
     - `Engine.sh --network-mode public|local deploy dev`: Vite HMR WebUI behind Traefik. API, PostgreSQL, Traefik, guacd, and WireGuard stay on the current shared runtime config unless their own inputs changed.
     - `Engine.sh --network-mode public|local --service api-backend restart`: restart API container only.
-    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild and recreate WebUI container, then reconcile K3s WebUI workload so the production traffic target and rollback standby follow the current image.
+    - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild the WebUI image, reconcile K3s WebUI, and recreate the Compose WebUI container only when Compose owns that mode's WebUI route.
     - `Engine.sh --network-mode public|local --service traefik-edge reload`: restart Traefik edge after config/env changes.
     - `Engine.sh --network-mode public|local --service postgres-db restart`: restart PostgreSQL container.
     - `Engine.sh --network-mode public|local --service remote-desktop-guacd restart`: restart guacd container.
@@ -128,7 +128,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Update `Docs/Reference/Data and Schema/api-reference.md` and the relevant domain doc.
 
     ### WebUI hosting and dev mode
-    - Production UI is served by the `webui-frontend` container from its built static output.
+    - Production UI is served by the K3s `webui-frontend` workload from its built static output after Stage 6. Compose `webui-frontend` remains the dev/HMR and rollback container.
     - Dev UI runs Vite HMR behind `traefik-edge`.
     - WebUI app-wide realtime uses `/api/realtime/events` SSE through `bootstrapClientRuntime.js`. Root `/socket.io` is not opened on normal page load or operator-presence sync; only explicitly allowlisted legacy workflow-node events can connect to that root Socket.IO path.
     - The WebUI image uses Node Alpine stages. The production target copies only built static output plus the dependency-free static server into the final image, while the development target keeps Vite and `node_modules` for HMR.

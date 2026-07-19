@@ -208,8 +208,6 @@ services:
     depends_on:
       api-backend:
         condition: service_healthy
-      webui-frontend:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:$${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"]
       interval: 10s

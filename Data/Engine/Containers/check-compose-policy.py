@@ -238,6 +238,10 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
                 fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
             if service.get("volumes"):
                 fail("remote-desktop-guacd must not use host bind mounts")
+        if name == "traefik-edge":
+            depends_on = service.get("depends_on") or {}
+            if "webui-frontend" in depends_on:
+                fail("traefik-edge must not depend on Compose webui-frontend after K3s WebUI cutover")
 
         mounts = mount_by_target(service)
         if name == "postgres-db" and "/var/log/postgresql" in mounts:

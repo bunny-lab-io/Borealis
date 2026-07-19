@@ -248,7 +248,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     ### Server Info and Logs
     - `GET /api/server/time` (Operator Session) - server clock.
     - `GET /api/server/timezones` (Operator Session) - current Engine timezone metadata for Server Info. Timezone mutation is not supported by this endpoint.
-    - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, WebUI traffic owner/upstream metadata, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
+    - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, WebUI traffic owner/upstream metadata, disabled Compose WebUI state when K3s owns the route, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
     - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, K3s Metrics Server CPU/RAM stats for bridge workers when `borealis-operator` can read podmetrics, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.

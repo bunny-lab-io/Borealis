@@ -39,7 +39,7 @@ Most Engine containers use `network_mode: host`. Loopback assumptions are intent
 
 Compose `api-backend` can query the operator through `BOREALIS_OPERATOR_BASE_URL`, which `Engine.sh` resolves from the K3s Service ClusterIP after the operator Service exists. Runtime services do not receive kubeconfig or kubectl access.
 
-`webui-frontend` and `remote-desktop-guacd` K3s workloads run one replica and remain ClusterIP-only. Stage 6 routes production WebUI traffic from the existing Compose Traefik edge to the K3s `webui-frontend` Service IP. Compose Traefik remains the public edge, certificate owner, and watched dynamic-route reader; the K3s workload does not expose a Kubernetes Ingress. Compose API still uses loopback guacd until the explicit guacd/API cutover stage. Dev WebUI defaults to the existing Compose/HMR route unless `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` is set. Dev WebUI pods use fixed read-only hostPath mounts for the same runtime source paths Compose uses, plus memory-backed writable scratch for Vite optimizer and temp files.
+`webui-frontend` and `remote-desktop-guacd` K3s workloads run one replica and remain ClusterIP-only. Stage 6 routes production WebUI traffic from the existing Compose Traefik edge to the K3s `webui-frontend` Service IP. Compose Traefik remains the public edge, certificate owner, and watched dynamic-route reader; the K3s workload does not expose a Kubernetes Ingress. Compose API still uses loopback guacd until the explicit guacd/API cutover stage. Dev WebUI defaults to the existing Compose/HMR route unless `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` is set. Production `k3s` ownership removes the Compose WebUI container from the active Compose service set, while `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose` recreates it for rollback. Dev WebUI pods use fixed read-only hostPath mounts for the same runtime source paths Compose uses, plus memory-backed writable scratch for Vite optimizer and temp files.
 
 ## Least-Privilege Runtime
 `Engine.sh` creates or repairs a `borealis-engine` system user/group with stable numeric IDs and writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID:GID` into `Engine/Deploy/compose.env`. It also detects the host Docker socket GID as `BOREALIS_DOCKER_SOCKET_GID` so only socket-owning services get explicit supplemental group access.
@@ -192,7 +192,7 @@ Engine/Services/webui-frontend/data/web-interface/vite.config.mts -> /opt/Boreal
 
 The WebUI global realtime bridge uses authenticated SSE at `/api/realtime/events` for normal app events such as inventory, service, notification, watchdog, and operator-presence refreshes. It does not connect to root `/socket.io` during normal page load or presence sync. Root Socket.IO remains allowlisted only for legacy workflow-node events that explicitly emit legacy requests, while remote shell and remote desktop use their own per-session worker URLs.
 
-The K3s WebUI workload uses the same fixed read-only source mounts in dev mode and memory-backed `emptyDir` volumes for `node_modules/.vite` and `node_modules/.vite-temp`. In production mode it runs from the built image without host source mounts. Stage 6 makes the K3s WebUI workload the production traffic target by setting `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` and rendering Compose Traefik's core WebUI upstream to the K3s Service ClusterIP. The Compose WebUI container remains a rollback standby until a later retirement stage.
+The K3s WebUI workload uses the same fixed read-only source mounts in dev mode and memory-backed `emptyDir` volumes for `node_modules/.vite` and `node_modules/.vite-temp`. In production mode it runs from the built image without host source mounts. Stage 6 makes the K3s WebUI workload the production traffic target by setting `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` and rendering Compose Traefik's core WebUI upstream to the K3s Service ClusterIP. When that owner is active, `Engine.sh` excludes Compose `webui-frontend` from the active Compose service set and removes the stale Compose container. Rollback sets `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose` before redeploy, which recreates the Compose WebUI container on `127.0.0.1:8000`.
 
 Borealis uses host bind mounts for runtime ownership clarity, not named volumes as a security boundary. Security comes from explicit narrow targets, read-only flags, non-root users, dropped capabilities, and one-writer ownership. Replacing a broad bind with a named volume does not make another container's write access safer by itself.
 
@@ -303,7 +303,7 @@ pg_isready -h 127.0.0.1 -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 4. `wireguard-tunnel` must create the Unix control socket.
 5. `remote-desktop-guacd` must accept loopback TCP connections on `127.0.0.1:4822`.
-6. Compose `webui-frontend` remains a rollback standby and must serve `/` on `127.0.0.1:8000` while it stays in the Compose stack. K3s `webui-frontend` must pass its Deployment readiness probe before production Traefik is rendered with `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s`.
+6. K3s `webui-frontend` must pass its Deployment readiness probe before production Traefik is rendered with `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s`. Once K3s owns the route, Compose `webui-frontend` is disabled and removed unless rollback owner `docker-compose` is selected before redeploy.
 7. `api-backend` waits for:
 ```text
 postgres-db: service_healthy
