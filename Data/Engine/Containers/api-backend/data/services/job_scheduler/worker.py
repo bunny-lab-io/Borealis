@@ -64,6 +64,17 @@ _TRANSIENT_HEARTBEAT_DB_ERRORS = (
     "lock timeout",
 )
 
+_TRANSIENT_WORKER_DB_ERRORS = _TRANSIENT_HEARTBEAT_DB_ERRORS + (
+    "connection refused",
+    "connection failed",
+    "database system is starting up",
+    "server closed the connection unexpectedly",
+    "connection reset by peer",
+    "connection timed out",
+    "timeout expired",
+    "the connection is closed",
+)
+
 
 class _NoopSocketIO:
     def start_background_task(self, target, *args, **kwargs):
@@ -97,7 +108,7 @@ def _db_exception_text(exc: BaseException) -> str:
 
 def _is_transient_heartbeat_db_error(exc: BaseException) -> bool:
     text = _db_exception_text(exc)
-    return any(marker in text for marker in _TRANSIENT_HEARTBEAT_DB_ERRORS)
+    return any(marker in text for marker in _TRANSIENT_WORKER_DB_ERRORS)
 
 
 def _rollback_quietly(conn: sqlite3.Connection) -> None:
@@ -105,6 +116,63 @@ def _rollback_quietly(conn: sqlite3.Connection) -> None:
         conn.rollback()
     except Exception:
         pass
+
+
+def _connect_worker_db_with_retry(
+    logger,
+    db_factory,
+    *,
+    worker_guid: str,
+    purpose: str,
+    max_attempts: int = 30,
+    sleep_fn=time.sleep,
+):
+    attempt = 1
+    while True:
+        try:
+            return db_factory()
+        except Exception as exc:
+            if not _is_transient_heartbeat_db_error(exc) or attempt >= max_attempts:
+                raise
+            logger.warning(
+                "site worker db unavailable; retrying worker_guid=%s purpose=%s attempt=%s/%s err=%s",
+                worker_guid,
+                purpose,
+                attempt,
+                max_attempts,
+                exc,
+            )
+            sleep_fn(min(5.0, 0.5 * attempt))
+            attempt += 1
+
+
+def _stop_worker_quietly(logger, db_factory, *, worker_guid: str) -> None:
+    try:
+        conn = db_factory()
+    except Exception as exc:
+        if _is_transient_heartbeat_db_error(exc):
+            logger.warning(
+                "site worker db unavailable during stop; skip stop marker worker_guid=%s err=%s",
+                worker_guid,
+                exc,
+            )
+            return
+        raise
+    try:
+        stop_worker(conn, worker_guid=worker_guid)
+        conn.commit()
+    except Exception as exc:
+        _rollback_quietly(conn)
+        if _is_transient_heartbeat_db_error(exc):
+            logger.warning(
+                "site worker stop marker skipped after transient db error worker_guid=%s err=%s",
+                worker_guid,
+                exc,
+            )
+            return
+        raise
+    finally:
+        conn.close()
 
 
 def _commit_worker_heartbeat(
@@ -318,7 +386,12 @@ def main() -> None:
     )
     _attach_ansible_runner(socket_runtime, logger, db_factory)
     socket_runtime.start()
-    conn = db_factory()
+    conn = _connect_worker_db_with_retry(
+        logger,
+        db_factory,
+        worker_guid=worker_guid,
+        purpose="register",
+    )
     try:
         register_worker(
             conn,
@@ -353,7 +426,18 @@ def main() -> None:
     try:
         while True:
             agent_device_count = connected_device_count()
-            conn = db_factory()
+            try:
+                conn = db_factory()
+            except Exception as exc:
+                if _is_transient_heartbeat_db_error(exc):
+                    logger.warning(
+                        "site worker db unavailable; skipping heartbeat worker_guid=%s err=%s",
+                        worker_guid,
+                        exc,
+                    )
+                    time.sleep(3.0)
+                    continue
+                raise
             try:
                 online_device_total = online_device_count(conn) if agent_device_count <= 0 else 0
                 if agent_device_count > 0 or online_device_total > 0:
@@ -397,12 +481,7 @@ def main() -> None:
             site_id,
             exit_reason,
         )
-        conn = db_factory()
-        try:
-            stop_worker(conn, worker_guid=worker_guid)
-            conn.commit()
-        finally:
-            conn.close()
+        _stop_worker_quietly(logger, db_factory, worker_guid=worker_guid)
 
 
 if __name__ == "__main__":

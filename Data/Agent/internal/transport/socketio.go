@@ -50,11 +50,15 @@ type Client struct {
 	stateMu     sync.RWMutex
 	connected   bool
 	timeout     time.Duration
+	readIdle    time.Duration
 	tlsConfig   *tls.Config
 	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
-const defaultNamespaceConnectTimeout = 45 * time.Second
+const (
+	defaultNamespaceConnectTimeout = 45 * time.Second
+	defaultReadIdleTimeout         = 90 * time.Second
+)
 
 type Option func(*Client)
 
@@ -84,6 +88,7 @@ func NewClient(baseURL string, headers map[string]string, opts ...Option) *Clien
 		headers:  copiedHeaders,
 		handlers: map[string]Handler{},
 		timeout:  defaultNamespaceConnectTimeout,
+		readIdle: defaultReadIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(client)
@@ -109,6 +114,12 @@ func (c *Client) SetConnectTimeout(timeout time.Duration) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	c.timeout = timeout
+}
+
+func (c *Client) SetReadIdleTimeout(timeout time.Duration) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.readIdle = timeout
 }
 
 func (c *Client) Connect(ctx context.Context) error {
@@ -168,8 +179,12 @@ func (c *Client) Connect(ctx context.Context) error {
 			return err
 		}
 		c.recordActivity()
-		if deadlineActive && c.isConnected() {
-			_ = conn.SetReadDeadline(time.Time{})
+		if c.isConnected() {
+			if readIdle := c.readIdleTimeout(); readIdle > 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(readIdle))
+			} else if deadlineActive {
+				_ = conn.SetReadDeadline(time.Time{})
+			}
 			deadlineActive = false
 		}
 	}
@@ -300,6 +315,12 @@ func (c *Client) connectTimeout() time.Duration {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	return c.timeout
+}
+
+func (c *Client) readIdleTimeout() time.Duration {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.readIdle
 }
 
 func isTimeoutError(err error) bool {

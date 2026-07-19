@@ -819,6 +819,12 @@ func (a *Agent) engineSocketRoleSnapshot(now int64) RoleSnapshot {
 		statusCode = "healthy"
 		runningStatus = "Ready"
 		detail = "Engine Socket.IO control channel is connected."
+		if socketStateAt > 0 && time.Unix(now, 0).Sub(time.Unix(socketStateAt, 0)) > watchdogSocketStaleAfter {
+			status = "unhealthy"
+			statusCode = "unhealthy"
+			runningStatus = "Stale"
+			detail = "Engine Socket.IO control channel has stale connected state."
+		}
 	case "connecting":
 		runningStatus = "Connecting"
 		detail = "Engine Socket.IO control channel is connecting."

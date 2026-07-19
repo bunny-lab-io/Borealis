@@ -110,7 +110,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Retire terminal K3s site-worker pods so failed pods do not block replacement workers.
     - [x] Restart K3s site-worker containers on nonzero exit while preserving idle TTL clean exits.
     - [x] Treat persistent transient heartbeat deadlocks as skipped heartbeat cycles instead of fatal worker exits.
+    - [x] Retry site-worker database registration and heartbeat setup during transient PostgreSQL startup/unavailable windows.
     - [x] Preserve Agent Socket.IO registration after live redeploy validation.
+    - [x] Add Agent stale connected Socket.IO detection so worker restarts do not leave Agents stuck on dead control channels.
     - [x] Name new K3s site-worker pods with deterministic sanitized site slugs for operator-readable Kubernetes and Server Info views.
     - [x] Enforce unique, bounded site-worker slugs on site create and rename so K3s worker names do not need UUID suffixes.
     - [x] Keep K3s worker GUIDs deterministic per site so Agent Socket.IO route URLs do not churn across redeploys.
@@ -132,6 +134,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `/api/server/workers` returns `metrics.k8s.io` CPU/RAM payloads for every active K3s site worker.
     - [x] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
+    - [ ] Redeploy validates K3s site workers survive transient Compose PostgreSQL restarts without disconnecting the fleet.
+    - [ ] Agent release rollout validates stale connected Socket.IO sessions self-recover without manual Agent service restart.
 
 ## Stage 6: Production WebUI Cutover
 
@@ -164,8 +168,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
     - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
 - [ ] Validation:
-    - [ ] Bridge pod rollout passes.
-    - [ ] `curl -fsS http://127.0.0.1:5001/health` passes.
+    - [x] Bridge pod rollout passes.
+    - [x] `curl -fsS http://127.0.0.1:5001/health` passes.
     - [ ] `/health` passes.
     - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
     - [ ] Realtime SSE works with one replica.
@@ -223,6 +227,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Host networking must be minimized except WireGuard/edge needs.
 - [ ] Runtime service actions must not become raw Kubernetes mutation API.
 - [ ] K3s secrets must not replace Aegis security model.
+- [ ] Compose-owned PostgreSQL can still bounce during bridge-stage deploys; K3s site workers must tolerate transient DB outage until PostgreSQL cutover.
+- [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
 - [ ] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.
 

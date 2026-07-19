@@ -277,6 +277,40 @@ def test_site_worker_heartbeat_does_not_retry_non_transient_db_error(monkeypatch
     assert conn.commits == 0
 
 
+def test_site_worker_db_connect_retries_transient_outage() -> None:
+    attempts = []
+    sleeps = []
+
+    def fake_factory():
+        attempts.append(len(attempts) + 1)
+        if len(attempts) < 3:
+            raise sqlite3.Error("connection refused")
+        return "connected"
+
+    result = site_worker._connect_worker_db_with_retry(
+        logging.getLogger("test.site_worker"),
+        fake_factory,
+        worker_guid="worker-db-retry",
+        purpose="heartbeat",
+        sleep_fn=sleeps.append,
+    )
+
+    assert result == "connected"
+    assert attempts == [1, 2, 3]
+    assert sleeps == [0.5, 1.0]
+
+
+def test_site_worker_stop_marker_skips_transient_db_outage() -> None:
+    def fake_factory():
+        raise sqlite3.Error("database system is starting up")
+
+    site_worker._stop_worker_quietly(
+        logging.getLogger("test.site_worker"),
+        fake_factory,
+        worker_guid="worker-stop-skip",
+    )
+
+
 def test_register_worker_creates_active_route_record(tmp_path: Path, monkeypatch) -> None:
     dynamic_dir = tmp_path / "dynamic"
     monkeypatch.setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", str(dynamic_dir))

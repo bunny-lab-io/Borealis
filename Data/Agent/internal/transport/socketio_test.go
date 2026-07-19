@@ -114,6 +114,59 @@ func TestConnectAcksUnsupportedEvent(t *testing.T) {
 	}
 }
 
+func TestConnectReturnsAfterReadIdleTimeout(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/socket.io/" {
+			t.Errorf("path = %q", r.URL.Path)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade failed: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			t.Errorf("write open failed: %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read namespace connect failed: %v", err)
+			return
+		}
+		if string(msg) != "40" {
+			t.Errorf("namespace connect = %q", string(msg))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			t.Errorf("write namespace ack failed: %v", err)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.SetConnectTimeout(time.Second)
+	client.SetReadIdleTimeout(40 * time.Millisecond)
+	client.OnConnected(func(context.Context) error {
+		connected <- struct{}{}
+		return nil
+	})
+	err := client.Connect(context.Background())
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		t.Fatalf("Connect error = %v, want timeout", err)
+	}
+	select {
+	case <-connected:
+	default:
+		t.Fatal("socket did not reach connected state before idle timeout")
+	}
+}
+
 func TestConnectRespondsToPingWhileEventHandlerRuns(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	releaseHandler := make(chan struct{})
