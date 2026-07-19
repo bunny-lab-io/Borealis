@@ -137,12 +137,14 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Add production `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` route owner that renders Compose Traefik's core WebUI upstream to the K3s `webui-frontend` ClusterIP.
     - [x] Keep dev mode on Compose/HMR route by default unless `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` is explicitly set.
     - [x] Keep Compose Traefik as HTTP/HTTPS, certificate, and watched dynamic-route owner.
-    - [ ] Stop/disable Compose WebUI counterpart only after route validation.
+    - [ ] Stop/disable Compose WebUI counterpart after public and local route validation.
     - [x] Keep rollback path to Compose through `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose`.
 - [ ] Validation:
-    - [ ] Public and local network modes serve WebUI.
-    - [ ] Static assets and SPA fallback work.
-    - [ ] Repeated deploys do not restart unchanged WebUI pod.
+    - [x] Public network mode serves WebUI through K3s route owner.
+    - [ ] Local network mode serves WebUI through K3s route owner.
+    - [x] Static assets and SPA fallback work in public network mode.
+    - [x] Guacamole dynamic Traefik route still works after WebUI cutover.
+    - [x] Repeated deploys do not restart unchanged WebUI pod.
 
 ## Stage 7: API Backend Cutover
 
