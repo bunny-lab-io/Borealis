@@ -375,7 +375,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
 
     #### Dynamic site-worker launch policy
 
-    `site-worker-orchestrator` builds the `docker run` command for Docker-backed dynamic `site-worker-*` containers. Stage 5 K3s bridge mode routes site-worker lifecycle through `borealis-operator` instead. Callers do not supply arbitrary Docker flags, Kubernetes pod specs, or raw manifests in either path.
+    `site-worker-orchestrator` builds the `docker run` command for Docker-backed dynamic `site-worker-*` containers. Stage 5 K3s bridge mode routes site-worker lifecycle through `borealis-operator` instead, with `site-worker-orchestrator` retained only as the Docker boundary for draining legacy Docker workers after K3s worker listing succeeds. Callers do not supply arbitrary Docker flags, Kubernetes pod specs, or raw manifests in either path.
 
     - Container names must use the `site-worker-` prefix.
     - Images must match `BOREALIS_SITE_WORKER_IMAGE` or `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`.

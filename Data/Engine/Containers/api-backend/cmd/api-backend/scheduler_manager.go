@@ -1655,6 +1655,9 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		log.Printf("site-worker K3s reconcile skipped: %v", err)
 		return nil
 	}
+	if err := m.retireDockerSiteWorkersForK3sMode(ctx); err != nil {
+		log.Printf("site-worker Docker cleanup during K3s reconcile skipped: %v", err)
+	}
 	desiredImage := schedulerDesiredSiteWorkerImage()
 	sort.SliceStable(snapshots, func(i, j int) bool {
 		leftSite := coerceInt64(snapshots[i]["site_id"])
@@ -1734,6 +1737,31 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		}
 	}
 	return m.markMissingWorkersLost(ctx, live)
+}
+
+func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Context) error {
+	client, err := m.orchestratorClient()
+	if err != nil {
+		return err
+	}
+	snapshots, err := client.listSiteWorkers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, snapshot := range snapshots {
+		workerGUID := cleanText(snapshot["worker_guid"])
+		if workerGUID == "" {
+			continue
+		}
+		containerName := firstText(cleanText(snapshot["container_name"]), "site-worker-"+workerGUID)
+		if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
+			log.Printf("failed to stop Docker site-worker during K3s lifecycle migration container=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			continue
+		}
+		log.Printf("stopped Docker site-worker during K3s lifecycle migration container=%s worker_guid=%s", containerName, workerGUID)
+		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+	}
+	return nil
 }
 
 func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, containerName string, siteID int64, status string, lanes []string, taskLinks []map[string]any, upstreamPort int64, routeMetadata map[string]any) error {

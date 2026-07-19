@@ -150,7 +150,7 @@ Engine/Services/site-worker-orchestrator/run -> /opt/Borealis/Engine/Services/si
 Engine/Services/traefik-edge/config/dynamic -> /opt/Borealis/Engine/Services/traefik-edge/config/dynamic
 ```
 
-`job-scheduler` is the single writer for site-worker Traefik route files. It writes and retires `site-worker-<worker_guid>.yml` files under the dynamic Traefik config directory, then asks `site-worker-orchestrator` to launch or stop the corresponding Docker container. `site-worker-*` containers set `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0` so legacy Python route helpers keep database state only and do not write files.
+`job-scheduler` is the single writer for site-worker Traefik route files. In Docker lifecycle mode it writes and retires `site-worker-<worker_guid>.yml` files under the dynamic Traefik config directory, then asks `site-worker-orchestrator` to launch or stop the corresponding Docker container. In K3s lifecycle mode it uses `borealis-operator` for worker launch/list/retire and uses `site-worker-orchestrator` only to drain legacy Docker site-worker containers after K3s worker listing succeeds. `site-worker-*` containers set `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0` so legacy Python route helpers keep database state only and do not write files.
 
 `postgres-db`:
 ```text
