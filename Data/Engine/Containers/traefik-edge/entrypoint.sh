@@ -19,6 +19,8 @@ LOCAL_CA_ENABLED="${BOREALIS_LOCAL_CA_ENABLED:-0}"
 LOCAL_CA_CERT_PATH="${BOREALIS_LOCAL_CA_CERT_PATH:-}"
 LOCAL_TLS_CERT_PATH="${BOREALIS_LOCAL_TLS_CERT_PATH:-}"
 LOCAL_TLS_KEY_PATH="${BOREALIS_LOCAL_TLS_KEY_PATH:-}"
+WEBUI_TRAFFIC_OWNER="${BOREALIS_WEBUI_TRAFFIC_OWNER:-docker-compose}"
+WEBUI_UPSTREAM_HOST="${BOREALIS_WEBUI_UPSTREAM_HOST:-127.0.0.1}"
 WEBUI_UPSTREAM_PORT="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
 HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
@@ -119,7 +121,8 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "https_port": ${BOREALIS_PUBLIC_HTTPS_PORT:-443},
   "engine_upstream_host": "127.0.0.1",
   "engine_upstream_port": 5000,
-  "webui_upstream_host": "127.0.0.1",
+  "webui_traffic_owner": "${WEBUI_TRAFFIC_OWNER}",
+  "webui_upstream_host": "${WEBUI_UPSTREAM_HOST}",
   "webui_upstream_port": ${WEBUI_UPSTREAM_PORT},
   "vnc_upstream_host": "127.0.0.1",
   "vnc_upstream_port": ${BOREALIS_VNC_WS_PORT:-4823},
@@ -233,7 +236,7 @@ $(printf "%b" "${TLS_BLOCK}")
     borealis-webui:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:${WEBUI_UPSTREAM_PORT}"
+          - url: "http://${WEBUI_UPSTREAM_HOST}:${WEBUI_UPSTREAM_PORT}"
     borealis-vnc:
       loadBalancer:
         servers:

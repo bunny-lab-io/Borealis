@@ -28,6 +28,9 @@ def _build_settings(tmp_path: Path) -> LetsEncryptSettings:
         https_port=443,
         engine_upstream_host="127.0.0.1",
         engine_upstream_port=5000,
+        webui_traffic_owner="docker-compose",
+        webui_upstream_host="127.0.0.1",
+        webui_upstream_port=8000,
         vnc_upstream_host="127.0.0.1",
         vnc_upstream_port=4823,
         settings_path=str(tmp_path / "Engine" / "LetsEncrypt" / "Settings.json"),
@@ -56,8 +59,24 @@ def test_dynamic_config_routes_hostname_aliases(tmp_path: Path) -> None:
     dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
 
     assert 'Host(`borealis.example.com`,`alias.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
+    assert 'Host(`borealis.example.com`,`alias.example.com`) && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))' in dynamic_config
     assert 'Host(`borealis.example.com`,`alias.example.com`) && PathPrefix(`/remote-desktop/vnc`)' in dynamic_config
-    assert 'Host(`borealis.example.com`,`alias.example.com`) && !PathPrefix(`/remote-desktop/vnc`)' in dynamic_config
+    assert 'Host(`borealis.example.com`,`alias.example.com`)' in dynamic_config
+
+
+def test_dynamic_config_routes_webui_to_k3s_upstream(tmp_path: Path) -> None:
+    settings = _build_settings(tmp_path)
+    settings.webui_traffic_owner = "k3s"
+    settings.webui_upstream_host = "10.43.82.247"
+
+    artifacts = write_runtime_artifacts(settings)
+    dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
+    settings_payload = json.loads(Path(settings.settings_path).read_text(encoding="utf-8"))
+
+    assert "borealis-webui:" in dynamic_config
+    assert 'url: "http://10.43.82.247:8000"' in dynamic_config
+    assert settings_payload["webui_traffic_owner"] == "k3s"
+    assert settings_payload["webui_upstream_host"] == "10.43.82.247"
 
 
 def test_traefik_entrypoint_routes_hostname_aliases(tmp_path: Path) -> None:
@@ -82,6 +101,33 @@ def test_traefik_entrypoint_routes_hostname_aliases(tmp_path: Path) -> None:
     ).read_text(encoding="utf-8")
 
     assert dynamic_config.count("Host(`borealis.example.test`,`alias.example.test`)") == 4
+
+
+def test_traefik_entrypoint_routes_webui_to_configured_k3s_upstream(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_traefik = fake_bin / "traefik"
+    fake_traefik.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_traefik.chmod(0o755)
+    project_root = tmp_path / "runtime"
+    entrypoint = Path(__file__).resolve().parents[3] / "Data" / "Engine" / "Containers" / "traefik-edge" / "entrypoint.sh"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        "BOREALIS_PROJECT_ROOT": str(project_root),
+        "BOREALIS_PUBLIC_HOSTNAME": "borealis.example.test",
+        "BOREALIS_WEBUI_TRAFFIC_OWNER": "k3s",
+        "BOREALIS_WEBUI_UPSTREAM_HOST": "10.43.82.247",
+    }
+
+    subprocess.run(["sh", str(entrypoint)], check=True, env=env, capture_output=True, text=True)
+    service_root = project_root / "Engine" / "Services" / "traefik-edge"
+    dynamic_config = (service_root / "config" / "dynamic" / "core.yml").read_text(encoding="utf-8")
+    settings = json.loads((service_root / "state" / "Settings.json").read_text(encoding="utf-8"))
+
+    assert 'url: "http://10.43.82.247:8000"' in dynamic_config
+    assert settings["webui_traffic_owner"] == "k3s"
+    assert settings["webui_upstream_host"] == "10.43.82.247"
 
 
 def test_static_config_trusts_configured_reverse_proxy_for_client_ip(tmp_path: Path, monkeypatch) -> None:
@@ -133,9 +179,9 @@ def test_dynamic_config_routes_dev_ui_to_vite_and_keeps_api_on_engine(
     artifacts = write_runtime_artifacts(settings)
     dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
 
-    assert "borealis-engine-api:" in dynamic_config
+    assert "borealis-api:" in dynamic_config
     assert 'PathPrefix(`/api`) || PathPrefix(`/socket.io`)' in dynamic_config
     assert "borealis-ui-dev:" in dynamic_config
     assert 'service: borealis-vite' in dynamic_config
     assert 'url: "http://127.0.0.1:8000"' in dynamic_config
-    assert "borealis-https:" not in dynamic_config
+    assert "borealis-webui:" not in dynamic_config

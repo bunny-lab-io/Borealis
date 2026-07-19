@@ -100,7 +100,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 5: Site Worker Migration
 
-- [ ] Move dynamic site workers from Docker launch to operator-managed K3s pods.
+- [x] Move dynamic site workers from Docker launch to operator-managed K3s pods.
     - [x] Add `job-scheduler` lifecycle mode switch with Docker fallback through `BOREALIS_SITE_WORKER_LIFECYCLE_MODE`.
     - [x] Route K3s site-worker launch/retire/list operations through `borealis-operator` allowlisted verbs.
     - [x] Preserve one active worker per site in v1 through scheduler reconciliation.
@@ -117,7 +117,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Keep route files owned by `job-scheduler`.
     - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.
     - [ ] Replace temporary host-loopback worker bridge with ClusterIP-only routing after API/PostgreSQL cutover makes it practical.
-- [ ] Validation:
+- [x] Validation:
     - [x] Focused operator/scheduler unit tests pass.
     - [x] Static `Engine.sh` and Python worker checks pass.
     - [x] Agents connect to site worker through existing enrollment/token flow.
@@ -128,14 +128,17 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Connected Devices column reflects K3s worker registrations.
     - [x] Add Metrics Server-backed K3s site-worker CPU/RAM plumbing through `borealis-operator`.
     - [x] `/api/server/workers` returns `metrics.k8s.io` CPU/RAM payloads for every active K3s site worker.
-    - [ ] K3s resource metrics appear in Sites and Server Info.
+    - [x] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
 
 ## Stage 6: Production WebUI Cutover
 
 - [ ] Make K3s `webui-frontend` authoritative.
+    - [x] Add production `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` route owner that renders Compose Traefik's core WebUI upstream to the K3s `webui-frontend` ClusterIP.
+    - [x] Keep dev mode on Compose/HMR route by default unless `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` is explicitly set.
+    - [x] Keep Compose Traefik as HTTP/HTTPS, certificate, and watched dynamic-route owner.
     - [ ] Stop/disable Compose WebUI counterpart only after route validation.
-    - [ ] Keep rollback path to Compose.
+    - [x] Keep rollback path to Compose through `BOREALIS_WEBUI_TRAFFIC_OWNER=docker-compose`.
 - [ ] Validation:
     - [ ] Public and local network modes serve WebUI.
     - [ ] Static assets and SPA fallback work.

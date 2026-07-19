@@ -59,6 +59,9 @@ DEFAULT_TRAEFIK_DYNAMIC_CONFIG_PATH = DEFAULT_TRAEFIK_DYNAMIC_CONFIG_DIR / "core
 DEFAULT_TRAEFIK_LOG_ROOT = DEFAULT_TRAEFIK_SERVICE_ROOT / "logs"
 DEFAULT_ENGINE_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_ENGINE_UPSTREAM_PORT = 5000
+DEFAULT_WEBUI_UPSTREAM_HOST = "127.0.0.1"
+DEFAULT_WEBUI_UPSTREAM_PORT = 8000
+DEFAULT_WEBUI_TRAFFIC_OWNER = "docker-compose"
 DEFAULT_VNC_UPSTREAM_HOST = "127.0.0.1"
 DEFAULT_VNC_UPSTREAM_PORT = 4823
 DEFAULT_VITE_UPSTREAM_HOST = "127.0.0.1"
@@ -206,6 +209,15 @@ def _normalize_base_url(value: Any, *, fqdn: str, https_port: int) -> str:
     return urlunsplit((scheme, netloc, "", "", "")).rstrip("/")
 
 
+def _normalize_webui_traffic_owner(value: Any) -> str:
+    text = _normalize_text(value).lower().replace("_", "-")
+    if text in {"k3s", "kubernetes"}:
+        return "k3s"
+    if text in {"compose", "docker", "docker-compose"}:
+        return "docker-compose"
+    return DEFAULT_WEBUI_TRAFFIC_OWNER
+
+
 @dataclass
 class LetsEncryptSettings:
     enabled: bool
@@ -219,6 +231,9 @@ class LetsEncryptSettings:
     https_port: int
     engine_upstream_host: str
     engine_upstream_port: int
+    webui_traffic_owner: str
+    webui_upstream_host: str
+    webui_upstream_port: int
     vnc_upstream_host: str
     vnc_upstream_port: int
     settings_path: str
@@ -258,6 +273,9 @@ def _default_settings(
         https_port=https_port,
         engine_upstream_host=DEFAULT_ENGINE_UPSTREAM_HOST,
         engine_upstream_port=DEFAULT_ENGINE_UPSTREAM_PORT,
+        webui_traffic_owner=_normalize_webui_traffic_owner(os.environ.get("BOREALIS_WEBUI_TRAFFIC_OWNER")),
+        webui_upstream_host=_normalize_text(os.environ.get("BOREALIS_WEBUI_UPSTREAM_HOST")) or DEFAULT_WEBUI_UPSTREAM_HOST,
+        webui_upstream_port=_parse_int(os.environ.get("BOREALIS_WEBUI_UPSTREAM_PORT"), default=DEFAULT_WEBUI_UPSTREAM_PORT),
         vnc_upstream_host=DEFAULT_VNC_UPSTREAM_HOST,
         vnc_upstream_port=DEFAULT_VNC_UPSTREAM_PORT,
         settings_path=str(settings_path),
@@ -313,6 +331,9 @@ def load_settings(
         https_port=https_port,
         engine_upstream_host=_normalize_text(raw.get("engine_upstream_host")) or defaults.engine_upstream_host,
         engine_upstream_port=_parse_int(raw.get("engine_upstream_port"), default=defaults.engine_upstream_port),
+        webui_traffic_owner=_normalize_webui_traffic_owner(raw.get("webui_traffic_owner") or defaults.webui_traffic_owner),
+        webui_upstream_host=_normalize_text(raw.get("webui_upstream_host")) or defaults.webui_upstream_host,
+        webui_upstream_port=_parse_int(raw.get("webui_upstream_port"), default=defaults.webui_upstream_port),
         vnc_upstream_host=_normalize_text(raw.get("vnc_upstream_host")) or defaults.vnc_upstream_host,
         vnc_upstream_port=_parse_int(raw.get("vnc_upstream_port"), default=defaults.vnc_upstream_port),
         settings_path=str(path),
@@ -350,6 +371,9 @@ def _render_runtime_env(settings: LetsEncryptSettings) -> str:
         "BOREALIS_PUBLIC_WIREGUARD_PORT": str(settings.public_wireguard_port),
         "BOREALIS_VNC_WS_HOST": settings.vnc_upstream_host,
         "BOREALIS_VNC_WS_PORT": str(settings.vnc_upstream_port),
+        "BOREALIS_WEBUI_TRAFFIC_OWNER": settings.webui_traffic_owner,
+        "BOREALIS_WEBUI_UPSTREAM_HOST": settings.webui_upstream_host,
+        "BOREALIS_WEBUI_UPSTREAM_PORT": str(settings.webui_upstream_port),
         "BOREALIS_COOKIE_SECURE": "1",
         "BOREALIS_LETSENCRYPT_SETTINGS_PATH": settings.settings_path,
         "BOREALIS_TRAEFIK_STATIC_CONFIG_PATH": settings.traefik_static_config_path,
@@ -416,6 +440,7 @@ def _dev_ui_proxy_enabled() -> bool:
 
 def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
     engine_url = f"http://{settings.engine_upstream_host}:{settings.engine_upstream_port}"
+    webui_url = f"http://{settings.webui_upstream_host}:{settings.webui_upstream_port}"
     vnc_url = f"http://{settings.vnc_upstream_host}:{settings.vnc_upstream_port}"
     vite_url = f"http://{DEFAULT_VITE_UPSTREAM_HOST}:{DEFAULT_VITE_UPSTREAM_PORT}"
     challenge_path = DEFAULT_ACME_CHALLENGE_PATH
@@ -436,26 +461,26 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
         "      middlewares:",
         "        - redirect-to-https",
         "      service: noop@internal",
+        "    borealis-api:",
+        "      entryPoints:",
+        "        - websecure",
+        f'      rule: "{host_rule} && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
+        "      service: borealis-api",
+        "      priority: 100",
+        "      tls:",
+        "        certResolver: letsencrypt",
         "    borealis-vnc:",
         "      entryPoints:",
         "        - websecure",
         f'      rule: "{host_rule} && PathPrefix(`{settings.public_vnc_path}`)"',
         "      service: borealis-vnc",
-        "      priority: 100",
+        "      priority: 90",
         "      tls:",
         "        certResolver: letsencrypt",
     ]
     if dev_ui_proxy_enabled:
         router_lines.extend(
             [
-                "    borealis-engine-api:",
-                "      entryPoints:",
-                "        - websecure",
-                f'      rule: "{host_rule} && (PathPrefix(`/api`) || PathPrefix(`/socket.io`))"',
-                "      service: borealis-engine",
-                "      priority: 90",
-                "      tls:",
-                "        certResolver: letsencrypt",
                 "    borealis-ui-dev:",
                 "      entryPoints:",
                 "        - websecure",
@@ -469,11 +494,11 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
     else:
         router_lines.extend(
             [
-                "    borealis-https:",
+                "    borealis-webui:",
                 "      entryPoints:",
                 "        - websecure",
-                f'      rule: "{host_rule} && !PathPrefix(`{settings.public_vnc_path}`)"',
-                "      service: borealis-engine",
+                f'      rule: "{host_rule}"',
+                "      service: borealis-webui",
                 "      priority: 10",
                 "      tls:",
                 "        certResolver: letsencrypt",
@@ -481,14 +506,10 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
         )
     service_lines = [
         "  services:",
-        "    borealis-engine:",
+        "    borealis-api:",
         "      loadBalancer:",
         "        servers:",
         f'          - url: "{engine_url}"',
-        "    borealis-vnc:",
-        "      loadBalancer:",
-        "        servers:",
-        f'          - url: "{vnc_url}"',
     ]
     if dev_ui_proxy_enabled:
         service_lines.extend(
@@ -499,6 +520,23 @@ def _render_dynamic_config(settings: LetsEncryptSettings) -> str:
                 f'          - url: "{vite_url}"',
             ]
         )
+    else:
+        service_lines.extend(
+            [
+                "    borealis-webui:",
+                "      loadBalancer:",
+                "        servers:",
+                f'          - url: "{webui_url}"',
+            ]
+        )
+    service_lines.extend(
+        [
+            "    borealis-vnc:",
+            "      loadBalancer:",
+            "        servers:",
+            f'          - url: "{vnc_url}"',
+        ]
+    )
     return "\n".join(
         [*router_lines, *service_lines, ""]
     )

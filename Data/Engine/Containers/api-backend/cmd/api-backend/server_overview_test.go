@@ -78,6 +78,28 @@ func TestCollectOverviewPublicEdgePayloadReadsTraefikACMECertificate(t *testing.
 	}
 }
 
+func TestCollectOverviewHostPayloadReportsWebUITrafficOwner(t *testing.T) {
+	t.Setenv("BOREALIS_WEBUI_MODE", "prod")
+	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
+	t.Setenv("BOREALIS_WEBUI_UPSTREAM_HOST", "10.43.82.247")
+	t.Setenv("BOREALIS_WEBUI_UPSTREAM_PORT", "8000")
+
+	payload := collectOverviewHostPayload()
+	if got := payload["webui_mode"]; got != "production" {
+		t.Fatalf("webui mode = %#v", got)
+	}
+	if got := payload["webui_traffic_owner"]; got != "k3s" {
+		t.Fatalf("webui traffic owner = %#v", got)
+	}
+	upstream, ok := payload["webui_upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("webui upstream missing: %#v", payload["webui_upstream"])
+	}
+	if got := upstream["display"]; got != "10.43.82.247:8000" {
+		t.Fatalf("webui upstream display = %#v", got)
+	}
+}
+
 func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
 	root := t.TempDir()
 	stateDir := filepath.Join(root, "Engine", "Services", "traefik-edge", "state")

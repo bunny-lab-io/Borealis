@@ -43,7 +43,7 @@ This page starts with a plain-language security posture summary for evaluators, 
 ### Runtime and Container Boundaries
 
 - The public edge is Traefik; Engine APIs and database services bind to loopback on the Engine host.
-- K3s adds a single-node Kubernetes control plane on the Engine host. User-facing Borealis workloads still run under Docker Compose until explicit cutover; K3s currently hosts the restricted `borealis-operator`, non-authoritative WebUI/guacd bridge workloads, and operator-managed site-worker bridge pods.
+- K3s adds a single-node Kubernetes control plane on the Engine host. User-facing Borealis workloads move through explicit cutover stages; K3s currently hosts the restricted `borealis-operator`, the production WebUI ClusterIP workload, the guacd bridge workload, and operator-managed site-worker bridge pods.
 - Docker socket write access is isolated to `site-worker-orchestrator`; API reads container state through a read-only Docker proxy, and `job-scheduler` uses either the authenticated orchestrator Unix socket or `borealis-operator` for site-worker lifecycle requests. Other Engine services do not join the Docker group or mount the socket.
 - Most Engine containers, including `remote-desktop-guacd`, run as the non-root `borealis-engine` runtime owner with read-only root filesystems, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and profile-scaled resource limits. PostgreSQL uses the official non-root PostgreSQL UID to preserve database state ownership.
 - Cross-service bind mounts are narrowed to explicit runtime contracts. `job-scheduler` owns site-worker Traefik route files, while dynamic `site-worker-*` containers do not mount Traefik config and cannot write those route files. WebUI source mounts are read-only inside the container.
@@ -116,11 +116,11 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 
 ### K3s Cluster Security
 
-K3s is a host-level control-plane baseline plus a locked-down bridge, not a broad workload cutover. It gives Borealis a future migration target while keeping Compose authoritative for user-facing Engine services.
+K3s is a host-level control-plane baseline plus locked-down workload migration path, not a broad runtime mutation API. It gives Borealis a future migration target while each workload keeps an explicit cutover and rollback boundary.
 
 - `Engine.sh` writes K3s bootstrap and fixed operator manifests during deployment. Runtime services do not receive kubeconfig, Kubernetes API credentials, or kubectl access; they must call `borealis-operator` for allowlisted K3s lifecycle work.
 - Borealis writes its K3s config as `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml` and records the desired hash in `Engine/Deploy/k3s-baseline.sha256`.
-- Bundled K3s Traefik and ServiceLB stay disabled so the existing Borealis Compose Traefik edge remains the only ingress owner.
+- Bundled K3s Traefik and ServiceLB stay disabled so the existing Borealis Compose Traefik edge remains the only ingress owner, certificate owner, and dynamic route-file reader.
 - K3s kubeconfig is rendered root-only by default. Deploy fails if the kubeconfig is group-readable or world-readable.
 - `borealis-k3s-api-firewall.service` installs a host iptables chain for TCP `6443`, allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
 - K3s Secret encryption at rest is enabled for Kubernetes objects, but Aegis remains the Borealis security model for protected operator, credential, token, and signing material.
@@ -129,7 +129,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
 - `borealis-operator` RBAC allows `get` and `list` for pods, services, Deployments, ReplicaSets, StatefulSets, and Metrics Server podmetrics inside the `borealis` namespace. Lifecycle permissions add `patch` only for named Borealis Deployments/StatefulSets, plus pod `create`/`delete` for fixed site-worker pod lifecycle. It has no Kubernetes Secret, node, cluster-scope, arbitrary service account, raw YAML, arbitrary hostPath, or privileged pod permission through the Borealis API.
 - The operator API is ClusterIP-only and HMAC authenticated with `X-Borealis-Operator-Token`. Status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
 - The Compose API backend can query operator status through `BOREALIS_OPERATOR_BASE_URL`, but it remains Kubernetes-blind and exposes only an authenticated admin status endpoint to operators.
-- K3s `webui-frontend` and `remote-desktop-guacd` bridge pods run without ServiceAccount tokens, use non-root runtime IDs, dropped capabilities, read-only root filesystems, `RuntimeDefault` seccomp, `/tmp` memory-backed `emptyDir`, CPU/memory caps, and ClusterIP-only Services. They are not Traefik ingress targets.
+- K3s `webui-frontend` and `remote-desktop-guacd` pods run without ServiceAccount tokens, use non-root runtime IDs, dropped capabilities, read-only root filesystems, `RuntimeDefault` seccomp, `/tmp` memory-backed `emptyDir`, CPU/memory caps, and ClusterIP-only Services. Production WebUI traffic reaches K3s only because Compose Traefik renders its core WebUI upstream to the `webui-frontend` ClusterIP. The K3s workload does not create a Kubernetes Ingress, and `remote-desktop-guacd` is still not the API target.
 - K3s site-worker bridge pods run without ServiceAccount tokens and keep the Docker-era host-loopback route model while Compose API/PostgreSQL remain localhost-only. This is a temporary Stage 5 bridge exception: pods use `hostNetwork: true`, bind remote-op ports to `127.0.0.1`, receive only fixed API logs/cache/config/secrets hostPath mounts, and still run non-root with dropped capabilities, read-only root filesystem, `RuntimeDefault` seccomp, and memory-backed `/tmp`.
 - The WebUI dev bridge uses a fixed allowlist of read-only hostPath mounts for `Engine/Services/webui-frontend/data/web-interface/` HMR parity. Runtime services cannot request arbitrary hostPath mounts through the operator API.
 
@@ -316,7 +316,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
     - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
     - Orchestrator image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/orchestrator-healthcheck.sh`.
     - Remote Desktop guacd container runtime: `Data/Engine/Containers/remote-desktop-guacd/Dockerfile`, `Data/Engine/Containers/remote-desktop-guacd/entrypoint.sh`, and `Data/Engine/Containers/remote-desktop-guacd/healthcheck.sh`.
-    - WebUI K3s bridge bind-host support: `Data/Engine/Containers/webui-frontend/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/static-server.js`, and `Data/Engine/Containers/webui-frontend/healthcheck.js`.
+    - WebUI K3s bind-host and production route support: `Engine.sh`, `Data/Engine/Containers/traefik-edge/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/entrypoint.sh`, `Data/Engine/Containers/webui-frontend/static-server.js`, and `Data/Engine/Containers/webui-frontend/healthcheck.js`.
 
     ### Key material locations
 
@@ -358,7 +358,7 @@ K3s is a host-level control-plane baseline plus a locked-down bridge, not a broa
     - `site-worker-orchestrator` runs non-root with the Docker socket supplemental group, mounts the Docker socket read-write, and receives only the run path, API cache, site-worker logs, API secrets read-only, and deploy metadata read-only.
     - `webui-frontend` runs non-root. Runtime source mounts are read-only inside the container; Vite cache and resolved config temp writes use tmpfs, including `node_modules/.vite-temp` in dev mode.
     - `remote-desktop-guacd` runs non-root, binds guacd to `127.0.0.1:4822`, has no host bind mounts, writes only transient in-container file logs under tmpfs, and does not mount the Docker socket.
-    - K3s bridge `webui-frontend`, `remote-desktop-guacd`, and site-worker pods mirror the non-root, read-only-root, dropped-capability, tmpfs-style `/tmp`, and CPU/memory cap posture where Kubernetes supports it. Dev WebUI bridge pods also use memory-backed `node_modules/.vite-temp` scratch for Vite config bundles. Kubernetes does not enforce the Compose per-container PID cap here; `Engine.sh` records the desired cap as a pod annotation until a later cutover decides the runtime-level PID policy.
+    - K3s `webui-frontend`, `remote-desktop-guacd`, and site-worker pods mirror the non-root, read-only-root, dropped-capability, tmpfs-style `/tmp`, and CPU/memory cap posture where Kubernetes supports it. Dev WebUI pods also use memory-backed `node_modules/.vite-temp` scratch for Vite config bundles. Kubernetes does not enforce the Compose per-container PID cap here; `Engine.sh` records the desired cap as a pod annotation until a later cutover decides the runtime-level PID policy.
     - K3s site-worker CPU/RAM visibility uses namespace-scoped `metrics.k8s.io` podmetrics read by `borealis-operator`; Compose `api-backend` receives normalized metrics through the operator API and never receives kubeconfig or Kubernetes API credentials.
     - `postgres-db` runs as the PostgreSQL runtime UID with Borealis runtime group compatibility and explicit state/run mounts. PostgreSQL logging uses Docker stdout/stderr instead of a host log bind mount.
     - `traefik-edge` is an explicit root exception for host-network low-port binding. It drops default capabilities and adds only `NET_BIND_SERVICE`.

@@ -114,20 +114,24 @@ func collectOverviewHostPayload() map[string]any {
 	nowLocal := nowUTC.Local()
 	timezoneID := currentTimezoneID()
 	hostname, _ := os.Hostname()
+	webuiUpstreamHost := firstText(strings.TrimSpace(os.Getenv("BOREALIS_WEBUI_UPSTREAM_HOST")), "127.0.0.1")
+	webuiUpstreamPort := parseIntDefault(os.Getenv("BOREALIS_WEBUI_UPSTREAM_PORT"), 8000)
 	return map[string]any{
-		"hostname":           hostname,
-		"kernel":             runtime.GOOS,
-		"architecture":       runtime.GOARCH,
-		"engine_mode":        firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
-		"webui_mode":         normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
-		"server_time":        serializeServerTime(nowLocal, nowUTC, timezoneID),
-		"timezone":           nowLocal.Format("MST"),
-		"timezone_id":        timezoneID,
-		"uptime_seconds":     readProcUptimeSeconds(),
-		"public_base_url":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
-		"public_hostname":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
-		"public_https_port":  parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
-		"deployment_profile": deploymentProfilePayload(),
+		"hostname":            hostname,
+		"kernel":              runtime.GOOS,
+		"architecture":        runtime.GOARCH,
+		"engine_mode":         firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
+		"webui_mode":          normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
+		"webui_traffic_owner": normalizeOverviewWebUITrafficOwner(os.Getenv("BOREALIS_WEBUI_TRAFFIC_OWNER")),
+		"webui_upstream":      map[string]any{"host": webuiUpstreamHost, "port": webuiUpstreamPort, "display": endpointDisplay(webuiUpstreamHost, webuiUpstreamPort)},
+		"server_time":         serializeServerTime(nowLocal, nowUTC, timezoneID),
+		"timezone":            nowLocal.Format("MST"),
+		"timezone_id":         timezoneID,
+		"uptime_seconds":      readProcUptimeSeconds(),
+		"public_base_url":     strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
+		"public_hostname":     strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
+		"public_https_port":   parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
+		"deployment_profile":  deploymentProfilePayload(),
 	}
 }
 
@@ -830,6 +834,17 @@ func normalizeOverviewWebUIMode(value string) string {
 			return "unknown"
 		}
 		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizeOverviewWebUITrafficOwner(value string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))) {
+	case "k3s", "kubernetes":
+		return "k3s"
+	case "compose", "docker", "docker-compose":
+		return "docker-compose"
+	default:
+		return "unknown"
 	}
 }
 

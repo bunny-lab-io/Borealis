@@ -109,7 +109,7 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     ### Container service map
     - `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
-    - `webui-frontend`: `127.0.0.1:8000` in production and dev.
+    - `webui-frontend`: K3s ClusterIP `:8000` for production WebUI after cutover; Compose loopback `127.0.0.1:8000` remains dev/HMR and rollback path.
     - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
     - `postgres-db`: `127.0.0.1:5432`, persistent database state.
     - `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.

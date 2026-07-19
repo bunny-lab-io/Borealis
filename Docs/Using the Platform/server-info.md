@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, and site-worker scheduled task slots.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, WebUI route owner, and site-worker scheduled task slots.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -70,6 +70,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     ### Runtime behavior
 
     - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
+    - Host runtime details include `webui_traffic_owner` and `webui_upstream` so K3s WebUI cutover can be validated without reading Traefik files directly.
     - Public-edge certificate health reads Traefik `acme.json` for Externally Accessible deployments, or the Borealis local CA/leaf certificate files for Internal-Only deployments. `/api/server/overview` reports profile, certificate mode, expiry, severity, domains, resolver/source, fingerprint, and local CA bundle metadata for install flows.
     - Active Operator Sessions counts live `/api/realtime/events` SSE subscribers. The realtime hub emits `server_operator_presence_changed` when subscribers connect or disconnect so Server Info can refresh without waiting for the next poll.
     - Service actions queue work items so API request can return before service changes interrupt runtime. Docker-backed execution runs through `site-worker-orchestrator`; Server Info shows that service but does not expose an operator restart action for it.

@@ -49,7 +49,7 @@ BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
-K3S_BRIDGE_WORKLOADS_VERSION="2"
+K3S_BRIDGE_WORKLOADS_VERSION="3"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -361,7 +361,7 @@ dashboard_row_label() {
       printf '%s\n' "Borealis Operator"
       ;;
     "k3s-webui-frontend")
-      printf '%s\n' "WebUI Frontend Bridge"
+      printf '%s\n' "K3s WebUI Frontend"
       ;;
     "k3s-remote-desktop-guacd")
       printf '%s\n' "Guacamole Bridge"
@@ -2200,6 +2200,11 @@ render_k3s_webui_frontend_bridge_manifest() {
   local port="$6"
   local memory_limit="$7"
   local cpu_limit="$8"
+  local traffic_owner="$9"
+  local workload_stage="workload-bridge"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    workload_stage="workload-cutover"
+  fi
   cat <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -2212,10 +2217,10 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     app.kubernetes.io/component: frontend
     borealis.io/service-key: webui-frontend
-    borealis.io/stage: workload-bridge
+    borealis.io/stage: ${workload_stage}
   annotations:
     borealis.io/bridge-config-hash: "${config_hash}"
-    borealis.io/traffic-owner: "docker-compose"
+    borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   replicas: 1
   revisionHistoryLimit: 2
@@ -2236,10 +2241,10 @@ spec:
         app.kubernetes.io/managed-by: Engine.sh
         app.kubernetes.io/component: frontend
         borealis.io/service-key: webui-frontend
-        borealis.io/stage: workload-bridge
+        borealis.io/stage: ${workload_stage}
       annotations:
         borealis.io/bridge-config-hash: "${config_hash}"
-        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/traffic-owner: "${traffic_owner}"
         borealis.io/pids-limit: "$(read_env_value BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT)"
     spec:
       automountServiceAccountToken: false
@@ -2393,10 +2398,10 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     app.kubernetes.io/component: frontend
     borealis.io/service-key: webui-frontend
-    borealis.io/stage: workload-bridge
+    borealis.io/stage: ${workload_stage}
   annotations:
     borealis.io/bridge-config-hash: "${config_hash}"
-    borealis.io/traffic-owner: "docker-compose"
+    borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   type: ClusterIP
   selector:
@@ -2566,7 +2571,8 @@ render_k3s_bridge_workloads_manifest() {
   local webui_cpu_limit="${10}"
   local guacd_memory_limit="${11}"
   local guacd_cpu_limit="${12}"
-  render_k3s_webui_frontend_bridge_manifest "${webui_image}" "${mode}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${webui_port}" "${webui_memory_limit}" "${webui_cpu_limit}"
+  local webui_traffic_owner="${13}"
+  render_k3s_webui_frontend_bridge_manifest "${webui_image}" "${mode}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${webui_port}" "${webui_memory_limit}" "${webui_cpu_limit}" "${webui_traffic_owner}"
   printf '%s\n' "---"
   render_k3s_remote_desktop_guacd_bridge_manifest "${guacd_image}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${guacd_port}" "${guacd_memory_limit}" "${guacd_cpu_limit}"
 }
@@ -2586,6 +2592,7 @@ ensure_k3s_bridge_workloads() {
   local guacd_port
   local webui_memory_limit
   local webui_cpu_limit
+  local webui_traffic_owner
   local guacd_memory_limit
   local guacd_cpu_limit
   runtime_uid="$(resolve_runtime_owner_uid)"
@@ -2596,6 +2603,7 @@ ensure_k3s_bridge_workloads() {
   guacd_port="${guacd_port:-4822}"
   webui_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT)")"
   webui_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_CPU_LIMIT)")"
+  webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
   guacd_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT)")"
   guacd_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT)")"
 
@@ -2611,6 +2619,7 @@ ensure_k3s_bridge_workloads() {
       "webui_port=${webui_port}" \
       "webui_memory_limit=${webui_memory_limit}" \
       "webui_cpu_limit=${webui_cpu_limit}" \
+      "webui_traffic_owner=${webui_traffic_owner}" \
       "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
       "webui_vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
       "webui_vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
@@ -2642,6 +2651,7 @@ ensure_k3s_bridge_workloads() {
     "${webui_cpu_limit}" \
     "${guacd_memory_limit}" \
     "${guacd_cpu_limit}" \
+    "${webui_traffic_owner}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
@@ -2656,7 +2666,11 @@ ensure_k3s_bridge_workloads() {
     log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
     die "K3s WebUI bridge rollout failed. See ${BUILD_LOG}."
   fi
-  log_status "k3s-webui-frontend" "Ready" "${C_GREEN}"
+  if [[ "${webui_traffic_owner}" == "k3s" ]]; then
+    log_status "k3s-webui-frontend" "Ready - Traffic Owner" "${C_GREEN}"
+  else
+    log_status "k3s-webui-frontend" "Ready - Bridge" "${C_GREEN}"
+  fi
 
   log_status "k3s-remote-desktop-guacd" "Waiting For Rollout" "${C_YELLOW}"
   if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/remote-desktop-guacd" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
@@ -2710,10 +2724,15 @@ read_env_value() {
   awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
 }
 
-borealis_operator_service_cluster_ip() {
+k3s_service_cluster_ip() {
+  local service_name="$1"
   k3s_cluster_installed || return 0
   [[ -s "${K3S_KUBECONFIG}" ]] || return 0
-  k3s_kubectl -n "${K3S_NAMESPACE}" get service "${BOREALIS_OPERATOR_SERVICE_NAME}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+  k3s_kubectl -n "${K3S_NAMESPACE}" get service "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+}
+
+borealis_operator_service_cluster_ip() {
+  k3s_service_cluster_ip "${BOREALIS_OPERATOR_SERVICE_NAME}"
 }
 
 resolve_borealis_operator_base_url() {
@@ -2729,6 +2748,53 @@ resolve_borealis_operator_base_url() {
     return 0
   fi
   read_env_value BOREALIS_OPERATOR_BASE_URL
+}
+
+normalize_webui_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto)
+      printf '%s\n' "auto"
+      ;;
+    k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      printf '%s\n' "docker-compose"
+      ;;
+    *)
+      die "Unsupported BOREALIS_WEBUI_TRAFFIC_OWNER '${1}'. Use auto, k3s, or docker-compose."
+      ;;
+  esac
+}
+
+resolve_webui_traffic_owner() {
+  local mode="$1"
+  local owner
+  owner="$(normalize_webui_traffic_owner "${BOREALIS_WEBUI_TRAFFIC_OWNER:-auto}")"
+  if [[ "${owner}" != "auto" ]]; then
+    printf '%s\n' "${owner}"
+    return 0
+  fi
+  if [[ "${mode}" == "prod" ]]; then
+    printf '%s\n' "k3s"
+    return 0
+  fi
+  printf '%s\n' "docker-compose"
+}
+
+resolve_webui_upstream_host() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    local cluster_ip
+    cluster_ip="$(k3s_service_cluster_ip "webui-frontend")"
+    if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
+      printf '%s\n' "${cluster_ip}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "127.0.0.1"
 }
 
 env_key_exists() {
@@ -3926,6 +3992,8 @@ write_compose_env() {
   local host_timezone
   local webui_memory_limit
   local webui_cpu_limit
+  local webui_traffic_owner
+  local webui_upstream_host
   local engine_ip_fallback=""
   local local_ca_enabled=0
   local local_ca_cert=""
@@ -3966,6 +4034,8 @@ write_compose_env() {
     webui_memory_limit="${PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT}"
     webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT}"
   fi
+  webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
+  webui_upstream_host="$(resolve_webui_upstream_host "${webui_traffic_owner}")"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
@@ -3987,6 +4057,8 @@ BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
 BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
 TZ=${host_timezone}
+BOREALIS_WEBUI_TRAFFIC_OWNER=${webui_traffic_owner}
+BOREALIS_WEBUI_UPSTREAM_HOST=${webui_upstream_host}
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}

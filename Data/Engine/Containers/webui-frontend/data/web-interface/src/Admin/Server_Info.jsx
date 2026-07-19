@@ -1316,6 +1316,13 @@ export default function ServerInfo() {
         actions: [],
       },
       {
+        id: "webui_route_owner",
+        name: "WebUI Route Owner",
+        value: formatTitleCase(host?.webui_traffic_owner || "unknown"),
+        details: host?.webui_upstream?.display ? `Upstream ${host.webui_upstream.display}` : "Upstream unavailable",
+        actions: [],
+      },
+      {
         id: "site_worker_scheduled_tasks",
         name: "Site Worker Scheduled Tasks",
         value: Number(siteWorkerSettings?.scheduled_task_concurrency_limit || 5),
