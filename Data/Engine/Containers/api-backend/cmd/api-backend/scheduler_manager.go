@@ -1469,11 +1469,15 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 		return err
 	}
 	workerGUID := randomUUID()
-	containerName := "site-worker-" + workerGUID
+	siteName, err := m.siteNameForSite(ctx, siteID)
+	if err != nil {
+		log.Printf("site-worker site name lookup failed site_id=%d: %v", siteID, err)
+	}
+	containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
 	remoteOpsPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
 	remoteDesktopPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
 	if schedulerSiteWorkerLifecycleMode() == "k3s" {
-		return m.spawnK3sSiteWorker(ctx, siteID, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
+		return m.spawnK3sSiteWorker(ctx, siteID, siteName, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 	}
 	return m.spawnDockerSiteWorker(ctx, siteID, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 }
@@ -1504,7 +1508,7 @@ func (m *goSchedulerManager) spawnDockerSiteWorker(ctx context.Context, siteID i
 	return nil
 }
 
-func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int64, workerGUID string, containerName string, remoteOpsPort int64, remoteDesktopPort int64) error {
+func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int64, siteName string, workerGUID string, containerName string, remoteOpsPort int64, remoteDesktopPort int64) error {
 	if err := m.upsertWorker(ctx, workerGUID, containerName, siteID, schedulerWorkerStatusStarting, []string{}, nil, 0, map[string]any{
 		"lifecycle_owner": "borealis-operator",
 		"route_kind":      "site_worker",
@@ -1520,6 +1524,7 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 	image := schedulerDesiredSiteWorkerImage()
 	response, err := client.launchSiteWorker(ctx, borealisOperatorLaunchSiteWorkerRequest{
 		SiteID:            siteID,
+		SiteName:          siteName,
 		WorkerGUID:        workerGUID,
 		ImageRef:          image,
 		ResourceProfile:   schedulerSiteWorkerResourceProfile(),
@@ -1532,6 +1537,7 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 	}
 	result := schedulerAnyMap(response["result"])
 	pod := schedulerAnyMap(result["pod"])
+	containerName = firstText(cleanText(result["pod_name"]), cleanText(pod["name"]), containerName)
 	host := firstText(cleanText(pod["service_cluster_ip"]), cleanText(schedulerAnyMap(result["service"])["cluster_ip"]), cleanText(pod["remote_ops_host"]), cleanText(result["remote_ops_host"]))
 	metadata := schedulerWorkerRouteMetadataForHost(workerGUID, host, remoteOpsPort, remoteDesktopPort, "borealis-operator")
 	if host != "" {
@@ -1542,6 +1548,26 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 	}
 	log.Printf("launched K3s site-worker pod=%s site_id=%d service_host=%s", containerName, siteID, host)
 	return nil
+}
+
+func (m *goSchedulerManager) siteNameForSite(ctx context.Context, siteID int64) (string, error) {
+	if siteID <= 0 {
+		return "", nil
+	}
+	conn, err := m.store.db.Conn(ctx)
+	if err != nil {
+		return "", errors.Join(errOperatorStoreDown, err)
+	}
+	defer conn.Close()
+	var name sql.NullString
+	err = conn.QueryRowContext(ctx, `SELECT name FROM engine.sites WHERE id=$1`, siteID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return nullString(name), nil
 }
 
 func (m *goSchedulerManager) activeWorkerForSite(ctx context.Context, siteID int64) (bool, error) {

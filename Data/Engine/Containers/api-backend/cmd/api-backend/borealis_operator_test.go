@@ -348,6 +348,7 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	operator := borealisOperatorTestClient(server)
 	payload, status, err := operator.launchSiteWorker(context.Background(), borealisOperatorLaunchSiteWorkerRequest{
 		SiteID:            7,
+		SiteName:          "Bunny's Lab",
 		WorkerGUID:        "worker-safe",
 		ImageRef:          "borealis-engine/site-worker:sha-cccccccccccc",
 		ResourceProfile:   "small",
@@ -357,8 +358,12 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("expected site-worker launch accepted status=%d payload=%#v err=%v", status, payload, err)
 	}
-	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-worker-safe" {
+	if cleanText(nestedMap(createdPod, "metadata")["name"]) != "site-worker-bunnys-lab-worker-safe" {
 		t.Fatalf("unexpected site-worker pod name: %#v", nestedMap(createdPod, "metadata"))
+	}
+	annotations := nestedMap(nestedMap(createdPod, "metadata"), "annotations")
+	if cleanText(annotations["borealis.io/site-slug"]) != "bunnys-lab" {
+		t.Fatalf("unexpected site-worker site annotations: %#v", annotations)
 	}
 }
 

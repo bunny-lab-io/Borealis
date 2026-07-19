@@ -103,6 +103,7 @@ type borealisOperatorScaleRequest struct {
 
 type borealisOperatorLaunchSiteWorkerRequest struct {
 	SiteID            int64  `json:"site_id"`
+	SiteName          string `json:"site_name"`
 	WorkerGUID        string `json:"worker_guid"`
 	ImageRef          string `json:"image_ref"`
 	ResourceProfile   string `json:"resource_profile"`
@@ -540,8 +541,13 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	if len(existing) > 0 {
 		return nil, http.StatusConflict, fmt.Errorf("site-worker %s already has %d K3s pod(s)", workerGUID, len(existing))
 	}
-	podName := "site-worker-" + workerGUID
-	pod := o.siteWorkerPodManifest(podName, req.SiteID, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
+	siteName := cleanText(req.SiteName)
+	siteSlug := siteWorkerSiteSlug(req.SiteID, siteName)
+	podName := siteWorkerNameForSite(req.SiteID, siteName, workerGUID)
+	if len(podName) > siteWorkerKubernetesNameMax || !borealisOperatorKubernetesNameAllowed(podName) {
+		return nil, http.StatusBadRequest, errors.New("generated site-worker pod name must be a Kubernetes DNS label segment")
+	}
+	pod := o.siteWorkerPodManifest(podName, req.SiteID, siteName, siteSlug, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
 	created, err := o.kubeCreate(ctx, "core", "pods", pod)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
@@ -552,6 +558,8 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 		"pod_name":            podName,
 		"worker_guid":         workerGUID,
 		"site_id":             req.SiteID,
+		"site_name":           siteName,
+		"site_slug":           siteSlug,
 		"image_ref":           imageRef,
 		"resource_profile":    profileName,
 		"remote_ops_port":     remoteOpsPort,
@@ -919,7 +927,7 @@ func (o *borealisOperator) siteWorkerPodsByGUID(ctx context.Context, workerGUID 
 	return result, nil
 }
 
-func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
+func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, siteName string, siteSlug string, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
 	projectRoot := envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis")
 	apiRoot := filepath.Join(projectRoot, "Engine", "Services", "api-backend")
 	runtimeSecretName := envDefault("BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME", "borealis-site-worker-runtime-env")
@@ -944,6 +952,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 				"borealis.io/image-ref":           imageRef,
 				"borealis.io/created-at":          time.Now().UTC().Format(time.RFC3339Nano),
 				"borealis.io/stage":               "site-worker-migration",
+				"borealis.io/site-name":           siteName,
+				"borealis.io/site-slug":           siteSlug,
 				"borealis.io/route-owner":         "job-scheduler",
 				"borealis.io/network-mode":        "host-loopback",
 				"borealis.io/remote-ops-host":     "127.0.0.1",
@@ -1456,6 +1466,7 @@ func (c *borealisOperatorClient) listSiteWorkers(ctx context.Context) ([]map[str
 func (c *borealisOperatorClient) launchSiteWorker(ctx context.Context, req borealisOperatorLaunchSiteWorkerRequest) (map[string]any, error) {
 	return c.command(ctx, "LaunchSiteWorker", map[string]any{
 		"site_id":             req.SiteID,
+		"site_name":           req.SiteName,
 		"worker_guid":         req.WorkerGUID,
 		"image_ref":           req.ImageRef,
 		"resource_profile":    req.ResourceProfile,
