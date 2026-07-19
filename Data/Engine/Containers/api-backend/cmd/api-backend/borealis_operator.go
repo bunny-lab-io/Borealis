@@ -102,10 +102,12 @@ type borealisOperatorScaleRequest struct {
 }
 
 type borealisOperatorLaunchSiteWorkerRequest struct {
-	SiteID          int64  `json:"site_id"`
-	WorkerGUID      string `json:"worker_guid"`
-	ImageRef        string `json:"image_ref"`
-	ResourceProfile string `json:"resource_profile"`
+	SiteID            int64  `json:"site_id"`
+	WorkerGUID        string `json:"worker_guid"`
+	ImageRef          string `json:"image_ref"`
+	ResourceProfile   string `json:"resource_profile"`
+	RemoteOpsPort     int64  `json:"remote_ops_port"`
+	RemoteDesktopPort int64  `json:"remote_desktop_port"`
 }
 
 type borealisOperatorRetireSiteWorkerRequest struct {
@@ -523,6 +525,14 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	if !ok {
 		return nil, http.StatusBadRequest, fmt.Errorf("unsupported resource_profile %q", profileName)
 	}
+	remoteOpsPort := req.RemoteOpsPort
+	if remoteOpsPort <= 0 {
+		return nil, http.StatusBadRequest, errors.New("remote_ops_port is required")
+	}
+	remoteDesktopPort := req.RemoteDesktopPort
+	if remoteDesktopPort <= 0 {
+		return nil, http.StatusBadRequest, errors.New("remote_desktop_port is required")
+	}
 	existing, err := o.siteWorkerPodsByGUID(ctx, workerGUID)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
@@ -531,20 +541,23 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 		return nil, http.StatusConflict, fmt.Errorf("site-worker %s already has %d K3s pod(s)", workerGUID, len(existing))
 	}
 	podName := "site-worker-" + workerGUID
-	pod := o.siteWorkerPodManifest(podName, req.SiteID, workerGUID, imageRef, profileName, profile)
+	pod := o.siteWorkerPodManifest(podName, req.SiteID, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
 	created, err := o.kubeCreate(ctx, "core", "pods", pod)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
 	return map[string]any{
-		"ok":               true,
-		"launched":         true,
-		"pod_name":         podName,
-		"worker_guid":      workerGUID,
-		"site_id":          req.SiteID,
-		"image_ref":        imageRef,
-		"resource_profile": profileName,
-		"pod":              summarizeKubernetesPod(created),
+		"ok":                  true,
+		"launched":            true,
+		"pod_name":            podName,
+		"worker_guid":         workerGUID,
+		"site_id":             req.SiteID,
+		"image_ref":           imageRef,
+		"resource_profile":    profileName,
+		"remote_ops_port":     remoteOpsPort,
+		"remote_desktop_port": remoteDesktopPort,
+		"remote_ops_host":     "127.0.0.1",
+		"pod":                 summarizeBorealisSiteWorkerPod(created),
 	}, http.StatusAccepted, nil
 }
 
@@ -603,7 +616,7 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 		if component != "site-worker" && workload != "site-worker" && !strings.HasPrefix(name, "site-worker-") {
 			continue
 		}
-		workers = append(workers, summarizeKubernetesPod(pod))
+		workers = append(workers, summarizeBorealisSiteWorkerPod(pod))
 	}
 	return workers, nil
 }
@@ -906,7 +919,11 @@ func (o *borealisOperator) siteWorkerPodsByGUID(ctx context.Context, workerGUID 
 	return result, nil
 }
 
-func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile) map[string]any {
+func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
+	projectRoot := envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis")
+	apiRoot := filepath.Join(projectRoot, "Engine", "Services", "api-backend")
+	runtimeSecretName := envDefault("BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME", "borealis-site-worker-runtime-env")
+	logRoot := filepath.Join(apiRoot, "logs", "site-workers")
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
@@ -924,15 +941,21 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 				"borealis.io/resource-profile": profileName,
 			},
 			"annotations": map[string]string{
-				"borealis.io/image-ref":   imageRef,
-				"borealis.io/created-at":  time.Now().UTC().Format(time.RFC3339Nano),
-				"borealis.io/stage":       "operator-lifecycle",
-				"borealis.io/route-owner": "pending-stage-5",
+				"borealis.io/image-ref":           imageRef,
+				"borealis.io/created-at":          time.Now().UTC().Format(time.RFC3339Nano),
+				"borealis.io/stage":               "site-worker-migration",
+				"borealis.io/route-owner":         "job-scheduler",
+				"borealis.io/network-mode":        "host-loopback",
+				"borealis.io/remote-ops-host":     "127.0.0.1",
+				"borealis.io/remote-ops-port":     fmt.Sprintf("%d", remoteOpsPort),
+				"borealis.io/remote-desktop-port": fmt.Sprintf("%d", remoteDesktopPort),
 			},
 		},
 		"spec": map[string]any{
 			"automountServiceAccountToken": false,
 			"enableServiceLinks":           false,
+			"hostNetwork":                  true,
+			"dnsPolicy":                    "ClusterFirstWithHostNet",
 			"restartPolicy":                "Never",
 			"securityContext": map[string]any{
 				"runAsNonRoot": true,
@@ -948,14 +971,30 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 					"name":            "site-worker",
 					"image":           imageRef,
 					"imagePullPolicy": "IfNotPresent",
+					"ports": []map[string]any{
+						{"name": "remote-ops", "containerPort": remoteOpsPort, "protocol": "TCP"},
+						{"name": "remote-desktop", "containerPort": remoteDesktopPort, "protocol": "TCP"},
+					},
+					"envFrom": []map[string]any{
+						{"secretRef": map[string]any{"name": runtimeSecretName}},
+					},
 					"env": []map[string]any{
 						{"name": "BOREALIS_PROCESS_ROLE", "value": "site-worker"},
 						{"name": "BOREALIS_SITE_WORKER_GUID", "value": workerGUID},
 						{"name": "BOREALIS_SITE_WORKER_SITE_ID", "value": fmt.Sprintf("%d", siteID)},
 						{"name": "BOREALIS_SITE_WORKER_CONTAINER_NAME", "value": podName},
+						{"name": "BOREALIS_SITE_WORKER_BIND_HOST", "value": "127.0.0.1"},
+						{"name": "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST", "value": "127.0.0.1"},
+						{"name": "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT", "value": fmt.Sprintf("%d", remoteOpsPort)},
+						{"name": "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT", "value": fmt.Sprintf("%d", remoteDesktopPort)},
 						{"name": "BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "value": "0"},
 						{"name": "BOREALIS_SITE_WORKER_RESOURCE_PROFILE", "value": profileName},
 						{"name": "BOREALIS_K3S_SITE_WORKER_BRIDGE", "value": "1"},
+						{"name": "BOREALIS_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+".log")},
+						{"name": "BOREALIS_ERROR_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+"-error.log")},
+						{"name": "BOREALIS_API_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+"-api.log")},
+						{"name": "BOREALIS_VPN_TUNNEL_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+"-vpn.log")},
+						{"name": "BOREALIS_WIREGUARD_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+"-vpn.log")},
 						{"name": "HOME", "value": "/tmp"},
 					},
 					"resources": map[string]any{
@@ -977,6 +1016,10 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 					},
 					"volumeMounts": []map[string]any{
 						{"name": "tmp", "mountPath": "/tmp"},
+						{"name": "api-logs-site-workers", "mountPath": filepath.Join(apiRoot, "logs", "site-workers")},
+						{"name": "api-cache", "mountPath": filepath.Join(apiRoot, "cache")},
+						{"name": "api-config", "mountPath": filepath.Join(apiRoot, "config"), "readOnly": true},
+						{"name": "api-secrets", "mountPath": filepath.Join(apiRoot, "secrets"), "readOnly": true},
 					},
 				},
 			},
@@ -988,7 +1031,21 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, w
 						"sizeLimit": "128Mi",
 					},
 				},
+				borealisOperatorHostPathVolume("api-logs-site-workers", filepath.Join(apiRoot, "logs", "site-workers"), "DirectoryOrCreate"),
+				borealisOperatorHostPathVolume("api-cache", filepath.Join(apiRoot, "cache"), "DirectoryOrCreate"),
+				borealisOperatorHostPathVolume("api-config", filepath.Join(apiRoot, "config"), "Directory"),
+				borealisOperatorHostPathVolume("api-secrets", filepath.Join(apiRoot, "secrets"), "Directory"),
 			},
+		},
+	}
+}
+
+func borealisOperatorHostPathVolume(name string, path string, pathType string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"hostPath": map[string]any{
+			"path": path,
+			"type": pathType,
 		},
 	}
 }
@@ -1085,6 +1142,64 @@ func summarizeKubernetesPod(item map[string]any) map[string]any {
 		"ready":         kubernetesPodReady(status),
 		"restart_count": kubernetesPodRestartCount(status),
 	}
+}
+
+func summarizeBorealisSiteWorkerPod(pod map[string]any) map[string]any {
+	metadata := nestedMap(pod, "metadata")
+	labels := mapStringAny(metadata["labels"])
+	annotations := mapStringAny(metadata["annotations"])
+	spec := nestedMap(pod, "spec")
+	status := nestedMap(pod, "status")
+	workerGUID := cleanText(labels["borealis.io/worker-guid"])
+	siteID := coerceInt64(labels["borealis.io/site-id"])
+	remoteOpsPort := coerceInt64(firstNonEmptyAny(annotations["borealis.io/remote-ops-port"], labels["borealis.io/remote-ops-port"]))
+	remoteDesktopPort := coerceInt64(firstNonEmptyAny(annotations["borealis.io/remote-desktop-port"], labels["borealis.io/remote-desktop-port"]))
+	summary := summarizeKubernetesPod(pod)
+	createdAt := kubernetesTimestampUnix(cleanText(metadata["creationTimestamp"]))
+	if createdAt <= 0 {
+		createdAt = kubernetesTimestampUnix(cleanText(annotations["borealis.io/created-at"]))
+	}
+	phase := cleanText(status["phase"])
+	summary["site_id"] = siteID
+	summary["worker_guid"] = workerGUID
+	summary["container_name"] = firstText(cleanText(metadata["name"]), "site-worker-"+workerGUID)
+	summary["configured_image"] = firstText(cleanText(annotations["borealis.io/image-ref"]), kubernetesPodContainerImage(spec, "site-worker"))
+	summary["resource_profile"] = cleanText(labels["borealis.io/resource-profile"])
+	summary["remote_ops_port"] = remoteOpsPort
+	summary["remote_desktop_port"] = remoteDesktopPort
+	summary["remote_ops_host"] = firstText(cleanText(annotations["borealis.io/remote-ops-host"]), "127.0.0.1")
+	summary["network_mode"] = firstText(cleanText(annotations["borealis.io/network-mode"]), "host-loopback")
+	summary["created_at"] = createdAt
+	summary["kubernetes_phase"] = phase
+	summary["docker_state"] = phase
+	summary["lifecycle_owner"] = "borealis-operator"
+	return summary
+}
+
+func kubernetesPodContainerImage(spec map[string]any, containerName string) string {
+	containers, _ := spec["containers"].([]any)
+	for _, raw := range containers {
+		container, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cleanText(container["name"]) == containerName {
+			return cleanText(container["image"])
+		}
+	}
+	return ""
+}
+
+func kubernetesTimestampUnix(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return 0
+	}
+	return parsed.Unix()
 }
 
 func kubernetesPodReady(status map[string]any) bool {
@@ -1321,12 +1436,31 @@ func (c *borealisOperatorClient) scaleKnownWorkload(ctx context.Context, service
 	})
 }
 
-func (c *borealisOperatorClient) launchSiteWorker(ctx context.Context, siteID int64, workerGUID string, imageRef string, resourceProfile string) (map[string]any, error) {
+func (c *borealisOperatorClient) listSiteWorkers(ctx context.Context) ([]map[string]any, error) {
+	payload, err := c.command(ctx, "ListSiteWorkers", nil)
+	if err != nil {
+		return nil, err
+	}
+	result := schedulerAnyMap(payload["result"])
+	items, _ := result["workers"].([]any)
+	workers := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		worker, ok := item.(map[string]any)
+		if ok {
+			workers = append(workers, worker)
+		}
+	}
+	return workers, nil
+}
+
+func (c *borealisOperatorClient) launchSiteWorker(ctx context.Context, req borealisOperatorLaunchSiteWorkerRequest) (map[string]any, error) {
 	return c.command(ctx, "LaunchSiteWorker", map[string]any{
-		"site_id":          siteID,
-		"worker_guid":      workerGUID,
-		"image_ref":        imageRef,
-		"resource_profile": resourceProfile,
+		"site_id":             req.SiteID,
+		"worker_guid":         req.WorkerGUID,
+		"image_ref":           req.ImageRef,
+		"resource_profile":    req.ResourceProfile,
+		"remote_ops_port":     req.RemoteOpsPort,
+		"remote_desktop_port": req.RemoteDesktopPort,
 	})
 }
 

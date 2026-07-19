@@ -45,6 +45,7 @@ K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
 K3S_BASELINE_VERSION="1"
 BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
+BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
@@ -1828,6 +1829,38 @@ borealis_operator_site_worker_image_allowlist() {
   printf '%s\n' "${image}"
 }
 
+base64_inline() {
+  local value="${1-}"
+  printf '%s' "${value}" | base64 -w 0 2>/dev/null || printf '%s' "${value}" | base64 | tr -d '\n'
+}
+
+borealis_site_worker_runtime_secret_data() {
+  local key
+  for key in \
+    BOREALIS_PROJECT_ROOT \
+    BOREALIS_ENGINE_MODE \
+    BOREALIS_ENGINE_CONTAINERIZED \
+    BOREALIS_INTERNAL_API_BASE_URL \
+    BOREALIS_DATABASE_URL \
+    BOREALIS_DB_SSLMODE \
+    BOREALIS_DB_POOL_SIZE \
+    BOREALIS_DB_MAX_OVERFLOW \
+    BOREALIS_DB_CONNECT_TIMEOUT \
+    BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS \
+    BOREALIS_ENGINE_SECRET_PATH \
+    BOREALIS_ENGINE_CERT_ROOT \
+    BOREALIS_ENGINE_AUTH_TOKEN_ROOT \
+    BOREALIS_ANSIBLE_RUNTIME_ROOT \
+    BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH \
+    BOREALIS_SITE_WORKER_SETTINGS_PATH \
+    BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY \
+    BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT \
+    BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE \
+    BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS; do
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done
+}
+
 render_borealis_operator_manifest() {
   local image="$1"
   local secret="$2"
@@ -1837,7 +1870,7 @@ render_borealis_operator_manifest() {
   local secret_b64
   local runtime_uid
   local runtime_gid
-  secret_b64="$(printf '%s' "${secret}" | base64 -w 0 2>/dev/null || printf '%s' "${secret}" | base64 | tr -d '\n')"
+  secret_b64="$(base64_inline "${secret}")"
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   cat <<EOF
@@ -1854,6 +1887,20 @@ metadata:
 type: Opaque
 data:
   BOREALIS_OPERATOR_SECRET: "${secret_b64}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: site-worker
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: site-worker-migration
+type: Opaque
+data:
+$(borealis_site_worker_runtime_secret_data)
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -1990,6 +2037,10 @@ spec:
               value: "${workload_image_allowlist}"
             - name: BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST
               value: "${site_worker_image_allowlist}"
+            - name: BOREALIS_PROJECT_ROOT
+              value: "${SCRIPT_DIR}"
+            - name: BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME
+              value: "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_UID
               value: "${runtime_uid}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
@@ -2061,7 +2112,7 @@ ensure_borealis_operator_bridge() {
   workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${SCRIPT_DIR}" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
@@ -3936,6 +3987,7 @@ BOREALIS_OPERATOR_SERVICE_NAME=${BOREALIS_OPERATOR_SERVICE_NAME}
 BOREALIS_OPERATOR_PORT=${BOREALIS_OPERATOR_PORT}
 BOREALIS_OPERATOR_BASE_URL=${operator_base_url}
 BOREALIS_OPERATOR_SECRET=${operator_secret}
+BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -4047,6 +4099,7 @@ BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
 BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
 BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
+BOREALIS_SITE_WORKER_LIFECYCLE_MODE=${BOREALIS_SITE_WORKER_LIFECYCLE_MODE:-auto}
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
@@ -4054,6 +4107,8 @@ BOREALIS_ANSIBLE_RUNTIME_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache/Ansible
 BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/ansible_runner_settings.json
 BOREALIS_SITE_WORKER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/site_worker_settings.json
 BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}
+BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE=${BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE:-eventlet}
+BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=${BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS:-300}
 BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log

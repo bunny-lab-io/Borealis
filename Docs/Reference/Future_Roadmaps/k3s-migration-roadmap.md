@@ -96,12 +96,19 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Stage 5: Site Worker Migration
 
 - [ ] Move dynamic site workers from Docker launch to operator-managed K3s pods.
-    - [ ] Preserve one active worker per site in v1.
-    - [ ] Preserve Agent Socket.IO registration.
-    - [ ] Preserve worker idle TTL and stale worker retirement.
-    - [ ] Preserve resource caps, no-new-privileges, dropped capabilities, read-only root, tmpfs.
-- [ ] Replace Traefik route-file behavior with Kubernetes-native Service/Ingress routing or controlled bridge route.
+    - [x] Add `job-scheduler` lifecycle mode switch with Docker fallback through `BOREALIS_SITE_WORKER_LIFECYCLE_MODE`.
+    - [x] Route K3s site-worker launch/retire/list operations through `borealis-operator` allowlisted verbs.
+    - [x] Preserve one active worker per site in v1 through scheduler reconciliation.
+    - [x] Preserve worker idle TTL and stale worker retirement in the K3s bridge path.
+    - [x] Preserve non-root UID/GID, dropped capabilities, read-only root, memory-backed `/tmp`, fixed resource requests/limits, and no ServiceAccount token.
+    - [ ] Preserve Agent Socket.IO registration after live redeploy validation.
+- [x] Replace Traefik route-file behavior with a controlled host-loopback bridge route while Compose API/PostgreSQL stay localhost-only.
+    - [x] Keep route files owned by `job-scheduler`.
+    - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.
+    - [ ] Replace temporary host-loopback worker bridge with ClusterIP-only routing after API/PostgreSQL cutover makes it practical.
 - [ ] Validation:
+    - [x] Focused operator/scheduler unit tests pass.
+    - [x] Static `Engine.sh` and Python worker checks pass.
     - [ ] Agents connect to site worker through existing enrollment/token flow.
     - [ ] Remote shell, file management, service/process actions work.
     - [ ] Worker metrics appear in Sites and Server Info.

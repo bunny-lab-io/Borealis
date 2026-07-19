@@ -306,7 +306,7 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 			}
 			raw, _ := json.Marshal(createdPod)
 			text := string(raw)
-			for _, forbidden := range []string{"hostPath", "privileged", "hostNetwork", "serviceAccountName", "/var/run/docker.sock"} {
+			for _, forbidden := range []string{"privileged", "serviceAccountName", "/var/run/docker.sock"} {
 				if strings.Contains(text, forbidden) {
 					t.Fatalf("site-worker pod contains forbidden field %q: %s", forbidden, text)
 				}
@@ -314,6 +314,29 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 			spec := nestedMap(createdPod, "spec")
 			if spec["automountServiceAccountToken"] != false {
 				t.Fatalf("site-worker pod must not mount service account token: %#v", spec)
+			}
+			if spec["hostNetwork"] != true {
+				t.Fatalf("site-worker pod must use host loopback bridge during Compose transition: %#v", spec)
+			}
+			volumes, _ := spec["volumes"].([]any)
+			hostPaths := map[string]bool{}
+			for _, rawVolume := range volumes {
+				volume, _ := rawVolume.(map[string]any)
+				hostPath := schedulerAnyMap(volume["hostPath"])
+				if len(hostPath) == 0 {
+					continue
+				}
+				hostPaths[cleanText(hostPath["path"])] = true
+			}
+			for _, expected := range []string{
+				"/opt/Borealis/Engine/Services/api-backend/logs/site-workers",
+				"/opt/Borealis/Engine/Services/api-backend/cache",
+				"/opt/Borealis/Engine/Services/api-backend/config",
+				"/opt/Borealis/Engine/Services/api-backend/secrets",
+			} {
+				if !hostPaths[expected] {
+					t.Fatalf("site-worker pod missing fixed hostPath %s in %#v", expected, hostPaths)
+				}
 			}
 			writeJSON(w, http.StatusCreated, createdPod)
 		default:
@@ -324,10 +347,12 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 
 	operator := borealisOperatorTestClient(server)
 	payload, status, err := operator.launchSiteWorker(context.Background(), borealisOperatorLaunchSiteWorkerRequest{
-		SiteID:          7,
-		WorkerGUID:      "worker-safe",
-		ImageRef:        "borealis-engine/site-worker:sha-cccccccccccc",
-		ResourceProfile: "small",
+		SiteID:            7,
+		WorkerGUID:        "worker-safe",
+		ImageRef:          "borealis-engine/site-worker:sha-cccccccccccc",
+		ResourceProfile:   "small",
+		RemoteOpsPort:     56001,
+		RemoteDesktopPort: 61001,
 	})
 	if err != nil || status != http.StatusAccepted {
 		t.Fatalf("expected site-worker launch accepted status=%d payload=%#v err=%v", status, payload, err)

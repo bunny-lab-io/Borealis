@@ -276,6 +276,10 @@ def main() -> None:
     site_id = int(str(os.environ.get("BOREALIS_SITE_WORKER_SITE_ID") or "0").strip() or "0")
     container_name = str(os.environ.get("BOREALIS_SITE_WORKER_CONTAINER_NAME") or f"site-worker-{worker_guid}").strip()
     remote_ops_host = str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    remote_ops_bind_host = (
+        str(os.environ.get("BOREALIS_SITE_WORKER_BIND_HOST") or remote_ops_host).strip()
+        or remote_ops_host
+    )
     try:
         remote_ops_port = int(str(os.environ.get("BOREALIS_SITE_WORKER_REMOTE_OPS_PORT") or "0").strip() or "0")
     except Exception:
@@ -294,9 +298,9 @@ def main() -> None:
     socket_runtime = SiteWorkerSocketRuntime(
         worker_guid=worker_guid,
         site_id=site_id,
-        host=remote_ops_host,
+        host=remote_ops_bind_host,
         port=remote_ops_port,
-        guacamole_host=remote_ops_host,
+        guacamole_host=remote_ops_bind_host,
         guacamole_port=remote_desktop_port,
         internal_secret=settings.secret_key,
         internal_api_base_url=_api_base_url(),
