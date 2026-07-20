@@ -3445,6 +3445,116 @@ ensure_k3s_postgres_statefulset() {
   log_status "k3s-postgres-db" "Ready - Shadow" "${C_GREEN}"
 }
 
+postgres_shadow_import_summary_sql() {
+  cat <<'SQL'
+SELECT 'assemblies.tables=' || COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = 'assemblies' AND table_type = 'BASE TABLE'
+UNION ALL
+SELECT 'engine.tables=' || COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = 'engine' AND table_type = 'BASE TABLE'
+UNION ALL
+SELECT 'engine.sites=' || COUNT(*) FROM engine.sites
+UNION ALL
+SELECT 'engine.devices=' || COUNT(*) FROM engine.devices
+UNION ALL
+SELECT 'engine.users=' || COUNT(*) FROM engine.users
+ORDER BY 1;
+SQL
+}
+
+compose_postgres_psql() {
+  local sql="$1"
+  docker exec borealis-engine-postgres-db sh -lc \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$1"' \
+    sh "${sql}"
+}
+
+k3s_postgres_psql() {
+  local sql="$1"
+  k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$1"' \
+    sh "${sql}"
+}
+
+postgres_shadow_import_summary() {
+  local target="$1"
+  local sql
+  sql="$(postgres_shadow_import_summary_sql)"
+  case "${target}" in
+    compose)
+      compose_postgres_psql "${sql}"
+      ;;
+    k3s)
+      k3s_postgres_psql "${sql}"
+      ;;
+    *)
+      die "Unknown PostgreSQL summary target '${target}'."
+      ;;
+  esac
+}
+
+ensure_k3s_postgres_shadow_traffic_owner() {
+  local owner=""
+  owner="$(
+    k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
+      -o jsonpath='{.metadata.annotations.borealis\.io/traffic-owner}' 2>>"${BUILD_LOG}" || true
+  )"
+  if [[ "${owner}" != "docker-compose" ]]; then
+    die "Refusing K3s PostgreSQL shadow import because StatefulSet traffic owner is '${owner:-unknown}', not docker-compose."
+  fi
+}
+
+validate_k3s_postgres_shadow_import() {
+  local mode="$1"
+  local source_summary=""
+  local target_summary=""
+
+  ensure_k3s_cluster_baseline
+  ensure_longhorn_storage_baseline
+  ensure_k3s_postgres_statefulset "${mode}"
+  ensure_k3s_postgres_shadow_traffic_owner
+
+  log_status "postgres-db" "Starting PostgreSQL" "${C_YELLOW}"
+  compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
+  if ! wait_for_postgres_container 150; then
+    log_status "postgres-db" "Failed" "${C_RED}"
+    die "postgres-db did not become healthy before K3s shadow import validation. See ${BUILD_LOG}."
+  fi
+  refresh_compose_service_statuses postgres-db
+
+  log_status "k3s-postgres-db" "Snapshotting Compose DB" "${C_YELLOW}"
+  source_summary="$(postgres_shadow_import_summary compose)"
+  printf '[%s] K3s PostgreSQL shadow import source summary:\n%s\n' "$(date +%FT%T)" "${source_summary}" >> "${BUILD_LOG}"
+
+  log_status "k3s-postgres-db" "Resetting Shadow Schemas" "${C_YELLOW}"
+  k3s_postgres_psql 'DROP SCHEMA IF EXISTS engine CASCADE; DROP SCHEMA IF EXISTS assemblies CASCADE;' >> "${BUILD_LOG}" 2>&1
+
+  log_status "k3s-postgres-db" "Importing Shadow Data" "${C_YELLOW}"
+  if ! {
+    docker exec borealis-engine-postgres-db sh -lc \
+      'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-acl --schema=engine --schema=assemblies' \
+      | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+        'pg_restore --exit-on-error --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  } >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Shadow Import Failed" "${C_RED}"
+    die "K3s PostgreSQL shadow import failed. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Verifying Shadow Import" "${C_YELLOW}"
+  target_summary="$(postgres_shadow_import_summary k3s)"
+  printf '[%s] K3s PostgreSQL shadow import target summary:\n%s\n' "$(date +%FT%T)" "${target_summary}" >> "${BUILD_LOG}"
+  if [[ "${source_summary}" != "${target_summary}" ]]; then
+    printf '[%s] K3s PostgreSQL shadow import summary mismatch. Source:\n%s\nTarget:\n%s\n' "$(date +%FT%T)" "${source_summary}" "${target_summary}" >> "${BUILD_LOG}"
+    log_status "k3s-postgres-db" "Shadow Import Mismatch" "${C_RED}"
+    die "K3s PostgreSQL shadow import completed but row summaries differ. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Ready - Shadow Import Validated" "${C_GREEN}"
+  printf '[%s] K3s PostgreSQL shadow import validation complete; Compose PostgreSQL remains traffic owner.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+}
+
 render_k3s_webui_frontend_bridge_manifest() {
   local image="$1"
   local mode="$2"
@@ -6635,13 +6745,17 @@ service_action() {
   local service="${1:-}"
   local action="${2:-}"
   local mode="${3:-prod}"
-  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile> [dev|prod]"
+  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import> [dev|prod]"
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   case "${action}" in
+    shadow-import|validate-shadow-import)
+      [[ "${service}" == "postgres-db" ]] || die "shadow-import supported for postgres-db only."
+      validate_k3s_postgres_shadow_import "${mode}"
+      ;;
     restart)
       [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
       if [[ "${service}" == "job-scheduler" ]]; then
@@ -6702,7 +6816,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

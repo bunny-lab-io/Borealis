@@ -207,6 +207,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Add retry-safe PostgreSQL PVC ownership init path with narrow init-container ownership capabilities.
     - [ ] Preserve backup/restore semantics.
         - [x] Keep Traefik ACME storage strict and Backup/Restore-readable while allowing Traefik restart/renewal.
+        - [x] Add `postgres-db shadow-import` validation path that restores a logical Compose DB snapshot into the K3s shadow DB without changing live traffic ownership.
     - [x] No HA/replication in v1 shadow manifest.
     - [x] No automatic PVC deletion.
 - [ ] Validation:
@@ -218,8 +219,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
     - [x] Live deploy creates K3s `postgres-db-0` and `postgres-data-postgres-db-0` without changing Compose DB traffic owner.
     - [x] K3s PostgreSQL readiness passes on the shadow StatefulSet.
-    - [ ] Logical backup/restore tested.
-    - [ ] Existing Engine data imports cleanly.
+    - [x] Logical backup/restore tested through `pg_dump` from Compose PostgreSQL and `pg_restore` into K3s shadow PostgreSQL.
+    - [x] Existing Engine data imports cleanly into K3s shadow PostgreSQL.
+    - [ ] Encrypted WebUI Backup/Restore is validated against K3s PostgreSQL after API/database traffic owner cutover path exists.
     - [x] DB profile settings preserved or documented.
 
 ## Stage 10: WireGuard Cutover
