@@ -120,6 +120,7 @@ services:
     user: "0:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
     restart: unless-stopped
     cap_add:
+      - DAC_OVERRIDE
       - NET_BIND_SERVICE
     mem_limit: ${BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT:-256m}
     cpus: "${BOREALIS_TRAEFIK_EDGE_CPU_LIMIT:-1.00}"

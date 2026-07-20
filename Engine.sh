@@ -3066,6 +3066,7 @@ render_k3s_postgres_statefulset_manifest() {
   local cpu_limit="$6"
   local storage_class="$7"
   local storage_size="$8"
+  local postgres_pgdata="/var/lib/postgresql/data/pgdata"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -3183,7 +3184,11 @@ spec:
           command:
             - sh
             - -c
-            - chown -R ${postgres_uid}:${postgres_gid} /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data
+            - |
+              set -e
+              install -d -m 0755 -o 0 -g 0 ${postgres_pgdata}
+              chown -R ${postgres_uid}:${postgres_gid} ${postgres_pgdata}
+              chmod 0700 ${postgres_pgdata}
           securityContext:
             runAsUser: 0
             runAsGroup: 0
@@ -3191,6 +3196,7 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
@@ -3253,7 +3259,7 @@ spec:
                 name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
           env:
             - name: PGDATA
-              value: /var/lib/postgresql/data
+              value: ${postgres_pgdata}
             - name: HOME
               value: /tmp
           livenessProbe:

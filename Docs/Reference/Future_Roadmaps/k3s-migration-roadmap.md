@@ -203,7 +203,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Set PostgreSQL StatefulSet manifests to use the Longhorn StorageClass.
     - [x] Keep K3s PostgreSQL ClusterIP-only while Compose PostgreSQL remains traffic owner.
     - [x] Preserve profile-managed PostgreSQL startup settings in the K3s StatefulSet manifest.
+    - [x] Use `PGDATA=/var/lib/postgresql/data/pgdata` so Longhorn filesystem metadata does not block `initdb`.
+    - [x] Add retry-safe PostgreSQL PVC ownership init path with narrow init-container ownership capabilities.
     - [ ] Preserve backup/restore semantics.
+        - [x] Keep Traefik ACME storage strict and Backup/Restore-readable while allowing Traefik restart/renewal.
     - [x] No HA/replication in v1 shadow manifest.
     - [x] No automatic PVC deletion.
 - [ ] Validation:
@@ -213,11 +216,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Longhorn system pods are ready and StorageClass is available.
     - [x] Live validation found upstream Longhorn default annotation drift; Engine reconcile now clears it after manifest apply.
     - [x] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
-    - [ ] Live deploy creates K3s `postgres-db-0` and `postgres-data-postgres-db-0` without changing Compose DB traffic owner.
-    - [ ] K3s PostgreSQL readiness passes on the shadow StatefulSet.
+    - [x] Live deploy creates K3s `postgres-db-0` and `postgres-data-postgres-db-0` without changing Compose DB traffic owner.
+    - [x] K3s PostgreSQL readiness passes on the shadow StatefulSet.
     - [ ] Logical backup/restore tested.
     - [ ] Existing Engine data imports cleanly.
-    - [ ] DB profile settings preserved or documented.
+    - [x] DB profile settings preserved or documented.
 
 ## Stage 10: WireGuard Cutover
 

@@ -42,7 +42,7 @@ DOCKER_SOCKET_SERVICES = {
     "site-worker-orchestrator": False,
 }
 CAP_ADD_ALLOWLIST = {
-    "traefik-edge": {"NET_BIND_SERVICE"},
+    "traefik-edge": {"DAC_OVERRIDE", "NET_BIND_SERVICE"},
     "wireguard-tunnel": {"NET_ADMIN", "NET_RAW"},
 }
 
