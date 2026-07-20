@@ -5,6 +5,7 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 ## Scope
 - Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine container deployments use the `postgres-db` service on `127.0.0.1:5432`.
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
+- K3s migration Stage 9 adds Longhorn as the storage baseline before PostgreSQL moves, but PostgreSQL remains Compose-owned until the explicit StatefulSet cutover with backup, restore, and import validation.
 
 ## Quick Relationship Map
 ```text
@@ -48,6 +49,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 
 ## Important PostgreSQL Behavior
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
+- Current Engine PostgreSQL state remains under `Engine/Services/postgres-db/state`. Longhorn installation alone does not migrate, copy, delete, or re-own that state.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
 - Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.

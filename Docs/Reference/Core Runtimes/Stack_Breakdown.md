@@ -6,7 +6,7 @@ Explain the Borealis Engine Docker Compose stack, service ownership, startup ord
 - Linux Engine only.
 - Docker Engine plus Docker Compose plugin.
 - No Docker Desktop.
-- Single-node K3s baseline plus restricted bridge workloads are reconciled by `Engine.sh`; Docker Compose remains source of truth for user-facing workloads until explicit workload cutover.
+- Single-node K3s baseline, Longhorn storage baseline, and restricted bridge workloads are reconciled by `Engine.sh`; Docker Compose remains source of truth for user-facing workloads until explicit workload cutover.
 - Compose project name: `borealis-engine`.
 - Compose source of truth: `Data/Engine/Containers/compose.yaml`.
 - Runtime state: `Engine/`.
@@ -44,6 +44,17 @@ The K3s `api-backend` bridge runs one pod from the same API image, mirrors gener
 `job-scheduler` runs one K3s replica with a `Recreate` rollout strategy so deploys do not create overlapping scheduler loops. It has no ServiceAccount token, no kubeconfig, and no Docker socket. Until API/PostgreSQL cutover, it uses host networking only to reach the K3s API backend bridge on `127.0.0.1:5001` and existing loopback PostgreSQL, receives runtime env through `borealis-job-scheduler-runtime-env`, and keeps fixed hostPath access to API cache/log/config/secrets plus Traefik dynamic route files.
 
 `webui-frontend` and `remote-desktop-guacd` K3s workloads run one replica and remain ClusterIP-only. Stage 6 routes production and dev WebUI traffic from the existing Compose Traefik edge to the K3s `webui-frontend` Service IP. Compose Traefik remains the public edge, certificate owner, and watched dynamic-route reader; the K3s workload does not expose a Kubernetes Ingress. Compose API still uses loopback guacd until the explicit guacd/API cutover stage. Stage 6 removes the Compose WebUI service and `Engine.sh` removes stale `borealis-engine-webui-frontend` containers during deploy. Dev WebUI pods use fixed read-only hostPath mounts for the same runtime source paths Compose used, plus memory-backed writable scratch for Vite optimizer and temp files.
+
+## K3s Storage Baseline
+| Component | K3s object | Main responsibility | Exposure |
+| --- | --- | --- | --- |
+| Longhorn | Namespace `longhorn-system`, controller Deployments, DaemonSets, CSI resources, StorageClass `longhorn` by default | Persistent volume backend for future Borealis PVC-backed workloads | Cluster-internal |
+
+`Engine.sh deploy` reconciles Longhorn before Borealis K3s workloads so PVC-backed cutover stages have a known storage baseline. The default manifest is pinned by `BOREALIS_K3S_LONGHORN_VERSION` and can be overridden with `BOREALIS_K3S_LONGHORN_MANIFEST_URL`.
+
+Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for future workload manifests. The current default is `longhorn`; `BOREALIS_K3S_STORAGE_CLASS` remains accepted as a compatibility alias. `Engine.sh` does not make Longhorn the cluster default StorageClass yet, so K3s `local-path` can remain default for non-Borealis or ad hoc PVCs until an explicit policy change.
+
+Longhorn requires host iSCSI support. `Engine.sh deploy` installs or verifies `open-iscsi` on Debian-style systems, `iscsi-initiator-utils` on RHEL-style systems, or equivalent distro packages, loads `iscsi_tcp`, and verifies `iscsid` is running before applying Longhorn. Normal deploy does not delete Longhorn objects, volumes, PVCs, or existing PostgreSQL state.
 
 ## Least-Privilege Runtime
 `Engine.sh` creates or repairs a `borealis-engine` system user/group with stable numeric IDs and writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID:GID` into `Engine/Deploy/compose.env`. It also detects the host Docker socket GID as `BOREALIS_DOCKER_SOCKET_GID` so only socket-owning services get explicit supplemental group access.

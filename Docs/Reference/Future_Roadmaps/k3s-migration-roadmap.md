@@ -15,7 +15,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Keep `api-backend`, `job-scheduler`, and migrated workloads Kubernetes-blind or operator-API-only.
 - [x] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
 - [x] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
-- [ ] Use Longhorn as the default K3s PVC/persistent volume backend for workloads that need durable container storage.
+- [ ] Use Longhorn as the Borealis K3s PVC/persistent volume backend for workloads that need durable container storage.
 
 ## Stage 1: K3s Baseline
 
@@ -194,12 +194,17 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Stage 9: PostgreSQL Cutover
 
 - [ ] Move `postgres-db` into K3s StatefulSet with one Longhorn-backed PVC.
-    - [ ] Install/reconcile Longhorn before the first PVC-backed workload cutover if it is not already present.
-    - [ ] Set Borealis workload manifests to use the Longhorn StorageClass explicitly or through a Borealis-managed default.
+    - [x] Add `Engine.sh deploy` Longhorn reconcile phase before the first PVC-backed workload cutover.
+    - [x] Install/reconcile Longhorn from pinned manifest version `v1.12.0` if it is enabled and not already present.
+    - [x] Reconcile Longhorn host iSCSI prerequisites without deleting existing Longhorn resources or PVCs.
+    - [x] Keep K3s `local-path` default unchanged for now; future Borealis PVC manifests should request `BOREALIS_K3S_PVC_STORAGE_CLASS` explicitly.
+    - [ ] Set PostgreSQL StatefulSet manifests to use the Longhorn StorageClass.
     - [ ] Preserve backup/restore semantics.
     - [ ] No HA/replication in v1.
     - [ ] No automatic PVC deletion.
 - [ ] Validation:
+    - [x] Static `Engine.sh` syntax passes after Longhorn reconcile addition.
+    - [ ] Live deploy reconciles Longhorn once and a second deploy does not churn Longhorn pods.
     - [ ] Longhorn system pods are ready and StorageClass is available.
     - [ ] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
     - [ ] Logical backup/restore tested.

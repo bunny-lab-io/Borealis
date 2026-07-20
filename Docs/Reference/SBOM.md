@@ -167,6 +167,8 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Tecnativa Docker Socket Proxy container image (`ghcr.io/tecnativa/docker-socket-proxy:v0.4.2`) | [Apache-2.0](https://github.com/Tecnativa/docker-socket-proxy/blob/master/LICENSE.txt) |
 | shared-engine | K3s Kubernetes runtime (single-node baseline installed by `Engine.sh`; stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |
+| shared-engine | Longhorn `v1.12.0` default K3s storage baseline manifest (installed by `Engine.sh` unless `BOREALIS_K3S_LONGHORN_ENABLED=0`) | [Apache-2.0](https://github.com/longhorn/longhorn/blob/master/LICENSE) |
+| shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
 | shared-engine | Go toolchain 1.23.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |

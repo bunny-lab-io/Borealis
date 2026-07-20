@@ -43,6 +43,13 @@ K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
 K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
 K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
 K3S_BASELINE_VERSION="1"
+K3S_LONGHORN_ENABLED="${BOREALIS_K3S_LONGHORN_ENABLED:-1}"
+K3S_LONGHORN_NAMESPACE="${BOREALIS_K3S_LONGHORN_NAMESPACE:-longhorn-system}"
+K3S_LONGHORN_VERSION="${BOREALIS_K3S_LONGHORN_VERSION:-v1.12.0}"
+K3S_LONGHORN_MANIFEST_URL="${BOREALIS_K3S_LONGHORN_MANIFEST_URL:-https://raw.githubusercontent.com/longhorn/longhorn/${K3S_LONGHORN_VERSION}/deploy/longhorn.yaml}"
+K3S_LONGHORN_ROLLOUT_TIMEOUT="${BOREALIS_K3S_LONGHORN_ROLLOUT_TIMEOUT:-300s}"
+K3S_LONGHORN_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-longhorn.sha256"
+K3S_PVC_STORAGE_CLASS="${BOREALIS_K3S_PVC_STORAGE_CLASS:-${BOREALIS_K3S_STORAGE_CLASS:-longhorn}}"
 BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
@@ -176,7 +183,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -202,7 +209,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -239,6 +246,7 @@ dashboard_seed_rows() {
   local row=""
   for row in \
     "Ensuring Cluster Exists" \
+    "k3s-longhorn-storage" \
     "borealis-operator" \
     "k3s-api-backend" \
     "k3s-job-scheduler" \
@@ -372,6 +380,9 @@ dashboard_row_label() {
     "borealis-operator")
       printf '%s\n' "Borealis Operator"
       ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "Longhorn Storage"
+      ;;
     "k3s-api-backend")
       printf '%s\n' "K3s API Backend"
       ;;
@@ -496,6 +507,7 @@ dashboard_render_table() {
   dashboard_render_table_header
   for row in \
     "Ensuring Cluster Exists" \
+    "k3s-longhorn-storage" \
     "borealis-operator" \
     "k3s-api-backend" \
     "k3s-webui-frontend" \
@@ -1361,6 +1373,39 @@ validate_k3s_baseline_settings() {
     || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
 }
 
+normalize_enabled_flag() {
+  local label="$1"
+  local raw="${2:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|on|enabled)
+      printf '%s\n' "1"
+      ;;
+    0|false|no|off|disabled)
+      printf '%s\n' "0"
+      ;;
+    *)
+      die "${label} must be one of 1, 0, true, false, yes, no, on, off, enabled, or disabled."
+      ;;
+  esac
+}
+
+validate_k3s_longhorn_settings() {
+  normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}" >/dev/null
+  [[ "${K3S_LONGHORN_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_NAMESPACE must be a valid Kubernetes namespace name."
+  [[ "${K3S_PVC_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_PVC_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ -n "${K3S_LONGHORN_MANIFEST_URL}" ]] \
+    || die "BOREALIS_K3S_LONGHORN_MANIFEST_URL must not be empty when Longhorn reconcile is enabled."
+  [[ "${K3S_LONGHORN_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_ROLLOUT_TIMEOUT must be a kubectl timeout like 300s or 5m."
+}
+
+k3s_longhorn_enabled() {
+  [[ "$(normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}")" == "1" ]]
+}
+
 ensure_systemctl_for_k3s() {
   command_exists systemctl || die "Borealis-managed K3s baseline currently requires systemd/systemctl."
 }
@@ -1763,6 +1808,197 @@ ensure_k3s_cluster_baseline() {
   ensure_k3s_namespace
   label_k3s_nodes
   log_status "Ensuring Cluster Exists" "Ready" "${C_GREEN}"
+}
+
+systemd_unit_file_exists() {
+  local unit="$1"
+  systemctl list-unit-files "${unit}" --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${unit}"
+}
+
+ensure_longhorn_iscsi_package() {
+  command_exists iscsiadm && return 0
+
+  log_status "k3s-longhorn-storage" "Installing iSCSI Dependency" "${C_YELLOW}"
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      if ! run_privileged apt-get update -qq >> "${BUILD_LOG}" 2>&1 \
+        || ! run_privileged apt-get install -y open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        if ! run_privileged dnf install -y iscsi-initiator-utils >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+          die "Failed to install iscsi-initiator-utils for Longhorn. See ${BUILD_LOG}."
+        fi
+      elif ! run_privileged yum install -y iscsi-initiator-utils >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install iscsi-initiator-utils for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    arch)
+      if ! run_privileged pacman -Sy --noconfirm open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    opensuse*|sles)
+      if ! run_privileged zypper --non-interactive install open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    *)
+      die "Unsupported distro '${DISTRO_ID}'. Install open-iscsi or iscsi-initiator-utils before Longhorn reconcile."
+      ;;
+  esac
+
+  command_exists iscsiadm || die "Longhorn iSCSI dependency install completed, but iscsiadm is still missing."
+}
+
+ensure_longhorn_iscsi_kernel_module() {
+  if [[ -d /sys/module/iscsi_tcp ]]; then
+    return 0
+  fi
+  if command_exists modprobe; then
+    run_privileged modprobe iscsi_tcp >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if [[ -d /sys/module/iscsi_tcp ]]; then
+    return 0
+  fi
+  log_status "k3s-longhorn-storage" "iSCSI Module Missing" "${C_RED}"
+  die "Longhorn requires the iscsi_tcp kernel module. Install/enable iSCSI kernel support and redeploy."
+}
+
+ensure_longhorn_iscsid_running() {
+  local started_unit=0
+  if systemd_unit_file_exists "iscsid.service"; then
+    started_unit=1
+    if ! run_privileged systemctl enable --now iscsid.service >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "iscsid Start Failed" "${C_RED}"
+      die "Failed to enable/start iscsid.service for Longhorn. See ${BUILD_LOG}."
+    fi
+  fi
+  if systemd_unit_file_exists "iscsid.socket"; then
+    started_unit=1
+    run_privileged systemctl enable --now iscsid.socket >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if systemd_unit_file_exists "open-iscsi.service"; then
+    started_unit=1
+    run_privileged systemctl enable --now open-iscsi.service >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if run_privileged systemctl is-active --quiet iscsid.service 2>/dev/null; then
+    return 0
+  fi
+  if command_exists pgrep && pgrep -x iscsid >/dev/null 2>&1; then
+    return 0
+  fi
+  log_status "k3s-longhorn-storage" "iscsid Not Running" "${C_RED}"
+  if [[ "${started_unit}" -eq 0 ]]; then
+    die "Longhorn requires iscsid, but no iscsid/open-iscsi systemd unit was found."
+  fi
+  die "Longhorn requires iscsid to be running. See ${BUILD_LOG}."
+}
+
+ensure_longhorn_node_dependencies() {
+  log_status "k3s-longhorn-storage" "Reconciling Dependencies" "${C_YELLOW}"
+  ensure_longhorn_iscsi_package
+  ensure_longhorn_iscsi_kernel_module
+  ensure_longhorn_iscsid_running
+}
+
+wait_for_longhorn_rollouts() {
+  local deployment
+  local daemonset
+  local -a deployments=()
+  local -a daemonsets=()
+
+  mapfile -t deployments < <(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get deployments -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)
+  ((${#deployments[@]} > 0)) || die "Longhorn namespace has no Deployments after manifest apply."
+  for deployment in "${deployments[@]}"; do
+    [[ -n "${deployment}" ]] || continue
+    log_status "k3s-longhorn-storage" "Waiting For ${deployment}" "${C_YELLOW}"
+    if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" rollout status "deployment/${deployment}" --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Rollout Failed" "${C_RED}"
+      die "Longhorn Deployment ${deployment} did not become ready. See ${BUILD_LOG}."
+    fi
+  done
+
+  mapfile -t daemonsets < <(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get daemonsets -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)
+  for daemonset in "${daemonsets[@]}"; do
+    [[ -n "${daemonset}" ]] || continue
+    log_status "k3s-longhorn-storage" "Waiting For ${daemonset}" "${C_YELLOW}"
+    if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" rollout status "daemonset/${daemonset}" --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Rollout Failed" "${C_RED}"
+      die "Longhorn DaemonSet ${daemonset} did not become ready. See ${BUILD_LOG}."
+    fi
+  done
+}
+
+wait_for_longhorn_storage_class() {
+  local attempt
+  for attempt in {1..60}; do
+    if k3s_kubectl get storageclass "${K3S_PVC_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "k3s-longhorn-storage" "StorageClass Missing" "${C_RED}"
+  die "Longhorn StorageClass ${K3S_PVC_STORAGE_CLASS} was not available after reconcile. See ${BUILD_LOG}."
+}
+
+ensure_longhorn_storage_baseline() {
+  validate_k3s_longhorn_settings
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "enabled=$(normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}")" \
+      "namespace=${K3S_LONGHORN_NAMESPACE}" \
+      "version=${K3S_LONGHORN_VERSION}" \
+      "manifest_url=${K3S_LONGHORN_MANIFEST_URL}" \
+      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  if ! k3s_longhorn_enabled; then
+    printf '%s  k3s-longhorn-storage disabled\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
+    log_status "k3s-longhorn-storage" "Skipped - Disabled" "${C_DIM}"
+    return 0
+  fi
+
+  ensure_longhorn_node_dependencies
+
+  log_status "k3s-longhorn-storage" "Applying Manifests" "${C_YELLOW}"
+  if ! k3s_kubectl apply -f "${K3S_LONGHORN_MANIFEST_URL}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Apply Failed" "${C_RED}"
+    die "Failed to apply Longhorn manifest ${K3S_LONGHORN_MANIFEST_URL}. See ${BUILD_LOG}."
+  fi
+
+  if ! k3s_kubectl get namespace "${K3S_LONGHORN_NAMESPACE}" >/dev/null 2>&1; then
+    log_status "k3s-longhorn-storage" "Namespace Missing" "${C_RED}"
+    die "Longhorn namespace ${K3S_LONGHORN_NAMESPACE} missing after manifest apply."
+  fi
+  k3s_kubectl label namespace "${K3S_LONGHORN_NAMESPACE}" \
+    app.kubernetes.io/part-of=borealis \
+    app.kubernetes.io/managed-by=Engine.sh \
+    borealis.io/stage=longhorn-storage \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+  k3s_kubectl annotate namespace "${K3S_LONGHORN_NAMESPACE}" \
+    borealis.io/longhorn-config-hash="${config_hash}" \
+    borealis.io/longhorn-version="${K3S_LONGHORN_VERSION}" \
+    borealis.io/longhorn-manifest-url="${K3S_LONGHORN_MANIFEST_URL}" \
+    borealis.io/pvc-storage-class="${K3S_PVC_STORAGE_CLASS}" \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+
+  wait_for_longhorn_rollouts
+  wait_for_longhorn_storage_class
+  printf '%s  k3s-longhorn-storage\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
+  log_status "k3s-longhorn-storage" "Ready - StorageClass" "${C_GREEN}"
 }
 
 k3s_ctr() {
@@ -5847,6 +6083,7 @@ deploy_engine() {
   log_deploy_header "${mode}" "${network_mode}"
   ensure_engine_dependencies
   ensure_k3s_cluster_baseline
+  ensure_longhorn_storage_baseline
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   build_images "${mode}"
