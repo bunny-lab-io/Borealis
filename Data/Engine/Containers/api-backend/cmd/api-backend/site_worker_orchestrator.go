@@ -491,6 +491,9 @@ func (o *siteWorkerOrchestrator) runServiceAction(ctx context.Context, req orche
 	}
 	actionName = strings.ToLower(cleanText(resolved["action"]))
 	actionMode = strings.ToLower(cleanText(resolved["mode"]))
+	if !schedulerServiceActionUsesOrchestrator(serviceKey, actionName) {
+		return fmt.Errorf("unsupported helper service action service=%s action=%s mode=%s", serviceKey, actionName, actionMode)
+	}
 	image := schedulerServiceActionHelperImage()
 	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
 	commandParts := []string{"bash", "Engine.sh", "--network-mode", overviewEngineNetworkMode(), "--service", serviceKey, actionName}

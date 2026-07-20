@@ -276,8 +276,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Keep only intentional bridge services: `traefik-edge` and `site-worker-orchestrator`.
     - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
     - [x] Expose WebUI restart as an operator-routed K3s action so simple WebUI pod restarts no longer need the helper bridge.
+    - [x] Keep WebUI rebuilds CLI-only through `Engine.sh --service webui-frontend rebuild prod|dev`; reject queued runtime WebUI rebuild helper actions.
+    - [x] Route K3s API, WebUI, PostgreSQL, and guacd restarts through `borealis-operator` without Docker-helper fallback.
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
     - [x] Route K3s WireGuard reconcile service actions through the scheduler-mounted control socket instead of the Docker helper bridge.
+    - [x] Limit `site-worker-orchestrator` service-action helper to `traefik-edge reload` until edge cutover removes the final Compose service.
     - [x] Move remaining Compose bridge service rows to scheduler snapshots first, without a long-running Docker proxy fallback.
     - [x] Stop Docker metadata reads for K3s site-worker rows once operator metrics are present.
     - [x] Retire Compose `docker-proxy` after K3s worker metrics and scheduler service snapshots became authoritative.
@@ -293,7 +296,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `docker compose config --services` shows only `site-worker-orchestrator` and `traefik-edge`.
     - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
     - [x] Server Overview unit tests confirm remaining Compose bridge rows can render from scheduler snapshots.
-    - [x] Server action tests confirm WebUI restart can be queued separately from helper-backed rebuild.
+    - [x] Server action tests confirm WebUI restart uses the operator path and WebUI rebuild is rejected from queued runtime helper paths.
+    - [x] Orchestrator tests confirm the helper allowlist is limited to Traefik reload.
     - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 

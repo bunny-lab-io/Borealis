@@ -1014,11 +1014,7 @@ func (s *postgresOperatorStore) activeWireGuardLeaseCount(ctx context.Context) i
 func overviewServiceActions(serviceKey string) []map[string]string {
 	switch serviceKey {
 	case "webui-frontend":
-		return []map[string]string{
-			{"id": "restart", "label": "Restart", "action": "restart"},
-			{"id": "rebuild_prod", "label": "Rebuild Prod", "action": "rebuild", "mode": "prod"},
-			{"id": "rebuild_dev", "label": "Rebuild Dev", "action": "rebuild", "mode": "dev"},
-		}
+		return []map[string]string{{"id": "restart", "label": "Restart", "action": "restart"}}
 	case "traefik-edge":
 		return []map[string]string{{"id": "reload", "label": "Reload", "action": "reload"}}
 	case "wireguard-tunnel":

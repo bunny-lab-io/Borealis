@@ -8037,7 +8037,23 @@ service_action() {
       validate_k3s_api_backend_shadow_db "${mode}"
       ;;
     restart)
-      [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
+      if [[ "${service}" == "webui-frontend" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        ensure_k3s_bridge_workloads "${mode}"
+        retire_compose_webui_container
+        log_status "k3s-webui-frontend" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/webui-frontend" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-webui-frontend" "Restart Failed" "${C_RED}"
+          die "K3s WebUI frontend restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/webui-frontend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
+          die "K3s WebUI frontend rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-webui-frontend" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
       if [[ "${service}" == "api-backend" ]]; then
         ensure_k3s_cluster_baseline
         ensure_borealis_operator_bridge

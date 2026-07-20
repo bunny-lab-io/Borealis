@@ -6,7 +6,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
 - API runtime: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (Go `net/http`) inside the `api-backend` container.
 - Configuration loader: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (environment-first defaults).
 - API registration: `Data/Engine/Containers/api-backend/cmd/api-backend/main.go` (Go route registrars).
-- Site-worker orchestrator: Go `site-worker-orchestrator` mode from the shared api-backend binary; it owns Docker write access only for legacy site-worker drains and remaining allowlisted Docker/Compose helper actions.
+- Site-worker orchestrator: Go `site-worker-orchestrator` mode from the shared api-backend binary; it owns Docker write access only for legacy site-worker drains and the remaining allowlisted Traefik reload helper.
 - K3s baseline, storage, and migrated workloads: `Engine.sh` installs and reconciles a single-node K3s control plane, Longhorn storage baseline, restricted `borealis-operator`, K3s PostgreSQL StatefulSet, K3s API backend, K3s job-scheduler workload, K3s WireGuard tunnel workload, K3s WebUI workload, and authoritative guacd ClusterIP workload for migration work.
 - WebUI serving: production and dev traffic are routed by Compose Traefik to K3s `webui-frontend`. Stage 6 retires the Compose WebUI service; `Engine.sh` still keeps the source/build bridge that syncs WebUI source and reconciles the K3s workload.
 - Realtime events: `Data/Engine/Containers/api-backend/cmd/api-backend/operator_realtime.go` and `remote_shell.go` (quick job results, VPN shell bridge).
@@ -101,6 +101,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - `Engine.sh --network-mode public|local --service api-backend rebuild prod`: rebuild the API image, reconcile the K3s API backend Deployment to the refreshed image, and retire any stale Compose API container.
     - `Engine.sh --network-mode public|local --service job-scheduler restart`: restart the K3s job-scheduler Deployment and wait for rollout.
     - `Engine.sh --network-mode public|local --service job-scheduler rebuild prod`: rebuild the scheduler image, retire any stale Compose scheduler container, and reconcile the K3s job-scheduler Deployment to the refreshed image.
+    - `Engine.sh --network-mode public|local --service webui-frontend restart`: restart the K3s WebUI Deployment and wait for rollout.
     - `Engine.sh --network-mode public|local --service webui-frontend rebuild dev|prod`: rebuild the WebUI image, sync dev runtime source when requested, and reconcile the K3s WebUI workload.
     - `Engine.sh --network-mode public|local --service traefik-edge reload`: restart Traefik edge after config/env changes.
     - `Engine.sh --network-mode public|local --service postgres-db restart`: restart the K3s PostgreSQL StatefulSet and wait for rollout.

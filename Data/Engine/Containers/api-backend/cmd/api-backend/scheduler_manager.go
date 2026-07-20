@@ -1142,6 +1142,9 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 			return fmt.Errorf("unsupported borealis-operator service action service=%s action=%s", serviceKey, actionName)
 		}
 	}
+	if !schedulerServiceActionUsesOrchestrator(serviceKey, actionName) {
+		return fmt.Errorf("unsupported service action service=%s action=%s", serviceKey, actionName)
+	}
 	client, err := m.orchestratorClient()
 	if err != nil {
 		return err
@@ -2762,20 +2765,20 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 		return false
 	}
 	switch serviceKey {
-	case "webui-frontend":
-		return schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_TRAFFIC_OWNER")
-	case "api-backend":
-		return schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_RUNTIME_OWNER")
-	case "remote-desktop-guacd":
-		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
-	case "postgres-db":
-		return schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_TRAFFIC_OWNER")
+	case "webui-frontend", "api-backend", "remote-desktop-guacd", "postgres-db":
+		return true
 	case "job-scheduler":
-		// Self-restart must stay detached through Engine.sh so the current scheduler can finish the queue item.
+		// Self-restart stays CLI-only so the current scheduler can finish any active queue item.
 		return false
 	default:
 		return false
 	}
+}
+
+func schedulerServiceActionUsesOrchestrator(serviceKey string, actionName string) bool {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	actionName = strings.ToLower(strings.TrimSpace(actionName))
+	return serviceKey == "traefik-edge" && actionName == "reload"
 }
 
 func schedulerServiceActionUsesWireGuardControl(serviceKey string, actionName string) bool {

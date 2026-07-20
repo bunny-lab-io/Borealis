@@ -920,7 +920,7 @@ finally:
     - `/api/server/overview` and `/api/server/services` fallback service rows.
     - Task-scheduler service reconciliation.
     - Notes:
-    - `api-backend` reads this table only for display. Service actions are queued into `job_scheduler_work_items`; `job-scheduler` claims them, routes K3s-owned workload actions through `borealis-operator`, and asks `site-worker-orchestrator` only for remaining Docker/Compose helper work.
+    - `api-backend` reads this table only for display. Service actions are queued into `job_scheduler_work_items`; `job-scheduler` claims them, routes K3s-owned workload actions through `borealis-operator`, sends WireGuard reconcile through the mounted control socket, and asks `site-worker-orchestrator` only for Traefik reload while Traefik remains Compose-owned.
 
     #### `credentials`
     - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

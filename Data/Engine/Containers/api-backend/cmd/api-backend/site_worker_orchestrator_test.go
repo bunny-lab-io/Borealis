@@ -178,7 +178,7 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 	t.Setenv("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:test")
 
 	orchestrator := &siteWorkerOrchestrator{secret: []byte("test-secret"), dockerBin: dockerPath, projectRoot: "/opt/Borealis"}
-	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild", Mode: "prod"}); err != nil {
+	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "traefik-edge", Action: "reload"}); err != nil {
 		t.Fatalf("valid service action rejected: %v", err)
 	}
 	raw, err := os.ReadFile(capturePath)
@@ -202,9 +202,8 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 		"\nborealis-engine/job-scheduler:test\n",
 		"Engine.sh",
 		"--service",
-		"webui-frontend",
-		"rebuild",
-		"prod",
+		"traefik-edge",
+		"reload",
 	} {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
@@ -214,6 +213,9 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("service action helper contains forbidden docker option %q:\n%s", forbidden, joined)
 		}
+	}
+	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild", Mode: "prod"}); err == nil {
+		t.Fatalf("webui rebuild should be CLI-only and rejected")
 	}
 	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild"}); err == nil {
 		t.Fatalf("rebuild without mode should be rejected")

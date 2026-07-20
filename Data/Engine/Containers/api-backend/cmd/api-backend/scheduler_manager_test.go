@@ -272,7 +272,7 @@ func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	}
 }
 
-func TestSchedulerManagerServiceActionUsesOrchestrator(t *testing.T) {
+func TestSchedulerManagerTraefikReloadUsesOrchestrator(t *testing.T) {
 	var received orchestratorServiceActionRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/services/action" {
@@ -297,13 +297,13 @@ func TestSchedulerManagerServiceActionUsesOrchestrator(t *testing.T) {
 		},
 	}
 	err := manager.runServiceAction(context.Background(), map[string]any{
-		"service_key": "webui-frontend",
-		"action":      map[string]any{"action": "restart"},
+		"service_key": "traefik-edge",
+		"action":      map[string]any{"action": "reload"},
 	})
 	if err != nil {
 		t.Fatalf("run service action: %v", err)
 	}
-	if received.ServiceKey != "webui-frontend" || received.Action != "restart" {
+	if received.ServiceKey != "traefik-edge" || received.Action != "reload" {
 		t.Fatalf("unexpected orchestrator payload %+v", received)
 	}
 }
@@ -346,6 +346,20 @@ func TestSchedulerManagerK3sServiceActionUsesOperator(t *testing.T) {
 	params := schedulerAnyMap(received.Params)
 	if params["service_key"] != "webui-frontend" {
 		t.Fatalf("unexpected operator params %#v", received.Params)
+	}
+}
+
+func TestSchedulerManagerRejectsWebUIRebuildHelper(t *testing.T) {
+	manager := &goSchedulerManager{}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "webui-frontend",
+		"action":      map[string]any{"action": "rebuild", "mode": "prod"},
+	})
+	if err == nil {
+		t.Fatal("expected webui rebuild helper rejection")
+	}
+	if !strings.Contains(err.Error(), "unsupported service action") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

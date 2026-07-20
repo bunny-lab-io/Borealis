@@ -8,6 +8,9 @@ Use service-scoped commands when troubleshooting one Engine component without re
 # Restart the API backend workload.
 ./Engine.sh --network-mode local --service api-backend restart
 
+# Restart the WebUI frontend workload without rebuilding its image.
+./Engine.sh --network-mode local --service webui-frontend restart
+
 # Rebuild the WebUI frontend workload in production mode.
 ./Engine.sh --network-mode local --service webui-frontend rebuild prod
 
@@ -36,6 +39,7 @@ Use service-scoped commands when troubleshooting one Engine component without re
 
     - Service-scoped commands go through `Engine.sh` so Compose project naming, K3s reconciliation, env loading, and service role detection remain consistent.
     - `api-backend restart` is enough for most backend-only config and code reload checks after a container image already exists.
-    - `webui-frontend rebuild prod` recreates the static WebUI service for production.
-    - `webui-frontend rebuild dev` keeps Vite/HMR behavior available for development deployments.
+    - `webui-frontend restart` restarts the K3s WebUI Deployment without rebuilding image layers.
+    - `webui-frontend rebuild prod` rebuilds the production WebUI image and reconciles the K3s WebUI workload.
+    - `webui-frontend rebuild dev` syncs staged WebUI source, rebuilds the development image, and keeps Vite/HMR behavior available in the K3s WebUI workload.
     - `wireguard-tunnel reconcile` runs through the K3s tunnel pod and repairs Engine-side tunnel state without requiring a full stack redeploy.
