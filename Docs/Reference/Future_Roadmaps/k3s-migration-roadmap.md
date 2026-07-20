@@ -189,7 +189,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [ ] Scheduled job tick creates expected runs after live redeploy.
     - [x] Service actions route through operator for K3s-owned restart paths in focused Go tests.
     - [x] No duplicate scheduler loops in deployment model: Compose service removed, stale container retired before K3s rollout, and K3s Deployment uses `Recreate`.
-    - [ ] Live redeploy confirms exactly one K3s scheduler pod and no Compose `borealis-engine-job-scheduler` container.
+    - [x] Live redeploy confirms exactly one K3s scheduler pod and no Compose `borealis-engine-job-scheduler` container.
 
 ## Stage 9: PostgreSQL Cutover
 
