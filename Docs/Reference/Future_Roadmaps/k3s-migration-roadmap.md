@@ -168,8 +168,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remove Compose `api-backend` from `compose.yaml` and retire stale `borealis-engine-api-backend` containers during deploy.
     - [x] Route Compose Traefik's `/api` and `/socket.io` upstream to the configured K3s API loopback port.
     - [x] Recycle existing K3s site-worker pods once when `BOREALIS_INTERNAL_API_BASE_URL` changes from Compose API `5000` to K3s API `5001`.
-    - [ ] Preserve Aegis bootstrap/unlock behavior.
-    - [ ] Preserve internal API token behavior.
+    - [x] Preserve Aegis bootstrap/unlock behavior.
+    - [x] Preserve internal API token behavior.
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
     - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
 - [ ] Validation:
@@ -179,7 +179,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `/health` passes after traffic-owner deploy.
     - [x] Public WebUI route returns HTTP 200 after K3s API cutover and Compose API retirement.
     - [x] Repeated public-mode deploy keeps K3s API, scheduler, and WebUI pods ready while Compose `api-backend`, `job-scheduler`, and `webui-frontend` containers remain absent.
-    - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
+    - [x] Login, Aegis unlock, enrollment, heartbeat, and API routes pass.
+    - [x] Remote shell, file management, process management, service management, registry, and remote desktop pass after API traffic-owner cutover.
+    - [x] Backup export passes after API traffic-owner cutover.
+    - [x] All agents appear connected to their site workers after API traffic-owner cutover.
     - [ ] Realtime SSE works with one replica.
     - [x] Compose API removal plan is documented: K3s API owns traffic before stale Compose API container removal; Compose PostgreSQL remains DB owner until Stage 9.
 
