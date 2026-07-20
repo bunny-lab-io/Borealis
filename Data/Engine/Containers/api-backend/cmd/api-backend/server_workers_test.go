@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -236,5 +237,49 @@ func TestMergeK3sSiteWorkerMetadataAttachesMetrics(t *testing.T) {
 	}
 	if got := row["container_id"]; got != "site-worker-bunny-lab" {
 		t.Fatalf("expected pod name as container id fallback, got %#v", row)
+	}
+}
+
+func TestAttachWorkerContainerMetadataSkipsDockerProxyForK3sRows(t *testing.T) {
+	requests := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requests <- r.URL.String():
+		default:
+		}
+		http.Error(w, "docker proxy should not be used for k3s rows", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	t.Setenv("BOREALIS_DOCKER_PROXY_URL", server.URL)
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", "")
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "")
+
+	row := map[string]any{
+		"worker_guid":              "worker-1",
+		"container_name":           "site-worker-bunny-lab",
+		"site_id":                  int64(7),
+		"container_metrics_source": "metrics.k8s.io",
+		"lifecycle_owner":          "borealis-operator",
+		"docker_stats": map[string]any{
+			"source":      "metrics.k8s.io",
+			"cpu_percent": float64(1.25),
+		},
+		"kubernetes_metrics": map[string]any{
+			"cpu_usage_millicores": float64(12.5),
+		},
+	}
+
+	attachWorkerContainerMetadata(context.Background(), []map[string]any{row})
+
+	select {
+	case request := <-requests:
+		t.Fatalf("unexpected docker proxy request %s", request)
+	default:
+	}
+	if got := schedulerAnyMap(row["docker_stats"])["source"]; got != "metrics.k8s.io" {
+		t.Fatalf("expected k3s metrics to remain attached, got %#v", row["docker_stats"])
+	}
+	if got := schedulerAnyMap(row["kubernetes_metrics"])["cpu_usage_millicores"]; got != float64(12.5) {
+		t.Fatalf("expected kubernetes metrics to remain attached, got %#v", row["kubernetes_metrics"])
 	}
 }

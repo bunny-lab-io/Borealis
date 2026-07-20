@@ -713,11 +713,17 @@ func enrichWorkerReferences(rows []map[string]any, activeWork []map[string]any, 
 }
 
 func attachWorkerContainerMetadata(ctx context.Context, rows []map[string]any) []map[string]any {
+	attachK3sSiteWorkerMetadata(ctx, rows)
+	dockerRows := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
+		if workerRowHasK3sContainerMetadata(row) {
+			continue
+		}
 		containerName := cleanText(row["container_name"])
 		if containerName == "" {
 			continue
 		}
+		dockerRows = append(dockerRows, row)
 		inspected := dockerInspectContainer(containerName)
 		if len(inspected) == 0 {
 			continue
@@ -734,11 +740,26 @@ func attachWorkerContainerMetadata(ctx context.Context, rows []map[string]any) [
 		}
 		applyDockerInspectSizeMetadata(row, inspected)
 	}
-	attachDockerStatsToRows(rows, func(row map[string]any) string {
+	attachDockerStatsToRows(dockerRows, func(row map[string]any) string {
 		return cleanText(row["container_name"])
 	})
-	attachK3sSiteWorkerMetadata(ctx, rows)
 	return rows
+}
+
+func workerRowHasK3sContainerMetadata(row map[string]any) bool {
+	if row == nil {
+		return false
+	}
+	if strings.EqualFold(cleanText(row["lifecycle_owner"]), "borealis-operator") {
+		return true
+	}
+	if strings.EqualFold(cleanText(row["container_metrics_source"]), "metrics.k8s.io") {
+		return true
+	}
+	if cleanText(row["kubernetes_phase"]) != "" {
+		return true
+	}
+	return len(schedulerAnyMap(row["kubernetes_metrics"])) > 0
 }
 
 func attachK3sSiteWorkerMetadata(ctx context.Context, rows []map[string]any) {

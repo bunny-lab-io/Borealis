@@ -70,6 +70,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     ### Runtime behavior
 
     - Container mode reads remaining Compose bridge service state from job-scheduler snapshots first, falls back to `docker-proxy` during early boot or stale snapshots, reads K3s state through `borealis-operator`, and reads scheduler-owned worker/task state through job-scheduler snapshots.
+    - K3s site-worker rows merge operator metrics before legacy Docker metadata fallback, so operator-backed worker rows do not query `docker-proxy`.
     - Host runtime details include `webui_traffic_owner` and `webui_upstream` so K3s WebUI cutover can be validated without reading Traefik files directly.
     - When `webui_traffic_owner` is `k3s`, the Compose `webui-frontend` service row reports `enabled_state=disabled` instead of a missing or failed Compose container.
     - Public-edge certificate health reads Traefik `acme.json` for Externally Accessible deployments, or the Borealis local CA/leaf certificate files for Internal-Only deployments. `/api/server/overview` reports profile, certificate mode, expiry, severity, domains, resolver/source, fingerprint, and local CA bundle metadata for install flows.
