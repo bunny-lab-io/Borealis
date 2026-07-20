@@ -2279,10 +2279,7 @@ spec:
       app.kubernetes.io/name: api-backend
       app.kubernetes.io/part-of: borealis
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   template:
     metadata:
       labels:

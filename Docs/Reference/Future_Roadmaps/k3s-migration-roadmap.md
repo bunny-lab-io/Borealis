@@ -161,6 +161,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Bind bridge API to host loopback port `5001` while Compose API owns `127.0.0.1:5000`.
     - [x] Mirror generated runtime env into `borealis-api-backend-runtime-env`.
     - [x] Disable API-owned background loops in the bridge pod with `BOREALIS_API_BACKGROUND_LOOPS=0`.
+    - [x] Use `Recreate` rollout strategy for the host-network bridge so single-node K3s does not deadlock on fixed port `5001`.
     - [ ] Make K3s `api-backend` authoritative.
     - [ ] Remove Compose `api-backend` after route/internal-caller validation.
     - [ ] Preserve Aegis bootstrap/unlock behavior.
