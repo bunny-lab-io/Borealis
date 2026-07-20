@@ -105,6 +105,22 @@ func TestServerServiceRestartQueuesRestartAction(t *testing.T) {
 	}
 }
 
+func TestServerServiceWebUIRestartQueuesRestartAction(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	mux := http.NewServeMux()
+	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/webui-frontend/restart", `{}`))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.serviceKey != "webui-frontend" || cleanText(store.action["action"]) != "restart" {
+		t.Fatalf("unexpected queued action service=%q action=%+v", store.serviceKey, store.action)
+	}
+}
+
 func TestServerServiceActionRejectsInvalidAction(t *testing.T) {
 	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
 	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}

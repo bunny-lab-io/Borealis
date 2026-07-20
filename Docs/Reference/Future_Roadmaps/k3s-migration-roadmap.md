@@ -272,6 +272,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose `remote-desktop-guacd` retired.
     - [x] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
     - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
+    - [x] Expose WebUI restart as an operator-routed K3s action so simple WebUI pod restarts no longer need the helper bridge.
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
@@ -284,6 +285,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live Docker check confirms retired Compose containers are absent.
     - [x] `docker compose config --services` shows only `docker-proxy`, `site-worker-orchestrator`, and `traefik-edge`.
     - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
+    - [x] Server action tests confirm WebUI restart can be queued separately from helper-backed rebuild.
     - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
 
 ## Open Risks
