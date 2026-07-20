@@ -350,6 +350,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - `Engine.sh` writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID`, `BOREALIS_ENGINE_RUNTIME_OWNER_GID`, `BOREALIS_ENGINE_RUNTIME_USER`, and `BOREALIS_ENGINE_RUNTIME_GROUP` into `Engine/Deploy/compose.env`.
     - `Engine.sh` detects the host Docker socket group and writes `BOREALIS_DOCKER_SOCKET_GID`. Only services that mount `/var/run/docker.sock` receive that supplemental group.
     - Runtime service directories under `Engine/Services/` are chowned to the runtime owner during deploy. Secret paths keep stricter permissions.
+    - Traefik ACME storage remains `0600` but is owned by the Borealis runtime user so authenticated Backup/Restore export can snapshot it without granting group/world read access. The Traefik edge process runs as root and remains able to read and renew the file.
     - `Engine/Deploy/runtime.env` and `Engine/Deploy/compose.env` are `0640 root:borealis-engine` because the orchestrator must read them to launch workers and inspect Compose state. `webui-frontend.env` remains `0600`.
     - API secrets are `0750` directories with files stripped of group/other access. WireGuard config and secret files are `0640` so the API backend can write them and the tunnel container can read them through the Borealis runtime group.
     - PostgreSQL state keeps the upstream PostgreSQL runtime UID when an existing database is present. `Engine.sh` resolves `BOREALIS_POSTGRES_RUNTIME_UID` from existing `PG_VERSION` ownership or defaults to the upstream image UID.

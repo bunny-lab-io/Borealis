@@ -3793,7 +3793,8 @@ apply_runtime_service_ownership() {
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/traefik-edge/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
   if [[ -e "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" ]]; then
-    chown "0:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
+    # Keep Traefik ACME storage 0600 while allowing api-backend backup export to read it.
+    chown "${owner_uid}:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
     chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
   fi
 }

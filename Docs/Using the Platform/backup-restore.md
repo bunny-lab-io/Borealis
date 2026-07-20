@@ -64,6 +64,7 @@ Agents keep trust when the restored Engine remains reachable at the same FQDN th
     - Outer backup JSON contains `kind`, `schema_version`, `kdf_params`, `nonce_b64`, and `ciphertext_b64`.
     - Inner payload uses the fixed Borealis backup encryption path: AES-256-GCM with the Aegis-derived key.
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
+    - Traefik ACME state must remain `0600` and readable by the `api-backend` runtime user. `Engine.sh` repairs ownership to the Borealis runtime user during deploy so export can read the file without loosening group/world permissions.
     - Analyze uses the same decrypt and validation path as restore, but does not clear current state or import rows.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
     - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears pending device approvals and saved views, clears the in-memory Aegis key, clears operator cookies, and returns `restart_required: true`.
