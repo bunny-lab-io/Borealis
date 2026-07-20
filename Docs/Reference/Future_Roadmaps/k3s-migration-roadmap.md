@@ -290,6 +290,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
 - [ ] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.
+- [ ] Full Engine WebUI unit lane needs K3s-compatible runtime test-cache staging. Tracked by [Technical Debt #377](https://github.com/bunny-lab-io/Borealis/issues/377).
 
 ??? example "Detailed Codex Breakdown"
 
