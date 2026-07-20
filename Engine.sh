@@ -61,9 +61,15 @@ BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
 K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
+K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
+BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
 K3S_API_BACKEND_BRIDGE_VERSION="1"
 K3S_BRIDGE_WORKLOADS_VERSION="3"
 K3S_JOB_SCHEDULER_VERSION="1"
+K3S_POSTGRES_VERSION="1"
+K3S_POSTGRES_ENABLED="${BOREALIS_K3S_POSTGRES_ENABLED:-1}"
+K3S_POSTGRES_STORAGE_SIZE="${BOREALIS_K3S_POSTGRES_STORAGE_SIZE:-20Gi}"
+K3S_POSTGRES_ROLLOUT_TIMEOUT="${BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT:-180s}"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -183,7 +189,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -209,7 +215,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -247,6 +253,7 @@ dashboard_seed_rows() {
   for row in \
     "Ensuring Cluster Exists" \
     "k3s-longhorn-storage" \
+    "k3s-postgres-db" \
     "borealis-operator" \
     "k3s-api-backend" \
     "k3s-job-scheduler" \
@@ -383,6 +390,9 @@ dashboard_row_label() {
     "k3s-longhorn-storage")
       printf '%s\n' "Longhorn Storage"
       ;;
+    "k3s-postgres-db")
+      printf '%s\n' "K3s PostgreSQL DB"
+      ;;
     "k3s-api-backend")
       printf '%s\n' "K3s API Backend"
       ;;
@@ -508,8 +518,10 @@ dashboard_render_table() {
   for row in \
     "Ensuring Cluster Exists" \
     "k3s-longhorn-storage" \
+    "k3s-postgres-db" \
     "borealis-operator" \
     "k3s-api-backend" \
+    "k3s-job-scheduler" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
     "webui-frontend" \
@@ -1406,6 +1418,24 @@ k3s_longhorn_enabled() {
   [[ "$(normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}")" == "1" ]]
 }
 
+validate_k3s_storage_quantity() {
+  local label="$1"
+  local raw="$2"
+  [[ "${raw}" =~ ^[1-9][0-9]*([EPTGMK]i?|m)?$ ]] \
+    || die "${label} must be a Kubernetes storage quantity like 20Gi."
+}
+
+validate_k3s_postgres_settings() {
+  normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}" >/dev/null
+  validate_k3s_storage_quantity "BOREALIS_K3S_POSTGRES_STORAGE_SIZE" "${K3S_POSTGRES_STORAGE_SIZE}"
+  [[ "${K3S_POSTGRES_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)?$ ]] \
+    || die "BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT must be a kubectl timeout like 180s or 3m."
+}
+
+k3s_postgres_enabled() {
+  [[ "$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" == "1" ]]
+}
+
 ensure_systemctl_for_k3s() {
   command_exists systemctl || die "Borealis-managed K3s baseline currently requires systemd/systemctl."
 }
@@ -2114,6 +2144,17 @@ borealis_runtime_env_secret_data() {
     [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
     printf '  %s: "%s"\n' "${key}" "$(base64_inline "${value}")"
   done < "${file}"
+}
+
+borealis_postgres_runtime_secret_data() {
+  local key
+  for key in \
+    POSTGRES_DB \
+    POSTGRES_USER \
+    POSTGRES_PASSWORD \
+    TZ; do
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done
 }
 
 borealis_site_worker_runtime_secret_data() {
@@ -3016,6 +3057,388 @@ ensure_k3s_job_scheduler() {
   log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
 }
 
+render_k3s_postgres_statefulset_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local postgres_uid="$3"
+  local postgres_gid="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  local storage_class="$7"
+  local storage_size="$8"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: k3s-shadow
+type: Opaque
+data:
+$(borealis_postgres_runtime_secret_data)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-db-headless
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: k3s-shadow
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-db
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: k3s-shadow
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-db
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: database
+    borealis.io/service-key: postgres-db
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: k3s-shadow
+  annotations:
+    borealis.io/postgres-config-hash: "${config_hash}"
+    borealis.io/storage-class: "${storage_class}"
+    borealis.io/storage-size: "${storage_size}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  serviceName: postgres-db-headless
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-db
+      app.kubernetes.io/part-of: borealis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-db
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: database
+        borealis.io/service-key: postgres-db
+        borealis.io/stage: postgres-cutover
+        borealis.io/runtime-owner: k3s-shadow
+      annotations:
+        borealis.io/postgres-config-hash: "${config_hash}"
+        borealis.io/storage-class: "${storage_class}"
+        borealis.io/storage-size: "${storage_size}"
+        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_POSTGRES_DB_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: ${postgres_gid}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: postgres-data-permissions
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - chown -R ${postgres_uid}:${postgres_gid} /var/lib/postgresql/data && chmod 0700 /var/lib/postgresql/data
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres-db
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          args:
+            - postgres
+            - -c
+            - listen_addresses=*
+            - -c
+            - port=5432
+            - -c
+            - max_connections=$(read_env_value BOREALIS_POSTGRES_MAX_CONNECTIONS)
+            - -c
+            - shared_buffers=$(read_env_value BOREALIS_POSTGRES_SHARED_BUFFERS)
+            - -c
+            - effective_cache_size=$(read_env_value BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE)
+            - -c
+            - work_mem=$(read_env_value BOREALIS_POSTGRES_WORK_MEM)
+            - -c
+            - maintenance_work_mem=$(read_env_value BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM)
+            - -c
+            - max_worker_processes=$(read_env_value BOREALIS_POSTGRES_MAX_WORKER_PROCESSES)
+            - -c
+            - max_parallel_workers=$(read_env_value BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS)
+            - -c
+            - max_parallel_workers_per_gather=$(read_env_value BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER)
+            - -c
+            - autovacuum_max_workers=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS)
+            - -c
+            - autovacuum_vacuum_cost_limit=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT)
+            - -c
+            - autovacuum_naptime=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME)
+            - -c
+            - autovacuum_vacuum_scale_factor=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR)
+            - -c
+            - autovacuum_analyze_scale_factor=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR)
+            - -c
+            - max_wal_size=$(read_env_value BOREALIS_POSTGRES_MAX_WAL_SIZE)
+            - -c
+            - min_wal_size=$(read_env_value BOREALIS_POSTGRES_MIN_WAL_SIZE)
+            - -c
+            - effective_io_concurrency=$(read_env_value BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY)
+            - -c
+            - wal_compression=$(read_env_value BOREALIS_POSTGRES_WAL_COMPRESSION)
+            - -c
+            - checkpoint_timeout=$(read_env_value BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT)
+            - -c
+            - checkpoint_completion_target=$(read_env_value BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET)
+            - -c
+            - random_page_cost=$(read_env_value BOREALIS_POSTGRES_RANDOM_PAGE_COST)
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data
+            - name: HOME
+              value: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U "\${POSTGRES_USER}" -d "\${POSTGRES_DB}"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U "\${POSTGRES_USER}" -d "\${POSTGRES_DB}"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: ${postgres_uid}
+            runAsGroup: ${postgres_gid}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: postgres-run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+        labels:
+          app.kubernetes.io/name: postgres-db
+          app.kubernetes.io/part-of: borealis
+          app.kubernetes.io/managed-by: Engine.sh
+          borealis.io/stage: postgres-cutover
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ${storage_class}
+        resources:
+          requests:
+            storage: ${storage_size}
+EOF
+}
+
+wait_for_k3s_postgres_pvc() {
+  local pvc_name="postgres-data-postgres-db-0"
+  local attempt
+  local phase=""
+  for attempt in {1..90}; do
+    phase="$(k3s_kubectl -n "${K3S_NAMESPACE}" get pvc "${pvc_name}" -o jsonpath='{.status.phase}' 2>>"${BUILD_LOG}" || true)"
+    if [[ "${phase}" == "Bound" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "k3s-postgres-db" "PVC Not Bound" "${C_RED}"
+  die "K3s PostgreSQL PVC ${pvc_name} did not become Bound. See ${BUILD_LOG}."
+}
+
+ensure_k3s_postgres_statefulset() {
+  local mode="$1"
+  validate_k3s_postgres_settings
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "enabled=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" \
+      "mode=${mode}" \
+      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
+      "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
+      "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  if ! k3s_postgres_enabled; then
+    printf '%s  k3s-postgres-db disabled\n' "${config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
+    if k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db >/dev/null 2>&1; then
+      log_status "k3s-postgres-db" "Skipped - Preserved" "${C_DIM}"
+    else
+      log_status "k3s-postgres-db" "Skipped - Compose Owner" "${C_DIM}"
+    fi
+    return 0
+  fi
+
+  if ! k3s_kubectl get storageclass "${K3S_PVC_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+    log_status "k3s-postgres-db" "StorageClass Missing" "${C_RED}"
+    die "K3s PostgreSQL requires StorageClass ${K3S_PVC_STORAGE_CLASS}. See ${BUILD_LOG}."
+  fi
+
+  local image
+  local postgres_uid
+  local postgres_gid
+  local memory_limit
+  local cpu_limit
+  image="$(service_image_tag_or_previous postgres-db borealis-engine/postgres-db:local)"
+  [[ -n "${image}" ]] || die "PostgreSQL image tag unavailable."
+  postgres_uid="$(resolve_postgres_runtime_uid)"
+  postgres_gid="$(resolve_postgres_runtime_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_POSTGRES_DB_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_POSTGRES_DB_CPU_LIMIT)")"
+
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "enabled=1" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "postgres_uid=${postgres_uid}" \
+      "postgres_gid=${postgres_gid}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
+      "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
+      "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "postgres-db" "${image}" "k3s-postgres-db"
+
+  log_status "k3s-postgres-db" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-postgres-db.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_postgres_statefulset_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${postgres_uid}" \
+    "${postgres_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${K3S_PVC_STORAGE_CLASS}" \
+    "${K3S_POSTGRES_STORAGE_SIZE}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-postgres-db" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s PostgreSQL manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-postgres-db" "Waiting For PVC" "${C_YELLOW}"
+  wait_for_k3s_postgres_pvc
+
+  log_status "k3s-postgres-db" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "statefulset/postgres-db" --timeout="${K3S_POSTGRES_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Rollout Failed" "${C_RED}"
+    die "K3s PostgreSQL rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-postgres-db\n' "${config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
+  log_status "k3s-postgres-db" "Ready - Shadow" "${C_GREEN}"
+}
+
 render_k3s_webui_frontend_bridge_manifest() {
   local image="$1"
   local mode="$2"
@@ -3509,7 +3932,7 @@ ensure_k3s_bridge_workloads() {
 
 service_has_k3s_bridge_workload() {
   case "$1" in
-    api-backend|job-scheduler|webui-frontend|remote-desktop-guacd)
+    api-backend|job-scheduler|postgres-db|webui-frontend|remote-desktop-guacd)
       return 0
       ;;
   esac
@@ -3530,6 +3953,9 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
   elif [[ "${service}" == "job-scheduler" ]]; then
     retire_compose_job_scheduler_container
     ensure_k3s_job_scheduler "${mode}"
+  elif [[ "${service}" == "postgres-db" ]]; then
+    ensure_longhorn_storage_baseline
+    ensure_k3s_postgres_statefulset "${mode}"
   else
     ensure_k3s_bridge_workloads "${mode}"
   fi
@@ -4946,6 +5372,11 @@ BOREALIS_OPERATOR_PORT=${BOREALIS_OPERATOR_PORT}
 BOREALIS_OPERATOR_BASE_URL=${operator_base_url}
 BOREALIS_OPERATOR_SECRET=${operator_secret}
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+BOREALIS_POSTGRES_RUNTIME_SECRET_NAME=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+BOREALIS_K3S_PVC_STORAGE_CLASS=${K3S_PVC_STORAGE_CLASS}
+BOREALIS_K3S_POSTGRES_ENABLED=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")
+BOREALIS_K3S_POSTGRES_STORAGE_SIZE=${K3S_POSTGRES_STORAGE_SIZE}
+BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT=${K3S_POSTGRES_ROLLOUT_TIMEOUT}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -5002,6 +5433,7 @@ BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT=${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-${PROFILE_T
 BOREALIS_POSTGRES_DB_MEMORY_LIMIT=${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-${PROFILE_POSTGRES_DB_MEMORY_LIMIT}}
 BOREALIS_POSTGRES_DB_CPU_LIMIT=${BOREALIS_POSTGRES_DB_CPU_LIMIT:-${PROFILE_POSTGRES_DB_CPU_LIMIT}}
 BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POSTGRES_DB_PIDS_LIMIT}}
+BOREALIS_POSTGRES_RUNTIME_OWNER=compose
 BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT}}
@@ -6105,6 +6537,7 @@ deploy_engine() {
   ensure_borealis_operator_bridge
   ensure_k3s_bridge_workloads "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
+  ensure_k3s_postgres_statefulset "${mode}"
   ensure_engine_database_schema
   ensure_k3s_api_backend_bridge "${mode}"
   retire_compose_job_scheduler_container

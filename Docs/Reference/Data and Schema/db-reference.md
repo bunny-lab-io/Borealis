@@ -5,7 +5,7 @@ Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, 
 ## Scope
 - Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine container deployments use the `postgres-db` service on `127.0.0.1:5432`.
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
-- K3s migration Stage 9 adds Longhorn as the storage baseline before PostgreSQL moves, but PostgreSQL remains Compose-owned until the explicit StatefulSet cutover with backup, restore, and import validation.
+- K3s migration Stage 9 adds Longhorn as the storage baseline and creates a shadow `postgres-db` StatefulSet before PostgreSQL moves. PostgreSQL remains Compose-owned until the explicit traffic cutover with backup, restore, and import validation.
 
 ## Quick Relationship Map
 ```text
@@ -49,7 +49,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 
 ## Important PostgreSQL Behavior
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
-- Current Engine PostgreSQL state remains under `Engine/Services/postgres-db/state`. Longhorn installation alone does not migrate, copy, delete, or re-own that state.
+- Current Engine PostgreSQL state remains under `Engine/Services/postgres-db/state`. Longhorn installation and the Stage 9 shadow StatefulSet do not migrate, copy, delete, or re-own that state.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
 - Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.
@@ -258,6 +258,8 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Compose environment: `Engine/Deploy/compose.env`.
 - Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
 - Engine deploy starts `postgres-db` and runs schema setup before API and scheduler containers reconcile. Schema setup covers both `engine.*` runtime tables and `assemblies.*` catalog tables, so operators do not need a separate first-run schema command.
+- Stage 9 K3s preparation creates a separate `postgres-db` StatefulSet and Longhorn PVC inside K3s for storage/runtime validation. That pod is ClusterIP-only and is not the live Engine database while `BOREALIS_POSTGRES_RUNTIME_OWNER=compose`.
+- `Engine.sh deploy` does not delete the K3s PostgreSQL StatefulSet or PVC when Stage 9 is disabled or changed. PVC cleanup is intentionally manual.
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
 - Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
