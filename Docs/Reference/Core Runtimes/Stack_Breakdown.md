@@ -294,6 +294,7 @@ Build cache:
 - Docker Buildx uses retained `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` exports when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
 - Successful Buildx builds write a full `mode=max` cache export for the service, and successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and delete whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
+- If Docker cache metadata is corrupt during a required image build or cleanup restore, `Engine.sh` prunes Docker builder cache and retries that image build without cache before failing the deploy.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
 - `job-scheduler` and `site-worker-orchestrator` use the same Alpine scheduler image. `job-scheduler` runs the queue/reconcile mode without Docker socket access. `site-worker-orchestrator` runs the Docker-boundary mode with Bash/Python for detached `Engine.sh` service-action helpers, Docker CLI, Docker Compose plugin, `ca-certificates`, and `tzdata`.

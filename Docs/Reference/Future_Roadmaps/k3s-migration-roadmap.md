@@ -291,6 +291,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
     - [x] Server action tests confirm WebUI restart can be queued separately from helper-backed rebuild.
     - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
+    - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
 ## Open Risks
 

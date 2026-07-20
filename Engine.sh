@@ -7035,6 +7035,21 @@ prepare_service_build_artifacts() {
   esac
 }
 
+docker_build_with_cache_repair() {
+  local service="$1"
+  shift
+  local -a docker_build_args=("$@")
+  if DOCKER_BUILDKIT=1 docker build "${docker_build_args[@]}"; then
+    return 0
+  fi
+
+  printf '[%s] Docker cached build failed for %s; pruning builder cache and retrying without cache\n' "$(date +%FT%T)" "${service}"
+  if ! docker builder prune --all --force; then
+    printf '[%s] Docker builder cache prune failed for %s; retrying without cache anyway\n' "$(date +%FT%T)" "${service}"
+  fi
+  DOCKER_BUILDKIT=1 docker build --no-cache "${docker_build_args[@]}"
+}
+
 build_service_image() {
   local service="$1"
   local mode="$2"
@@ -7135,10 +7150,10 @@ build_service_image() {
       else
         rm -rf "${cache_next}"
         printf '[%s] Buildx cache build failed for %s; falling back to docker build\n' "$(date +%FT%T)" "${service}"
-        DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+        docker_build_with_cache_repair "${service}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
       fi
     else
-      DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+      docker_build_with_cache_repair "${service}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
