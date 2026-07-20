@@ -27,13 +27,13 @@ ORCHESTRATOR_SOURCE = (
 EXPECTED_SERVICES = {
     "docker-proxy",
     "api-backend",
-    "job-scheduler",
     "site-worker-orchestrator",
     "traefik-edge",
     "postgres-db",
     "remote-desktop-guacd",
     "wireguard-tunnel",
 }
+RETIRED_COMPOSE_SERVICES = {"job-scheduler", "webui-frontend"}
 
 ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
@@ -170,6 +170,9 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
     missing = EXPECTED_SERVICES - set(services)
     if missing:
         fail(f"compose missing services: {', '.join(sorted(missing))}")
+    retired = RETIRED_COMPOSE_SERVICES & set(services)
+    if retired:
+        fail(f"retired services must not be present in Compose: {', '.join(sorted(retired))}")
 
     for name in sorted(EXPECTED_SERVICES):
         service = services[name]
@@ -245,29 +248,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
         mounts = mount_by_target(service)
         if name == "postgres-db" and "/var/log/postgresql" in mounts:
             fail("postgres-db must not mount host log directory")
-        if name == "job-scheduler":
-            forbid_mount_target_prefix(
-                mounts,
-                name,
-                {
-                    "/opt/Borealis/Engine/Services/api-backend",
-                    "/opt/Borealis/Engine/Services/wireguard-tunnel",
-                    "/opt/Borealis/Engine/Services/traefik-edge/config",
-                },
-                allowed={
-                    "/opt/Borealis/Engine/Services/api-backend/cache",
-                    "/opt/Borealis/Engine/Services/api-backend/config",
-                    "/opt/Borealis/Engine/Services/api-backend/logs",
-                    "/opt/Borealis/Engine/Services/api-backend/secrets",
-                    "/opt/Borealis/Engine/Services/traefik-edge/config/dynamic",
-                },
-            )
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/cache", read_only=False)
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/config", read_only=True)
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/logs", read_only=False)
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/api-backend/secrets", read_only=True)
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/site-worker-orchestrator/run", read_only=False)
-            require_mount(mounts, name, "/opt/Borealis/Engine/Services/traefik-edge/config/dynamic", read_only=False)
         if name == "site-worker-orchestrator":
             forbid_mount_target_prefix(
                 mounts,

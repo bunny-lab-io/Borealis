@@ -1123,6 +1123,22 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	if serviceKey == "site-worker" && actionName == "recreate" {
 		return m.runSiteWorkerRecreate(ctx, action)
 	}
+	if schedulerServiceActionUsesOperator(serviceKey, actionName) {
+		client, err := m.operatorClient()
+		if err != nil {
+			return err
+		}
+		switch actionName {
+		case "restart":
+			if _, err := client.restartKnownWorkload(ctx, serviceKey); err != nil {
+				return err
+			}
+			log.Printf("queued service action via borealis-operator service=%s action=%s", serviceKey, actionName)
+			return nil
+		default:
+			return fmt.Errorf("unsupported borealis-operator service action service=%s action=%s", serviceKey, actionName)
+		}
+	}
 	client, err := m.orchestratorClient()
 	if err != nil {
 		return err
@@ -2713,6 +2729,39 @@ func schedulerSiteWorkerLifecycleMode() string {
 		return "docker"
 	default:
 		return "docker"
+	}
+}
+
+func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bool {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	actionName = strings.ToLower(strings.TrimSpace(actionName))
+	if actionName != "restart" {
+		return false
+	}
+	if _, ok := borealisOperatorKnownWorkloadForService(serviceKey); !ok {
+		return false
+	}
+	switch serviceKey {
+	case "webui-frontend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_TRAFFIC_OWNER")
+	case "api-backend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_RUNTIME_OWNER")
+	case "remote-desktop-guacd":
+		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
+	case "job-scheduler":
+		// Self-restart must stay detached through Engine.sh so the current scheduler can finish the queue item.
+		return false
+	default:
+		return false
+	}
+}
+
+func schedulerEnvOwnerIsK3s(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "k3s", "kubernetes":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -217,23 +217,14 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 	}
 }
 
-func TestComposeJobSchedulerDoesNotMountDockerSocket(t *testing.T) {
+func TestComposeSchedulerAndWebUIAreRetired(t *testing.T) {
 	content, err := os.ReadFile("../../../compose.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	schedulerBlock := composeServiceBlock(string(content), "job-scheduler")
-	if strings.Contains(schedulerBlock, "/var/run/docker.sock") {
-		t.Fatalf("job-scheduler must not mount Docker socket:\n%s", schedulerBlock)
-	}
-	for _, forbidden := range []string{
-		"Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend",
-		"Engine/Services/wireguard-tunnel",
-		"Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config",
-	} {
-		if strings.Contains(schedulerBlock, forbidden) {
-			t.Fatalf("job-scheduler has overbroad mount %q:\n%s", forbidden, schedulerBlock)
-		}
+	if schedulerBlock != "" {
+		t.Fatalf("Compose job-scheduler service should be retired after K3s cutover:\n%s", schedulerBlock)
 	}
 	orchestratorBlock := composeServiceBlock(string(content), "site-worker-orchestrator")
 	if !strings.Contains(orchestratorBlock, "BOREALIS_DOCKER_SOCKET_PATH") || !strings.Contains(orchestratorBlock, ":/var/run/docker.sock") {

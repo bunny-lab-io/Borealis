@@ -29,11 +29,17 @@ var composeServiceSpecs = []struct {
 	{"docker-proxy", "Docker Proxy"},
 	{"api-backend", "API Backend"},
 	{"site-worker-orchestrator", "Site Worker Orchestrator"},
-	{"job-scheduler", "Job Scheduler"},
 	{"traefik-edge", "Traefik Edge"},
 	{"postgres-db", "PostgreSQL"},
 	{"remote-desktop-guacd", "Guacamole"},
 	{"wireguard-tunnel", "WireGuard Tunnel"},
+}
+
+var k3sWorkloadServiceSpecs = []struct {
+	key   string
+	label string
+}{
+	{"job-scheduler", "Job Scheduler"},
 }
 
 func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, realtime *operatorRealtimeHub, _ http.Handler) {
@@ -95,7 +101,7 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore, real
 		"collected_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"host":                   collectOverviewHostPayload(),
 		"resources":              collectOverviewResourcePayload(),
-		"services":               collectOverviewServiceRows(),
+		"services":               collectOverviewServiceRows(ctx),
 		"wireguard":              collectOverviewWireGuardPayload(ctx, store),
 		"public_edge":            collectOverviewPublicEdgePayload(),
 		"security":               collectOverviewSecurityPayload(),
@@ -160,7 +166,7 @@ func collectOverviewResourcePayload() map[string]any {
 	}
 }
 
-func collectOverviewServiceRows() []map[string]any {
+func collectOverviewServiceRows(ctx context.Context) []map[string]any {
 	if !containerizedEngineEnabled() {
 		return collectSystemdServiceRows()
 	}
@@ -207,7 +213,77 @@ func collectOverviewServiceRows() []map[string]any {
 			"container_image":    cleanText(configPayload["Image"]),
 		})
 	}
+	rows = append(rows, collectOverviewK3sWorkloadRows(ctx)...)
 	return rows
+}
+
+func collectOverviewK3sWorkloadRows(ctx context.Context) []map[string]any {
+	rows := []map[string]any{}
+	if !schedulerEnvOwnerIsK3s("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER") {
+		return rows
+	}
+	client, configured := newBorealisOperatorClientFromEnv()
+	for _, spec := range k3sWorkloadServiceSpecs {
+		row := overviewK3sWorkloadServiceRow(spec.key, spec.label, nil, false, configured)
+		if configured {
+			requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			payload, err := client.command(requestCtx, "GetWorkloadStatus", map[string]any{"service_key": spec.key})
+			cancel()
+			if err == nil {
+				row = overviewK3sWorkloadServiceRow(spec.key, spec.label, schedulerAnyMap(payload["result"]), true, true)
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func overviewK3sWorkloadServiceRow(serviceKey string, label string, workload map[string]any, available bool, operatorConfigured bool) map[string]any {
+	desiredReady := false
+	if available {
+		if value, ok := workload["desired_ready"].(bool); ok {
+			desiredReady = value
+		}
+	}
+	status := "unknown"
+	state := "unknown"
+	if desiredReady {
+		status = "healthy"
+		state = "running"
+	} else if operatorConfigured {
+		status = "warning"
+		state = "pending"
+	}
+	return map[string]any{
+		"key":                serviceKey,
+		"label":              label,
+		"instance":           nil,
+		"unit_name":          "deployment/" + serviceKey,
+		"compose_service":    nil,
+		"kubernetes_kind":    firstText(cleanText(workload["kind"]), "Deployment"),
+		"kubernetes_name":    firstText(cleanText(workload["name"]), serviceKey),
+		"kubernetes_ready":   desiredReady,
+		"replicas":           coerceInt64(workload["replicas"]),
+		"ready_replicas":     coerceInt64(workload["ready_replicas"]),
+		"available_replicas": coerceInt64(workload["available_replicas"]),
+		"runtime":            "k3s",
+		"docker_state":       "",
+		"docker_health":      nullableStringValue(status),
+		"docker_status":      status,
+		"docker_status_text": state,
+		"display_status":     status,
+		"active_state":       state,
+		"sub_state":          state,
+		"enabled_state":      "k3s",
+		"main_pid":           int64(0),
+		"started_at":         nil,
+		"fragment_path":      nil,
+		"restart_supported":  false,
+		"actions":            overviewServiceActions(serviceKey),
+		"pending_action":     nil,
+		"status":             status,
+		"container_image":    nil,
+	}
 }
 
 func collectOverviewWireGuardPayload(ctx context.Context, store operatorStore) map[string]any {
@@ -780,7 +856,7 @@ func overviewServiceActions(serviceKey string) []map[string]string {
 		return []map[string]string{{"id": "reload", "label": "Reload", "action": "reload"}}
 	case "wireguard-tunnel":
 		return []map[string]string{{"id": "reconcile", "label": "Reconcile", "action": "reconcile"}}
-	case "docker-proxy", "api-backend", "job-scheduler", "postgres-db", "remote-desktop-guacd":
+	case "docker-proxy", "api-backend", "postgres-db", "remote-desktop-guacd":
 		return []map[string]string{{"id": "restart", "label": "Restart", "action": "restart"}}
 	default:
 		return []map[string]string{}

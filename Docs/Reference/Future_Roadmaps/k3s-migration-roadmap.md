@@ -178,13 +178,18 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 8: Scheduler Cutover
 
-- [ ] Move `job-scheduler` into K3s as one replica.
-    - [ ] Use `borealis-operator` for workload/site-worker lifecycle.
-    - [ ] Preserve Postgres work leases and queue behavior.
+- [x] Move `job-scheduler` into K3s as one replica.
+    - [x] Add fixed K3s `job-scheduler` Deployment with `Recreate` rollout strategy.
+    - [x] Remove Compose `job-scheduler` service and retire stale `borealis-engine-job-scheduler` containers during deploy.
+    - [x] Use `borealis-operator` for K3s workload/site-worker lifecycle where the scheduler can complete the queued action safely.
+    - [x] Preserve Postgres work leases and queue behavior through the existing scheduler manager and work-item tables.
+    - [x] Keep scheduler Kubernetes-blind: no ServiceAccount token, no kubeconfig, no Docker socket.
+    - [x] Keep temporary host-loopback access to the K3s API bridge and Compose PostgreSQL until API/PostgreSQL cutover.
 - [ ] Validation:
-    - [ ] Scheduled job tick creates expected runs.
-    - [ ] Service actions route through operator.
-    - [ ] No duplicate scheduler loops.
+    - [ ] Scheduled job tick creates expected runs after live redeploy.
+    - [x] Service actions route through operator for K3s-owned restart paths in focused Go tests.
+    - [x] No duplicate scheduler loops in deployment model: Compose service removed, stale container retired before K3s rollout, and K3s Deployment uses `Recreate`.
+    - [ ] Live redeploy confirms exactly one K3s scheduler pod and no Compose `borealis-engine-job-scheduler` container.
 
 ## Stage 9: PostgreSQL Cutover
 

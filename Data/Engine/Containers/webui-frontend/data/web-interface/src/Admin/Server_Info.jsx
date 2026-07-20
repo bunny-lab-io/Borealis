@@ -1552,17 +1552,25 @@ export default function ServerInfo() {
               },
             ];
       const serviceState = String(row?.display_status || row?.docker_status || row?.active_state || "").trim();
+      const serviceRuntime = String(row?.runtime || "").trim().toLowerCase();
       return {
         id: `services:${row?.unit_name || index}`,
         domain: "Services",
         name: row?.label || "Service",
-        details: row?.compose_service ? `${row.compose_service} · ${row?.unit_name || "container"}` : row?.unit_name || "—",
-        value: row?.runtime === "compose" ? "Docker Compose" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
+        details:
+          serviceRuntime === "k3s"
+            ? `${row?.kubernetes_kind || "Deployment"} · ${row?.unit_name || row?.kubernetes_name || "workload"}`
+            : row?.compose_service
+              ? `${row.compose_service} · ${row?.unit_name || "container"}`
+              : row?.unit_name || "—",
+        value: serviceRuntime === "compose" ? "Docker Compose" : serviceRuntime === "k3s" ? "K3s" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
         health: String(row?.docker_health || row?.status || "").trim().toLowerCase(),
         state: serviceState ? formatTitleCase(serviceState) : formatTitleCase(row?.active_state),
         enabled:
-          row?.runtime === "compose" && String(row?.enabled_state || "compose").trim().toLowerCase() === "compose"
+          serviceRuntime === "compose" && String(row?.enabled_state || "compose").trim().toLowerCase() === "compose"
             ? "Compose"
+            : serviceRuntime === "k3s"
+              ? "K3s"
             : formatTitleCase(row?.enabled_state),
         started: row?.started_at ? formatDateTime(row.started_at) : "Unavailable",
         actions,

@@ -47,13 +47,16 @@ BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-opera
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
 BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME:-borealis-api-backend-runtime-env}"
+BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME="${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME:-borealis-job-scheduler-runtime-env}"
 BOREALIS_API_BACKEND_K3S_BRIDGE_PORT="${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
+K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
 K3S_API_BACKEND_BRIDGE_VERSION="1"
 K3S_BRIDGE_WORKLOADS_VERSION="3"
+K3S_JOB_SCHEDULER_VERSION="1"
 BUILD_CACHE_RETENTION_DAYS=7
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
@@ -85,7 +88,6 @@ SERVICE_ROLES=(
   "docker-proxy"
   "api-backend"
   "site-worker-orchestrator"
-  "job-scheduler"
   "traefik-edge"
   "postgres-db"
   "remote-desktop-guacd"
@@ -93,6 +95,7 @@ SERVICE_ROLES=(
 )
 SERVICE_ACTION_ROLES=(
   "${SERVICE_ROLES[@]}"
+  "job-scheduler"
   "webui-frontend"
 )
 BUILD_ROLES=(
@@ -173,7 +176,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -199,7 +202,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+    "Ensuring Cluster Exists"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -238,6 +241,7 @@ dashboard_seed_rows() {
     "Ensuring Cluster Exists" \
     "borealis-operator" \
     "k3s-api-backend" \
+    "k3s-job-scheduler" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
     "webui-frontend" \
@@ -370,6 +374,9 @@ dashboard_row_label() {
       ;;
     "k3s-api-backend")
       printf '%s\n' "K3s API Backend"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' "K3s Job Scheduler"
       ;;
     "k3s-webui-frontend")
       printf '%s\n' "K3s WebUI Frontend"
@@ -2493,6 +2500,274 @@ ensure_k3s_api_backend_bridge() {
   log_status "k3s-api-backend" "Ready - Bridge" "${C_GREEN}"
 }
 
+render_k3s_job_scheduler_manifest() {
+  local image="$1"
+  local site_worker_image="$2"
+  local config_hash="$3"
+  local runtime_uid="$4"
+  local runtime_gid="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  local internal_api_base="$8"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: job-scheduler
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: scheduler-cutover
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-scheduler
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: job-scheduler
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: scheduler
+    borealis.io/service-key: job-scheduler
+    borealis.io/stage: scheduler-cutover
+  annotations:
+    borealis.io/scheduler-config-hash: "${config_hash}"
+    borealis.io/network-mode: "host-loopback"
+    borealis.io/runtime-owner: "k3s"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: job-scheduler
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: job-scheduler
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: scheduler
+        borealis.io/service-key: job-scheduler
+        borealis.io/stage: scheduler-cutover
+      annotations:
+        borealis.io/scheduler-config-hash: "${config_hash}"
+        borealis.io/network-mode: "host-loopback"
+        borealis.io/runtime-owner: "k3s"
+        borealis.io/site-worker-image: "${site_worker_image}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: job-scheduler
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}
+          env:
+            - name: BOREALIS_PROCESS_ROLE
+              value: "job-scheduler"
+            - name: BOREALIS_INTERNAL_API_BASE_URL
+              value: "${internal_api_base}"
+            - name: BOREALIS_SITE_WORKER_IMAGE
+              value: "${site_worker_image}"
+            - name: BOREALIS_SITE_WORKER_LIFECYCLE_MODE
+              value: "k3s"
+            - name: BOREALIS_JOB_SCHEDULER_CONTAINER_NAME
+              value: "job-scheduler"
+            - name: BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER
+              value: "k3s"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-job-scheduler-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-job-scheduler-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: engine-deploy
+              mountPath: /opt/Borealis/Engine/Deploy
+              readOnly: true
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-cache
+              mountPath: /opt/Borealis/Engine/Services/api-backend/cache
+            - name: api-config
+              mountPath: /opt/Borealis/Engine/Services/api-backend/config
+              readOnly: true
+            - name: api-logs
+              mountPath: /opt/Borealis/Engine/Services/api-backend/logs
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
+              readOnly: true
+            - name: orchestrator-run
+              mountPath: /opt/Borealis/Engine/Services/site-worker-orchestrator/run
+            - name: traefik-config-root
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
+            - name: traefik-dynamic
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config/dynamic
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: traefik-config-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: engine-deploy
+          hostPath:
+            path: ${DEPLOY_DIR}
+            type: Directory
+        - name: api-cache
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/cache
+            type: Directory
+        - name: api-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/config
+            type: Directory
+        - name: api-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/logs
+            type: Directory
+        - name: api-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
+            type: Directory
+        - name: orchestrator-run
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/site-worker-orchestrator/run
+            type: Directory
+        - name: traefik-dynamic
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic
+            type: Directory
+EOF
+}
+
+ensure_k3s_job_scheduler() {
+  local mode="$1"
+  local image
+  local site_worker_image
+  image="$(service_image_tag_or_previous job-scheduler borealis-engine/job-scheduler:local)"
+  site_worker_image="$(service_image_tag_or_previous site-worker borealis-engine/site-worker:local)"
+  [[ -n "${image}" ]] || die "Job scheduler image tag unavailable."
+  [[ -n "${site_worker_image}" ]] || die "Site worker image tag unavailable for K3s job scheduler."
+
+  local runtime_uid
+  local runtime_gid
+  local memory_limit
+  local cpu_limit
+  local runtime_env_hash
+  local api_bridge_port
+  local internal_api_base
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
+  internal_api_base="http://127.0.0.1:${api_bridge_port}"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_JOB_SCHEDULER_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "site_worker_image=${site_worker_image}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
+      "internal_api_base=${internal_api_base}" \
+      "site_worker_lifecycle=k3s" \
+      "project_root=${SCRIPT_DIR}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "job-scheduler" "${image}" "k3s-job-scheduler"
+
+  log_status "k3s-job-scheduler" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-job-scheduler.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_job_scheduler_manifest \
+    "${image}" \
+    "${site_worker_image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${internal_api_base}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-job-scheduler" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s job scheduler manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-job-scheduler" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/job-scheduler" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-job-scheduler" "Rollout Failed" "${C_RED}"
+    die "K3s job scheduler rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-job-scheduler\n' "${config_hash}" > "${K3S_JOB_SCHEDULER_CONFIG_HASH_FILE}"
+  log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
+}
+
 render_k3s_webui_frontend_bridge_manifest() {
   local image="$1"
   local mode="$2"
@@ -2986,7 +3261,7 @@ ensure_k3s_bridge_workloads() {
 
 service_has_k3s_bridge_workload() {
   case "$1" in
-    api-backend|webui-frontend|remote-desktop-guacd)
+    api-backend|job-scheduler|webui-frontend|remote-desktop-guacd)
       return 0
       ;;
   esac
@@ -3004,6 +3279,9 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   if [[ "${service}" == "api-backend" ]]; then
     ensure_k3s_api_backend_bridge "${mode}"
+  elif [[ "${service}" == "job-scheduler" ]]; then
+    retire_compose_job_scheduler_container
+    ensure_k3s_job_scheduler "${mode}"
   else
     ensure_k3s_bridge_workloads "${mode}"
   fi
@@ -3118,6 +3396,20 @@ retire_compose_webui_container() {
     fi
   fi
   log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
+}
+
+retire_compose_job_scheduler_container() {
+  local service="job-scheduler"
+  local container="borealis-engine-job-scheduler"
+  local subject="k3s-job-scheduler"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose job scheduler container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  printf '[%s] %s Compose container retired; K3s owns job-scheduler lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
 env_key_exists() {
@@ -4381,6 +4673,7 @@ BOREALIS_WEBUI_MODE=prod
 BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
 TZ=${host_timezone}
 BOREALIS_WEBUI_TRAFFIC_OWNER=${webui_traffic_owner}
+BOREALIS_WEBUI_RUNTIME_OWNER=k3s
 BOREALIS_WEBUI_UPSTREAM_HOST=${webui_upstream_host}
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
@@ -4437,9 +4730,11 @@ BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
 BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
 BOREALIS_API_BACKEND_K3S_BRIDGE_PORT=${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}
+BOREALIS_API_BACKEND_RUNTIME_OWNER=compose-bridge
 BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT=${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-${PROFILE_JOB_SCHEDULER_MEMORY_LIMIT}}
 BOREALIS_JOB_SCHEDULER_CPU_LIMIT=${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-${PROFILE_JOB_SCHEDULER_CPU_LIMIT}}
 BOREALIS_JOB_SCHEDULER_PIDS_LIMIT=${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-${PROFILE_JOB_SCHEDULER_PIDS_LIMIT}}
+BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER=k3s
 BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT}}
 BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT}}
 BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT}}
@@ -4461,6 +4756,7 @@ BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POS
 BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT}}
+BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER=compose-bridge
 BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT}}
 BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT}}
 BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT}}
@@ -5146,6 +5442,7 @@ changed_build_services() {
     printf '%s\n' webui-frontend
   fi
   if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
+    printf '%s\n' job-scheduler
     printf '%s\n' site-worker-orchestrator
   fi
   if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
@@ -5396,7 +5693,6 @@ services = [
     "docker-proxy",
     "api-backend",
     "site-worker-orchestrator",
-    "job-scheduler",
     "traefik-edge",
     "postgres-db",
     "remote-desktop-guacd",
@@ -5561,6 +5857,8 @@ deploy_engine() {
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   ensure_engine_database_schema
   ensure_k3s_api_backend_bridge "${mode}"
+  retire_compose_job_scheduler_container
+  ensure_k3s_job_scheduler "${mode}"
   log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
@@ -5657,6 +5955,22 @@ service_action() {
   case "${action}" in
     restart)
       [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
+      if [[ "${service}" == "job-scheduler" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        retire_compose_job_scheduler_container
+        log_status "k3s-job-scheduler" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/job-scheduler" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-job-scheduler" "Restart Failed" "${C_RED}"
+          die "K3s job scheduler restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/job-scheduler" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-job-scheduler" "Rollout Failed" "${C_RED}"
+          die "K3s job scheduler rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
       compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
@@ -5676,6 +5990,7 @@ service_action() {
       fi
       reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
       retire_compose_webui_container
+      retire_compose_job_scheduler_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url

@@ -73,47 +73,6 @@ services:
       retries: 18
       start_period: 30s
 
-  job-scheduler:
-    <<: *borealis-hardened-service
-    image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}
-    container_name: borealis-engine-job-scheduler
-    network_mode: host
-    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
-    restart: unless-stopped
-    mem_limit: ${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-256m}
-    cpus: "${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-1.00}"
-    pids_limit: ${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-160}
-    env_file:
-      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
-    environment:
-      BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
-      BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
-      BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
-      BOREALIS_JOB_SCHEDULER_GUID: job-scheduler
-      BOREALIS_JOB_SCHEDULER_CONTAINER_NAME: borealis-engine-job-scheduler
-      HOME: /tmp
-    volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/cache:/opt/Borealis/Engine/Services/api-backend/cache
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/config:/opt/Borealis/Engine/Services/api-backend/config:ro
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/logs:/opt/Borealis/Engine/Services/api-backend/logs
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/secrets:/opt/Borealis/Engine/Services/api-backend/secrets:ro
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator/run:/opt/Borealis/Engine/Services/site-worker-orchestrator/run
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config/dynamic:/opt/Borealis/Engine/Services/traefik-edge/config/dynamic
-    depends_on:
-      api-backend:
-        condition: service_healthy
-      site-worker-orchestrator:
-        condition: service_healthy
-      postgres-db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "borealis-job-scheduler-healthcheck"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
-
   site-worker-orchestrator:
     <<: *borealis-hardened-service
     image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -9,6 +10,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,12 +108,54 @@ func TestCollectOverviewServiceRowsOmitsRetiredComposeWebUI(t *testing.T) {
 	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
 	t.Setenv("BOREALIS_WEBUI_FRONTEND_IMAGE", "borealis-engine/webui-frontend:sha-test")
 
-	rows := collectOverviewServiceRows()
+	rows := collectOverviewServiceRows(context.Background())
 	for _, row := range rows {
 		if row["key"] == "webui-frontend" {
 			t.Fatalf("retired Compose webui-frontend row should be omitted: %#v", row)
 		}
 	}
+}
+
+func TestCollectOverviewServiceRowsIncludesK3sScheduler(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req borealisOperatorCommandRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Verb != "GetWorkloadStatus" {
+			t.Fatalf("unexpected operator verb %q", req.Verb)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"verb": req.Verb,
+			"result": map[string]any{
+				"kind":               "Deployment",
+				"name":               "job-scheduler",
+				"service_key":        "job-scheduler",
+				"replicas":           1,
+				"ready_replicas":     1,
+				"available_replicas": 1,
+				"desired_ready":      true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	t.Setenv("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "test-secret")
+
+	rows := collectOverviewServiceRows(context.Background())
+	for _, row := range rows {
+		if row["key"] == "job-scheduler" {
+			if row["runtime"] != "k3s" || row["status"] != "healthy" {
+				t.Fatalf("unexpected K3s scheduler row: %#v", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("K3s scheduler row missing: %#v", rows)
 }
 
 func TestCollectOverviewPublicEdgePayloadReadsInternalLocalCA(t *testing.T) {
