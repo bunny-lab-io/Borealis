@@ -255,9 +255,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Existing agents reconnect.
         - [x] SQL worker audit shows K3s site-worker socket counts match online device counts after redeploy.
         - [x] WireGuard status shows fresh peer handshakes from the K3s host-network pod.
-    - [ ] Remote shell/desktop over tunnel works.
+    - [x] Remote shell/desktop over tunnel works.
         - [x] API and K3s site-worker pods resolve and connect to `remote-desktop-guacd.borealis.svc.cluster.local:4822`.
-        - [ ] Operator browser smoke after guacd traffic-owner env propagation.
+        - [x] Operator browser smoke after guacd traffic-owner env propagation.
+        - [x] WebUI login, Server Info, Device Inventory, Remote Desktop, Remote Shell, File Management, Process Management, and Service Management pass after WireGuard and guacd cutover.
     - [ ] Quarantine/revocation removes peer access.
 
 ## Stage 11: Compose Retirement
@@ -269,7 +270,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose `postgres-db` retired.
     - [x] Compose `wireguard-tunnel` retired.
     - [x] Compose `remote-desktop-guacd` retired.
-    - [ ] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
+    - [x] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
@@ -279,6 +280,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Narrow Engine tests pass.
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
     - [x] Live Docker check confirms retired Compose containers are absent.
+    - [x] `docker compose config --services` shows only `docker-proxy`, `site-worker-orchestrator`, and `traefik-edge`.
 
 ## Open Risks
 
