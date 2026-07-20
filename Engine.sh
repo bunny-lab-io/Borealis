@@ -7958,6 +7958,7 @@ deploy_engine() {
       die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
     fi
     wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
+    refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
     retire_compose_webui_container
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
     recycle_k3s_site_workers_for_runtime_secret_change
