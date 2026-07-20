@@ -107,7 +107,7 @@ Borealis Engine containers are deployed with least-privilege defaults and only r
 - `traefik-edge` is a root exception because it binds host-network ports `80` and `443` and must renew strict ACME storage owned by the Borealis runtime user for backup export. It drops all default capabilities and adds only `NET_BIND_SERVICE` and `DAC_OVERRIDE`.
 - K3s `wireguard-tunnel` is a root exception because it creates and reconciles the WireGuard interface. It uses `hostNetwork`, `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`, with `no-new-privileges`, read-only root filesystem, tmpfs scratch paths, no ServiceAccount token, and a constrained control socket instead of full privileged mode.
 - Server Info service actions use a short-lived helper container that mounts `/opt/Borealis` and the Docker socket so `Engine.sh --service` can perform scoped restart, rebuild, reload, and reconcile actions. This helper is Docker-root-equivalent by design, but still uses read-only root filesystem, dropped capabilities, `no-new-privileges`, tmpfs `/tmp`, and resource caps.
-- Docker socket access is split by need: `docker-proxy` has read-only socket access for container status and metrics, `site-worker-orchestrator` has write socket access for legacy Docker drains and allowlisted service helpers, and other static services do not mount the socket.
+- Docker socket access is restricted to `site-worker-orchestrator` for legacy Docker drains and allowlisted service helpers. Other static services do not mount the socket, and K3s worker metrics come through `borealis-operator` instead of Docker socket reads.
 - K3s `job-scheduler` reaches K3s lifecycle operations through the HMAC-authenticated `borealis-operator` API. It has no ServiceAccount token, kubeconfig, Kubernetes API credential, or Docker socket. It reaches `site-worker-orchestrator` only through the authenticated Unix socket for legacy Docker drains and detached helper actions.
 - Dynamic `site-worker-*` containers run non-root with dropped capabilities, `no-new-privileges`, read-only root filesystems, tmpfs `/tmp`, PID/memory/CPU caps, read-only API config and secrets, writable API cache/log paths, no Docker socket, and no Traefik config mount.
 - K3s `remote-desktop-guacd` runs non-root, mounts only read-only host timezone data, exposes only a ClusterIP Service, and does not mount the Docker socket.
@@ -363,7 +363,6 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Hardened static services declare `pids_limit`, `mem_limit`, and `cpus`. Values come from profile-managed `compose.env` entries with operator override support.
     - Most static services run as `${BOREALIS_ENGINE_RUNTIME_OWNER_UID}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID}`.
     - Writable paths are explicit bind mounts or tmpfs entries. A read-only root filesystem forces cache, log, run, and state writes into reviewed paths.
-    - `docker-proxy` runs non-root with read-only root filesystem, read-only Docker socket mount, loopback-only host port `127.0.0.1:2375`, `CONTAINERS=1`, and `POST=0`.
     - `api-backend` runs non-root and does not mount the Docker socket. It mounts only its service runtime plus specific Traefik and WireGuard paths required for edge settings and tunnel reconciliation.
     - K3s `job-scheduler` runs non-root and does not mount the Docker socket or a ServiceAccount token. It mounts API cache/logs read-write, API config/secrets read-only, orchestrator run path read-write for legacy helper/drain paths, and Traefik dynamic config read-write.
     - `site-worker-orchestrator` runs non-root with the Docker socket supplemental group, mounts the Docker socket read-write, and receives only the run path, API cache, site-worker logs, API secrets read-only, and deploy metadata read-only.
@@ -378,7 +377,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     #### Docker socket boundary
 
     - Docker socket write access is isolated to `site-worker-orchestrator` and short-lived service-action helper containers launched by the orchestrator for Compose-owned actions.
-    - `docker-proxy` has read-only Docker API access for status and site-worker metrics. API and UI reads use the proxy or scheduler snapshots instead of mounting the Docker socket.
+    - K3s site-worker status and CPU/RAM metrics come from `borealis-operator` over the internal HMAC API. API and UI reads do not mount the Docker socket for migrated K3s workers.
     - K3s `job-scheduler` talks to `borealis-operator` for K3s lifecycle and to `site-worker-orchestrator` over `/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock` only for legacy Docker drains or detached helper actions.
     - The orchestrator Unix socket accepts only requests signed with `X-Borealis-Internal-Token`, backed by the Engine internal secret.
     - The orchestrator exposes narrow operations: launch site-worker, stop site-worker, remove site-worker, and run allowlisted Engine service action helper.

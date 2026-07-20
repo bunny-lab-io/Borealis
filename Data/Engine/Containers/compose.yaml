@@ -13,33 +13,6 @@ x-borealis-hardened-service: &borealis-hardened-service
     - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
 
 services:
-  docker-proxy:
-    <<: *borealis-hardened-service
-    image: ${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
-    container_name: borealis-engine-docker-proxy
-    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
-    group_add:
-      - "${BOREALIS_DOCKER_SOCKET_GID:-0}"
-    restart: unless-stopped
-    mem_limit: ${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-128m}
-    cpus: "${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-0.50}"
-    pids_limit: ${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-64}
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
-      - /run:rw,noexec,nosuid,nodev,size=16m,uid=${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646},gid=${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646},mode=0775
-    environment:
-      CONTAINERS: "1"
-      POST: "0"
-      LOG_LEVEL: warning
-      TZ: ${TZ:-Etc/UTC}
-      BOREALIS_ENGINE_HOST_TIMEZONE: ${BOREALIS_ENGINE_HOST_TIMEZONE:-Etc/UTC}
-    ports:
-      - "127.0.0.1:2375:2375"
-    volumes:
-      - *borealis-host-localtime
-      - *borealis-host-zoneinfo
-      - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
-
   site-worker-orchestrator:
     <<: *borealis-hardened-service
     image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}

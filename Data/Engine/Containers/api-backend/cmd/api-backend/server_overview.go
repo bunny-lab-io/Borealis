@@ -26,7 +26,6 @@ var composeServiceSpecs = []struct {
 	key   string
 	label string
 }{
-	{"docker-proxy", "Docker Proxy"},
 	{"site-worker-orchestrator", "Site Worker Orchestrator"},
 	{"traefik-edge", "Traefik Edge"},
 }
@@ -273,9 +272,6 @@ func overviewServiceSnapshotFresh(updatedAt int64) bool {
 
 func overviewComposeServiceRowFromDocker(serviceKey string, label string) map[string]any {
 	containerName := "borealis-engine-" + serviceKey
-	if serviceKey == "docker-proxy" {
-		containerName = "borealis-engine-docker-proxy"
-	}
 	inspected := dockerInspectContainer(containerName)
 	statePayload, _ := inspected["State"].(map[string]any)
 	configPayload, _ := inspected["Config"].(map[string]any)
@@ -1027,7 +1023,7 @@ func overviewServiceActions(serviceKey string) []map[string]string {
 		return []map[string]string{{"id": "reload", "label": "Reload", "action": "reload"}}
 	case "wireguard-tunnel":
 		return []map[string]string{{"id": "reconcile", "label": "Reconcile", "action": "reconcile"}}
-	case "docker-proxy", "api-backend", "postgres-db", "remote-desktop-guacd":
+	case "api-backend", "postgres-db", "remote-desktop-guacd":
 		return []map[string]string{{"id": "restart", "label": "Restart", "action": "restart"}}
 	default:
 		return []map[string]string{}

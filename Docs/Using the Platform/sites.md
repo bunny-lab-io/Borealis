@@ -54,7 +54,7 @@ Select any colored section of the Connected Devices bar, or its `Connected`, `Di
     - `POST /api/sites/assign` - assign devices to site.
     - `POST /api/sites/rename` - rename site.
     - `POST /api/sites/<site_id>/auto-approval` - set or clear temporary site auto-approval.
-    - `GET /api/server/workers?history_seconds=300` - active/recent worker state used by Sites, including site-worker Docker stats and Docker inspect size metadata when `docker-proxy` responds, plus K3s CPU/RAM pod metrics when `borealis-operator` can read Metrics Server.
+    - `GET /api/server/workers?history_seconds=300` - active/recent worker state used by Sites, including K3s CPU/RAM pod metrics when `borealis-operator` can read Metrics Server and legacy Docker metadata only when an explicit Docker metadata endpoint is configured during migration.
 
     ### Related documentation
 

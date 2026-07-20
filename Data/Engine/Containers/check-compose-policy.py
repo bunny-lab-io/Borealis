@@ -25,7 +25,6 @@ ORCHESTRATOR_SOURCE = (
 )
 
 EXPECTED_SERVICES = {
-    "docker-proxy",
     "site-worker-orchestrator",
     "traefik-edge",
 }
@@ -41,7 +40,6 @@ RETIRED_COMPOSE_SERVICES = {
 ROOT_SERVICES = {"traefik-edge"}
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
 DOCKER_SOCKET_SERVICES = {
-    "docker-proxy": True,
     "site-worker-orchestrator": False,
 }
 CAP_ADD_ALLOWLIST = {
@@ -201,8 +199,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             fail(f"{name} must use read_only root filesystem")
         if not compatibility_exception and not has_tmpfs_path(service, "/tmp"):
             fail(f"{name} missing tmpfs /tmp")
-        if name == "docker-proxy" and not has_tmpfs_path(service, "/run"):
-            fail("docker-proxy missing tmpfs /run")
         if not compatibility_exception and not service.get("pids_limit"):
             fail(f"{name} missing pids_limit")
         if not compatibility_exception and not service.get("mem_limit"):

@@ -108,7 +108,6 @@ if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
 SERVICE_ROLES=(
-  "docker-proxy"
   "site-worker-orchestrator"
   "traefik-edge"
 )
@@ -200,7 +199,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -217,7 +216,7 @@ dashboard_row_section() {
     "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
       printf '%s\n' "Backend"
       ;;
-    "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
+    "traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
       printf '%s\n' "Networking"
       ;;
     "postgres-db"|"Profile")
@@ -277,7 +276,6 @@ dashboard_seed_rows() {
     "api-backend > job-scheduler > site-worker-orchestrator" \
     "site-worker" \
     "remote-desktop-guacd" \
-    "docker-proxy" \
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
@@ -380,9 +378,6 @@ dashboard_row_label() {
       ;;
     "remote-desktop-guacd")
       printf '%s\n' "Guacamole Remote Desktop"
-      ;;
-    "docker-proxy")
-      printf '%s\n' "Docker Proxy"
       ;;
     "traefik-edge")
       printf '%s\n' "Traefik Reverse Proxy"
@@ -546,7 +541,6 @@ dashboard_render_table() {
     "api-backend > job-scheduler > site-worker-orchestrator" \
     "site-worker" \
     "remote-desktop-guacd" \
-    "docker-proxy" \
     "traefik-edge" \
     "wireguard-tunnel" \
     "postgres-db" \
@@ -5196,6 +5190,18 @@ retire_compose_webui_container() {
   log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
 }
 
+retire_compose_docker_proxy_container() {
+  local service="docker-proxy"
+  local container="borealis-engine-docker-proxy"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      die "Failed to remove retired Compose Docker proxy container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  printf '[%s] %s Compose container retired; Server Info no longer uses Docker proxy for K3s worker metrics or bridge service status\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
 retire_compose_job_scheduler_container() {
   local service="job-scheduler"
   local container="borealis-engine-job-scheduler"
@@ -6393,9 +6399,6 @@ load_profile_tuning() {
   case "${profile_rank}" in
     3)
       postgres_extra_mib=8192
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="256m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="1.00"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=128
       PROFILE_API_BACKEND_MEMORY_LIMIT="3g"
       PROFILE_API_BACKEND_CPU_LIMIT="6.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=512
@@ -6430,9 +6433,6 @@ load_profile_tuning() {
       ;;
     2)
       postgres_extra_mib=4096
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="192m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.75"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
       PROFILE_API_BACKEND_MEMORY_LIMIT="2g"
       PROFILE_API_BACKEND_CPU_LIMIT="4.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=384
@@ -6467,9 +6467,6 @@ load_profile_tuning() {
       ;;
     1)
       postgres_extra_mib=2048
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
       PROFILE_API_BACKEND_MEMORY_LIMIT="1g"
       PROFILE_API_BACKEND_CPU_LIMIT="2.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=256
@@ -6504,9 +6501,6 @@ load_profile_tuning() {
       ;;
     *)
       postgres_extra_mib=512
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=64
       PROFILE_API_BACKEND_MEMORY_LIMIT="512m"
       PROFILE_API_BACKEND_CPU_LIMIT="1.50"
       PROFILE_API_BACKEND_PIDS_LIMIT=160
@@ -6731,9 +6725,6 @@ BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
 
-BOREALIS_DOCKER_PROXY_MEMORY_LIMIT=${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-${PROFILE_DOCKER_PROXY_MEMORY_LIMIT}}
-BOREALIS_DOCKER_PROXY_CPU_LIMIT=${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-${PROFILE_DOCKER_PROXY_CPU_LIMIT}}
-BOREALIS_DOCKER_PROXY_PIDS_LIMIT=${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-${PROFILE_DOCKER_PROXY_PIDS_LIMIT}}
 BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
 BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
@@ -6824,7 +6815,6 @@ BOREALIS_WIREGUARD_PORT_ALLOWLIST=47002,5900,22
 BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
-BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
 BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
 BOREALIS_SITE_WORKER_LIFECYCLE_MODE=${BOREALIS_SITE_WORKER_LIFECYCLE_MODE:-auto}
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
@@ -6857,7 +6847,6 @@ BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-
 BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-db:local}
 BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE=${IMAGE_TAGS[remote-desktop-guacd]:-borealis-engine/remote-desktop-guacd:local}
 BOREALIS_WIREGUARD_TUNNEL_IMAGE=${IMAGE_TAGS[wireguard-tunnel]:-borealis-engine/wireguard-tunnel:local}
-BOREALIS_DOCKER_PROXY_IMAGE=${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
 EOF
   chmod 600 "${COMPOSE_ENV}" "${RUNTIME_ENV}" "${WEBUI_ENV}"
   apply_deploy_env_file_permissions
@@ -7722,7 +7711,6 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
         return default
 
 services = [
-    "docker-proxy",
     "site-worker-orchestrator",
     "traefik-edge",
 ]
@@ -7948,6 +7936,7 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_docker_proxy_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -7966,6 +7955,7 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_docker_proxy_container
     write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -7989,6 +7979,7 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_docker_proxy_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
@@ -8011,6 +8002,7 @@ deploy_engine() {
   retire_compose_postgres_container
   retire_compose_wireguard_tunnel_container
   retire_compose_remote_desktop_guacd_container
+  retire_compose_docker_proxy_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
@@ -8155,6 +8147,7 @@ service_action() {
       retire_compose_postgres_container
       retire_compose_wireguard_tunnel_container
       retire_compose_remote_desktop_guacd_container
+      retire_compose_docker_proxy_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url
@@ -8183,7 +8176,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }
