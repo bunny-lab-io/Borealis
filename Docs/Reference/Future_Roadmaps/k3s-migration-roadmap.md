@@ -206,10 +206,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Validation:
     - [x] Static `Engine.sh` syntax passes after Longhorn reconcile addition.
     - [x] First live deploy reconciles Longhorn once.
-    - [ ] Second live deploy after explicit-only StorageClass guard does not churn Longhorn pods.
+    - [x] Second live deploy after explicit-only StorageClass guard does not churn Longhorn pods.
     - [x] Longhorn system pods are ready and StorageClass is available.
     - [x] Live validation found upstream Longhorn default annotation drift; Engine reconcile now clears it after manifest apply.
-    - [ ] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
+    - [x] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
     - [ ] Logical backup/restore tested.
     - [ ] Existing Engine data imports cleanly.
     - [ ] DB profile settings preserved or documented.
