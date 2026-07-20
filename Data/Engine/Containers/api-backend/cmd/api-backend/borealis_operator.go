@@ -1053,6 +1053,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 					},
 					"volumeMounts": []map[string]any{
 						{"name": "tmp", "mountPath": "/tmp"},
+						{"name": "host-localtime", "mountPath": "/etc/localtime", "readOnly": true},
+						{"name": "host-zoneinfo", "mountPath": "/usr/share/zoneinfo", "readOnly": true},
 						{"name": "api-logs-site-workers", "mountPath": filepath.Join(apiRoot, "logs", "site-workers")},
 						{"name": "api-cache", "mountPath": filepath.Join(apiRoot, "cache")},
 						{"name": "api-config", "mountPath": filepath.Join(apiRoot, "config"), "readOnly": true},
@@ -1072,6 +1074,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 				borealisOperatorHostPathVolume("api-cache", filepath.Join(apiRoot, "cache"), "DirectoryOrCreate"),
 				borealisOperatorHostPathVolume("api-config", filepath.Join(apiRoot, "config"), "Directory"),
 				borealisOperatorHostPathVolume("api-secrets", filepath.Join(apiRoot, "secrets"), "Directory"),
+				borealisOperatorHostPathVolume("host-localtime", "/etc/localtime", "File"),
+				borealisOperatorHostPathVolume("host-zoneinfo", "/usr/share/zoneinfo", "Directory"),
 			},
 		},
 	}

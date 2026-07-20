@@ -64,13 +64,13 @@ K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256
 K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
-K3S_API_BACKEND_BRIDGE_VERSION="1"
-K3S_API_BACKEND_DB_VALIDATION_VERSION="1"
+K3S_API_BACKEND_BRIDGE_VERSION="2"
+K3S_API_BACKEND_DB_VALIDATION_VERSION="2"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
-K3S_BRIDGE_WORKLOADS_VERSION="3"
-K3S_JOB_SCHEDULER_VERSION="1"
-K3S_POSTGRES_VERSION="1"
+K3S_BRIDGE_WORKLOADS_VERSION="4"
+K3S_JOB_SCHEDULER_VERSION="2"
+K3S_POSTGRES_VERSION="2"
 K3S_POSTGRES_ENABLED="${BOREALIS_K3S_POSTGRES_ENABLED:-1}"
 K3S_POSTGRES_STORAGE_SIZE="${BOREALIS_K3S_POSTGRES_STORAGE_SIZE:-20Gi}"
 K3S_POSTGRES_ROLLOUT_TIMEOUT="${BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT:-180s}"
@@ -2204,9 +2204,54 @@ borealis_postgres_runtime_secret_data() {
     POSTGRES_DB \
     POSTGRES_USER \
     POSTGRES_PASSWORD \
+    BOREALIS_ENGINE_HOST_TIMEZONE \
     TZ; do
     printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
   done
+}
+
+host_timezone_value() {
+  local timezone
+  timezone="$(read_env_value TZ)"
+  if [[ -z "${timezone}" ]]; then
+    timezone="$(resolve_host_timezone)"
+  fi
+  printf '%s\n' "${timezone}"
+}
+
+k3s_timezone_env_entries() {
+  local timezone
+  timezone="$(host_timezone_value)"
+  cat <<EOF
+            - name: TZ
+              value: "${timezone}"
+            - name: BOREALIS_ENGINE_HOST_TIMEZONE
+              value: "${timezone}"
+EOF
+}
+
+k3s_timezone_volume_mount_entries() {
+  cat <<'EOF'
+            - name: host-localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: host-zoneinfo
+              mountPath: /usr/share/zoneinfo
+              readOnly: true
+EOF
+}
+
+k3s_timezone_volume_entries() {
+  cat <<'EOF'
+        - name: host-localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: host-zoneinfo
+          hostPath:
+            path: /usr/share/zoneinfo
+            type: Directory
+EOF
 }
 
 k3s_postgres_database_url() {
@@ -2226,6 +2271,8 @@ borealis_site_worker_runtime_secret_data() {
     BOREALIS_PROJECT_ROOT \
     BOREALIS_ENGINE_MODE \
     BOREALIS_ENGINE_CONTAINERIZED \
+    BOREALIS_ENGINE_HOST_TIMEZONE \
+    TZ \
     BOREALIS_INTERNAL_API_BASE_URL \
     BOREALIS_DATABASE_URL \
     BOREALIS_DB_SSLMODE \
@@ -2407,6 +2454,7 @@ spec:
               containerPort: ${BOREALIS_OPERATOR_PORT}
               protocol: TCP
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_PROCESS_ROLE
               value: "borealis-operator"
             - name: BOREALIS_OPERATOR_LISTEN_HOST
@@ -2462,6 +2510,10 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+$(k3s_timezone_volume_mount_entries)
+      volumes:
+$(k3s_timezone_volume_entries)
 ---
 apiVersion: v1
 kind: Service
@@ -2501,7 +2553,7 @@ ensure_borealis_operator_bridge() {
   workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${SCRIPT_DIR}" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
@@ -2680,6 +2732,7 @@ spec:
             - secretRef:
                 name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_GO_API_HOST
               value: "127.0.0.1"
             - name: BOREALIS_GO_API_PORT
@@ -2729,6 +2782,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
             - name: api-backend-runtime
               mountPath: /opt/Borealis/Engine/Services/api-backend
             - name: traefik-edge-config
@@ -2750,6 +2804,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
         - name: api-backend-runtime
           hostPath:
             path: ${RUNTIME_ROOT}/Services/api-backend
@@ -2932,6 +2987,7 @@ spec:
             - secretRef:
                 name: ${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_API_BACKGROUND_LOOPS
               value: "0"
             - name: BOREALIS_K3S_API_BACKEND_DB_VALIDATION
@@ -2953,6 +3009,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
             - name: api-backend-runtime
               mountPath: /opt/Borealis/Engine/Services/api-backend
       volumes:
@@ -2960,6 +3017,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
         - name: api-backend-runtime
           hostPath:
             path: ${RUNTIME_ROOT}/Services/api-backend
@@ -3131,6 +3189,7 @@ spec:
             - secretRef:
                 name: ${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_PROCESS_ROLE
               value: "job-scheduler"
             - name: BOREALIS_INTERNAL_API_BASE_URL
@@ -3176,6 +3235,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
             - name: engine-deploy
               mountPath: /opt/Borealis/Engine/Deploy
               readOnly: true
@@ -3202,6 +3262,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
         - name: api-backend-root
           emptyDir:
             sizeLimit: 16Mi
@@ -3516,6 +3577,7 @@ spec:
             - secretRef:
                 name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
           env:
+$(k3s_timezone_env_entries)
             - name: PGDATA
               value: ${postgres_pgdata}
             - name: HOME
@@ -3558,6 +3620,7 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+$(k3s_timezone_volume_mount_entries)
             - name: postgres-run
               mountPath: /var/run/postgresql
             - name: tmp
@@ -3571,6 +3634,7 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
@@ -3887,6 +3951,7 @@ spec:
               containerPort: ${port}
               protocol: TCP
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_WEBUI_MODE
               value: "${mode}"
             - name: BOREALIS_WEBUI_UPSTREAM_PORT
@@ -3930,6 +3995,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
 EOF
   if [[ "${mode}" == "dev" ]]; then
     cat <<EOF
@@ -3966,6 +4032,7 @@ EOF
           emptyDir:
             medium: Memory
             sizeLimit: 256Mi
+$(k3s_timezone_volume_entries)
 EOF
   if [[ "${mode}" == "dev" ]]; then
     cat <<EOF
@@ -4105,6 +4172,7 @@ spec:
               containerPort: ${port}
               protocol: TCP
           env:
+$(k3s_timezone_env_entries)
             - name: BOREALIS_GUACD_BIND_HOST
               value: "0.0.0.0"
             - name: BOREALIS_GUACD_HEALTH_HOST
@@ -4146,11 +4214,13 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
 ---
 apiVersion: v1
 kind: Service
@@ -4245,6 +4315,8 @@ ensure_k3s_bridge_workloads() {
       "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
       "webui_vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
       "webui_vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
       "guacd_image=${guacd_image}" \
       "guacd_port=${guacd_port}" \
       "guacd_memory_limit=${guacd_memory_limit}" \
@@ -4320,14 +4392,15 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
 
   printf '[%s] Reconciling K3s bridge workloads after scoped %s rebuild\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
   ensure_k3s_cluster_baseline
-  ensure_borealis_operator_bridge
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
+  ensure_borealis_operator_bridge
   if [[ "${service}" == "api-backend" ]]; then
     ensure_k3s_api_backend_bridge "${mode}"
     retire_compose_api_backend_container
   elif [[ "${service}" == "job-scheduler" ]]; then
     retire_compose_job_scheduler_container
     ensure_k3s_job_scheduler "${mode}"
+    recycle_k3s_site_workers_for_timezone
   elif [[ "${service}" == "postgres-db" ]]; then
     ensure_longhorn_storage_baseline
     ensure_k3s_postgres_statefulset "${mode}"
@@ -4567,6 +4640,47 @@ recycle_k3s_site_workers_for_api_cutover() {
   fi
   wait_for_k3s_site_worker_ready_count "${count}" 300
   log_status "site-worker" "Recycled - API Cutover" "${C_GREEN}"
+}
+
+recycle_k3s_site_workers_for_timezone() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+
+  local expected_timezone
+  expected_timezone="$(host_timezone_value)"
+  [[ -n "${expected_timezone}" ]] || return 0
+
+  local pod_names=()
+  mapfile -t pod_names < <(
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+      -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+  )
+  ((${#pod_names[@]} > 0)) || return 0
+
+  local pod
+  local timezone
+  local mismatch_count=0
+  for pod in "${pod_names[@]}"; do
+    [[ -n "${pod}" ]] || continue
+    timezone="$(k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod}" -c site-worker -- sh -c 'printf "%s" "${TZ:-}"' 2>>"${BUILD_LOG}" || true)"
+    if [[ "${timezone}" != "${expected_timezone}" ]]; then
+      mismatch_count=$((mismatch_count + 1))
+      printf '[%s] K3s site worker pod %s has timezone %s; expected %s\n' "$(date +%FT%T)" "${pod}" "${timezone:-unset}" "${expected_timezone}" >> "${BUILD_LOG}"
+    fi
+  done
+  ((mismatch_count > 0)) || return 0
+
+  log_status "site-worker" "Recycling K3s Workers For Timezone" "${C_YELLOW}"
+  printf '[%s] Recycling %s K3s site worker pod(s) because %s pod(s) do not inherit host timezone %s\n' "$(date +%FT%T)" "${#pod_names[@]}" "${mismatch_count}" "${expected_timezone}" >> "${BUILD_LOG}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --wait=false >> "${BUILD_LOG}" 2>&1; then
+    log_status "site-worker" "Recycle Failed" "${C_RED}"
+    die "Failed to recycle K3s site worker pods for host timezone propagation. See ${BUILD_LOG}."
+  fi
+  wait_for_k3s_site_worker_ready_count "${#pod_names[@]}" 300
+  log_status "site-worker" "Recycled - Timezone" "${C_GREEN}"
 }
 
 env_key_exists() {
@@ -7071,6 +7185,7 @@ deploy_engine() {
     refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
     retire_compose_webui_container
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
@@ -7084,6 +7199,7 @@ deploy_engine() {
     refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
     retire_compose_webui_container
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
     write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
@@ -7101,6 +7217,7 @@ deploy_engine() {
     wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
     retire_compose_webui_container
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
@@ -7118,6 +7235,7 @@ deploy_engine() {
   wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
   retire_compose_webui_container
   recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+  recycle_k3s_site_workers_for_timezone
   retire_compose_api_backend_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"

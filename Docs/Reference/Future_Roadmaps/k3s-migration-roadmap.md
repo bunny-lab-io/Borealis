@@ -16,6 +16,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
 - [x] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
 - [ ] Use Longhorn as the Borealis K3s PVC/persistent volume backend for workloads that need durable container storage.
+- [x] Propagate the Engine host timezone into Borealis-managed Compose containers and K3s pods.
 
 ## Stage 1: K3s Baseline
 

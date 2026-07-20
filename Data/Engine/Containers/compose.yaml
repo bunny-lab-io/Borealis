@@ -1,5 +1,8 @@
 name: ${BOREALIS_COMPOSE_PROJECT_NAME:-borealis-engine}
 
+x-borealis-host-localtime: &borealis-host-localtime /etc/localtime:/etc/localtime:ro
+x-borealis-host-zoneinfo: &borealis-host-zoneinfo /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+
 x-borealis-hardened-service: &borealis-hardened-service
   security_opt:
     - no-new-privileges:true
@@ -28,9 +31,13 @@ services:
       CONTAINERS: "1"
       POST: "0"
       LOG_LEVEL: warning
+      TZ: ${TZ:-Etc/UTC}
+      BOREALIS_ENGINE_HOST_TIMEZONE: ${BOREALIS_ENGINE_HOST_TIMEZONE:-Etc/UTC}
     ports:
       - "127.0.0.1:2375:2375"
     volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
       - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
 
   site-worker-orchestrator:
@@ -54,6 +61,8 @@ services:
       BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
       HOME: /tmp
     volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Deploy:/opt/Borealis/Engine/Deploy:ro
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/cache:/opt/Borealis/Engine/Services/api-backend/cache
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend/logs/site-workers:/opt/Borealis/Engine/Services/api-backend/logs/site-workers
@@ -88,6 +97,8 @@ services:
     environment:
       HOME: /tmp
     volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge:/opt/Borealis/Engine/Services/traefik-edge
     healthcheck:
       test: ["CMD-SHELL", "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:$${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"]
@@ -158,6 +169,8 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/state:/var/lib/postgresql/data
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/postgres-db/run:/var/run/borealis
     healthcheck:
@@ -183,6 +196,9 @@ services:
       BOREALIS_GUACD_BIND_HOST: "127.0.0.1"
       BOREALIS_GUACD_LOG_DIR: /tmp/borealis-guacd-logs
       HOME: /tmp
+    volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
     healthcheck:
       test: ["CMD", "borealis-guacd-healthcheck"]
       interval: 10s
@@ -208,6 +224,8 @@ services:
     env_file:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     volumes:
+      - *borealis-host-localtime
+      - *borealis-host-zoneinfo
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel:/opt/Borealis/Engine/Services/wireguard-tunnel
     healthcheck:
       test: ["CMD", "borealis-wireguard-healthcheck"]

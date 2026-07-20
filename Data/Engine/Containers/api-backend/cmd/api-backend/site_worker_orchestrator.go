@@ -370,6 +370,8 @@ func (o *siteWorkerOrchestrator) launchSiteWorker(ctx context.Context, req orche
 		args = append(args, "-e", "BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY="+explicit)
 	}
 	args = append(args,
+		"-v", "/etc/localtime:/etc/localtime:ro",
+		"-v", "/usr/share/zoneinfo:/usr/share/zoneinfo:ro",
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/logs/site-workers", filepath.Join(apiRoot, "logs", "site-workers")),
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/secrets:ro", filepath.Join(apiRoot, "secrets")),
 		"-v", fmt.Sprintf("%s:/opt/Borealis/Engine/Services/api-backend/config:ro", filepath.Join(apiRoot, "config")),
@@ -505,8 +507,12 @@ func (o *siteWorkerOrchestrator) runServiceAction(ctx context.Context, req orche
 		"--memory", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"),
 		"--cpus", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT", "1.00"),
 		"--pids-limit", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT", "160"),
+		"-e", "TZ=" + schedulerResourceEnv("TZ", "Etc/UTC"),
+		"-e", "BOREALIS_ENGINE_HOST_TIMEZONE=" + schedulerResourceEnv("BOREALIS_ENGINE_HOST_TIMEZONE", schedulerResourceEnv("TZ", "Etc/UTC")),
 		"-e", "HOME=/tmp",
-		"-v", schedulerResourceEnv("BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock")+":/var/run/docker.sock",
+		"-v", "/etc/localtime:/etc/localtime:ro",
+		"-v", "/usr/share/zoneinfo:/usr/share/zoneinfo:ro",
+		"-v", schedulerResourceEnv("BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock") + ":/var/run/docker.sock",
 		"-v", fmt.Sprintf("%s:%s", o.projectRoot, o.projectRoot),
 		"-w", o.projectRoot,
 		"--entrypoint", "/bin/bash",

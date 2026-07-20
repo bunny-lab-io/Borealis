@@ -94,7 +94,7 @@ bash Engine.sh --network-mode public deploy prod
 ```
 
 ## Configure the Timezone
-Borealis reads the Linux host timezone during every `Engine.sh --network-mode public|local deploy` or redeploy and passes that value into the Engine containers as `TZ`. Server Info uses that propagated timezone for Engine-local clock displays.
+Borealis reads the Linux host timezone during every `Engine.sh --network-mode public|local deploy` or redeploy and passes that value into Compose containers and Borealis K3s pods as `TZ` and `BOREALIS_ENGINE_HOST_TIMEZONE`. Engine-managed containers also receive read-only host timezone data mounts so minimal images resolve the same local timezone as the host. Server Info uses that propagated timezone for Engine-local clock displays.
 
 Set the timezone before deploying the Engine:
 

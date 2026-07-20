@@ -44,6 +44,10 @@ CAP_ADD_ALLOWLIST = {
     "traefik-edge": {"DAC_OVERRIDE", "NET_BIND_SERVICE"},
     "wireguard-tunnel": {"NET_ADMIN", "NET_RAW"},
 }
+TIMEZONE_MOUNTS = {
+    "/etc/localtime": "/etc/localtime",
+    "/usr/share/zoneinfo": "/usr/share/zoneinfo",
+}
 
 
 def fail(message: str) -> None:
@@ -131,6 +135,14 @@ def require_mount(
     if actual_read_only != read_only:
         mode = "read-only" if read_only else "read-write"
         fail(f"{service_name} mount {target} must be {mode}")
+
+
+def require_timezone_mounts(mounts: dict[str, tuple[str, bool]], service_name: str) -> None:
+    for target, expected_source in TIMEZONE_MOUNTS.items():
+        require_mount(mounts, service_name, target, read_only=True)
+        source, _ = mounts[target]
+        if source != expected_source:
+            fail(f"{service_name} mount {target} must source {expected_source}")
 
 
 def forbid_mount_target_prefix(
@@ -234,11 +246,15 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
         elif socket_mounts:
             fail(f"{name} must not mount Docker socket")
 
+        mounts = mount_by_target(service)
+        require_timezone_mounts(mounts, name)
+
         if name == "remote-desktop-guacd":
             if service_env(service, "BOREALIS_GUACD_BIND_HOST") != "127.0.0.1":
                 fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
-            if service.get("volumes"):
-                fail("remote-desktop-guacd must not use host bind mounts")
+            extra_mounts = set(mounts) - set(TIMEZONE_MOUNTS)
+            if extra_mounts:
+                fail("remote-desktop-guacd must not use host bind mounts beyond read-only timezone data")
         if name == "traefik-edge":
             depends_on = service.get("depends_on") or {}
             if "api-backend" in depends_on:
@@ -246,7 +262,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             if "webui-frontend" in depends_on:
                 fail("traefik-edge must not depend on Compose webui-frontend after K3s WebUI cutover")
 
-        mounts = mount_by_target(service)
         if name == "postgres-db" and "/var/log/postgresql" in mounts:
             fail("postgres-db must not mount host log directory")
         if name == "site-worker-orchestrator":
@@ -283,7 +298,12 @@ def assert_dynamic_orchestrator_policy() -> None:
         "site-worker pids": '"BOREALIS_SITE_WORKER_PIDS_LIMIT", "128"',
         "site-worker route file writes disabled": '"BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0"',
         "site-worker home": '"HOME=/tmp"',
+        "site-worker host localtime": '"/etc/localtime:/etc/localtime:ro"',
+        "site-worker host zoneinfo": '"/usr/share/zoneinfo:/usr/share/zoneinfo:ro"',
         "service helper no-new-privileges": '"BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"',
+        "service helper timezone": '"TZ", "Etc/UTC"',
+        "service helper host localtime": '"/etc/localtime:/etc/localtime:ro"',
+        "service helper host zoneinfo": '"/usr/share/zoneinfo:/usr/share/zoneinfo:ro"',
         "service helper socket path": '"BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock"',
     }
     for label, snippet in required.items():

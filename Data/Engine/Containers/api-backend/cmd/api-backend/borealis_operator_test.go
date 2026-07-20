@@ -335,6 +335,8 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 				"/opt/Borealis/Engine/Services/api-backend/cache",
 				"/opt/Borealis/Engine/Services/api-backend/config",
 				"/opt/Borealis/Engine/Services/api-backend/secrets",
+				"/etc/localtime",
+				"/usr/share/zoneinfo",
 			} {
 				if !hostPaths[expected] {
 					t.Fatalf("site-worker pod missing fixed hostPath %s in %#v", expected, hostPaths)
