@@ -108,7 +108,7 @@ func TestCollectOverviewServiceRowsOmitsRetiredComposeWebUI(t *testing.T) {
 	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
 	t.Setenv("BOREALIS_WEBUI_FRONTEND_IMAGE", "borealis-engine/webui-frontend:sha-test")
 
-	rows := collectOverviewServiceRows(context.Background())
+	rows := collectOverviewServiceRows(context.Background(), nil)
 	for _, row := range rows {
 		if row["key"] == "webui-frontend" && row["runtime"] == "compose" {
 			t.Fatalf("retired Compose webui-frontend row should be omitted: %#v", row)
@@ -146,7 +146,7 @@ func TestCollectOverviewServiceRowsIncludesK3sScheduler(t *testing.T) {
 	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_OPERATOR_SECRET", "test-secret")
 
-	rows := collectOverviewServiceRows(context.Background())
+	rows := collectOverviewServiceRows(context.Background(), nil)
 	for _, row := range rows {
 		if row["key"] == "job-scheduler" {
 			if row["runtime"] != "k3s" || row["status"] != "healthy" {
@@ -206,7 +206,7 @@ func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) 
 	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
 	t.Setenv("BOREALIS_OPERATOR_SECRET", "test-secret")
 
-	rows := collectOverviewServiceRows(context.Background())
+	rows := collectOverviewServiceRows(context.Background(), nil)
 	seen := map[string]map[string]any{}
 	for _, row := range rows {
 		seen[cleanText(row["key"])] = row
@@ -227,6 +227,74 @@ func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) 
 		row := seen[serviceKey]
 		if row == nil || row["runtime"] != "compose" {
 			t.Fatalf("remaining bridge Compose row missing for %s: %#v", serviceKey, rows)
+		}
+	}
+}
+
+type overviewServiceSnapshotStoreStub struct {
+	snapshots map[string]overviewServiceSnapshot
+	err       error
+}
+
+func (s overviewServiceSnapshotStoreStub) lookupOperator(context.Context, string, string) (operatorProfile, error) {
+	return operatorProfile{}, nil
+}
+
+func (s overviewServiceSnapshotStoreStub) overviewServiceSnapshots(context.Context) (map[string]overviewServiceSnapshot, error) {
+	return s.snapshots, s.err
+}
+
+func TestCollectOverviewServiceRowsUsesSchedulerSnapshotsForComposeBridge(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	now := time.Now().Unix()
+	store := overviewServiceSnapshotStoreStub{snapshots: map[string]overviewServiceSnapshot{
+		"docker-proxy": {
+			updatedAt: now,
+			payload: map[string]any{
+				"Name":    "borealis-engine-docker-proxy",
+				"Service": "docker-proxy",
+				"State":   "running",
+				"Health":  "healthy",
+				"Status":  "Up 10 minutes (healthy)",
+				"Image":   "ghcr.io/tecnativa/docker-socket-proxy:v0.4.2",
+			},
+		},
+		"site-worker-orchestrator": {
+			updatedAt: now,
+			payload: map[string]any{
+				"Name":    "borealis-engine-site-worker-orchestrator",
+				"Service": "site-worker-orchestrator",
+				"State":   "running",
+				"Health":  "healthy",
+				"Status":  "Up 10 minutes (healthy)",
+				"Image":   "borealis-engine/api-backend:sha-test",
+			},
+		},
+		"traefik-edge": {
+			updatedAt: now,
+			payload: map[string]any{
+				"Name":    "borealis-engine-traefik-edge",
+				"Service": "traefik-edge",
+				"State":   "running",
+				"Health":  "healthy",
+				"Status":  "Up 10 minutes (healthy)",
+				"Image":   "traefik:v3.4.3",
+			},
+		},
+	}}
+
+	rows := collectOverviewServiceRows(context.Background(), store)
+	seen := map[string]map[string]any{}
+	for _, row := range rows {
+		seen[cleanText(row["key"])] = row
+	}
+	for _, serviceKey := range []string{"docker-proxy", "site-worker-orchestrator", "traefik-edge"} {
+		row := seen[serviceKey]
+		if row == nil {
+			t.Fatalf("compose bridge row missing for %s: %#v", serviceKey, rows)
+		}
+		if row["snapshot_source"] != "job-scheduler" || row["runtime"] != "compose" || row["status"] != "healthy" {
+			t.Fatalf("expected scheduler snapshot row for %s, got %#v", serviceKey, row)
 		}
 	}
 }

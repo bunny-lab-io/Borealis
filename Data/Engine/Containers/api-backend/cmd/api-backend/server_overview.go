@@ -43,6 +43,15 @@ var k3sWorkloadServiceSpecs = []struct {
 	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
 
+type overviewServiceSnapshotStore interface {
+	overviewServiceSnapshots(ctx context.Context) (map[string]overviewServiceSnapshot, error)
+}
+
+type overviewServiceSnapshot struct {
+	payload   map[string]any
+	updatedAt int64
+}
+
 func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, realtime *operatorRealtimeHub, _ http.Handler) {
 	mux.HandleFunc("/api/server/overview", serverOverviewHandler(auth, realtime))
 }
@@ -102,7 +111,7 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore, real
 		"collected_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"host":                   collectOverviewHostPayload(),
 		"resources":              collectOverviewResourcePayload(),
-		"services":               collectOverviewServiceRows(ctx),
+		"services":               collectOverviewServiceRows(ctx, store),
 		"wireguard":              collectOverviewWireGuardPayload(ctx, store),
 		"public_edge":            collectOverviewPublicEdgePayload(),
 		"security":               collectOverviewSecurityPayload(),
@@ -167,55 +176,184 @@ func collectOverviewResourcePayload() map[string]any {
 	}
 }
 
-func collectOverviewServiceRows(ctx context.Context) []map[string]any {
+func collectOverviewServiceRows(ctx context.Context, store operatorStore) []map[string]any {
 	if !containerizedEngineEnabled() {
 		return collectSystemdServiceRows()
 	}
+	snapshots := collectOverviewComposeServiceSnapshots(ctx, store)
 	rows := make([]map[string]any, 0, len(composeServiceSpecs))
 	for _, spec := range composeServiceSpecs {
-		containerName := "borealis-engine-" + spec.key
-		if spec.key == "docker-proxy" {
-			containerName = "borealis-engine-docker-proxy"
+		if snapshot, ok := snapshots[spec.key]; ok && overviewServiceSnapshotFresh(snapshot.updatedAt) {
+			rows = append(rows, overviewComposeServiceRowFromSnapshot(spec.key, spec.label, snapshot))
+			continue
 		}
-		inspected := dockerInspectContainer(containerName)
-		statePayload, _ := inspected["State"].(map[string]any)
-		configPayload, _ := inspected["Config"].(map[string]any)
-		state := strings.ToLower(cleanText(statePayload["Status"]))
-		if state == "" {
-			state = "unknown"
-		}
-		health := ""
-		if healthPayload, ok := statePayload["Health"].(map[string]any); ok {
-			health = strings.ToLower(cleanText(healthPayload["Status"]))
-		}
-		displayStatus := overviewDisplayStatus(state, health)
-		rows = append(rows, map[string]any{
-			"key":                spec.key,
-			"label":              spec.label,
-			"instance":           nil,
-			"unit_name":          containerName,
-			"compose_service":    spec.key,
-			"runtime":            "compose",
-			"docker_state":       state,
-			"docker_health":      nullableStringValue(health),
-			"docker_status":      displayStatus,
-			"docker_status_text": cleanText(statePayload["Status"]),
-			"display_status":     displayStatus,
-			"active_state":       state,
-			"sub_state":          firstText(health, state),
-			"enabled_state":      "compose",
-			"main_pid":           coerceInt64(statePayload["Pid"]),
-			"started_at":         nullableStringValue(normalizeStartedAt(cleanText(statePayload["StartedAt"]))),
-			"fragment_path":      nil,
-			"restart_supported":  overviewServiceRestartSupported(spec.key),
-			"actions":            overviewServiceActions(spec.key),
-			"pending_action":     nil,
-			"status":             overviewComposeStatus(state, health),
-			"container_image":    cleanText(configPayload["Image"]),
-		})
+		rows = append(rows, overviewComposeServiceRowFromDocker(spec.key, spec.label))
 	}
 	rows = append(rows, collectOverviewK3sWorkloadRows(ctx)...)
 	return rows
+}
+
+func collectOverviewComposeServiceSnapshots(ctx context.Context, store operatorStore) map[string]overviewServiceSnapshot {
+	if store == nil {
+		return map[string]overviewServiceSnapshot{}
+	}
+	snapshotStore, ok := store.(overviewServiceSnapshotStore)
+	if !ok {
+		return map[string]overviewServiceSnapshot{}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	snapshots, err := snapshotStore.overviewServiceSnapshots(requestCtx)
+	if err != nil {
+		return map[string]overviewServiceSnapshot{}
+	}
+	return snapshots
+}
+
+func (s *postgresOperatorStore) overviewServiceSnapshots(ctx context.Context) (map[string]overviewServiceSnapshot, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(ctx, `
+		SELECT service_key, payload_json, updated_at
+		  FROM engine.job_scheduler_service_snapshots
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	snapshots := map[string]overviewServiceSnapshot{}
+	for rows.Next() {
+		var serviceKey string
+		var rawPayload string
+		var updatedAt int64
+		if err := rows.Scan(&serviceKey, &rawPayload, &updatedAt); err != nil {
+			return nil, err
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(rawPayload), &payload); err != nil || payload == nil {
+			continue
+		}
+		key := normalizeOverviewSnapshotServiceKey(serviceKey, payload)
+		if key == "" {
+			continue
+		}
+		snapshots[key] = overviewServiceSnapshot{payload: payload, updatedAt: updatedAt}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
+func normalizeOverviewSnapshotServiceKey(serviceKey string, payload map[string]any) string {
+	candidates := []string{
+		serviceKey,
+		cleanText(payload["Service"]),
+		cleanText(payload["service"]),
+		cleanText(payload["Name"]),
+		cleanText(payload["name"]),
+	}
+	for _, candidate := range candidates {
+		normalized := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(candidate), "borealis-engine-"))
+		for _, spec := range composeServiceSpecs {
+			if normalized == spec.key {
+				return spec.key
+			}
+		}
+	}
+	return ""
+}
+
+func overviewServiceSnapshotFresh(updatedAt int64) bool {
+	return updatedAt > 0 && time.Now().Unix()-updatedAt <= 120
+}
+
+func overviewComposeServiceRowFromDocker(serviceKey string, label string) map[string]any {
+	containerName := "borealis-engine-" + serviceKey
+	if serviceKey == "docker-proxy" {
+		containerName = "borealis-engine-docker-proxy"
+	}
+	inspected := dockerInspectContainer(containerName)
+	statePayload, _ := inspected["State"].(map[string]any)
+	configPayload, _ := inspected["Config"].(map[string]any)
+	state := strings.ToLower(cleanText(statePayload["Status"]))
+	if state == "" {
+		state = "unknown"
+	}
+	health := ""
+	if healthPayload, ok := statePayload["Health"].(map[string]any); ok {
+		health = strings.ToLower(cleanText(healthPayload["Status"]))
+	}
+	displayStatus := overviewDisplayStatus(state, health)
+	return map[string]any{
+		"key":                serviceKey,
+		"label":              label,
+		"instance":           nil,
+		"unit_name":          containerName,
+		"compose_service":    serviceKey,
+		"runtime":            "compose",
+		"docker_state":       state,
+		"docker_health":      nullableStringValue(health),
+		"docker_status":      displayStatus,
+		"docker_status_text": cleanText(statePayload["Status"]),
+		"display_status":     displayStatus,
+		"active_state":       state,
+		"sub_state":          firstText(health, state),
+		"enabled_state":      "compose",
+		"main_pid":           coerceInt64(statePayload["Pid"]),
+		"started_at":         nullableStringValue(normalizeStartedAt(cleanText(statePayload["StartedAt"]))),
+		"fragment_path":      nil,
+		"restart_supported":  overviewServiceRestartSupported(serviceKey),
+		"actions":            overviewServiceActions(serviceKey),
+		"pending_action":     nil,
+		"status":             overviewComposeStatus(state, health),
+		"container_image":    cleanText(configPayload["Image"]),
+	}
+}
+
+func overviewComposeServiceRowFromSnapshot(serviceKey string, label string, snapshot overviewServiceSnapshot) map[string]any {
+	payload := snapshot.payload
+	containerName := firstText(cleanText(payload["Name"]), cleanText(payload["Names"]), "borealis-engine-"+serviceKey)
+	state := strings.ToLower(firstText(cleanText(payload["State"]), cleanText(payload["state"])))
+	if state == "" {
+		state = "unknown"
+	}
+	health := strings.ToLower(firstText(cleanText(payload["Health"]), cleanText(payload["health"])))
+	statusText := firstText(cleanText(payload["Status"]), cleanText(payload["status"]), state)
+	displayStatus := overviewDisplayStatus(state, health)
+	startedAt := firstText(cleanText(payload["StartedAt"]), cleanText(payload["started_at"]))
+	if startedAt == "" {
+		startedAt = firstText(cleanText(payload["CreatedAt"]), cleanText(payload["created_at"]))
+	}
+	return map[string]any{
+		"key":                 serviceKey,
+		"label":               label,
+		"instance":            nil,
+		"unit_name":           containerName,
+		"compose_service":     serviceKey,
+		"runtime":             "compose",
+		"docker_state":        state,
+		"docker_health":       nullableStringValue(health),
+		"docker_status":       displayStatus,
+		"docker_status_text":  statusText,
+		"display_status":      displayStatus,
+		"active_state":        state,
+		"sub_state":           firstText(health, state),
+		"enabled_state":       "compose",
+		"main_pid":            coerceInt64(payload["Pid"]),
+		"started_at":          nullableStringValue(normalizeStartedAt(startedAt)),
+		"fragment_path":       nil,
+		"restart_supported":   overviewServiceRestartSupported(serviceKey),
+		"actions":             overviewServiceActions(serviceKey),
+		"pending_action":      nil,
+		"status":              overviewComposeStatus(state, health),
+		"container_image":     firstText(cleanText(payload["Image"]), cleanText(payload["image"])),
+		"snapshot_source":     "job-scheduler",
+		"snapshot_updated_at": snapshot.updatedAt,
+	}
 }
 
 func collectOverviewK3sWorkloadRows(ctx context.Context) []map[string]any {
