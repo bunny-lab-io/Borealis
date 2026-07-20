@@ -72,7 +72,7 @@ K3S_API_BACKEND_DB_VALIDATION_VERSION="2"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="4"
-K3S_JOB_SCHEDULER_VERSION="2"
+K3S_JOB_SCHEDULER_VERSION="3"
 K3S_WIREGUARD_TUNNEL_VERSION="1"
 K3S_POSTGRES_VERSION="3"
 K3S_POSTGRES_SCHEMA_JOB_NAME="${BOREALIS_K3S_POSTGRES_SCHEMA_JOB_NAME:-postgres-db-schema-initializer}"
@@ -3316,6 +3316,8 @@ $(k3s_timezone_volume_mount_entries)
               readOnly: true
             - name: orchestrator-run
               mountPath: /opt/Borealis/Engine/Services/site-worker-orchestrator/run
+            - name: wireguard-run
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
             - name: traefik-config-root
               mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
             - name: traefik-dynamic
@@ -3355,6 +3357,10 @@ $(k3s_timezone_volume_entries)
         - name: orchestrator-run
           hostPath:
             path: ${RUNTIME_ROOT}/Services/site-worker-orchestrator/run
+            type: Directory
+        - name: wireguard-run
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/run
             type: Directory
         - name: traefik-dynamic
           hostPath:
@@ -3404,6 +3410,7 @@ ensure_k3s_job_scheduler() {
       "internal_api_base=${internal_api_base}" \
       "site_worker_lifecycle=k3s" \
       "project_root=${SCRIPT_DIR}" \
+      "wireguard_run=${RUNTIME_ROOT}/Services/wireguard-tunnel/run" \
       | sha256sum | awk '{print $1}'
   )"
 

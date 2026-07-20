@@ -1123,6 +1123,9 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	if serviceKey == "site-worker" && actionName == "recreate" {
 		return m.runSiteWorkerRecreate(ctx, action)
 	}
+	if schedulerServiceActionUsesWireGuardControl(serviceKey, actionName) {
+		return m.runWireGuardControlServiceAction(ctx, actionName)
+	}
 	if schedulerServiceActionUsesOperator(serviceKey, actionName) {
 		client, err := m.operatorClient()
 		if err != nil {
@@ -1147,6 +1150,23 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 		return err
 	}
 	log.Printf("queued service action via site-worker orchestrator service=%s action=%s", serviceKey, actionName)
+	return nil
+}
+
+func (m *goSchedulerManager) runWireGuardControlServiceAction(ctx context.Context, actionName string) error {
+	socketPath := cleanText(os.Getenv("BOREALIS_WIREGUARD_CONTROL_SOCKET"))
+	if socketPath == "" {
+		socketPath = "/opt/Borealis/Engine/Services/wireguard-tunnel/run/control.sock"
+	}
+	code, out, errOut, err := runWireGuardControlSocketCommand(ctx, socketPath, actionName, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("wireguard control socket action failed: %w", err)
+	}
+	if code != 0 {
+		log.Printf("wireguard control socket action returned nonzero service=wireguard-tunnel action=%s code=%d stdout=%q stderr=%q", actionName, code, out, errOut)
+		return nil
+	}
+	log.Printf("queued service action via wireguard control socket service=wireguard-tunnel action=%s", actionName)
 	return nil
 }
 
@@ -2756,6 +2776,15 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 	default:
 		return false
 	}
+}
+
+func schedulerServiceActionUsesWireGuardControl(serviceKey string, actionName string) bool {
+	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
+	actionName = strings.ToLower(strings.TrimSpace(actionName))
+	if serviceKey != "wireguard-tunnel" || actionName != "reconcile" {
+		return false
+	}
+	return schedulerEnvOwnerIsK3s("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER")
 }
 
 func schedulerEnvOwnerIsK3s(key string) bool {

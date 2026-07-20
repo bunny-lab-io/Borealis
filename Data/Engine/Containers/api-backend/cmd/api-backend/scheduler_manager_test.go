@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -386,6 +387,106 @@ func TestSchedulerManagerK3sPostgresRestartUsesOperator(t *testing.T) {
 	params := schedulerAnyMap(received.Params)
 	if params["service_key"] != "postgres-db" {
 		t.Fatalf("unexpected operator params %#v", received.Params)
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileUsesControlSocket(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", socketPath)
+
+	received := make(chan map[string]any, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(conn).Decode(&payload); err != nil {
+			return
+		}
+		received <- payload
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"returncode": 0,
+			"stdout":     "ok",
+			"stderr":     "",
+		})
+	}()
+
+	manager := &goSchedulerManager{}
+	err = manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	select {
+	case payload := <-received:
+		if payload["command"] != "reconcile" {
+			t.Fatalf("unexpected wireguard payload %#v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wireguard control socket did not receive command")
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileFailsWhenSocketMissing(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", filepath.Join(t.TempDir(), "missing.sock"))
+	manager := &goSchedulerManager{}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err == nil {
+		t.Fatal("expected missing wireguard control socket error")
+	}
+	if !strings.Contains(err.Error(), "wireguard control socket action failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileNonzeroCompletes(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", socketPath)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(conn).Decode(&payload); err != nil {
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"returncode": 1,
+			"stdout":     "",
+			"stderr":     "wg interface unavailable",
+		})
+	}()
+
+	manager := &goSchedulerManager{}
+	err = manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
 	}
 }
 

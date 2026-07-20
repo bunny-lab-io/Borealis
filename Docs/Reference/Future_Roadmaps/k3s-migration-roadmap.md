@@ -251,6 +251,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Move `wireguard-tunnel` into K3s pinned host-network pod.
     - [x] Preserve `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, control socket boundary.
     - [x] Preserve firewall chains and peer `/32` policy.
+    - [x] Route queued WireGuard reconcile/recover actions from K3s `job-scheduler` through the mounted control socket instead of the Docker helper bridge.
 - [ ] Validation:
     - [x] Existing agents reconnect.
         - [x] SQL worker audit shows K3s site-worker socket counts match online device counts after redeploy.
@@ -259,6 +260,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
         - [x] API and K3s site-worker pods resolve and connect to `remote-desktop-guacd.borealis.svc.cluster.local:4822`.
         - [x] Operator browser smoke after guacd traffic-owner env propagation.
         - [x] WebUI login, Server Info, Device Inventory, Remote Desktop, Remote Shell, File Management, Process Management, and Service Management pass after WireGuard and guacd cutover.
+    - [x] Focused scheduler tests confirm K3s WireGuard reconcile sends only predefined `reconcile` command to the control socket and does not require the helper bridge.
+    - [ ] Live Server Info `Recover Listener` action validates queued scheduler-to-control-socket path after redeploy.
     - [ ] Quarantine/revocation removes peer access.
 
 ## Stage 11: Compose Retirement
@@ -274,6 +277,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
     - [x] Expose WebUI restart as an operator-routed K3s action so simple WebUI pod restarts no longer need the helper bridge.
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
+    - [x] Route K3s WireGuard reconcile service actions through the scheduler-mounted control socket instead of the Docker helper bridge.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
