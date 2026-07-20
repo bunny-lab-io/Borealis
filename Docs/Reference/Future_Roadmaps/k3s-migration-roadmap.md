@@ -135,7 +135,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `/api/server/workers` returns `metrics.k8s.io` CPU/RAM payloads for every active K3s site worker.
     - [x] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
-    - [ ] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
+    - [x] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
     - [ ] Agent release rollout validates stale connected Socket.IO sessions self-recover without manual Agent service restart.
 
 ## Stage 6: Production WebUI Cutover
@@ -298,6 +298,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Server Overview unit tests confirm remaining Compose bridge rows can render from scheduler snapshots.
     - [x] Server action tests confirm WebUI restart uses the operator path and WebUI rebuild is rejected from queued runtime helper paths.
     - [x] Orchestrator tests confirm the helper allowlist is limited to Traefik reload.
+    - [x] `Engine.sh --network-mode public --service webui-frontend restart prod` rolls the K3s WebUI Deployment without restoring the retired Compose WebUI container.
     - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
