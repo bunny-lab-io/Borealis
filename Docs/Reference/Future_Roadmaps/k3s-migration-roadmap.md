@@ -162,6 +162,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Mirror generated runtime env into `borealis-api-backend-runtime-env`.
     - [x] Disable API-owned background loops in the bridge pod with `BOREALIS_API_BACKGROUND_LOOPS=0`.
     - [x] Use `Recreate` rollout strategy for the host-network bridge so single-node K3s does not deadlock on fixed port `5001`.
+    - [x] Add one-shot K3s `api-backend` shadow DB validator Job that targets imported K3s PostgreSQL data without moving public API traffic.
     - [ ] Make K3s `api-backend` authoritative.
     - [ ] Remove Compose `api-backend` after route/internal-caller validation.
     - [ ] Preserve Aegis bootstrap/unlock behavior.
@@ -171,6 +172,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Validation:
     - [x] Bridge pod rollout passes.
     - [x] `curl -fsS http://127.0.0.1:5001/health` passes.
+    - [x] `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod` validates Go API bootstrap state against K3s PostgreSQL shadow data.
     - [ ] `/health` passes.
     - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
     - [ ] Realtime SSE works with one replica.

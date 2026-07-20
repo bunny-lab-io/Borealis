@@ -1077,8 +1077,14 @@ func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "")
 	os.Args = []string{"api-backend", "api-healthcheck"}
-	if schedulerManagerMode() || schedulerHealthcheckMode() || borealisOperatorClientHealthcheckMode() || !apiHealthcheckMode() {
+	if schedulerManagerMode() || schedulerHealthcheckMode() || borealisOperatorClientHealthcheckMode() || apiDBHealthcheckMode() || !apiHealthcheckMode() {
 		t.Fatalf("expected api-healthcheck arg to select API healthcheck only")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "job-scheduler")
+	os.Args = []string{"api-backend", "api-db-healthcheck"}
+	if schedulerManagerMode() || schedulerHealthcheckMode() || apiHealthcheckMode() || borealisOperatorClientHealthcheckMode() || !apiDBHealthcheckMode() {
+		t.Fatalf("expected api-db-healthcheck arg to override inherited scheduler role")
 	}
 }
 

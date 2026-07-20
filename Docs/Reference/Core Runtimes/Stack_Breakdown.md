@@ -590,6 +590,7 @@ sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout stat
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service postgres-db webui-frontend remote-desktop-guacd
 curl -fsS http://127.0.0.1:5001/health
+sudo bash Engine.sh --network-mode public --service api-backend shadow-db-validate prod
 ```
 
 ## Logs
@@ -838,6 +839,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
     sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service webui-frontend remote-desktop-guacd
     docker exec borealis-engine-api-backend borealis-api-backend-go borealis-operator-healthcheck
+    sudo bash Engine.sh --network-mode public --service api-backend shadow-db-validate prod
     sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
     ```
     - Update this page when adding a service, port, volume, service action, or load-order dependency.

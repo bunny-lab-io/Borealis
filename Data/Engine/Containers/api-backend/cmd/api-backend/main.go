@@ -51,6 +51,14 @@ func main() {
 		return
 	}
 
+	if apiDBHealthcheckMode() {
+		if err := runGoAPIDBHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("Go api-backend DB healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if schedulerHealthcheckMode() {
 		if err := runGoJobSchedulerHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("Go job-scheduler healthcheck failed: %v", err)
@@ -234,6 +242,13 @@ func apiHealthcheckMode() bool {
 	return processRoleMatches("api-healthcheck", "api-backend-healthcheck")
 }
 
+func apiDBHealthcheckMode() bool {
+	if processArgMatches("api-db-healthcheck", "api-backend-db-healthcheck", "api-shadow-db-healthcheck") {
+		return true
+	}
+	return processRoleMatches("api-db-healthcheck", "api-backend-db-healthcheck", "api-shadow-db-healthcheck")
+}
+
 func schedulerHealthcheckMode() bool {
 	if processArgMatches("job-scheduler-healthcheck", "scheduler-healthcheck") {
 		return true
@@ -267,6 +282,9 @@ func explicitHealthcheckArgMode() bool {
 	return processArgMatches(
 		"api-healthcheck",
 		"api-backend-healthcheck",
+		"api-db-healthcheck",
+		"api-backend-db-healthcheck",
+		"api-shadow-db-healthcheck",
 		"job-scheduler-healthcheck",
 		"scheduler-healthcheck",
 		"site-worker-orchestrator-healthcheck",
@@ -311,6 +329,40 @@ func runGoAPIHealthcheck(ctx context.Context, cfg gatewayConfig) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("API healthcheck returned HTTP %d", resp.StatusCode)
 	}
+	return nil
+}
+
+func runGoAPIDBHealthcheck(ctx context.Context, cfg gatewayConfig) error {
+	auth, closeAuth, err := newAuthService(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeAuth()
+
+	checkTimeout := cfg.DBConnectTimeout + 15*time.Second
+	if checkTimeout < 15*time.Second {
+		checkTimeout = 15 * time.Second
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+
+	state, err := currentBootstrapState(checkCtx, auth)
+	if err != nil {
+		return fmt.Errorf("bootstrap state query failed: %w", err)
+	}
+	phase := strings.TrimSpace(fmt.Sprint(state["phase"]))
+	if phase == "" {
+		return errors.New("bootstrap phase empty")
+	}
+	log.Printf(
+		"Go api-backend DB healthcheck passed: phase=%s configured=%v locked=%v user_count=%v admin_count=%v ready_admin_count=%v",
+		phase,
+		state["configured"],
+		state["locked"],
+		state["user_count"],
+		state["admin_count"],
+		state["ready_admin_count"],
+	)
 	return nil
 }
 

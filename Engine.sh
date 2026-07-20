@@ -54,6 +54,7 @@ BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-opera
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
 BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME:-borealis-api-backend-runtime-env}"
+BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME:-borealis-api-backend-shadow-db-runtime-env}"
 BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME="${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME:-borealis-job-scheduler-runtime-env}"
 BOREALIS_API_BACKEND_K3S_BRIDGE_PORT="${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
@@ -64,6 +65,9 @@ K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
 K3S_API_BACKEND_BRIDGE_VERSION="1"
+K3S_API_BACKEND_DB_VALIDATION_VERSION="1"
+K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
+K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="3"
 K3S_JOB_SCHEDULER_VERSION="1"
 K3S_POSTGRES_VERSION="1"
@@ -2146,6 +2150,33 @@ borealis_runtime_env_secret_data() {
   done < "${file}"
 }
 
+borealis_runtime_env_secret_data_with_override() {
+  local file="${1:-${RUNTIME_ENV}}"
+  local override_key="${2:-}"
+  local override_value="${3:-}"
+  local line=""
+  local key=""
+  local value=""
+  local override_written=0
+  [[ -n "${override_key}" ]] || die "Runtime env Secret override key is required."
+  [[ "${override_key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "Invalid runtime env Secret override key '${override_key}'."
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" && "${line}" != \#* && "${line}" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ "${key}" == "${override_key}" ]]; then
+      value="${override_value}"
+      override_written=1
+    fi
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "${value}")"
+  done < "${file}"
+  if ((override_written == 0)); then
+    printf '  %s: "%s"\n' "${override_key}" "$(base64_inline "${override_value}")"
+  fi
+}
+
 borealis_postgres_runtime_secret_data() {
   local key
   for key in \
@@ -2155,6 +2186,17 @@ borealis_postgres_runtime_secret_data() {
     TZ; do
     printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
   done
+}
+
+k3s_postgres_database_url() {
+  local db_name=""
+  local db_user=""
+  local db_password=""
+  db_name="$(read_env_value POSTGRES_DB)"
+  db_user="$(read_env_value POSTGRES_USER)"
+  db_password="$(read_env_value POSTGRES_PASSWORD)"
+  [[ -n "${db_name}" && -n "${db_user}" && -n "${db_password}" ]] || die "PostgreSQL runtime credentials unavailable for K3s API backend DB validation."
+  printf 'postgresql://%s:%s@postgres-db.%s.svc:5432/%s\n' "${db_user}" "${db_password}" "${K3S_NAMESPACE}" "${db_name}"
 }
 
 borealis_site_worker_runtime_secret_data() {
@@ -2787,6 +2829,196 @@ ensure_k3s_api_backend_bridge() {
   fi
   printf '%s  k3s-api-backend\n' "${config_hash}" > "${K3S_API_BACKEND_CONFIG_HASH_FILE}"
   log_status "k3s-api-backend" "Ready - Bridge" "${C_GREEN}"
+}
+
+render_k3s_api_backend_shadow_db_validator_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  local database_url="$7"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend-shadow-db-validator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: api-backend-shadow-db-validation
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data_with_override "${RUNTIME_ENV}" BOREALIS_DATABASE_URL "${database_url}")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend-shadow-db-validator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-shadow-db-validation
+  annotations:
+    borealis.io/validation-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-backend-shadow-db-validator
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: backend
+        borealis.io/service-key: api-backend
+        borealis.io/stage: api-backend-shadow-db-validation
+      annotations:
+        borealis.io/validation-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "docker-compose"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api-backend-db-healthcheck
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - borealis-api-backend-go
+            - api-db-healthcheck
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}
+          env:
+            - name: BOREALIS_API_BACKGROUND_LOOPS
+              value: "0"
+            - name: BOREALIS_K3S_API_BACKEND_DB_VALIDATION
+              value: "1"
+            - name: HOME
+              value: "/tmp"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: api-backend-runtime
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: api-backend-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend
+            type: Directory
+EOF
+}
+
+validate_k3s_api_backend_shadow_db() {
+  local mode="$1"
+  local image=""
+  local runtime_uid=""
+  local runtime_gid=""
+  local memory_limit=""
+  local cpu_limit=""
+  local runtime_env_hash=""
+  local database_url=""
+  local config_hash=""
+  local manifest_file=""
+
+  validate_k3s_postgres_shadow_import "${mode}"
+  ensure_k3s_postgres_shadow_traffic_owner
+
+  image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
+  [[ -n "${image}" ]] || die "API backend image tag unavailable."
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_API_BACKEND_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  database_url="$(k3s_postgres_database_url)"
+
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_API_BACKEND_DB_VALIDATION_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}" \
+      "job=${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" \
+      "postgres_service=postgres-db.${K3S_NAMESPACE}.svc" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "api-backend" "${image}" "k3s-api-backend"
+
+  log_status "k3s-api-backend" "Preparing Shadow DB Validator" "${C_YELLOW}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
+
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-api-backend-shadow-db-validator.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_api_backend_shadow_db_validator_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${database_url}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-api-backend" "Shadow DB Validator Apply Failed" "${C_RED}"
+    die "Failed to apply K3s API backend shadow DB validator Job. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-api-backend" "Validating Shadow DB" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=complete "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --timeout="${K3S_API_BACKEND_DB_VALIDATION_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    printf '[%s] K3s API backend shadow DB validator pods:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l "job-name=${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" -o wide >> "${BUILD_LOG}" 2>&1 || true
+    printf '[%s] K3s API backend shadow DB validator logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --tail=120 >> "${BUILD_LOG}" 2>&1 || true
+    log_status "k3s-api-backend" "Shadow DB Validation Failed" "${C_RED}"
+    die "K3s API backend shadow DB validation failed. See ${BUILD_LOG}."
+  fi
+
+  printf '[%s] K3s API backend shadow DB validator logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --tail=120 >> "${BUILD_LOG}" 2>&1 || true
+  printf '[%s] K3s API backend shadow DB validation complete; Compose API and Compose PostgreSQL remain traffic owners.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+  log_status "k3s-api-backend" "Ready - Shadow DB Validated" "${C_GREEN}"
 }
 
 render_k3s_job_scheduler_manifest() {
@@ -6745,7 +6977,7 @@ service_action() {
   local service="${1:-}"
   local action="${2:-}"
   local mode="${3:-prod}"
-  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import> [dev|prod]"
+  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [dev|prod]"
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
   ensure_engine_dependencies
@@ -6755,6 +6987,10 @@ service_action() {
     shadow-import|validate-shadow-import)
       [[ "${service}" == "postgres-db" ]] || die "shadow-import supported for postgres-db only."
       validate_k3s_postgres_shadow_import "${mode}"
+      ;;
+    shadow-db-validate|validate-shadow-db)
+      [[ "${service}" == "api-backend" ]] || die "shadow-db-validate supported for api-backend only."
+      validate_k3s_api_backend_shadow_db "${mode}"
       ;;
     restart)
       [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
@@ -6816,7 +7052,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }
