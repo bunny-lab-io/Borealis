@@ -283,6 +283,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live Docker check confirms retired Compose containers are absent.
     - [x] `docker compose config --services` shows only `docker-proxy`, `site-worker-orchestrator`, and `traefik-edge`.
     - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
+    - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
 
 ## Open Risks
 
