@@ -56,7 +56,7 @@ func serverServiceActionHandler(auth *authService, fallback http.Handler) http.H
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "server_actions_unavailable"})
 			return
 		}
-		if !knownComposeService(serviceKey) {
+		if !knownContainerService(serviceKey) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "invalid_service_key", "message": "Unsupported service key."})
 			return
 		}
@@ -137,11 +137,13 @@ func (s *postgresOperatorStore) queueServerServiceAction(ctx context.Context, se
 	return workItemID, nil
 }
 
-func knownComposeService(serviceKey string) bool {
-	if serviceKey == "webui-frontend" {
-		return true
-	}
+func knownContainerService(serviceKey string) bool {
 	for _, spec := range composeServiceSpecs {
+		if spec.key == serviceKey {
+			return true
+		}
+	}
+	for _, spec := range k3sWorkloadServiceSpecs {
 		if spec.key == serviceKey {
 			return true
 		}

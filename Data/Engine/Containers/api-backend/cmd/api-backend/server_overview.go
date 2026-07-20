@@ -27,19 +27,20 @@ var composeServiceSpecs = []struct {
 	label string
 }{
 	{"docker-proxy", "Docker Proxy"},
-	{"api-backend", "API Backend"},
 	{"site-worker-orchestrator", "Site Worker Orchestrator"},
 	{"traefik-edge", "Traefik Edge"},
-	{"postgres-db", "PostgreSQL"},
-	{"remote-desktop-guacd", "Guacamole"},
-	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
 
 var k3sWorkloadServiceSpecs = []struct {
 	key   string
 	label string
 }{
+	{"api-backend", "API Backend"},
 	{"job-scheduler", "Job Scheduler"},
+	{"postgres-db", "PostgreSQL"},
+	{"remote-desktop-guacd", "Guacamole"},
+	{"webui-frontend", "WebUI Frontend"},
+	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
 
 func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, realtime *operatorRealtimeHub, _ http.Handler) {
@@ -219,11 +220,11 @@ func collectOverviewServiceRows(ctx context.Context) []map[string]any {
 
 func collectOverviewK3sWorkloadRows(ctx context.Context) []map[string]any {
 	rows := []map[string]any{}
-	if !schedulerEnvOwnerIsK3s("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER") {
-		return rows
-	}
 	client, configured := newBorealisOperatorClientFromEnv()
 	for _, spec := range k3sWorkloadServiceSpecs {
+		if !overviewK3sWorkloadEnabled(spec.key) {
+			continue
+		}
 		row := overviewK3sWorkloadServiceRow(spec.key, spec.label, nil, false, configured)
 		if configured {
 			requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -236,6 +237,34 @@ func collectOverviewK3sWorkloadRows(ctx context.Context) []map[string]any {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func overviewK3sWorkloadEnabled(serviceKey string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceKey)) {
+	case "api-backend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_TRAFFIC_OWNER")
+	case "job-scheduler":
+		return schedulerEnvOwnerIsK3s("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER")
+	case "postgres-db":
+		return schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_TRAFFIC_OWNER")
+	case "remote-desktop-guacd":
+		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
+	case "webui-frontend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_TRAFFIC_OWNER")
+	case "wireguard-tunnel":
+		return schedulerEnvOwnerIsK3s("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER")
+	default:
+		return false
+	}
+}
+
+func overviewK3sWorkloadKind(serviceKey string) string {
+	switch strings.ToLower(strings.TrimSpace(serviceKey)) {
+	case "postgres-db":
+		return "StatefulSet"
+	default:
+		return "Deployment"
+	}
 }
 
 func overviewK3sWorkloadServiceRow(serviceKey string, label string, workload map[string]any, available bool, operatorConfigured bool) map[string]any {
@@ -254,14 +283,17 @@ func overviewK3sWorkloadServiceRow(serviceKey string, label string, workload map
 		status = "warning"
 		state = "pending"
 	}
+	kind := firstText(cleanText(workload["kind"]), overviewK3sWorkloadKind(serviceKey))
+	name := firstText(cleanText(workload["name"]), serviceKey)
+	actions := overviewServiceActions(serviceKey)
 	return map[string]any{
 		"key":                serviceKey,
 		"label":              label,
 		"instance":           nil,
-		"unit_name":          "deployment/" + serviceKey,
+		"unit_name":          strings.ToLower(kind) + "/" + name,
 		"compose_service":    nil,
-		"kubernetes_kind":    firstText(cleanText(workload["kind"]), "Deployment"),
-		"kubernetes_name":    firstText(cleanText(workload["name"]), serviceKey),
+		"kubernetes_kind":    kind,
+		"kubernetes_name":    name,
 		"kubernetes_ready":   desiredReady,
 		"replicas":           coerceInt64(workload["replicas"]),
 		"ready_replicas":     coerceInt64(workload["ready_replicas"]),
@@ -278,8 +310,8 @@ func overviewK3sWorkloadServiceRow(serviceKey string, label string, workload map
 		"main_pid":           int64(0),
 		"started_at":         nil,
 		"fragment_path":      nil,
-		"restart_supported":  false,
-		"actions":            overviewServiceActions(serviceKey),
+		"restart_supported":  overviewServiceRestartSupported(serviceKey),
+		"actions":            actions,
 		"pending_action":     nil,
 		"status":             status,
 		"container_image":    nil,

@@ -271,6 +271,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose `wireguard-tunnel` retired.
     - [x] Compose `remote-desktop-guacd` retired.
     - [x] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
+    - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
@@ -281,6 +282,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
     - [x] Live Docker check confirms retired Compose containers are absent.
     - [x] `docker compose config --services` shows only `docker-proxy`, `site-worker-orchestrator`, and `traefik-edge`.
+    - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
 
 ## Open Risks
 
