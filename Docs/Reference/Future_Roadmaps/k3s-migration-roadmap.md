@@ -272,6 +272,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose `remote-desktop-guacd` retired.
     - [x] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
     - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
+    - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:

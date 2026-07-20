@@ -2748,6 +2748,8 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 		return schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_RUNTIME_OWNER")
 	case "remote-desktop-guacd":
 		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
+	case "postgres-db":
+		return schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_TRAFFIC_OWNER")
 	case "job-scheduler":
 		// Self-restart must stay detached through Engine.sh so the current scheduler can finish the queue item.
 		return false

@@ -348,6 +348,47 @@ func TestSchedulerManagerK3sServiceActionUsesOperator(t *testing.T) {
 	}
 }
 
+func TestSchedulerManagerK3sPostgresRestartUsesOperator(t *testing.T) {
+	t.Setenv("BOREALIS_POSTGRES_TRAFFIC_OWNER", "k3s")
+	var received borealisOperatorCommandRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/command" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"verb":   received.Verb,
+			"result": map[string]any{"ok": true, "service_key": "postgres-db"},
+		})
+	}))
+	defer server.Close()
+
+	manager := &goSchedulerManager{
+		operator: &borealisOperatorClient{
+			baseURL:    server.URL,
+			token:      "operator-token",
+			httpClient: server.Client(),
+		},
+	}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "postgres-db",
+		"action":      map[string]any{"action": "restart"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	if received.Verb != "RestartKnownWorkload" {
+		t.Fatalf("unexpected operator verb %q", received.Verb)
+	}
+	params := schedulerAnyMap(received.Params)
+	if params["service_key"] != "postgres-db" {
+		t.Fatalf("unexpected operator params %#v", received.Params)
+	}
+}
+
 func TestSchedulerManagerCallsSiteWorkerHostService(t *testing.T) {
 	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/remote-ops/host-service/call" {
