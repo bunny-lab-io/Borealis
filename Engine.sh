@@ -70,7 +70,9 @@ K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_J
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="4"
 K3S_JOB_SCHEDULER_VERSION="2"
-K3S_POSTGRES_VERSION="2"
+K3S_POSTGRES_VERSION="3"
+K3S_POSTGRES_SCHEMA_JOB_NAME="${BOREALIS_K3S_POSTGRES_SCHEMA_JOB_NAME:-postgres-db-schema-initializer}"
+K3S_POSTGRES_SCHEMA_TIMEOUT="${BOREALIS_K3S_POSTGRES_SCHEMA_TIMEOUT:-180s}"
 K3S_POSTGRES_ENABLED="${BOREALIS_K3S_POSTGRES_ENABLED:-1}"
 K3S_POSTGRES_STORAGE_SIZE="${BOREALIS_K3S_POSTGRES_STORAGE_SIZE:-20Gi}"
 K3S_POSTGRES_ROLLOUT_TIMEOUT="${BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT:-180s}"
@@ -105,12 +107,12 @@ SERVICE_ROLES=(
   "docker-proxy"
   "site-worker-orchestrator"
   "traefik-edge"
-  "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
 )
 SERVICE_ACTION_ROLES=(
   "${SERVICE_ROLES[@]}"
+  "postgres-db"
   "api-backend"
   "job-scheduler"
   "webui-frontend"
@@ -174,6 +176,7 @@ declare -A DASHBOARD_COLOR
 declare -A DASHBOARD_UPDATED
 declare -A DASHBOARD_ROW_SECTION
 CURRENT_BUILD_SELECTION=()
+K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT=0
 DASHBOARD_ACTIVE=0
 DASHBOARD_CURSOR_HIDDEN=0
 DASHBOARD_MODE_LABEL=""
@@ -670,6 +673,14 @@ log_build_status() {
         return 0
       fi
       log_status "k3s-webui-frontend" "${status}" "${color}"
+      return 0
+      ;;
+    postgres-db)
+      if [[ "${DASHBOARD_STATUS[k3s-postgres-db]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s PostgreSQL remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-postgres-db" "${status}" "${color}"
       return 0
       ;;
   esac
@@ -1299,6 +1310,9 @@ ensure_engine_database_schema() {
 }
 
 ensure_no_host_postgres_conflict() {
+  if [[ "$(resolve_postgres_traffic_owner)" == "k3s" ]]; then
+    return 0
+  fi
   if host_postgres_units_active && ! container_running borealis-engine-postgres-db; then
     die "Host PostgreSQL is active on this machine and conflicts with container postgres-db on 127.0.0.1:5432. Stop and disable host PostgreSQL before deploying."
   fi
@@ -3385,6 +3399,9 @@ render_k3s_postgres_statefulset_manifest() {
   local cpu_limit="$6"
   local storage_class="$7"
   local storage_size="$8"
+  local traffic_owner="$9"
+  local runtime_owner
+  runtime_owner="$(postgres_runtime_owner_label "${traffic_owner}")"
   local postgres_pgdata="/var/lib/postgresql/data/pgdata"
   cat <<EOF
 apiVersion: v1
@@ -3397,7 +3414,7 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
-    borealis.io/runtime-owner: k3s-shadow
+    borealis.io/runtime-owner: ${runtime_owner}
 type: Opaque
 data:
 $(borealis_postgres_runtime_secret_data)
@@ -3412,7 +3429,7 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
-    borealis.io/runtime-owner: k3s-shadow
+    borealis.io/runtime-owner: ${runtime_owner}
 spec:
   clusterIP: None
   selector:
@@ -3434,7 +3451,7 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
-    borealis.io/runtime-owner: k3s-shadow
+    borealis.io/runtime-owner: ${runtime_owner}
 spec:
   type: ClusterIP
   selector:
@@ -3458,12 +3475,12 @@ metadata:
     app.kubernetes.io/component: database
     borealis.io/service-key: postgres-db
     borealis.io/stage: postgres-cutover
-    borealis.io/runtime-owner: k3s-shadow
+    borealis.io/runtime-owner: ${runtime_owner}
   annotations:
     borealis.io/postgres-config-hash: "${config_hash}"
     borealis.io/storage-class: "${storage_class}"
     borealis.io/storage-size: "${storage_size}"
-    borealis.io/traffic-owner: "docker-compose"
+    borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   serviceName: postgres-db-headless
   replicas: 1
@@ -3481,12 +3498,12 @@ spec:
         app.kubernetes.io/component: database
         borealis.io/service-key: postgres-db
         borealis.io/stage: postgres-cutover
-        borealis.io/runtime-owner: k3s-shadow
+        borealis.io/runtime-owner: ${runtime_owner}
       annotations:
         borealis.io/postgres-config-hash: "${config_hash}"
         borealis.io/storage-class: "${storage_class}"
         borealis.io/storage-size: "${storage_size}"
-        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/traffic-owner: "${traffic_owner}"
         borealis.io/pids-limit: "$(read_env_value BOREALIS_POSTGRES_DB_PIDS_LIMIT)"
     spec:
       automountServiceAccountToken: false
@@ -3669,6 +3686,8 @@ wait_for_k3s_postgres_pvc() {
 
 ensure_k3s_postgres_statefulset() {
   local mode="$1"
+  local traffic_owner="${2:-}"
+  traffic_owner="$(normalize_postgres_traffic_owner "${traffic_owner:-$(resolve_postgres_traffic_owner)}")"
   validate_k3s_postgres_settings
 
   local config_hash
@@ -3677,6 +3696,7 @@ ensure_k3s_postgres_statefulset() {
       "schema=${K3S_POSTGRES_VERSION}" \
       "namespace=${K3S_NAMESPACE}" \
       "enabled=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" \
+      "traffic_owner=${traffic_owner}" \
       "mode=${mode}" \
       "storage_class=${K3S_PVC_STORAGE_CLASS}" \
       "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
@@ -3718,6 +3738,7 @@ ensure_k3s_postgres_statefulset() {
       "schema=${K3S_POSTGRES_VERSION}" \
       "namespace=${K3S_NAMESPACE}" \
       "enabled=1" \
+      "traffic_owner=${traffic_owner}" \
       "mode=${mode}" \
       "image=${image}" \
       "postgres_uid=${postgres_uid}" \
@@ -3747,6 +3768,7 @@ ensure_k3s_postgres_statefulset() {
     "${cpu_limit}" \
     "${K3S_PVC_STORAGE_CLASS}" \
     "${K3S_POSTGRES_STORAGE_SIZE}" \
+    "${traffic_owner}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
@@ -3764,7 +3786,11 @@ ensure_k3s_postgres_statefulset() {
     die "K3s PostgreSQL rollout failed. See ${BUILD_LOG}."
   fi
   printf '%s  k3s-postgres-db\n' "${config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
-  log_status "k3s-postgres-db" "Ready - Shadow" "${C_GREEN}"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    log_status "k3s-postgres-db" "Ready - Traffic Owner" "${C_GREEN}"
+  else
+    log_status "k3s-postgres-db" "Ready - Shadow" "${C_GREEN}"
+  fi
 }
 
 postgres_shadow_import_summary_sql() {
@@ -3817,34 +3843,289 @@ postgres_shadow_import_summary() {
   esac
 }
 
+current_k3s_postgres_traffic_owner() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
+    -o jsonpath='{.metadata.annotations.borealis\.io/traffic-owner}' 2>/dev/null || true
+}
+
 ensure_k3s_postgres_shadow_traffic_owner() {
   local owner=""
-  owner="$(
-    k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
-      -o jsonpath='{.metadata.annotations.borealis\.io/traffic-owner}' 2>>"${BUILD_LOG}" || true
-  )"
+  owner="$(current_k3s_postgres_traffic_owner)"
   if [[ "${owner}" != "docker-compose" ]]; then
     die "Refusing K3s PostgreSQL shadow import because StatefulSet traffic owner is '${owner:-unknown}', not docker-compose."
   fi
+}
+
+ensure_compose_postgres_container_for_cutover() {
+  local container="borealis-engine-postgres-db"
+  local state_dir="${RUNTIME_ROOT}/Services/postgres-db/state"
+  if ! docker inspect "${container}" >/dev/null 2>&1; then
+    if [[ -e "${state_dir}/PG_VERSION" ]]; then
+      die "Compose PostgreSQL state exists at ${state_dir}, but ${container} is missing. Start the previous Compose PostgreSQL container or restore from backup before DB cutover."
+    fi
+    printf '[%s] No Compose PostgreSQL container/state found; treating K3s PostgreSQL as fresh install.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    return 1
+  fi
+  if ! container_running "${container}"; then
+    log_status "postgres-db" "Starting Compose Snapshot Source" "${C_YELLOW}"
+    docker start "${container}" >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to start ${container} for PostgreSQL cutover snapshot. See ${BUILD_LOG}."
+  fi
+  if ! wait_for_postgres_container 150; then
+    log_status "postgres-db" "Failed" "${C_RED}"
+    die "Compose PostgreSQL did not become healthy for cutover snapshot. See ${BUILD_LOG}."
+  fi
+  refresh_compose_service_statuses postgres-db
+  return 0
+}
+
+quiesce_k3s_postgres_cutover_writers() {
+  K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT="$(k3s_site_worker_pod_count)"
+  log_status "k3s-postgres-db" "Quiescing DB Writers" "${C_YELLOW}"
+  printf '[%s] Quiescing K3s API backend, job scheduler, and %s site-worker pod(s) for PostgreSQL cutover snapshot.\n' "$(date +%FT%T)" "${K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT}" >> "${BUILD_LOG}"
+
+  if k3s_kubectl -n "${K3S_NAMESPACE}" get deployment api-backend >/dev/null 2>&1; then
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/api-backend --replicas=0 >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to scale K3s API backend down for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+  if k3s_kubectl -n "${K3S_NAMESPACE}" get deployment job-scheduler >/dev/null 2>&1; then
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=0 >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to scale K3s job scheduler down for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=delete pod \
+    -l 'app.kubernetes.io/name in (api-backend,job-scheduler)' \
+    --timeout=120s >> "${BUILD_LOG}" 2>&1 || true
+
+  if ((K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT > 0)); then
+    k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+      -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+      --wait=true --timeout=120s >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to quiesce K3s site workers for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+}
+
+wait_for_k3s_postgres_cutover_workers() {
+  ((K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT > 0)) || return 0
+  log_status "site-worker" "Waiting For K3s Workers" "${C_YELLOW}"
+  wait_for_k3s_site_worker_ready_count "${K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT}" 300
+  log_status "site-worker" "Ready - K3s DB" "${C_GREEN}"
+}
+
+import_compose_postgres_into_k3s_for_cutover() {
+  local source_summary=""
+  local target_summary=""
+
+  ensure_compose_postgres_container_for_cutover || return 0
+  quiesce_k3s_postgres_cutover_writers
+
+  log_status "k3s-postgres-db" "Snapshotting Compose DB" "${C_YELLOW}"
+  source_summary="$(postgres_shadow_import_summary compose)"
+  printf '[%s] K3s PostgreSQL cutover source summary:\n%s\n' "$(date +%FT%T)" "${source_summary}" >> "${BUILD_LOG}"
+
+  log_status "k3s-postgres-db" "Resetting K3s Schemas" "${C_YELLOW}"
+  k3s_postgres_psql 'DROP SCHEMA IF EXISTS engine CASCADE; DROP SCHEMA IF EXISTS assemblies CASCADE;' >> "${BUILD_LOG}" 2>&1
+
+  log_status "k3s-postgres-db" "Importing Cutover Data" "${C_YELLOW}"
+  if ! {
+    docker exec borealis-engine-postgres-db sh -lc \
+      'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-acl --schema=engine --schema=assemblies' \
+      | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+        'pg_restore --exit-on-error --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  } >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Cutover Import Failed" "${C_RED}"
+    die "K3s PostgreSQL cutover import failed. K3s API/scheduler remain quiesced so rerunning deploy can retry safely. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Verifying Cutover Data" "${C_YELLOW}"
+  target_summary="$(postgres_shadow_import_summary k3s)"
+  printf '[%s] K3s PostgreSQL cutover target summary:\n%s\n' "$(date +%FT%T)" "${target_summary}" >> "${BUILD_LOG}"
+  if [[ "${source_summary}" != "${target_summary}" ]]; then
+    printf '[%s] K3s PostgreSQL cutover summary mismatch. Source:\n%s\nTarget:\n%s\n' "$(date +%FT%T)" "${source_summary}" "${target_summary}" >> "${BUILD_LOG}"
+    log_status "k3s-postgres-db" "Cutover Import Mismatch" "${C_RED}"
+    die "K3s PostgreSQL cutover import completed but row summaries differ. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Cutover Data Imported" "${C_GREEN}"
+  printf '[%s] K3s PostgreSQL cutover import complete; API and scheduler will restart against K3s PostgreSQL.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+}
+
+render_k3s_postgres_schema_job_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  cat <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${K3S_POSTGRES_SCHEMA_JOB_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db-schema
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: database
+    borealis.io/service-key: postgres-db
+    borealis.io/stage: postgres-cutover
+  annotations:
+    borealis.io/schema-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "k3s"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-db-schema
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: database
+        borealis.io/service-key: postgres-db
+        borealis.io/stage: postgres-cutover
+      annotations:
+        borealis.io/schema-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "k3s"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres-db-schema
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -u
+            - -c
+            - |
+              import os
+              from Data.Engine.database import initialise_engine_database
+              initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: PYTHONPATH
+              value: "/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent"
+            - name: HOME
+              value: "/tmp"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: api-backend-runtime
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend
+            type: Directory
+EOF
+}
+
+ensure_k3s_engine_database_schema() {
+  local mode="$1"
+  local image=""
+  local runtime_uid=""
+  local runtime_gid=""
+  local config_hash=""
+  local manifest_file=""
+
+  image="$(service_image_tag_or_previous site-worker borealis-engine/site-worker:local)"
+  [[ -n "${image}" ]] || die "Site worker image tag unavailable for K3s database schema initialization."
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "runtime_secret=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      "job=${K3S_POSTGRES_SCHEMA_JOB_NAME}" \
+      "postgres_service=postgres-db.${K3S_NAMESPACE}.svc" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "site-worker" "${image}" "site-worker"
+  log_status "Database schema" "Preparing K3s Engine Tables" "${C_YELLOW}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
+
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-postgres-schema.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_postgres_schema_job_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "Database schema" "K3s Job Apply Failed" "${C_RED}"
+    die "Failed to apply K3s PostgreSQL schema initializer Job. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "Database schema" "Ensuring K3s Engine Tables" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=complete "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --timeout="${K3S_POSTGRES_SCHEMA_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    printf '[%s] K3s PostgreSQL schema initializer pods:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l "job-name=${K3S_POSTGRES_SCHEMA_JOB_NAME}" -o wide >> "${BUILD_LOG}" 2>&1 || true
+    printf '[%s] K3s PostgreSQL schema initializer logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --tail=200 >> "${BUILD_LOG}" 2>&1 || true
+    log_status "Database schema" "K3s Job Failed" "${C_RED}"
+    die "K3s PostgreSQL schema initialization failed. See ${BUILD_LOG}."
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --tail=240 2>/dev/null | stream_database_schema_output || true
+  log_status "Database schema" "Ready - K3s DB" "${C_GREEN}"
 }
 
 validate_k3s_postgres_shadow_import() {
   local mode="$1"
   local source_summary=""
   local target_summary=""
+  local current_owner=""
 
   ensure_k3s_cluster_baseline
   ensure_longhorn_storage_baseline
-  ensure_k3s_postgres_statefulset "${mode}"
+  current_owner="$(current_k3s_postgres_traffic_owner)"
+  if [[ -n "${current_owner}" && "${current_owner}" != "docker-compose" ]]; then
+    die "Refusing K3s PostgreSQL shadow import because StatefulSet traffic owner is '${current_owner}', not docker-compose."
+  fi
+  ensure_k3s_postgres_statefulset "${mode}" "docker-compose"
   ensure_k3s_postgres_shadow_traffic_owner
 
-  log_status "postgres-db" "Starting PostgreSQL" "${C_YELLOW}"
-  compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
-  if ! wait_for_postgres_container 150; then
-    log_status "postgres-db" "Failed" "${C_RED}"
-    die "postgres-db did not become healthy before K3s shadow import validation. See ${BUILD_LOG}."
-  fi
-  refresh_compose_service_statuses postgres-db
+  ensure_compose_postgres_container_for_cutover \
+    || die "Compose PostgreSQL source is unavailable for K3s shadow import validation."
 
   log_status "k3s-postgres-db" "Snapshotting Compose DB" "${C_YELLOW}"
   source_summary="$(postgres_shadow_import_summary compose)"
@@ -4496,6 +4777,57 @@ resolve_api_backend_traffic_owner() {
   normalize_api_backend_traffic_owner "${BOREALIS_API_BACKEND_TRAFFIC_OWNER:-auto}"
 }
 
+normalize_postgres_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto|k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      printf '%s\n' "docker-compose"
+      ;;
+    *)
+      die "Unsupported BOREALIS_POSTGRES_TRAFFIC_OWNER '${1}'. Use k3s."
+      ;;
+  esac
+}
+
+resolve_postgres_traffic_owner() {
+  local owner
+  owner="$(normalize_postgres_traffic_owner "${BOREALIS_POSTGRES_TRAFFIC_OWNER:-auto}")"
+  if [[ "${owner}" != "k3s" ]]; then
+    die "Compose PostgreSQL runtime has been retired. Use K3s-owned PostgreSQL."
+  fi
+  printf '%s\n' "${owner}"
+}
+
+postgres_runtime_owner_label() {
+  case "$(normalize_postgres_traffic_owner "${1:-k3s}")" in
+    k3s)
+      printf '%s\n' "k3s"
+      ;;
+    *)
+      printf '%s\n' "k3s-shadow"
+      ;;
+  esac
+}
+
+postgres_database_url_for_owner() {
+  local owner="$1"
+  local db_user="$2"
+  local db_password="$3"
+  local db_name="$4"
+  case "$(normalize_postgres_traffic_owner "${owner}")" in
+    k3s)
+      printf 'postgresql://%s:%s@postgres-db.%s.svc:5432/%s\n' "${db_user}" "${db_password}" "${K3S_NAMESPACE}" "${db_name}"
+      ;;
+    docker-compose)
+      printf 'postgresql://%s:%s@127.0.0.1:5432/%s\n' "${db_user}" "${db_password}" "${db_name}"
+      ;;
+  esac
+}
+
 resolve_api_backend_upstream_host() {
   local traffic_owner="$1"
   if [[ "${traffic_owner}" == "k3s" ]]; then
@@ -4588,6 +4920,22 @@ retire_compose_api_backend_container() {
   fi
   log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns api-backend traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
+retire_compose_postgres_container() {
+  local service="postgres-db"
+  local container="borealis-engine-postgres-db"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose PostgreSQL container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
+  printf '[%s] %s Compose container retired; K3s owns PostgreSQL traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
 k3s_site_worker_pod_count() {
@@ -5884,6 +6232,8 @@ write_compose_env() {
   local api_backend_traffic_owner
   local api_backend_upstream_host
   local api_backend_upstream_port
+  local postgres_traffic_owner
+  local postgres_database_url
   local internal_api_base_url
   local engine_ip_fallback=""
   local local_ca_enabled=0
@@ -5930,6 +6280,8 @@ write_compose_env() {
   api_backend_traffic_owner="$(resolve_api_backend_traffic_owner)"
   api_backend_upstream_host="$(resolve_api_backend_upstream_host "${api_backend_traffic_owner}")"
   api_backend_upstream_port="$(resolve_api_backend_upstream_port "${api_backend_traffic_owner}")"
+  postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
+  postgres_database_url="$(postgres_database_url_for_owner "${postgres_traffic_owner}" "${db_user}" "${postgres_password}" "${db_name}")"
   internal_api_base_url="http://${api_backend_upstream_host}:${api_backend_upstream_port}"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
@@ -6041,7 +6393,8 @@ BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT=${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-${PROFILE_T
 BOREALIS_POSTGRES_DB_MEMORY_LIMIT=${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-${PROFILE_POSTGRES_DB_MEMORY_LIMIT}}
 BOREALIS_POSTGRES_DB_CPU_LIMIT=${BOREALIS_POSTGRES_DB_CPU_LIMIT:-${PROFILE_POSTGRES_DB_CPU_LIMIT}}
 BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POSTGRES_DB_PIDS_LIMIT}}
-BOREALIS_POSTGRES_RUNTIME_OWNER=compose
+BOREALIS_POSTGRES_TRAFFIC_OWNER=${postgres_traffic_owner}
+BOREALIS_POSTGRES_RUNTIME_OWNER=k3s
 BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT}}
@@ -6053,7 +6406,7 @@ BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT:-${P
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
 POSTGRES_PASSWORD=${postgres_password}
-BOREALIS_DATABASE_URL=postgresql://${db_user}:${postgres_password}@127.0.0.1:5432/${db_name}
+BOREALIS_DATABASE_URL=${postgres_database_url}
 BOREALIS_DB_SSLMODE=disable
 BOREALIS_DB_POOL_SIZE=${PROFILE_DB_POOL_SIZE}
 BOREALIS_DB_MAX_OVERFLOW=${PROFILE_DB_MAX_OVERFLOW}
@@ -6985,7 +7338,6 @@ services = [
     "docker-proxy",
     "site-worker-orchestrator",
     "traefik-edge",
-    "postgres-db",
     "remote-desktop-guacd",
     "wireguard-tunnel",
 ]
@@ -7146,14 +7498,33 @@ deploy_engine() {
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
+  local desired_postgres_traffic_owner=""
+  local previous_postgres_traffic_owner=""
+  local postgres_cutover_pending=0
+  desired_postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
+  if [[ "${desired_postgres_traffic_owner}" == "k3s" ]] && ! k3s_postgres_enabled; then
+    die "K3s PostgreSQL is the only supported PostgreSQL traffic owner. Do not disable BOREALIS_K3S_POSTGRES_ENABLED after Stage 9 cutover."
+  fi
+  previous_postgres_traffic_owner="$(current_k3s_postgres_traffic_owner)"
+  if [[ "${desired_postgres_traffic_owner}" == "k3s" && "${previous_postgres_traffic_owner}" != "k3s" ]]; then
+    postgres_cutover_pending=1
+    ensure_k3s_postgres_statefulset "${mode}" "docker-compose"
+    import_compose_postgres_into_k3s_for_cutover
+  fi
   ensure_borealis_operator_bridge
   ensure_k3s_bridge_workloads "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-  ensure_k3s_postgres_statefulset "${mode}"
-  ensure_engine_database_schema
+  ensure_borealis_operator_bridge
+  if ((postgres_cutover_pending == 1)); then
+    ensure_k3s_postgres_statefulset "${mode}" "k3s"
+  else
+    ensure_k3s_postgres_statefulset "${mode}" "${desired_postgres_traffic_owner}"
+  fi
+  ensure_k3s_engine_database_schema "${mode}"
   ensure_k3s_api_backend_bridge "${mode}"
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
+  wait_for_k3s_postgres_cutover_workers
   local current_internal_api_base_url=""
   current_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   log_section "Service Reconciliation"
@@ -7187,6 +7558,7 @@ deploy_engine() {
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
     recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
+    retire_compose_postgres_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -7201,6 +7573,7 @@ deploy_engine() {
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
     recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
+    retire_compose_postgres_container
     write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -7219,6 +7592,7 @@ deploy_engine() {
     recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
     recycle_k3s_site_workers_for_timezone
     retire_compose_api_backend_container
+    retire_compose_postgres_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
@@ -7237,6 +7611,7 @@ deploy_engine() {
   recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
   recycle_k3s_site_workers_for_timezone
   retire_compose_api_backend_container
+  retire_compose_postgres_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
@@ -7305,6 +7680,22 @@ service_action() {
         log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
         return 0
       fi
+      if [[ "${service}" == "postgres-db" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_longhorn_storage_baseline
+        ensure_k3s_postgres_statefulset "${mode}" "k3s"
+        log_status "k3s-postgres-db" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "statefulset/postgres-db" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-postgres-db" "Restart Failed" "${C_RED}"
+          die "K3s PostgreSQL restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "statefulset/postgres-db" --timeout="${K3S_POSTGRES_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-postgres-db" "Rollout Failed" "${C_RED}"
+          die "K3s PostgreSQL rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-postgres-db" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
       compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
@@ -7326,6 +7717,7 @@ service_action() {
       retire_compose_webui_container
       retire_compose_api_backend_container
       retire_compose_job_scheduler_container
+      retire_compose_postgres_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url

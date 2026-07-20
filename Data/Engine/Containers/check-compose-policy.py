@@ -28,11 +28,10 @@ EXPECTED_SERVICES = {
     "docker-proxy",
     "site-worker-orchestrator",
     "traefik-edge",
-    "postgres-db",
     "remote-desktop-guacd",
     "wireguard-tunnel",
 }
-RETIRED_COMPOSE_SERVICES = {"api-backend", "job-scheduler", "webui-frontend"}
+RETIRED_COMPOSE_SERVICES = {"api-backend", "job-scheduler", "postgres-db", "webui-frontend"}
 
 ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
@@ -262,8 +261,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             if "webui-frontend" in depends_on:
                 fail("traefik-edge must not depend on Compose webui-frontend after K3s WebUI cutover")
 
-        if name == "postgres-db" and "/var/log/postgresql" in mounts:
-            fail("postgres-db must not mount host log directory")
         if name == "site-worker-orchestrator":
             forbid_mount_target_prefix(
                 mounts,

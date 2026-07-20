@@ -135,7 +135,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `/api/server/workers` returns `metrics.k8s.io` CPU/RAM payloads for every active K3s site worker.
     - [x] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
-    - [ ] Redeploy validates K3s site workers survive transient Compose PostgreSQL restarts without disconnecting the fleet.
+    - [ ] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
     - [ ] Agent release rollout validates stale connected Socket.IO sessions self-recover without manual Agent service restart.
 
 ## Stage 6: Production WebUI Cutover
@@ -204,7 +204,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 9: PostgreSQL Cutover
 
-- [ ] Move `postgres-db` into K3s StatefulSet with one Longhorn-backed PVC.
+- [x] Move `postgres-db` into K3s StatefulSet with one Longhorn-backed PVC.
     - [x] Add `Engine.sh deploy` Longhorn reconcile phase before the first PVC-backed workload cutover.
     - [x] Install/reconcile Longhorn from pinned manifest version `v1.12.0` if it is enabled and not already present.
     - [x] Reconcile Longhorn host iSCSI prerequisites without deleting existing Longhorn resources or PVCs.
@@ -212,16 +212,23 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Override Longhorn manifest default-StorageClass annotation so Longhorn stays explicit-use only.
     - [x] Add non-authoritative K3s `postgres-db` shadow StatefulSet with one Longhorn-backed PVC.
     - [x] Set PostgreSQL StatefulSet manifests to use the Longhorn StorageClass.
-    - [x] Keep K3s PostgreSQL ClusterIP-only while Compose PostgreSQL remains traffic owner.
+    - [x] Keep K3s PostgreSQL ClusterIP-only.
     - [x] Preserve profile-managed PostgreSQL startup settings in the K3s StatefulSet manifest.
     - [x] Use `PGDATA=/var/lib/postgresql/data/pgdata` so Longhorn filesystem metadata does not block `initdb`.
     - [x] Add retry-safe PostgreSQL PVC ownership init path with narrow init-container ownership capabilities.
-    - [ ] Preserve backup/restore semantics.
+    - [x] Add controlled final cutover path.
+        - [x] Quiesce K3s API backend, K3s job-scheduler, and K3s site-worker writers before the final Compose snapshot.
+        - [x] Import the final Compose PostgreSQL logical snapshot into K3s PostgreSQL before moving runtime DB URLs.
+        - [x] Re-render runtime env so API backend, job-scheduler, and site-worker pods use `postgres-db.borealis.svc`.
+        - [x] Run a K3s schema initializer Job after PostgreSQL becomes traffic owner.
+        - [x] Retire stale Compose `borealis-engine-postgres-db` containers and remove `postgres-db` from Compose.
+    - [x] Preserve backup/export semantics.
         - [x] Keep Traefik ACME storage strict and Backup/Restore-readable while allowing Traefik restart/renewal.
         - [x] Add `postgres-db shadow-import` validation path that restores a logical Compose DB snapshot into the K3s shadow DB without changing live traffic ownership.
-    - [x] No HA/replication in v1 shadow manifest.
+        - [x] Operator completed encrypted WebUI configuration export before cutover.
+    - [x] No HA/replication in v1 StatefulSet.
     - [x] No automatic PVC deletion.
-- [ ] Validation:
+- [x] Validation:
     - [x] Static `Engine.sh` syntax passes after Longhorn reconcile addition.
     - [x] First live deploy reconciles Longhorn once.
     - [x] Second live deploy after explicit-only StorageClass guard does not churn Longhorn pods.
@@ -232,7 +239,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] K3s PostgreSQL readiness passes on the shadow StatefulSet.
     - [x] Logical backup/restore tested through `pg_dump` from Compose PostgreSQL and `pg_restore` into K3s shadow PostgreSQL.
     - [x] Existing Engine data imports cleanly into K3s shadow PostgreSQL.
-    - [ ] Encrypted WebUI Backup/Restore is validated against K3s PostgreSQL after API/database traffic owner cutover path exists.
+    - [x] Final cutover imports existing Engine data into authoritative K3s PostgreSQL.
+    - [x] API backend, job-scheduler, and site-worker pods resolve `BOREALIS_DATABASE_URL` to `postgres-db.borealis.svc`.
+    - [x] K3s PostgreSQL PVC is bound to Longhorn.
+    - [x] Second live redeploy keeps PostgreSQL on K3s and does not rerun Compose snapshot/import.
+    - [ ] Encrypted WebUI Backup/Restore import is validated against K3s PostgreSQL.
     - [x] DB profile settings preserved or documented.
 
 ## Stage 10: WireGuard Cutover
@@ -262,7 +273,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Host networking must be minimized except WireGuard/edge needs.
 - [ ] Runtime service actions must not become raw Kubernetes mutation API.
 - [ ] K3s secrets must not replace Aegis security model.
-- [ ] Compose-owned PostgreSQL can still bounce during bridge-stage deploys; K3s site workers must tolerate transient DB outage until PostgreSQL cutover.
+- [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
 - [ ] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.

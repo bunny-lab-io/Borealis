@@ -20,7 +20,7 @@ You can follow the instructions on this page to install the Borealis Engine onto
     - Keep WireGuard `UDP/30000` reachable to the Linux host for remote agent operations.
 
 ## Engine Deployment Profiles
-The Engine container deployment system auto-detects host CPU and RAM specs on every engine deployment or redeployment. Borealis scores CPU and RAM separately, selects the lower sizing profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through Docker Compose. This sizing profile is separate from the network mode selected during install.
+The Engine container deployment system auto-detects host CPU and RAM specs on every engine deployment or redeployment. Borealis scores CPU and RAM separately, selects the lower sizing profile, writes profile tuning into `Engine/Deploy/compose.env`, and applies database plus site-worker scheduled task-slot settings through K3s workload manifests and the remaining Compose runtime. This sizing profile is separate from the network mode selected during install.
 
 === "Homelab"
     | Typical use | Endpoints | Active operators | vCPU | RAM | Scheduled task slots | NVMe storage |
@@ -52,7 +52,7 @@ The Engine container deployment system auto-detects host CPU and RAM specs on ev
     Site-worker scheduled task slots limit active scheduled-lane work items per site worker. They are not a hard count of remote devices. A shared Ansible playbook batch uses one slot for its site batch and may target multiple devices inside that Ansible process. Individual Ansible mode uses one slot per target while active.
 
 ## Profile-Managed Container Limits
-`Engine.sh` writes least-privilege runtime settings into `Engine/Deploy/compose.env` during every deploy. Normal Engine services, including `remote-desktop-guacd`, run as the `borealis-engine` system user/group, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, PID limits, and profile-scaled CPU/memory caps. PostgreSQL runs as the official non-root PostgreSQL UID so existing database state keeps compatible ownership. Limits are caps, not reservations. `remote-desktop-guacd` stays loopback-only and does not mount the Docker socket.
+`Engine.sh` writes least-privilege runtime settings into `Engine/Deploy/compose.env` during every deploy. Normal Engine services, including `remote-desktop-guacd`, run as the `borealis-engine` system user/group, with read-only root filesystems, dropped Linux capabilities, `no-new-privileges`, PID limits, and profile-scaled CPU/memory caps. PostgreSQL runs in K3s as the official non-root PostgreSQL UID on a Longhorn-backed PVC so imported database state keeps compatible ownership. Limits are caps, not reservations. `remote-desktop-guacd` stays loopback-only and does not mount the Docker socket.
 
 Site-worker memory is per active worker. If 500 workers are active at once, aggregate memory pressure is roughly `500 x site-worker cap` plus Engine service overhead. Tune active worker concurrency and per-worker caps together before scaling large environments.
 
@@ -151,7 +151,7 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
 
     Agent install commands include the local CA bundle automatically (this makes the command larger). Automatically-generated agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator's device or managed trust store before they show the Engine as trusted. Local deployments do not ask for an outer reverse proxy during interactive deployment and assume that there is none.
 
-During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, applies K3s bridge workloads, and starts the Docker Compose stack automatically.
+During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, applies K3s-owned workloads, and starts the remaining Docker Compose stack automatically.
 
 ### Local Redeploy Commands
 After the first install, update and redeploy from the checked-out Borealis repository. Keep the same network mode. Local `Engine.sh` runs use whatever source is already on disk, so pull the current GitHub branch before redeploying when you want newer Engine code.
@@ -185,15 +185,15 @@ After the first install, update and redeploy from the checked-out Borealis repos
     Do not enroll agents with raw IP `--server-url` values. Use the Engine FQDN as the URL. Local-mode agents will automatically attempt to use the generated `--server-ip-fallback` route hint when DNS is unavailable.
 
 ### K3s Cluster
-Every full Engine deploy now creates or repairs a single-node K3s cluster baseline before Docker Compose reconciliation. Compose remains authoritative for user-facing Borealis workloads until each workload reaches its own cutover stage.
+Every full Engine deploy now creates or repairs a single-node K3s cluster baseline before Docker Compose reconciliation. K3s currently owns PostgreSQL, API backend, job-scheduler, WebUI, and site-worker pods; Compose remains authoritative for Traefik edge, WireGuard tunnel, Docker proxy, site-worker-orchestrator helper bridge, and current guacd traffic until their own cutover stages.
 
 `Engine.sh` installs K3s only when the K3s binary and `k3s.service` are missing. Later deploys reconcile the Borealis-owned K3s config, API firewall, service health, kubeconfig permissions, node readiness, node labels, and `borealis` namespace without tearing down the cluster.
 
 K3s keeps bundled Traefik and ServiceLB disabled so Borealis Compose Traefik stays the only public ingress. Borealis also installs `borealis-k3s-api-firewall.service`, which applies a host iptables chain for TCP `6443`. The rule allows loopback and IPv4 K3s CNI/flannel traffic, then drops other inbound API traffic.
 
-The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the Compose API backend reaches the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
+The first K3s-hosted Borealis workload is `borealis-operator`. It is an internal bridge for cluster status and restricted lifecycle verbs, exposed as a ClusterIP service inside the `borealis` namespace. Runtime services do not receive kubeconfig or kubectl access; the K3s API backend and K3s job-scheduler reach the operator through `BOREALIS_OPERATOR_BASE_URL` and an HMAC-authenticated Borealis API.
 
-`api-backend`, `webui-frontend`, and `remote-desktop-guacd` workloads are also reconciled into K3s during migration. The API backend currently runs as a non-authoritative bridge on host loopback port `5001` with background loops disabled, while Compose API remains the traffic owner on `127.0.0.1:5000`. Production and dev WebUI traffic is routed by the existing Compose Traefik edge to the K3s `webui-frontend` ClusterIP after that Service is ready. Compose Traefik still owns HTTP/HTTPS, ACME or local CA certificate state, and watched dynamic route files under `Engine/Services/traefik-edge/config/dynamic/`. Compose guacd remains authoritative until later cutover stages. Stage 6 retires the Compose WebUI service; later deploys remove any stale `borealis-engine-webui-frontend` container instead of recreating it. Scoped WebUI, API, and guacd rebuilds refresh the K3s bridge workloads so they follow the current image manifest before the next full deploy.
+`postgres-db`, `api-backend`, `job-scheduler`, `webui-frontend`, and `remote-desktop-guacd` workloads are reconciled into K3s during migration. PostgreSQL is the authoritative database after Stage 9, uses one Longhorn-backed PVC, stays ClusterIP-only at `postgres-db.borealis.svc`, and is initialized through a K3s schema Job. The API backend owns traffic on host loopback port `5001`, and production/dev WebUI traffic is routed by the existing Compose Traefik edge to the K3s `webui-frontend` ClusterIP after that Service is ready. Compose Traefik still owns HTTP/HTTPS, ACME or local CA certificate state, and watched dynamic route files under `Engine/Services/traefik-edge/config/dynamic/`. Compose guacd remains authoritative until later cutover stages. Stage 6 retires the Compose WebUI service, Stage 7 retires Compose API, Stage 8 retires Compose scheduler, and Stage 9 retires Compose PostgreSQL. Later deploys remove stale retired containers instead of recreating them. Scoped WebUI, API, scheduler, PostgreSQL, and guacd rebuilds refresh K3s workloads so they follow the current image manifest before the next full deploy.
 
 Quick checks after a deploy:
 ```sh
@@ -201,12 +201,14 @@ sudo systemctl is-active k3s
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get namespace borealis --show-labels
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/borealis-operator
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status statefulset/postgres-db
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/api-backend
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/job-scheduler
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/webui-frontend
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
-sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service webui-frontend remote-desktop-guacd
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service postgres-db webui-frontend remote-desktop-guacd
 curl -fsS http://127.0.0.1:5001/health
-rg "BOREALIS_WEBUI_TRAFFIC_OWNER|BOREALIS_WEBUI_UPSTREAM_HOST" Engine/Deploy/compose.env
+rg "BOREALIS_POSTGRES_TRAFFIC_OWNER|BOREALIS_DATABASE_URL|BOREALIS_WEBUI_TRAFFIC_OWNER|BOREALIS_WEBUI_UPSTREAM_HOST" Engine/Deploy/compose.env
 sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ```
 
@@ -281,7 +283,7 @@ After deployment finishes:
     ### Launch mechanics
 
     - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
-    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies API/WebUI/guacd K3s workloads, defaults to production, and runs Docker Compose with project name `borealis-engine`.
+    - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies PostgreSQL/API/scheduler/WebUI/guacd K3s workloads, defaults to production, and runs the remaining Docker Compose stack with project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik and refreshes the runtime HMR source from staged WebUI source. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, detects the Docker socket GID, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.
     - Stage 1 K3s baseline writes Borealis-owned config to `/etc/rancher/k3s/config.yaml.d/10-borealis.yaml`, records the config hash in `Engine/Deploy/k3s-baseline.sha256`, installs K3s only when missing, restarts K3s only when the Borealis config changes, and never calls K3s teardown or uninstall helpers.
@@ -290,9 +292,11 @@ After deployment finishes:
     - Stage 3 keeps runtime services Kubernetes-blind by routing lifecycle work through `borealis-operator`. Its API is `POST /v1/command` with `X-Borealis-Operator-Token`.
     - Operator status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Operator lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
     - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs. Scoped `webui-frontend` and `remote-desktop-guacd` rebuilds reconcile the K3s baseline, operator, and workload manifests after image refresh.
-    - Stage 7 starts with a non-authoritative K3s `api-backend` bridge pod. It uses `Engine/Deploy/k3s-api-backend.sha256`, host-network loopback port `5001`, fixed API/Traefik/WireGuard hostPath mounts, generated Secret env mirroring, and `BOREALIS_API_BACKGROUND_LOOPS=0` so it can validate runtime readiness without duplicating watchdog evaluation while Compose API still owns traffic.
+    - Stage 7 made K3s `api-backend` the API traffic owner. It uses `Engine/Deploy/k3s-api-backend.sha256`, host-network loopback port `5001`, fixed API/Traefik/WireGuard hostPath mounts, generated Secret env mirroring, and `BOREALIS_API_BACKGROUND_LOOPS=1`. `Engine.sh` removes stale Compose API containers during deploy.
     - Stage 6 WebUI cutover keeps Compose Traefik as the only public edge and dynamic route-file reader, then changes its core WebUI upstream to the K3s `webui-frontend` ClusterIP by writing `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` and `BOREALIS_WEBUI_UPSTREAM_HOST=<cluster-ip>` into `Engine/Deploy/compose.env`. Production and dev WebUI traffic both use this K3s route. `Engine.sh` removes stale Compose WebUI containers during deploy.
-    - Compose API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
+    - Stage 8 made K3s `job-scheduler` the scheduler traffic owner. It runs one `Recreate` Deployment, owns scheduled ticks, service-action queueing, and K3s site-worker reconciliation, and removes stale Compose scheduler containers during deploy.
+    - Stage 9 made K3s `postgres-db` the database traffic owner. It uses one Longhorn-backed PVC, runs schema initialization as a K3s Job, points runtime `BOREALIS_DATABASE_URL` at `postgres-db.borealis.svc`, and removes stale Compose PostgreSQL containers during deploy.
+    - K3s API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the Traefik edge container, while the Engine API stays on loopback.
     - Production (`Engine.sh --network-mode public|local deploy prod`) runs the Engine API on loopback HTTP, serves the static WebUI from the K3s `webui-frontend` workload, and publishes the app through Compose Traefik.
