@@ -278,8 +278,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Expose WebUI restart as an operator-routed K3s action so simple WebUI pod restarts no longer need the helper bridge.
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
     - [x] Route K3s WireGuard reconcile service actions through the scheduler-mounted control socket instead of the Docker helper bridge.
-    - [x] Move remaining Compose bridge service rows to scheduler snapshots first, with Docker proxy only as early-boot or stale-snapshot fallback.
-    - [x] Stop Docker proxy metadata reads for K3s site-worker rows once operator metrics are present.
+    - [x] Move remaining Compose bridge service rows to scheduler snapshots first, without a long-running Docker proxy fallback.
+    - [x] Stop Docker metadata reads for K3s site-worker rows once operator metrics are present.
     - [x] Retire Compose `docker-proxy` after K3s worker metrics and scheduler service snapshots became authoritative.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
