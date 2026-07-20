@@ -52,7 +52,7 @@ The K3s `api-backend` bridge runs one pod from the same API image, mirrors gener
 
 `Engine.sh deploy` reconciles Longhorn before Borealis K3s workloads so PVC-backed cutover stages have a known storage baseline. The default manifest is pinned by `BOREALIS_K3S_LONGHORN_VERSION` and can be overridden with `BOREALIS_K3S_LONGHORN_MANIFEST_URL`.
 
-Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for future workload manifests. The current default is `longhorn`; `BOREALIS_K3S_STORAGE_CLASS` remains accepted as a compatibility alias. `Engine.sh` does not make Longhorn the cluster default StorageClass yet, so K3s `local-path` can remain default for non-Borealis or ad hoc PVCs until an explicit policy change.
+Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for future workload manifests. The current default is `longhorn`; `BOREALIS_K3S_STORAGE_CLASS` remains accepted as a compatibility alias. The upstream Longhorn manifest marks `longhorn` as a default StorageClass, so `Engine.sh` clears that default annotation after every Longhorn reconcile. K3s `local-path` remains default for non-Borealis or ad hoc PVCs until an explicit policy change.
 
 Longhorn requires host iSCSI support. `Engine.sh deploy` installs or verifies `open-iscsi` on Debian-style systems, `iscsi-initiator-utils` on RHEL-style systems, or equivalent distro packages, loads `iscsi_tcp`, and verifies `iscsid` is running before applying Longhorn. Normal deploy does not delete Longhorn objects, volumes, PVCs, or existing PostgreSQL state.
 

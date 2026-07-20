@@ -198,14 +198,17 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Install/reconcile Longhorn from pinned manifest version `v1.12.0` if it is enabled and not already present.
     - [x] Reconcile Longhorn host iSCSI prerequisites without deleting existing Longhorn resources or PVCs.
     - [x] Keep K3s `local-path` default unchanged for now; future Borealis PVC manifests should request `BOREALIS_K3S_PVC_STORAGE_CLASS` explicitly.
+    - [x] Override Longhorn manifest default-StorageClass annotation so Longhorn stays explicit-use only.
     - [ ] Set PostgreSQL StatefulSet manifests to use the Longhorn StorageClass.
     - [ ] Preserve backup/restore semantics.
     - [ ] No HA/replication in v1.
     - [ ] No automatic PVC deletion.
 - [ ] Validation:
     - [x] Static `Engine.sh` syntax passes after Longhorn reconcile addition.
-    - [ ] Live deploy reconciles Longhorn once and a second deploy does not churn Longhorn pods.
-    - [ ] Longhorn system pods are ready and StorageClass is available.
+    - [x] First live deploy reconciles Longhorn once.
+    - [ ] Second live deploy after explicit-only StorageClass guard does not churn Longhorn pods.
+    - [x] Longhorn system pods are ready and StorageClass is available.
+    - [x] Live validation found upstream Longhorn default annotation drift; Engine reconcile now clears it after manifest apply.
     - [ ] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
     - [ ] Logical backup/restore tested.
     - [ ] Existing Engine data imports cleanly.

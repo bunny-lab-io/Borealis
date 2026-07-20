@@ -1952,6 +1952,17 @@ wait_for_longhorn_storage_class() {
   die "Longhorn StorageClass ${K3S_PVC_STORAGE_CLASS} was not available after reconcile. See ${BUILD_LOG}."
 }
 
+ensure_longhorn_storage_class_explicit_only() {
+  log_status "k3s-longhorn-storage" "Reconciling StorageClass Policy" "${C_YELLOW}"
+  if ! k3s_kubectl annotate storageclass "${K3S_PVC_STORAGE_CLASS}" \
+    storageclass.kubernetes.io/is-default-class=false \
+    storageclass.beta.kubernetes.io/is-default-class=false \
+    --overwrite >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "StorageClass Policy Failed" "${C_RED}"
+    die "Failed to mark Longhorn StorageClass ${K3S_PVC_STORAGE_CLASS} as explicit-use only. See ${BUILD_LOG}."
+  fi
+}
+
 ensure_longhorn_storage_baseline() {
   validate_k3s_longhorn_settings
   local config_hash
@@ -1997,6 +2008,7 @@ ensure_longhorn_storage_baseline() {
 
   wait_for_longhorn_rollouts
   wait_for_longhorn_storage_class
+  ensure_longhorn_storage_class_explicit_only
   printf '%s  k3s-longhorn-storage\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
   log_status "k3s-longhorn-storage" "Ready - StorageClass" "${C_GREEN}"
 }
