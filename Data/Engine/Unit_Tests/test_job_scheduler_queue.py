@@ -51,6 +51,20 @@ def _connect_queue_db(tmp_path: Path):
     return conn
 
 
+def test_ensure_job_scheduler_tables_caches_per_sqlite_database(tmp_path: Path) -> None:
+    first = sqlite3.connect(str(tmp_path / "first.sqlite3"))
+    second = sqlite3.connect(str(tmp_path / "second.sqlite3"))
+    try:
+        ensure_job_scheduler_tables(first)
+        first.commit()
+        ensure_job_scheduler_tables(second)
+        second.commit()
+        second.execute("SELECT COUNT(*) FROM job_scheduler_workers").fetchone()
+    finally:
+        first.close()
+        second.close()
+
+
 def _seed_running_site_work(conn, *, worker_guid: str = "worker-1", site_id: int = 7) -> int:
     now = int(time.time())
     register_worker(

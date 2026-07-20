@@ -3,9 +3,9 @@
 Describe the Borealis PostgreSQL schema, table ownership, runtime interactions, and legacy migration structures so operators and Codex agents can troubleshoot and change schema safely.
 
 ## Scope
-- Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine container deployments use the `postgres-db` service on `127.0.0.1:5432`.
+- Primary runtime database: PostgreSQL (set via `BOREALIS_DATABASE_URL`). Linux Engine K3s deployments use the ClusterIP `postgres-db.borealis.svc:5432` after Stage 9 cutover.
 - Assembly catalog tables live in PostgreSQL `assemblies.*`.
-- K3s migration Stage 9 adds Longhorn as the storage baseline and creates a shadow `postgres-db` StatefulSet before PostgreSQL moves. PostgreSQL remains Compose-owned until the explicit traffic cutover with backup, restore, and import validation.
+- K3s migration Stage 9 moved PostgreSQL into a single-replica `postgres-db` StatefulSet with one Longhorn-backed PVC. The earlier shadow import path remains documented only for pre-cutover validation.
 
 ## Quick Relationship Map
 ```text
@@ -49,7 +49,7 @@ sites (id) -------------------< user_site_assignments (site_id)
 
 ## Important PostgreSQL Behavior
 - Borealis uses PostgreSQL as the live Engine database, so engine troubleshooting should focus on server-side constraints, indexes, sequences, and transaction boundaries.
-- Current Engine PostgreSQL state remains under `Engine/Services/postgres-db/state`. Longhorn installation and the Stage 9 shadow StatefulSet do not migrate, copy, delete, or re-own that state.
+- Current Engine PostgreSQL traffic uses the K3s `postgres-db` StatefulSet and Longhorn PVC. The old `Engine/Services/postgres-db/state` directory is preserved as retired host state and is not deleted during normal deploy.
 - Constraint enforcement, indexes, and transactions are handled server-side by PostgreSQL.
 - Some Borealis relations remain intentionally soft in schema/API logic, so application code still performs explicit cleanup and validation for tables such as `device_sites` and approval mappings.
 - Borealis now treats database connections as short-lived pooled resources. Request handlers and background services should fetch rows, release the connection, and then perform Python-side enrichment, JSON shaping, crypto, GitHub lookups, or target expansion outside the transaction boundary.
@@ -84,10 +84,11 @@ sites (id) -------------------< user_site_assignments (site_id)
 - Pages that should be read-only becoming slower as more operators are online.
 
 ### Operator CLI check for live PostgreSQL sessions
-- Operators with root access on the Engine host can inspect Borealis PostgreSQL sessions directly during troubleshooting.
+- Operators with root access on the Engine host can inspect Borealis PostgreSQL sessions directly through the K3s PostgreSQL pod during troubleshooting.
 - Run this command from the Engine host shell:
 ```sh
-sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start, now()-query_start as age, left(query,200) as query from pg_stat_activity where datname='borealis' order by query_start;"
+sudo k3s kubectl -n borealis exec -i postgres-db-0 -- sh -lc \
+  'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select pid, state, wait_event, query_start, now()-query_start as age, left(query,200) as query from pg_stat_activity where datname='\''borealis'\'' order by query_start;"'
 ```
 - Healthy pooled connections usually appear as `state = idle`, `wait_event = ClientRead`, and a recent `ROLLBACK` statement.
 - Problematic sessions usually appear as `state = idle in transaction` with an older `SELECT`, `UPDATE`, or `INSERT` still attached.
@@ -98,7 +99,7 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - Profile selection is based on detected CPU and RAM only.
 - Storage is displayed in the CLI as deployment guidance, but it does not change the selected profile or the applied DB tuning.
 - The launcher writes selected profile metadata, database pool values, PostgreSQL settings, and site-worker scheduled work-item slots into `Engine/Deploy/compose.env`.
-- Docker Compose applies PostgreSQL tuning through the `postgres-db` container startup command, so operators do not run manual `ALTER SYSTEM` steps for normal profile tuning.
+- `Engine.sh` applies PostgreSQL tuning through the K3s `postgres-db` StatefulSet startup command, so operators do not run manual `ALTER SYSTEM` steps for normal profile tuning.
 - The current auto-selected single-node profiles are:
   - `Homelab`
   - `Small Business`
@@ -254,18 +255,17 @@ sudo -u postgres psql -d borealis -c "select pid, state, wait_event, query_start
 - If you change the profile thresholds or any profile-tuned values in `Engine.sh` or container PostgreSQL configuration, update this section in `Docs/Reference/Data and Schema/db-reference.md` in the same change so the operator and Codex guidance stays accurate.
 
 ## Container PostgreSQL Operations
-- Runtime state: `Engine/Services/postgres-db/state`.
+- Runtime state: Longhorn PVC `postgres-data-postgres-db-0` mounted by K3s `postgres-db-0`.
 - Compose environment: `Engine/Deploy/compose.env`.
-- Default database URL shape: `postgresql://borealis:<generated-password>@127.0.0.1:5432/borealis`.
-- Engine deploy starts `postgres-db` and runs schema setup before API and scheduler containers reconcile. Schema setup covers both `engine.*` runtime tables and `assemblies.*` catalog tables, so operators do not need a separate first-run schema command.
-- Stage 9 K3s preparation creates a separate `postgres-db` StatefulSet and Longhorn PVC inside K3s for storage/runtime validation. That pod is ClusterIP-only and is not the live Engine database while `BOREALIS_POSTGRES_RUNTIME_OWNER=compose`.
-- Stage 9 shadow import validation uses `Engine.sh --network-mode public|local --service postgres-db shadow-import prod` to run `pg_dump` from live Compose PostgreSQL and `pg_restore` into K3s shadow PostgreSQL. The command refuses to run unless the K3s StatefulSet is still annotated `borealis.io/traffic-owner=docker-compose`, drops only `engine` and `assemblies` schemas inside the shadow database, and compares core table/row counts after import.
-- API shadow DB validation uses `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod`. It refreshes the K3s shadow import, runs a disposable K3s API backend Job with `BOREALIS_DATABASE_URL` pointed at `postgres-db.borealis.svc:5432`, verifies Go API bootstrap state against imported K3s data, and leaves Compose API/PostgreSQL as traffic owners.
-- `Engine.sh deploy` does not delete the K3s PostgreSQL StatefulSet or PVC when Stage 9 is disabled or changed. PVC cleanup is intentionally manual.
+- Default database URL shape: `postgresql://borealis:<generated-password>@postgres-db.borealis.svc:5432/borealis`.
+- Engine deploy starts or verifies the K3s `postgres-db` StatefulSet and runs schema setup as a K3s Job before API and scheduler workloads reconcile. Schema setup covers both `engine.*` runtime tables and `assemblies.*` catalog tables, so operators do not need a separate first-run schema command.
+- Stage 9 shadow import validation used `Engine.sh --network-mode public|local --service postgres-db shadow-import prod` to run `pg_dump` from live Compose PostgreSQL and `pg_restore` into K3s shadow PostgreSQL before traffic moved. The command now refuses to run once K3s PostgreSQL owns traffic.
+- API shadow DB validation used `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod` before the API/PostgreSQL cutover. It refreshed K3s shadow data, ran a disposable K3s API backend Job with `BOREALIS_DATABASE_URL` pointed at `postgres-db.borealis.svc:5432`, and verified Go API bootstrap state against imported K3s data.
+- `Engine.sh deploy` does not delete the K3s PostgreSQL StatefulSet or PVC during normal reconciliation. PVC cleanup is intentionally manual.
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
 - Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
-- Do not run host PostgreSQL on `127.0.0.1:5432` after migration; it conflicts with `postgres-db`.
+- Do not run host PostgreSQL on `127.0.0.1:5432` for Borealis after migration; Borealis runtime traffic uses the K3s ClusterIP.
 
 ### Preferred remediation pattern
 ```python
@@ -914,13 +914,13 @@ finally:
 
     #### `job_scheduler_service_snapshots`
     - Status: Active.
-    - Purpose: Last known Compose service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket.
+    - Purpose: Last known runtime service visibility snapshot written by `job-scheduler` for Server Info when `api-backend` has no Docker socket or Kubernetes credential.
     - Columns: `service_key`, `payload_json`, `updated_at`.
     - Used by:
     - `/api/server/overview` and `/api/server/services` fallback service rows.
-    - Task-scheduler Compose reconciliation.
+    - Task-scheduler service reconciliation.
     - Notes:
-    - `api-backend` reads this table only for display. Docker-backed service actions are queued into `job_scheduler_work_items`; `job-scheduler` claims them and asks `site-worker-orchestrator` to execute the allowlisted Docker work.
+    - `api-backend` reads this table only for display. Service actions are queued into `job_scheduler_work_items`; `job-scheduler` claims them, routes K3s-owned workload actions through `borealis-operator`, and asks `site-worker-orchestrator` only for remaining Docker/Compose helper work.
 
     #### `credentials`
     - Status: Active for scheduler and WebUI credential selection; protected at rest after Aegis Cipher setup.

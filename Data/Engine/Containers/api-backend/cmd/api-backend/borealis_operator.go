@@ -958,6 +958,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 	projectRoot := envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis")
 	apiRoot := filepath.Join(projectRoot, "Engine", "Services", "api-backend")
 	runtimeSecretName := envDefault("BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME", "borealis-site-worker-runtime-env")
+	runtimeConfigHash := strings.TrimSpace(os.Getenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH"))
 	logRoot := filepath.Join(apiRoot, "logs", "site-workers")
 	return map[string]any{
 		"apiVersion": "v1",
@@ -986,6 +987,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 				"borealis.io/remote-ops-host":     "127.0.0.1",
 				"borealis.io/remote-ops-port":     fmt.Sprintf("%d", remoteOpsPort),
 				"borealis.io/remote-desktop-port": fmt.Sprintf("%d", remoteDesktopPort),
+				"borealis.io/runtime-config-hash": runtimeConfigHash,
 			},
 		},
 		"spec": map[string]any{
@@ -1026,6 +1028,7 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 						{"name": "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT", "value": fmt.Sprintf("%d", remoteDesktopPort)},
 						{"name": "BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "value": "0"},
 						{"name": "BOREALIS_SITE_WORKER_RESOURCE_PROFILE", "value": profileName},
+						{"name": "BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH", "value": runtimeConfigHash},
 						{"name": "BOREALIS_K3S_SITE_WORKER_BRIDGE", "value": "1"},
 						{"name": "BOREALIS_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+".log")},
 						{"name": "BOREALIS_ERROR_LOG_FILE", "value": filepath.Join(logRoot, workerGUID+"-error.log")},

@@ -11,7 +11,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Keep `Engine.sh deploy` idempotent: reconcile, do not recreate healthy K3s state.
 - [x] Start with single-node non-HA K3s.
 - [x] Keep Compose Engine authoritative until each workload reaches explicit cutover.
-- [ ] Introduce `borealis-operator` as only K3s writer.
+- [x] Introduce `borealis-operator` as only runtime K3s writer; `Engine.sh` remains the deploy-time bootstrap/reconcile writer.
 - [x] Keep `api-backend`, `job-scheduler`, and migrated workloads Kubernetes-blind or operator-API-only.
 - [x] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
 - [x] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
@@ -248,24 +248,37 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 10: WireGuard Cutover
 
-- [ ] Move `wireguard-tunnel` into K3s pinned host-network pod.
-    - [ ] Preserve `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, control socket boundary.
-    - [ ] Preserve firewall chains and peer `/32` policy.
+- [x] Move `wireguard-tunnel` into K3s pinned host-network pod.
+    - [x] Preserve `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, control socket boundary.
+    - [x] Preserve firewall chains and peer `/32` policy.
 - [ ] Validation:
-    - [ ] Existing agents reconnect.
+    - [x] Existing agents reconnect.
+        - [x] SQL worker audit shows K3s site-worker socket counts match online device counts after redeploy.
+        - [x] WireGuard status shows fresh peer handshakes from the K3s host-network pod.
     - [ ] Remote shell/desktop over tunnel works.
+        - [x] API and K3s site-worker pods resolve and connect to `remote-desktop-guacd.borealis.svc.cluster.local:4822`.
+        - [ ] Operator browser smoke after guacd traffic-owner env propagation.
     - [ ] Quarantine/revocation removes peer access.
 
 ## Stage 11: Compose Retirement
 
 - [ ] Remove Compose ownership only after all K3s-owned services are stable.
+    - [x] Compose `webui-frontend` retired.
+    - [x] Compose `api-backend` retired.
+    - [x] Compose `job-scheduler` retired.
+    - [x] Compose `postgres-db` retired.
+    - [x] Compose `wireguard-tunnel` retired.
+    - [x] Compose `remote-desktop-guacd` retired.
+    - [ ] Keep only intentional bridge services: `traefik-edge`, `docker-proxy`, and `site-worker-orchestrator`.
 - [ ] Keep migration and recovery docs until stable release.
-- [ ] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
+- [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
     - [ ] Fresh install path works.
-    - [ ] Redeploy path works.
+    - [x] Redeploy path works.
     - [ ] Backup/restore path works.
-    - [ ] Narrow Engine tests pass.
+    - [x] Narrow Engine tests pass.
+    - [x] Compose policy confirms retired services stay out of `compose.yaml`.
+    - [x] Live Docker check confirms retired Compose containers are absent.
 
 ## Open Risks
 

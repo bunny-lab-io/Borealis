@@ -28,12 +28,17 @@ EXPECTED_SERVICES = {
     "docker-proxy",
     "site-worker-orchestrator",
     "traefik-edge",
+}
+RETIRED_COMPOSE_SERVICES = {
+    "api-backend",
+    "job-scheduler",
+    "postgres-db",
     "remote-desktop-guacd",
+    "webui-frontend",
     "wireguard-tunnel",
 }
-RETIRED_COMPOSE_SERVICES = {"api-backend", "job-scheduler", "postgres-db", "webui-frontend"}
 
-ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
+ROOT_SERVICES = {"traefik-edge"}
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
 DOCKER_SOCKET_SERVICES = {
     "docker-proxy": True,
@@ -41,7 +46,6 @@ DOCKER_SOCKET_SERVICES = {
 }
 CAP_ADD_ALLOWLIST = {
     "traefik-edge": {"DAC_OVERRIDE", "NET_BIND_SERVICE"},
-    "wireguard-tunnel": {"NET_ADMIN", "NET_RAW"},
 }
 TIMEZONE_MOUNTS = {
     "/etc/localtime": "/etc/localtime",
@@ -219,11 +223,7 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
             fail(f"{name} cap_add={sorted(cap_add)} expected {sorted(allowed_cap_add)}")
 
         devices = service.get("devices") or []
-        if name == "wireguard-tunnel":
-            rendered_devices = {str(device) for device in devices}
-            if not any("/dev/net/tun" in device for device in rendered_devices):
-                fail("wireguard-tunnel must declare /dev/net/tun")
-        elif devices:
+        if devices:
             fail(f"{name} must not declare devices")
 
         socket_mounts = [
@@ -248,12 +248,6 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
         mounts = mount_by_target(service)
         require_timezone_mounts(mounts, name)
 
-        if name == "remote-desktop-guacd":
-            if service_env(service, "BOREALIS_GUACD_BIND_HOST") != "127.0.0.1":
-                fail("remote-desktop-guacd must bind guacd to 127.0.0.1")
-            extra_mounts = set(mounts) - set(TIMEZONE_MOUNTS)
-            if extra_mounts:
-                fail("remote-desktop-guacd must not use host bind mounts beyond read-only timezone data")
         if name == "traefik-edge":
             depends_on = service.get("depends_on") or {}
             if "api-backend" in depends_on:

@@ -297,6 +297,7 @@ func TestBorealisOperatorScaleKnownWorkloadBounds(t *testing.T) {
 
 func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
+	t.Setenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH", "runtime-hash-test")
 	var createdPod map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -368,6 +369,24 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	annotations := nestedMap(nestedMap(createdPod, "metadata"), "annotations")
 	if cleanText(annotations["borealis.io/site-slug"]) != "bunnys-lab" {
 		t.Fatalf("unexpected site-worker site annotations: %#v", annotations)
+	}
+	if cleanText(annotations["borealis.io/runtime-config-hash"]) != "runtime-hash-test" {
+		t.Fatalf("unexpected runtime config hash annotation: %#v", annotations)
+	}
+	spec := nestedMap(createdPod, "spec")
+	containers, _ := spec["containers"].([]any)
+	if len(containers) != 1 {
+		t.Fatalf("expected one site-worker container: %#v", containers)
+	}
+	container, _ := containers[0].(map[string]any)
+	envList, _ := container["env"].([]any)
+	envByName := map[string]string{}
+	for _, rawEnv := range envList {
+		env, _ := rawEnv.(map[string]any)
+		envByName[cleanText(env["name"])] = cleanText(env["value"])
+	}
+	if envByName["BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH"] != "runtime-hash-test" {
+		t.Fatalf("expected runtime config hash env, got %#v", envByName)
 	}
 }
 

@@ -17,7 +17,7 @@ Server Info is the admin dashboard for Engine runtime health. Use it to inspect 
 
 ## Run Service Actions
 
-Server Info can queue supported Engine service actions through the job scheduler. The scheduler hands Docker-backed work to `site-worker-orchestrator`, which only accepts allowlisted actions. These are the same targeted operations as `Engine.sh --network-mode public|local --service ...`.
+Server Info can queue supported Engine service actions through the job scheduler. K3s-owned workload actions are routed through `borealis-operator`; remaining Docker/Compose helper actions are handed to `site-worker-orchestrator`, which only accepts allowlisted actions. These are the same targeted operations as `Engine.sh --network-mode public|local --service ...`.
 
 Use service actions for focused restart, rebuild, reload, or WireGuard reconcile work. Use full Engine deploy when more than one component changed.
 
@@ -69,12 +69,12 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     ### Runtime behavior
 
-    - Container mode reads Docker state through `docker-proxy` and job-scheduler snapshots.
+    - Container mode reads remaining Docker state through `docker-proxy`, K3s state through `borealis-operator`, and scheduler-owned state through job-scheduler snapshots.
     - Host runtime details include `webui_traffic_owner` and `webui_upstream` so K3s WebUI cutover can be validated without reading Traefik files directly.
     - When `webui_traffic_owner` is `k3s`, the Compose `webui-frontend` service row reports `enabled_state=disabled` instead of a missing or failed Compose container.
     - Public-edge certificate health reads Traefik `acme.json` for Externally Accessible deployments, or the Borealis local CA/leaf certificate files for Internal-Only deployments. `/api/server/overview` reports profile, certificate mode, expiry, severity, domains, resolver/source, fingerprint, and local CA bundle metadata for install flows.
     - Active Operator Sessions counts live `/api/realtime/events` SSE subscribers. The realtime hub emits `server_operator_presence_changed` when subscribers connect or disconnect so Server Info can refresh without waiting for the next poll.
-    - Service actions queue work items so API request can return before service changes interrupt runtime. Docker-backed execution runs through `site-worker-orchestrator`; Server Info shows that service but does not expose an operator restart action for it.
+    - Service actions queue work items so API request can return before service changes interrupt runtime. K3s-owned workload actions are reconciled through `borealis-operator`; remaining Docker/Compose helper actions run through `site-worker-orchestrator`. Server Info shows `site-worker-orchestrator` but does not expose an operator restart action for it.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
     - Server Info is informational first; raw log inspection belongs in Engine Log Management.

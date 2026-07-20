@@ -54,7 +54,7 @@ Use `Delete File` for one file. Use domain/family deletion only when you intenti
 
     - Primary API logs live under `Engine/Services/api-backend/logs/`.
     - Traefik logs live under `Engine/Services/traefik-edge/logs/`.
-    - guacd writes transient in-container logs under `/tmp/borealis-guacd-logs` and mirrors daemon output to Docker logs for `borealis-engine-remote-desktop-guacd`.
+    - guacd writes transient in-container logs under `/tmp/borealis-guacd-logs` and mirrors daemon output to K3s pod logs for `deployment/remote-desktop-guacd`.
     - PostgreSQL logs use K3s pod logs for `statefulset/postgres-db` in the `borealis` namespace.
     - WireGuard tunnel logs live under `Engine/Services/wireguard-tunnel/logs/` and `Engine/Services/api-backend/logs/VPN_Tunnel/`.
     - Retention overrides live in `Engine/Services/api-backend/logs/retention_policy.json`.
