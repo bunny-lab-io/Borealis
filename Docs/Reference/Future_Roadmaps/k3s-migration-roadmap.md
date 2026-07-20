@@ -116,7 +116,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Name new K3s site-worker pods with deterministic sanitized site slugs for operator-readable Kubernetes and Server Info views.
     - [x] Enforce unique, bounded site-worker slugs on site create and rename so K3s worker names do not need UUID suffixes.
     - [x] Keep K3s worker GUIDs deterministic per site so Agent Socket.IO route URLs do not churn across redeploys.
-- [x] Replace Traefik route-file behavior with a controlled host-loopback bridge route while Compose API/PostgreSQL stay localhost-only.
+- [x] Replace Traefik route-file behavior with a controlled host-loopback bridge route while PostgreSQL stays localhost-only.
     - [x] Keep route files owned by `job-scheduler`.
     - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.
     - [x] Prune terminal route rows and orphaned `site-worker-*.yml` files during scheduler reconciliation.
@@ -158,13 +158,16 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 - [ ] Move `api-backend` into K3s as one replica.
     - [x] Add non-authoritative K3s `api-backend` bridge Deployment.
-    - [x] Bind bridge API to host loopback port `5001` while Compose API owns `127.0.0.1:5000`.
+    - [x] Bind initial bridge API to host loopback port `5001` while Compose API owned `127.0.0.1:5000`.
     - [x] Mirror generated runtime env into `borealis-api-backend-runtime-env`.
-    - [x] Disable API-owned background loops in the bridge pod with `BOREALIS_API_BACKGROUND_LOOPS=0`.
+    - [x] Disable API-owned background loops in the bridge pod with `BOREALIS_API_BACKGROUND_LOOPS=0` before traffic cutover.
     - [x] Use `Recreate` rollout strategy for the host-network bridge so single-node K3s does not deadlock on fixed port `5001`.
     - [x] Add one-shot K3s `api-backend` shadow DB validator Job that targets imported K3s PostgreSQL data without moving public API traffic.
-    - [ ] Make K3s `api-backend` authoritative.
-    - [ ] Remove Compose `api-backend` after route/internal-caller validation.
+    - [x] Make K3s `api-backend` authoritative for API, Socket.IO, and internal caller traffic on `127.0.0.1:5001`.
+    - [x] Enable API-owned background loops in the K3s pod after Compose API retirement.
+    - [x] Remove Compose `api-backend` from `compose.yaml` and retire stale `borealis-engine-api-backend` containers during deploy.
+    - [x] Route Compose Traefik's `/api` and `/socket.io` upstream to the configured K3s API loopback port.
+    - [x] Recycle existing K3s site-worker pods once when `BOREALIS_INTERNAL_API_BASE_URL` changes from Compose API `5000` to K3s API `5001`.
     - [ ] Preserve Aegis bootstrap/unlock behavior.
     - [ ] Preserve internal API token behavior.
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
@@ -173,10 +176,12 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Bridge pod rollout passes.
     - [x] `curl -fsS http://127.0.0.1:5001/health` passes.
     - [x] `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod` validates Go API bootstrap state against K3s PostgreSQL shadow data.
-    - [ ] `/health` passes.
+    - [x] `/health` passes after traffic-owner deploy.
+    - [x] Public WebUI route returns HTTP 200 after K3s API cutover and Compose API retirement.
+    - [x] Repeated public-mode deploy keeps K3s API, scheduler, and WebUI pods ready while Compose `api-backend`, `job-scheduler`, and `webui-frontend` containers remain absent.
     - [ ] Login, Aegis unlock, enrollment, heartbeat, API routes pass.
     - [ ] Realtime SSE works with one replica.
-    - [ ] Compose API removal plan is documented after K3s API validation passes.
+    - [x] Compose API removal plan is documented: K3s API owns traffic before stale Compose API container removal; Compose PostgreSQL remains DB owner until Stage 9.
 
 ## Stage 8: Scheduler Cutover
 
@@ -186,7 +191,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Use `borealis-operator` for K3s workload/site-worker lifecycle where the scheduler can complete the queued action safely.
     - [x] Preserve Postgres work leases and queue behavior through the existing scheduler manager and work-item tables.
     - [x] Keep scheduler Kubernetes-blind: no ServiceAccount token, no kubeconfig, no Docker socket.
-    - [x] Keep temporary host-loopback access to the K3s API bridge and Compose PostgreSQL until API/PostgreSQL cutover.
+    - [x] Keep temporary host-loopback access to K3s API and Compose PostgreSQL until PostgreSQL cutover.
 - [ ] Validation:
     - [ ] Scheduled job tick creates expected runs after live redeploy.
     - [x] Service actions route through operator for K3s-owned restart paths in focused Go tests.

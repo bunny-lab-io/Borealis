@@ -22,6 +22,9 @@ LOCAL_TLS_KEY_PATH="${BOREALIS_LOCAL_TLS_KEY_PATH:-}"
 WEBUI_TRAFFIC_OWNER="${BOREALIS_WEBUI_TRAFFIC_OWNER:-k3s}"
 WEBUI_UPSTREAM_HOST="${BOREALIS_WEBUI_UPSTREAM_HOST:-127.0.0.1}"
 WEBUI_UPSTREAM_PORT="${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}"
+API_BACKEND_TRAFFIC_OWNER="${BOREALIS_API_BACKEND_TRAFFIC_OWNER:-k3s}"
+API_BACKEND_UPSTREAM_HOST="${BOREALIS_API_BACKEND_UPSTREAM_HOST:-127.0.0.1}"
+API_BACKEND_UPSTREAM_PORT="${BOREALIS_API_BACKEND_UPSTREAM_PORT:-5001}"
 HEALTH_PORT="${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"
 TRUSTED_PROXY_IPS="${BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS:-}"
 FORWARDED_HEADERS_TRUSTED_IPS="${BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS:-${TRUSTED_PROXY_IPS}}"
@@ -119,8 +122,9 @@ cat > "${STATE_DIR}/Settings.json" <<EOF
   "health_port": ${HEALTH_PORT},
   "http_port": ${BOREALIS_PUBLIC_HTTP_PORT:-80},
   "https_port": ${BOREALIS_PUBLIC_HTTPS_PORT:-443},
-  "engine_upstream_host": "127.0.0.1",
-  "engine_upstream_port": 5000,
+  "engine_upstream_host": "${API_BACKEND_UPSTREAM_HOST}",
+  "engine_upstream_port": ${API_BACKEND_UPSTREAM_PORT},
+  "api_backend_traffic_owner": "${API_BACKEND_TRAFFIC_OWNER}",
   "webui_traffic_owner": "${WEBUI_TRAFFIC_OWNER}",
   "webui_upstream_host": "${WEBUI_UPSTREAM_HOST}",
   "webui_upstream_port": ${WEBUI_UPSTREAM_PORT},
@@ -232,7 +236,7 @@ $(printf "%b" "${TLS_BLOCK}")
     borealis-api:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:5000"
+          - url: "http://${API_BACKEND_UPSTREAM_HOST}:${API_BACKEND_UPSTREAM_PORT}"
     borealis-webui:
       loadBalancer:
         servers:

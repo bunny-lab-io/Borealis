@@ -26,14 +26,13 @@ ORCHESTRATOR_SOURCE = (
 
 EXPECTED_SERVICES = {
     "docker-proxy",
-    "api-backend",
     "site-worker-orchestrator",
     "traefik-edge",
     "postgres-db",
     "remote-desktop-guacd",
     "wireguard-tunnel",
 }
-RETIRED_COMPOSE_SERVICES = {"job-scheduler", "webui-frontend"}
+RETIRED_COMPOSE_SERVICES = {"api-backend", "job-scheduler", "webui-frontend"}
 
 ROOT_SERVICES = {"traefik-edge", "wireguard-tunnel"}
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
@@ -242,6 +241,8 @@ def assert_static_service_policy(services: dict[str, Any]) -> None:
                 fail("remote-desktop-guacd must not use host bind mounts")
         if name == "traefik-edge":
             depends_on = service.get("depends_on") or {}
+            if "api-backend" in depends_on:
+                fail("traefik-edge must not depend on Compose api-backend after K3s API cutover")
             if "webui-frontend" in depends_on:
                 fail("traefik-edge must not depend on Compose webui-frontend after K3s WebUI cutover")
 

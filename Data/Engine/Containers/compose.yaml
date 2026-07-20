@@ -33,46 +33,6 @@ services:
     volumes:
       - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
 
-  api-backend:
-    <<: *borealis-hardened-service
-    image: ${BOREALIS_API_BACKEND_IMAGE:-borealis-engine/api-backend:local}
-    container_name: borealis-engine-api-backend
-    network_mode: host
-    user: "${BOREALIS_ENGINE_RUNTIME_OWNER_UID:-64646}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID:-64646}"
-    restart: unless-stopped
-    mem_limit: ${BOREALIS_API_BACKEND_MEMORY_LIMIT:-512m}
-    cpus: "${BOREALIS_API_BACKEND_CPU_LIMIT:-1.50}"
-    pids_limit: ${BOREALIS_API_BACKEND_PIDS_LIMIT:-160}
-    env_file:
-      - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
-    environment:
-      BOREALIS_SCHEDULED_JOBS_START_LOOP: "0"
-      HOME: /tmp
-    volumes:
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/config:/opt/Borealis/Engine/Services/traefik-edge/config
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/env:/opt/Borealis/Engine/Services/traefik-edge/env
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/logs:/opt/Borealis/Engine/Services/traefik-edge/logs
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge/state:/opt/Borealis/Engine/Services/traefik-edge/state
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/config:/opt/Borealis/Engine/Services/wireguard-tunnel/config
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/run:/opt/Borealis/Engine/Services/wireguard-tunnel/run
-      - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/wireguard-tunnel/secrets:/opt/Borealis/Engine/Services/wireguard-tunnel/secrets
-    depends_on:
-      docker-proxy:
-        condition: service_started
-      postgres-db:
-        condition: service_healthy
-      wireguard-tunnel:
-        condition: service_healthy
-      remote-desktop-guacd:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "borealis-api-backend-go", "api-healthcheck"]
-      interval: 10s
-      timeout: 5s
-      retries: 18
-      start_period: 30s
-
   site-worker-orchestrator:
     <<: *borealis-hardened-service
     image: ${BOREALIS_JOB_SCHEDULER_IMAGE:-borealis-engine/job-scheduler:local}
@@ -89,7 +49,7 @@ services:
       - ${BOREALIS_RUNTIME_ENV_FILE:-compose.env.example}
     environment:
       BOREALIS_PROCESS_ROLE: site-worker-orchestrator
-      BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5000}
+      BOREALIS_INTERNAL_API_BASE_URL: ${BOREALIS_INTERNAL_API_BASE_URL:-http://127.0.0.1:5001}
       BOREALIS_SITE_WORKER_IMAGE: ${BOREALIS_SITE_WORKER_IMAGE:-borealis-engine/site-worker:local}
       BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET: ${BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET:-/opt/Borealis/Engine/Services/site-worker-orchestrator/run/orchestrator.sock}
       HOME: /tmp
@@ -101,8 +61,6 @@ services:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/site-worker-orchestrator/run:/opt/Borealis/Engine/Services/site-worker-orchestrator/run
       - ${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
     depends_on:
-      api-backend:
-        condition: service_healthy
       postgres-db:
         condition: service_healthy
     healthcheck:
@@ -131,9 +89,6 @@ services:
       HOME: /tmp
     volumes:
       - ${BOREALIS_PROJECT_ROOT:-/opt/Borealis}/Engine/Services/traefik-edge:/opt/Borealis/Engine/Services/traefik-edge
-    depends_on:
-      api-backend:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:$${BOREALIS_TRAEFIK_HEALTH_PORT:-8082}"]
       interval: 10s

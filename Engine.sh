@@ -103,7 +103,6 @@ if [[ -n "${REPO_REF}" ]]; then
 fi
 SERVICE_ROLES=(
   "docker-proxy"
-  "api-backend"
   "site-worker-orchestrator"
   "traefik-edge"
   "postgres-db"
@@ -112,6 +111,7 @@ SERVICE_ROLES=(
 )
 SERVICE_ACTION_ROLES=(
   "${SERVICE_ROLES[@]}"
+  "api-backend"
   "job-scheduler"
   "webui-frontend"
 )
@@ -645,11 +645,32 @@ log_build_status() {
   local status="$2"
   local color="$3"
   case "${service}" in
+    api-backend)
+      if [[ "${DASHBOARD_STATUS[k3s-api-backend]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s API backend remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-api-backend" "${status}" "${color}"
+      return 0
+      ;;
     job-scheduler)
-      status="[Shares API Backend Image] -> ${status}"
+      if [[ "${DASHBOARD_STATUS[k3s-job-scheduler]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s job scheduler remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-job-scheduler" "${status}" "${color}"
+      return 0
       ;;
     site-worker-orchestrator)
       status="[Shares Job Scheduler Image] -> ${status}"
+      ;;
+    webui-frontend)
+      if [[ "${DASHBOARD_STATUS[k3s-webui-frontend]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s WebUI frontend remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-webui-frontend" "${status}" "${color}"
+      return 0
       ;;
   esac
   log_status "$(build_status_subject "${service}")" "${status}" "${color}"
@@ -2578,6 +2599,7 @@ render_k3s_api_backend_bridge_manifest() {
   local port="$5"
   local memory_limit="$6"
   local cpu_limit="$7"
+  local traffic_owner="$8"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -2588,7 +2610,7 @@ metadata:
     app.kubernetes.io/name: api-backend
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
-    borealis.io/stage: api-backend-bridge
+    borealis.io/stage: api-backend-cutover
 type: Opaque
 data:
 $(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
@@ -2604,11 +2626,11 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     app.kubernetes.io/component: backend
     borealis.io/service-key: api-backend
-    borealis.io/stage: api-backend-bridge
+    borealis.io/stage: api-backend-cutover
   annotations:
     borealis.io/bridge-config-hash: "${config_hash}"
     borealis.io/network-mode: "host-loopback"
-    borealis.io/traffic-owner: "docker-compose"
+    borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   replicas: 1
   revisionHistoryLimit: 2
@@ -2626,11 +2648,11 @@ spec:
         app.kubernetes.io/managed-by: Engine.sh
         app.kubernetes.io/component: backend
         borealis.io/service-key: api-backend
-        borealis.io/stage: api-backend-bridge
+        borealis.io/stage: api-backend-cutover
       annotations:
         borealis.io/bridge-config-hash: "${config_hash}"
         borealis.io/network-mode: "host-loopback"
-        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/traffic-owner: "${traffic_owner}"
         borealis.io/listen-host: "127.0.0.1"
         borealis.io/listen-port: "${port}"
         borealis.io/pids-limit: "$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
@@ -2669,7 +2691,7 @@ spec:
             - name: BOREALIS_INTERNAL_API_BASE_URL
               value: "http://127.0.0.1:${port}"
             - name: BOREALIS_API_BACKGROUND_LOOPS
-              value: "0"
+              value: "1"
             - name: BOREALIS_K3S_API_BACKEND_BRIDGE
               value: "1"
             - name: HOME
@@ -2775,12 +2797,14 @@ ensure_k3s_api_backend_bridge() {
   local memory_limit
   local cpu_limit
   local runtime_env_hash
+  local traffic_owner
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_API_BACKEND_MEMORY_LIMIT)")"
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  traffic_owner="$(resolve_api_backend_traffic_owner)"
 
   local config_hash
   config_hash="$(
@@ -2794,6 +2818,7 @@ ensure_k3s_api_backend_bridge() {
       "port=${port}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "traffic_owner=${traffic_owner}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
       "project_root=${SCRIPT_DIR}" \
@@ -2814,6 +2839,7 @@ ensure_k3s_api_backend_bridge() {
     "${port}" \
     "${memory_limit}" \
     "${cpu_limit}" \
+    "${traffic_owner}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
@@ -2828,7 +2854,7 @@ ensure_k3s_api_backend_bridge() {
     die "K3s API backend bridge rollout failed. See ${BUILD_LOG}."
   fi
   printf '%s  k3s-api-backend\n' "${config_hash}" > "${K3S_API_BACKEND_CONFIG_HASH_FILE}"
-  log_status "k3s-api-backend" "Ready - Bridge" "${C_GREEN}"
+  log_status "k3s-api-backend" "Ready - Traffic Owner" "${C_GREEN}"
 }
 
 render_k3s_api_backend_shadow_db_validator_manifest() {
@@ -3017,7 +3043,7 @@ validate_k3s_api_backend_shadow_db() {
 
   printf '[%s] K3s API backend shadow DB validator logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
   k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --tail=120 >> "${BUILD_LOG}" 2>&1 || true
-  printf '[%s] K3s API backend shadow DB validation complete; Compose API and Compose PostgreSQL remain traffic owners.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+  printf '[%s] K3s API backend shadow DB validation complete; K3s API remains traffic owner and Compose PostgreSQL remains DB traffic owner.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
   log_status "k3s-api-backend" "Ready - Shadow DB Validated" "${C_GREEN}"
 }
 
@@ -4298,6 +4324,7 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
   if [[ "${service}" == "api-backend" ]]; then
     ensure_k3s_api_backend_bridge "${mode}"
+    retire_compose_api_backend_container
   elif [[ "${service}" == "job-scheduler" ]]; then
     retire_compose_job_scheduler_container
     ensure_k3s_job_scheduler "${mode}"
@@ -4376,6 +4403,44 @@ resolve_webui_traffic_owner() {
   normalize_webui_traffic_owner "${BOREALIS_WEBUI_TRAFFIC_OWNER:-auto}"
 }
 
+normalize_api_backend_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto|k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      die "Compose API backend runtime has been retired. Use K3s-owned API backend."
+      ;;
+    *)
+      die "Unsupported BOREALIS_API_BACKEND_TRAFFIC_OWNER '${1}'. Use k3s."
+      ;;
+  esac
+}
+
+resolve_api_backend_traffic_owner() {
+  normalize_api_backend_traffic_owner "${BOREALIS_API_BACKEND_TRAFFIC_OWNER:-auto}"
+}
+
+resolve_api_backend_upstream_host() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    printf '%s\n' "127.0.0.1"
+    return 0
+  fi
+  printf '%s\n' "127.0.0.1"
+}
+
+resolve_api_backend_upstream_port() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}"
+    return 0
+  fi
+  printf '%s\n' "5000"
+}
+
 resolve_webui_upstream_host() {
   local traffic_owner="$1"
   if [[ "${traffic_owner}" == "k3s" ]]; then
@@ -4423,7 +4488,8 @@ retire_compose_webui_container() {
 retire_compose_job_scheduler_container() {
   local service="job-scheduler"
   local container="borealis-engine-job-scheduler"
-  local subject="k3s-job-scheduler"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
     log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
@@ -4431,7 +4497,76 @@ retire_compose_job_scheduler_container() {
       die "Failed to remove retired Compose job scheduler container '${container}'. See ${BUILD_LOG}."
     fi
   fi
+  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns job-scheduler lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
+retire_compose_api_backend_container() {
+  local service="api-backend"
+  local container="borealis-engine-api-backend"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose API backend container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
+  printf '[%s] %s Compose container retired; K3s owns api-backend traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
+k3s_site_worker_pod_count() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --no-headers 2>/dev/null | awk 'END {print NR+0}'
+}
+
+k3s_site_worker_ready_count() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    -o jsonpath='{range .items[*]}{.status.phase}{"\t"}{range .status.containerStatuses[*]}{.ready}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk '$1 == "Running" && $2 ~ /true/ {count++} END {print count+0}'
+}
+
+wait_for_k3s_site_worker_ready_count() {
+  local expected="$1"
+  local timeout="${2:-300}"
+  local deadline=$((SECONDS + timeout))
+  local ready=0
+  while ((SECONDS < deadline)); do
+    ready="$(k3s_site_worker_ready_count)"
+    if ((ready >= expected)); then
+      return 0
+    fi
+    sleep 5
+  done
+  log_status "site-worker" "K3s Worker Recycle Timed Out" "${C_RED}"
+  die "K3s site worker recycle did not restore ${expected} ready pod(s). See ${BUILD_LOG}."
+}
+
+recycle_k3s_site_workers_for_api_cutover() {
+  local previous_base="${1:-}"
+  local current_base="${2:-}"
+  [[ -n "${previous_base}" && -n "${current_base}" && "${previous_base}" != "${current_base}" ]] || return 0
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+
+  local count
+  count="$(k3s_site_worker_pod_count)"
+  ((count > 0)) || return 0
+
+  log_status "site-worker" "Recycling K3s Workers For API Cutover" "${C_YELLOW}"
+  printf '[%s] Recycling %s K3s site worker pod(s) because BOREALIS_INTERNAL_API_BASE_URL changed from %s to %s\n' "$(date +%FT%T)" "${count}" "${previous_base}" "${current_base}" >> "${BUILD_LOG}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --wait=false >> "${BUILD_LOG}" 2>&1; then
+    log_status "site-worker" "Recycle Failed" "${C_RED}"
+    die "Failed to recycle K3s site worker pods for API cutover. See ${BUILD_LOG}."
+  fi
+  wait_for_k3s_site_worker_ready_count "${count}" 300
+  log_status "site-worker" "Recycled - API Cutover" "${C_GREEN}"
 }
 
 env_key_exists() {
@@ -5632,6 +5767,10 @@ write_compose_env() {
   local webui_cpu_limit
   local webui_traffic_owner
   local webui_upstream_host
+  local api_backend_traffic_owner
+  local api_backend_upstream_host
+  local api_backend_upstream_port
+  local internal_api_base_url
   local engine_ip_fallback=""
   local local_ca_enabled=0
   local local_ca_cert=""
@@ -5674,6 +5813,10 @@ write_compose_env() {
   fi
   webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
   webui_upstream_host="$(resolve_webui_upstream_host "${webui_traffic_owner}")"
+  api_backend_traffic_owner="$(resolve_api_backend_traffic_owner)"
+  api_backend_upstream_host="$(resolve_api_backend_upstream_host "${api_backend_traffic_owner}")"
+  api_backend_upstream_port="$(resolve_api_backend_upstream_port "${api_backend_traffic_owner}")"
+  internal_api_base_url="http://${api_backend_upstream_host}:${api_backend_upstream_port}"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
@@ -5758,7 +5901,10 @@ BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
 BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
 BOREALIS_API_BACKEND_K3S_BRIDGE_PORT=${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}
-BOREALIS_API_BACKEND_RUNTIME_OWNER=compose-bridge
+BOREALIS_API_BACKEND_TRAFFIC_OWNER=${api_backend_traffic_owner}
+BOREALIS_API_BACKEND_RUNTIME_OWNER=k3s
+BOREALIS_API_BACKEND_UPSTREAM_HOST=${api_backend_upstream_host}
+BOREALIS_API_BACKEND_UPSTREAM_PORT=${api_backend_upstream_port}
 BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT=${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-${PROFILE_JOB_SCHEDULER_MEMORY_LIMIT}}
 BOREALIS_JOB_SCHEDULER_CPU_LIMIT=${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-${PROFILE_JOB_SCHEDULER_CPU_LIMIT}}
 BOREALIS_JOB_SCHEDULER_PIDS_LIMIT=${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-${PROFILE_JOB_SCHEDULER_PIDS_LIMIT}}
@@ -5823,7 +5969,7 @@ BOREALIS_POSTGRES_RANDOM_PAGE_COST=${PROFILE_POSTGRES_RANDOM_PAGE_COST}
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
 BOREALIS_SCHEDULED_JOBS_START_LOOP=0
-BOREALIS_INTERNAL_API_BASE_URL=http://127.0.0.1:5000
+BOREALIS_INTERNAL_API_BASE_URL=${internal_api_base_url}
 BOREALIS_COOKIE_SECURE=1
 BOREALIS_GUACAMOLE_ENABLED=1
 BOREALIS_GUACD_HOST=127.0.0.1
@@ -6467,6 +6613,9 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[api-backend]:-}" == "built" ]]; then
+    printf '%s\n' api-backend
+  fi
   if [[ "${BUILD_STATUSES[webui-frontend]:-}" == "built" ]]; then
     printf '%s\n' webui-frontend
   fi
@@ -6720,7 +6869,6 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
 
 services = [
     "docker-proxy",
-    "api-backend",
     "site-worker-orchestrator",
     "traefik-edge",
     "postgres-db",
@@ -6878,6 +7026,8 @@ deploy_engine() {
   ensure_k3s_cluster_baseline
   ensure_longhorn_storage_baseline
   ensure_no_host_postgres_conflict
+  local previous_internal_api_base_url=""
+  previous_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   prepare_runtime "${mode}"
   build_images "${mode}"
   export_image_manifest_env
@@ -6890,6 +7040,8 @@ deploy_engine() {
   ensure_k3s_api_backend_bridge "${mode}"
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
+  local current_internal_api_base_url=""
+  current_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
@@ -6918,6 +7070,8 @@ deploy_engine() {
     log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
     refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
     retire_compose_webui_container
+    recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    retire_compose_api_backend_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -6929,6 +7083,8 @@ deploy_engine() {
     log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
     refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
     retire_compose_webui_container
+    recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    retire_compose_api_backend_container
     write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
@@ -6944,6 +7100,8 @@ deploy_engine() {
     fi
     wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
     retire_compose_webui_container
+    recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    retire_compose_api_backend_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
     log_section "Docker Housekeeping"
@@ -6959,6 +7117,8 @@ deploy_engine() {
   fi
   wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
   retire_compose_webui_container
+  recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+  retire_compose_api_backend_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
   log_section "Docker Housekeeping"
@@ -6994,6 +7154,23 @@ service_action() {
       ;;
     restart)
       [[ "${service}" != "webui-frontend" ]] || die "webui-frontend restart is retired from Docker Compose; use rebuild to reconcile the K3s WebUI workload."
+      if [[ "${service}" == "api-backend" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        ensure_k3s_api_backend_bridge "${mode}"
+        log_status "k3s-api-backend" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/api-backend" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-api-backend" "Restart Failed" "${C_RED}"
+          die "K3s API backend restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/api-backend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-api-backend" "Rollout Failed" "${C_RED}"
+          die "K3s API backend rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        retire_compose_api_backend_container
+        log_status "k3s-api-backend" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
       if [[ "${service}" == "job-scheduler" ]]; then
         ensure_k3s_cluster_baseline
         ensure_borealis_operator_bridge
@@ -7029,6 +7206,7 @@ service_action() {
       fi
       reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
       retire_compose_webui_container
+      retire_compose_api_backend_container
       retire_compose_job_scheduler_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
