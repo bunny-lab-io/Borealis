@@ -167,52 +167,10 @@ func TestSiteWorkerOrchestratorStopRejectsNonBorealisAndGUIDMismatch(t *testing.
 	}
 }
 
-func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
-	tmp := t.TempDir()
-	capturePath := filepath.Join(tmp, "docker-args.txt")
-	dockerPath := filepath.Join(tmp, "docker")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + shellQuote(capturePath) + "\nprintf 'helper-id\\n'\n"
-	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:test")
-
-	orchestrator := &siteWorkerOrchestrator{secret: []byte("test-secret"), dockerBin: dockerPath, projectRoot: "/opt/Borealis"}
-	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "traefik-edge", Action: "reload"}); err != nil {
-		t.Fatalf("valid service action rejected: %v", err)
-	}
-	raw, err := os.ReadFile(capturePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	joined := "\n" + strings.Join(strings.Split(strings.TrimSpace(string(raw)), "\n"), "\n") + "\n"
-	for _, expected := range []string{
-		"\n--security-opt\nno-new-privileges:true\n",
-		"\n--cap-drop\nALL\n",
-		"\n--read-only\n",
-		"\n--tmpfs\n/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777\n",
-		"\n--memory\n512m\n",
-		"\n--cpus\n1.00\n",
-		"\n--pids-limit\n160\n",
-		"\n-e\nTZ=Etc/UTC\n",
-		"\n-e\nBOREALIS_ENGINE_HOST_TIMEZONE=Etc/UTC\n",
-		"\n-e\nHOME=/tmp\n",
-		"\n-v\n/etc/localtime:/etc/localtime:ro\n",
-		"\n-v\n/usr/share/zoneinfo:/usr/share/zoneinfo:ro\n",
-		"\nborealis-engine/job-scheduler:test\n",
-		"Engine.sh",
-		"--service",
-		"traefik-edge",
-		"reload",
-	} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("helper docker args missing %q:\n%s", expected, joined)
-		}
-	}
-	for _, forbidden := range []string{"\n--privileged\n", "\n--device\n", "\n--cap-add\n", "\n--pid\n", "\n--ipc\n"} {
-		if strings.Contains(joined, forbidden) {
-			t.Fatalf("service action helper contains forbidden docker option %q:\n%s", forbidden, joined)
-		}
+func TestSiteWorkerOrchestratorServiceActionHelperRetired(t *testing.T) {
+	orchestrator := &siteWorkerOrchestrator{secret: []byte("test-secret"), dockerBin: "/bin/false", projectRoot: "/opt/Borealis"}
+	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "traefik-edge", Action: "reload"}); err == nil {
+		t.Fatalf("traefik reload helper should be retired")
 	}
 	if err := orchestrator.runServiceAction(context.Background(), orchestratorServiceActionRequest{ServiceKey: "webui-frontend", Action: "rebuild", Mode: "prod"}); err == nil {
 		t.Fatalf("webui rebuild should be CLI-only and rejected")
@@ -225,31 +183,24 @@ func TestSiteWorkerOrchestratorServiceActionAllowlist(t *testing.T) {
 	}
 }
 
-func TestComposeSchedulerAndWebUIAreRetired(t *testing.T) {
+func TestComposeServicesAreRetired(t *testing.T) {
 	content, err := os.ReadFile("../../../compose.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	schedulerBlock := composeServiceBlock(string(content), "job-scheduler")
-	if schedulerBlock != "" {
-		t.Fatalf("Compose job-scheduler service should be retired after K3s cutover:\n%s", schedulerBlock)
-	}
-	orchestratorBlock := composeServiceBlock(string(content), "site-worker-orchestrator")
-	if !strings.Contains(orchestratorBlock, "BOREALIS_DOCKER_SOCKET_PATH") || !strings.Contains(orchestratorBlock, ":/var/run/docker.sock") {
-		t.Fatalf("site-worker-orchestrator should own Docker socket mount:\n%s", orchestratorBlock)
-	}
-	for _, forbidden := range []string{
-		"Engine/Services/api-backend:/opt/Borealis/Engine/Services/api-backend",
-		"Engine/Services/site-worker-orchestrator:/opt/Borealis/Engine/Services/site-worker-orchestrator",
-		"Engine/Services/traefik-edge",
+	for _, service := range []string{
+		"api-backend",
+		"job-scheduler",
+		"postgres-db",
+		"remote-desktop-guacd",
+		"site-worker-orchestrator",
+		"traefik-edge",
+		"webui-frontend",
+		"wireguard-tunnel",
 	} {
-		if strings.Contains(orchestratorBlock, forbidden) {
-			t.Fatalf("site-worker-orchestrator has overbroad mount %q:\n%s", forbidden, orchestratorBlock)
+		if block := composeServiceBlock(string(content), service); block != "" {
+			t.Fatalf("Compose %s service should be retired after K3s cutover:\n%s", service, block)
 		}
-	}
-	webuiBlock := composeServiceBlock(string(content), "webui-frontend")
-	if webuiBlock != "" {
-		t.Fatalf("Compose webui-frontend service should be retired after K3s cutover:\n%s", webuiBlock)
 	}
 }
 

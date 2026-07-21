@@ -485,48 +485,9 @@ func (o *siteWorkerOrchestrator) runServiceAction(ctx context.Context, req orche
 	if serviceKey == "" || actionName == "" {
 		return errors.New("service_key and action are required")
 	}
-	resolved := resolveOverviewServiceAction(serviceKey, map[string]any{"action": actionName, "mode": actionMode})
-	if resolved == nil {
-		return fmt.Errorf("unsupported service action service=%s action=%s mode=%s", serviceKey, actionName, actionMode)
-	}
-	actionName = strings.ToLower(cleanText(resolved["action"]))
-	actionMode = strings.ToLower(cleanText(resolved["mode"]))
-	if !schedulerServiceActionUsesOrchestrator(serviceKey, actionName) {
-		return fmt.Errorf("unsupported helper service action service=%s action=%s mode=%s", serviceKey, actionName, actionMode)
-	}
-	image := schedulerServiceActionHelperImage()
-	helperName := "borealis-engine-action-" + serviceKey + "-" + randomShortID()
-	commandParts := []string{"bash", "Engine.sh", "--network-mode", overviewEngineNetworkMode(), "--service", serviceKey, actionName}
-	if actionMode != "" {
-		commandParts = append(commandParts, actionMode)
-	}
-	shellCommand := "sleep 2; " + shellJoin(commandParts)
-	args := []string{
-		"run", "--rm", "-d", "--name", helperName, "--network", "host",
-		"--security-opt", "no-new-privileges:true",
-		"--cap-drop", "ALL",
-		"--read-only",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777",
-		"--memory", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"),
-		"--cpus", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT", "1.00"),
-		"--pids-limit", schedulerResourceEnv("BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT", "160"),
-		"-e", "TZ=" + schedulerResourceEnv("TZ", "Etc/UTC"),
-		"-e", "BOREALIS_ENGINE_HOST_TIMEZONE=" + schedulerResourceEnv("BOREALIS_ENGINE_HOST_TIMEZONE", schedulerResourceEnv("TZ", "Etc/UTC")),
-		"-e", "HOME=/tmp",
-		"-v", "/etc/localtime:/etc/localtime:ro",
-		"-v", "/usr/share/zoneinfo:/usr/share/zoneinfo:ro",
-		"-v", schedulerResourceEnv("BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock") + ":/var/run/docker.sock",
-		"-v", fmt.Sprintf("%s:%s", o.projectRoot, o.projectRoot),
-		"-w", o.projectRoot,
-		"--entrypoint", "/bin/bash",
-		image, "-lc", shellCommand,
-	}
-	out, err := exec.CommandContext(ctx, o.dockerBin, args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
-	}
-	log.Printf("site-worker orchestrator queued service action helper=%s service=%s action=%s", strings.TrimSpace(string(out)), serviceKey, actionName)
-	return nil
+	_ = ctx
+	_ = o
+	return fmt.Errorf("site-worker orchestrator service-action helper retired; use K3s operator path service=%s action=%s mode=%s", serviceKey, actionName, actionMode)
 }
 
 func schedulerResourceEnv(name string, fallback string) string {

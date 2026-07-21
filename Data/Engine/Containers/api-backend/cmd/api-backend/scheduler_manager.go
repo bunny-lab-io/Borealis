@@ -1132,7 +1132,7 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 			return err
 		}
 		switch actionName {
-		case "restart":
+		case "restart", "reload":
 			if _, err := client.restartKnownWorkload(ctx, serviceKey); err != nil {
 				return err
 			}
@@ -2758,7 +2758,7 @@ func schedulerSiteWorkerLifecycleMode() string {
 func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bool {
 	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
 	actionName = strings.ToLower(strings.TrimSpace(actionName))
-	if actionName != "restart" {
+	if actionName != "restart" && !(serviceKey == "traefik-edge" && actionName == "reload") {
 		return false
 	}
 	if _, ok := borealisOperatorKnownWorkloadForService(serviceKey); !ok {
@@ -2767,6 +2767,8 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 	switch serviceKey {
 	case "webui-frontend", "api-backend", "remote-desktop-guacd", "postgres-db":
 		return true
+	case "traefik-edge":
+		return actionName == "reload" && schedulerEnvOwnerIsK3s("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER")
 	case "job-scheduler":
 		// Self-restart stays CLI-only so the current scheduler can finish any active queue item.
 		return false
@@ -2776,9 +2778,7 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 }
 
 func schedulerServiceActionUsesOrchestrator(serviceKey string, actionName string) bool {
-	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
-	actionName = strings.ToLower(strings.TrimSpace(actionName))
-	return serviceKey == "traefik-edge" && actionName == "reload"
+	return false
 }
 
 func schedulerServiceActionUsesWireGuardControl(serviceKey string, actionName string) bool {

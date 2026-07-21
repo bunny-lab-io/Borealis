@@ -273,15 +273,19 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Compose `postgres-db` retired.
     - [x] Compose `wireguard-tunnel` retired.
     - [x] Compose `remote-desktop-guacd` retired.
-    - [x] Keep only intentional bridge services: `traefik-edge` and `site-worker-orchestrator`.
+    - [x] Move `traefik-edge` into K3s as the public edge owner.
+    - [x] Preserve HTTP/HTTPS host-network ports, ACME/local CA state, and watched dynamic route files.
+    - [x] Route `traefik-edge reload` through K3s `job-scheduler` and `borealis-operator`, not a Docker helper.
+    - [x] Retire `site-worker-orchestrator` as a long-running Compose service.
+    - [x] Leave `compose.yaml` as an empty retired manifest.
     - [x] Move Server Overview service rows for K3s-owned workloads off retired Compose container lookups and onto `borealis-operator` workload status.
     - [x] Expose WebUI restart as an operator-routed K3s action so simple WebUI pod restarts no longer need the helper bridge.
     - [x] Keep WebUI rebuilds CLI-only through `Engine.sh --service webui-frontend rebuild prod|dev`; reject queued runtime WebUI rebuild helper actions.
     - [x] Route K3s API, WebUI, PostgreSQL, and guacd restarts through `borealis-operator` without Docker-helper fallback.
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
     - [x] Route K3s WireGuard reconcile service actions through the scheduler-mounted control socket instead of the Docker helper bridge.
-    - [x] Limit `site-worker-orchestrator` service-action helper to `traefik-edge reload` until edge cutover removes the final Compose service.
-    - [x] Move remaining Compose bridge service rows to scheduler snapshots first, without a long-running Docker proxy fallback.
+    - [x] Remove the `site-worker-orchestrator` service-action helper path after Traefik edge cutover.
+    - [x] Remove remaining Compose bridge service rows after Traefik and orchestrator retirement.
     - [x] Stop Docker metadata reads for K3s site-worker rows once operator metrics are present.
     - [x] Retire Compose `docker-proxy` after K3s worker metrics and scheduler service snapshots became authoritative.
 - [ ] Keep migration and recovery docs until stable release.
@@ -293,13 +297,15 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Narrow Engine tests pass.
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
     - [x] Live Docker check confirms retired Compose containers are absent.
-    - [x] `docker compose config --services` shows only `site-worker-orchestrator` and `traefik-edge`.
-    - [x] Server Overview unit tests confirm retired workloads render as K3s rows while bridge services remain Compose rows.
-    - [x] Server Overview unit tests confirm remaining Compose bridge rows can render from scheduler snapshots.
+    - [x] `docker compose config --services` returns no service names.
+    - [x] Server Overview unit tests confirm retired workloads render as K3s rows and legacy Compose snapshots are ignored.
     - [x] Server action tests confirm WebUI restart uses the operator path and WebUI rebuild is rejected from queued runtime helper paths.
-    - [x] Orchestrator tests confirm the helper allowlist is limited to Traefik reload.
+    - [x] Scheduler tests confirm Traefik reload uses the operator path.
+    - [x] Orchestrator tests confirm the helper path is retired.
     - [x] `Engine.sh --network-mode public --service webui-frontend restart prod` rolls the K3s WebUI Deployment without restoring the retired Compose WebUI container.
-    - [x] Live deploy table reports remaining Compose bridge service status instead of leaving untouched bridge rows pending.
+    - [ ] Live deploy table reports K3s Traefik edge ready and Docker Compose retired.
+    - [ ] Live K3s rollout confirms `deployment/traefik-edge` healthy.
+    - [ ] Live Docker check confirms stale `borealis-engine-traefik-edge` and `borealis-engine-site-worker-orchestrator` containers are absent.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
 ## Open Risks
@@ -326,7 +332,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     ### Related documentation
 
     - [Engine Deployment](../../Engine/deploying-the-engine.md) for current operator install and redeploy flow.
-    - [Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md) for current Compose service boundaries.
+    - [Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md) for current K3s service boundaries and retired Compose state.
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md) for Engine runtime paths and generated state.
     - [Security Whitepaper](../security-whitepaper.md) for Aegis, runtime trust, token, and network boundaries.
     - [Backup and Restore](../backup-restore.md) for stateful data checkpoints.

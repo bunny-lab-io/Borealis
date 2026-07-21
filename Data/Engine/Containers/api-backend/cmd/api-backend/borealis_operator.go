@@ -697,6 +697,16 @@ func borealisOperatorKnownWorkloadForService(serviceKey string) (borealisOperato
 			MinReplicas:   1,
 			MaxReplicas:   2,
 		},
+		"traefik-edge": {
+			ServiceKey:    "traefik-edge",
+			Kind:          "Deployment",
+			APIGroup:      "apps",
+			Resource:      "deployments",
+			Name:          "traefik-edge",
+			ContainerName: "traefik-edge",
+			MinReplicas:   1,
+			MaxReplicas:   1,
+		},
 		"api-backend": {
 			ServiceKey:    "api-backend",
 			Kind:          "Deployment",
@@ -765,6 +775,7 @@ func borealisOperatorKnownServiceKeys() []string {
 		"job-scheduler",
 		"postgres-db",
 		"remote-desktop-guacd",
+		"traefik-edge",
 		"webui-frontend",
 		"wireguard-tunnel",
 	}

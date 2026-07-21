@@ -24,27 +24,22 @@ ORCHESTRATOR_SOURCE = (
     / "site_worker_orchestrator.go"
 )
 
-EXPECTED_SERVICES = {
-    "site-worker-orchestrator",
-    "traefik-edge",
-}
+EXPECTED_SERVICES: set[str] = set()
 RETIRED_COMPOSE_SERVICES = {
     "api-backend",
     "job-scheduler",
     "postgres-db",
     "remote-desktop-guacd",
+    "site-worker-orchestrator",
+    "traefik-edge",
     "webui-frontend",
     "wireguard-tunnel",
 }
 
-ROOT_SERVICES = {"traefik-edge"}
+ROOT_SERVICES: set[str] = set()
 COMPATIBILITY_EXCEPTIONS: dict[str, str] = {}
-DOCKER_SOCKET_SERVICES = {
-    "site-worker-orchestrator": False,
-}
-CAP_ADD_ALLOWLIST = {
-    "traefik-edge": {"DAC_OVERRIDE", "NET_BIND_SERVICE"},
-}
+DOCKER_SOCKET_SERVICES: dict[str, bool] = {}
+CAP_ADD_ALLOWLIST: dict[str, set[str]] = {}
 TIMEZONE_MOUNTS = {
     "/etc/localtime": "/etc/localtime",
     "/usr/share/zoneinfo": "/usr/share/zoneinfo",
@@ -287,11 +282,6 @@ def assert_dynamic_orchestrator_policy() -> None:
         "site-worker home": '"HOME=/tmp"',
         "site-worker host localtime": '"/etc/localtime:/etc/localtime:ro"',
         "site-worker host zoneinfo": '"/usr/share/zoneinfo:/usr/share/zoneinfo:ro"',
-        "service helper no-new-privileges": '"BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT", "512m"',
-        "service helper timezone": '"TZ", "Etc/UTC"',
-        "service helper host localtime": '"/etc/localtime:/etc/localtime:ro"',
-        "service helper host zoneinfo": '"/usr/share/zoneinfo:/usr/share/zoneinfo:ro"',
-        "service helper socket path": '"BOREALIS_DOCKER_SOCKET_PATH", "/var/run/docker.sock"',
     }
     for label, snippet in required.items():
         if snippet not in source:
@@ -313,7 +303,7 @@ def main() -> int:
         fail("docker compose config missing services map")
     assert_static_service_policy(services)
     assert_dynamic_orchestrator_policy()
-    print("POLICY PASS: Engine Compose and orchestrator launch hardening validated")
+    print("POLICY PASS: Engine Compose services retired and legacy orchestrator launch hardening validated")
     return 0
 
 

@@ -25,10 +25,7 @@ const wireguardInterfaceName = "borealis-wg"
 var composeServiceSpecs = []struct {
 	key   string
 	label string
-}{
-	{"site-worker-orchestrator", "Site Worker Orchestrator"},
-	{"traefik-edge", "Traefik Edge"},
-}
+}{}
 
 var k3sWorkloadServiceSpecs = []struct {
 	key   string
@@ -38,6 +35,7 @@ var k3sWorkloadServiceSpecs = []struct {
 	{"job-scheduler", "Job Scheduler"},
 	{"postgres-db", "PostgreSQL"},
 	{"remote-desktop-guacd", "Guacamole"},
+	{"traefik-edge", "Traefik Edge"},
 	{"webui-frontend", "WebUI Frontend"},
 	{"wireguard-tunnel", "WireGuard Tunnel"},
 }
@@ -383,6 +381,8 @@ func overviewK3sWorkloadEnabled(serviceKey string) bool {
 		return schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_TRAFFIC_OWNER")
 	case "remote-desktop-guacd":
 		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
+	case "traefik-edge":
+		return schedulerEnvOwnerIsK3s("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER")
 	case "webui-frontend":
 		return schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_TRAFFIC_OWNER")
 	case "wireguard-tunnel":

@@ -272,27 +272,29 @@ func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	}
 }
 
-func TestSchedulerManagerTraefikReloadUsesOrchestrator(t *testing.T) {
-	var received orchestratorServiceActionRequest
+func TestSchedulerManagerTraefikReloadUsesOperator(t *testing.T) {
+	t.Setenv("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER", "k3s")
+	var received borealisOperatorCommandRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/services/action" {
+		if r.URL.Path != "/v1/command" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
-			t.Fatalf("unexpected internal token %q", got)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"queued": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"verb":   received.Verb,
+			"result": map[string]any{"ok": true, "service_key": "traefik-edge"},
+		})
 	}))
 	defer server.Close()
 
 	manager := &goSchedulerManager{
 		secret: []byte("test-secret"),
-		orchestrator: &siteWorkerOrchestratorClient{
+		operator: &borealisOperatorClient{
 			baseURL:    server.URL,
-			token:      goInternalToken([]byte("test-secret")),
+			token:      "test-token",
 			httpClient: server.Client(),
 		},
 	}
@@ -303,8 +305,8 @@ func TestSchedulerManagerTraefikReloadUsesOrchestrator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run service action: %v", err)
 	}
-	if received.ServiceKey != "traefik-edge" || received.Action != "reload" {
-		t.Fatalf("unexpected orchestrator payload %+v", received)
+	if received.Verb != "RestartKnownWorkload" || cleanText(received.Params["service_key"]) != "traefik-edge" {
+		t.Fatalf("unexpected operator payload %+v", received)
 	}
 }
 

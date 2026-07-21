@@ -57,6 +57,7 @@ BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_RUNTIME_SECRET_
 BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME:-borealis-api-backend-shadow-db-runtime-env}"
 BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME="${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME:-borealis-job-scheduler-runtime-env}"
 BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME="${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME:-borealis-wireguard-tunnel-runtime-env}"
+BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME="${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME:-borealis-traefik-edge-runtime-env}"
 BOREALIS_API_BACKEND_K3S_BRIDGE_PORT="${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}"
 BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
@@ -64,6 +65,7 @@ K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
 K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
 K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-wireguard-tunnel.sha256"
+K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-traefik-edge.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
@@ -74,6 +76,7 @@ K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_
 K3S_BRIDGE_WORKLOADS_VERSION="4"
 K3S_JOB_SCHEDULER_VERSION="3"
 K3S_WIREGUARD_TUNNEL_VERSION="1"
+K3S_TRAEFIK_EDGE_VERSION="1"
 K3S_POSTGRES_VERSION="3"
 K3S_POSTGRES_SCHEMA_JOB_NAME="${BOREALIS_K3S_POSTGRES_SCHEMA_JOB_NAME:-postgres-db-schema-initializer}"
 K3S_POSTGRES_SCHEMA_TIMEOUT="${BOREALIS_K3S_POSTGRES_SCHEMA_TIMEOUT:-180s}"
@@ -107,12 +110,9 @@ LAUNCH_ARGS=()
 if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
-SERVICE_ROLES=(
-  "site-worker-orchestrator"
-  "traefik-edge"
-)
+SERVICE_ROLES=()
 SERVICE_ACTION_ROLES=(
-  "${SERVICE_ROLES[@]}"
+  "traefik-edge"
   "remote-desktop-guacd"
   "wireguard-tunnel"
   "postgres-db"
@@ -199,7 +199,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "site-worker"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -225,7 +225,7 @@ dashboard_row_section() {
     "Docker Compose")
       printf '%s\n' "Reconciliation"
       ;;
-    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
       printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
@@ -268,17 +268,10 @@ dashboard_seed_rows() {
     "k3s-api-backend" \
     "k3s-job-scheduler" \
     "k3s-wireguard-tunnel" \
+    "k3s-traefik-edge" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
-    "webui-frontend" \
-    "api-backend" \
-    "api-backend > job-scheduler" \
-    "api-backend > job-scheduler > site-worker-orchestrator" \
     "site-worker" \
-    "remote-desktop-guacd" \
-    "traefik-edge" \
-    "wireguard-tunnel" \
-    "postgres-db" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -409,6 +402,9 @@ dashboard_row_label() {
     "k3s-wireguard-tunnel")
       printf '%s\n' "K3s WireGuard Tunnel"
       ;;
+    "k3s-traefik-edge")
+      printf '%s\n' "K3s Traefik Edge"
+      ;;
     "k3s-webui-frontend")
       printf '%s\n' "K3s WebUI Frontend"
       ;;
@@ -533,17 +529,10 @@ dashboard_render_table() {
     "k3s-api-backend" \
     "k3s-job-scheduler" \
     "k3s-wireguard-tunnel" \
+    "k3s-traefik-edge" \
     "k3s-webui-frontend" \
     "k3s-remote-desktop-guacd" \
-    "webui-frontend" \
-    "api-backend" \
-    "api-backend > job-scheduler" \
-    "api-backend > job-scheduler > site-worker-orchestrator" \
     "site-worker" \
-    "remote-desktop-guacd" \
-    "traefik-edge" \
-    "wireguard-tunnel" \
-    "postgres-db" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -702,6 +691,14 @@ log_build_status() {
       log_status "k3s-wireguard-tunnel" "${status}" "${color}"
       return 0
       ;;
+    traefik-edge)
+      if [[ "${DASHBOARD_STATUS[k3s-traefik-edge]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s Traefik edge remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-traefik-edge" "${status}" "${color}"
+      return 0
+      ;;
   esac
   log_status "$(build_status_subject "${service}")" "${status}" "${color}"
 }
@@ -735,10 +732,6 @@ build_section_images() {
   for service in "${section_services[@]}"; do
     selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
     build_service_image "${service}" "${mode}"
-    if [[ "${service}" == "job-scheduler" ]]; then
-      log_build_status "site-worker-orchestrator" "Ready - Shared Image" "${C_GREEN}"
-      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
-    fi
   done
 }
 
@@ -2167,6 +2160,7 @@ borealis_operator_workload_image_allowlist() {
     "job-scheduler" \
     "postgres-db" \
     "remote-desktop-guacd" \
+    "traefik-edge" \
     "webui-frontend" \
     "wireguard-tunnel"; do
     image="${IMAGE_TAGS[${service}]:-}"
@@ -2237,6 +2231,48 @@ borealis_postgres_runtime_secret_data() {
     POSTGRES_DB \
     POSTGRES_USER \
     POSTGRES_PASSWORD \
+    BOREALIS_ENGINE_HOST_TIMEZONE \
+    TZ; do
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done
+}
+
+borealis_traefik_runtime_secret_data() {
+  local key
+  for key in \
+    BOREALIS_PROJECT_ROOT \
+    BOREALIS_PUBLIC_HOSTNAME \
+    BOREALIS_PUBLIC_HOSTNAME_ALIASES \
+    BOREALIS_PUBLIC_BASE_URL \
+    BOREALIS_PUBLIC_HTTP_PORT \
+    BOREALIS_PUBLIC_HTTPS_PORT \
+    BOREALIS_PUBLIC_VNC_PATH \
+    BOREALIS_PUBLIC_WIREGUARD_HOST \
+    BOREALIS_PUBLIC_WIREGUARD_PORT \
+    BOREALIS_ENGINE_NETWORK_MODE \
+    BOREALIS_ENGINE_NETWORK_MODE_LABEL \
+    BOREALIS_ENGINE_DEPLOYMENT_PROFILE \
+    BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL \
+    BOREALIS_ACME_EMAIL \
+    BOREALIS_LOCAL_CA_ENABLED \
+    BOREALIS_LOCAL_CA_CERT_PATH \
+    BOREALIS_LOCAL_TLS_CERT_PATH \
+    BOREALIS_LOCAL_TLS_KEY_PATH \
+    BOREALIS_WEBUI_TRAFFIC_OWNER \
+    BOREALIS_WEBUI_UPSTREAM_HOST \
+    BOREALIS_WEBUI_UPSTREAM_PORT \
+    BOREALIS_API_BACKEND_TRAFFIC_OWNER \
+    BOREALIS_API_BACKEND_UPSTREAM_HOST \
+    BOREALIS_API_BACKEND_UPSTREAM_PORT \
+    BOREALIS_VNC_WS_PORT \
+    BOREALIS_TRAEFIK_HEALTH_PORT \
+    BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS \
+    BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS \
+    BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS \
+    BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR \
+    BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH \
+    BOREALIS_ENGINE_RUNTIME_OWNER_UID \
+    BOREALIS_ENGINE_RUNTIME_OWNER_GID \
     BOREALIS_ENGINE_HOST_TIMEZONE \
     TZ; do
     printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
@@ -2425,7 +2461,7 @@ rules:
     verbs: ["get", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    resourceNames: ["api-backend", "borealis-operator", "job-scheduler", "remote-desktop-guacd", "webui-frontend", "wireguard-tunnel"]
+    resourceNames: ["api-backend", "borealis-operator", "job-scheduler", "remote-desktop-guacd", "traefik-edge", "webui-frontend", "wireguard-tunnel"]
     verbs: ["get", "patch"]
   - apiGroups: ["apps"]
     resources: ["statefulsets"]
@@ -4952,9 +4988,247 @@ ensure_k3s_wireguard_tunnel() {
   log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
 }
 
+k3s_traefik_edge_healthcheck() {
+  local health_port
+  health_port="$(read_env_value BOREALIS_TRAEFIK_HEALTH_PORT)"
+  health_port="${health_port:-8082}"
+  curl -fsS "http://127.0.0.1:${health_port}/ping" >/dev/null
+}
+
+render_k3s_traefik_edge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_gid="$3"
+  local health_port="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: traefik-edge
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: edge-cutover
+type: Opaque
+data:
+$(borealis_traefik_runtime_secret_data)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik-edge
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: traefik-edge
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: edge
+    borealis.io/service-key: traefik-edge
+    borealis.io/stage: edge-cutover
+  annotations:
+    borealis.io/edge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "host-network"
+    borealis.io/traffic-owner: "k3s"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik-edge
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traefik-edge
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: edge
+        borealis.io/service-key: traefik-edge
+        borealis.io/stage: edge-cutover
+      annotations:
+        borealis.io/edge-config-hash: "${config_hash}"
+        borealis.io/network-mode: "host-network"
+        borealis.io/traffic-owner: "k3s"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsUser: 0
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: traefik-edge
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: web
+              containerPort: 80
+              protocol: TCP
+            - name: websecure
+              containerPort: 443
+              protocol: TCP
+            - name: health
+              containerPort: ${health_port}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}
+          env:
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["DAC_OVERRIDE", "NET_BIND_SERVICE"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: traefik-runtime
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+$(k3s_timezone_volume_entries)
+        - name: traefik-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge
+            type: Directory
+EOF
+}
+
+ensure_k3s_traefik_edge() {
+  local mode="$1"
+  local image
+  image="$(service_image_tag_or_previous traefik-edge borealis-engine/traefik-edge:local)"
+  [[ -n "${image}" ]] || die "Traefik edge image tag unavailable."
+
+  local runtime_gid
+  local health_port
+  local memory_limit
+  local cpu_limit
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  health_port="$(read_env_value BOREALIS_TRAEFIK_HEALTH_PORT)"
+  health_port="${health_port:-8082}"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_CPU_LIMIT)")"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_TRAEFIK_EDGE_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "runtime_gid=${runtime_gid}" \
+      "health_port=${health_port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime=${RUNTIME_ROOT}/Services/traefik-edge" \
+      "hostname=$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" \
+      "aliases=$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)" \
+      "profile=$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" \
+      "acme_email=$(read_env_value BOREALIS_ACME_EMAIL)" \
+      "local_ca=$(read_env_value BOREALIS_LOCAL_CA_ENABLED)" \
+      "api_owner=$(read_env_value BOREALIS_API_BACKEND_TRAFFIC_OWNER)" \
+      "api_upstream=$(read_env_value BOREALIS_API_BACKEND_UPSTREAM_HOST):$(read_env_value BOREALIS_API_BACKEND_UPSTREAM_PORT)" \
+      "webui_owner=$(read_env_value BOREALIS_WEBUI_TRAFFIC_OWNER)" \
+      "webui_upstream=$(read_env_value BOREALIS_WEBUI_UPSTREAM_HOST):$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)" \
+      "trusted_proxy_ips=$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" \
+      "forwarded_headers=$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)" \
+      "proxy_protocol=$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "traefik-edge" "${image}" "k3s-traefik-edge"
+
+  log_status "k3s-traefik-edge" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-traefik-edge.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_traefik_edge_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_gid}" \
+    "${health_port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply --dry-run=server -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
+    die "K3s Traefik edge manifest validation failed. See ${BUILD_LOG}."
+  fi
+  retire_compose_traefik_edge_container
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s Traefik edge manifest. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-traefik-edge" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+    die "K3s Traefik edge rollout failed. See ${BUILD_LOG}."
+  fi
+  log_status "k3s-traefik-edge" "Verifying Ping" "${C_YELLOW}"
+  if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+    die "K3s Traefik edge healthcheck failed. See ${BUILD_LOG}."
+  fi
+
+  printf '%s  k3s-traefik-edge\n' "${config_hash}" > "${K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE}"
+  log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
+}
+
 service_has_k3s_bridge_workload() {
   case "$1" in
-    api-backend|job-scheduler|postgres-db|webui-frontend|remote-desktop-guacd|wireguard-tunnel)
+    api-backend|job-scheduler|postgres-db|webui-frontend|remote-desktop-guacd|wireguard-tunnel|traefik-edge)
       return 0
       ;;
   esac
@@ -4982,6 +5256,8 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
     ensure_k3s_postgres_statefulset "${mode}"
   elif [[ "${service}" == "wireguard-tunnel" ]]; then
     ensure_k3s_wireguard_tunnel "${mode}"
+  elif [[ "${service}" == "traefik-edge" ]]; then
+    ensure_k3s_traefik_edge "${mode}"
   elif [[ "${service}" == "remote-desktop-guacd" ]]; then
     ensure_k3s_bridge_workloads "${mode}"
     retire_compose_remote_desktop_guacd_container
@@ -5181,13 +5457,13 @@ retire_compose_webui_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose WebUI container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
+  printf '[%s] %s Compose container retired; K3s owns WebUI traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
 retire_compose_docker_proxy_container() {
@@ -5208,13 +5484,12 @@ retire_compose_job_scheduler_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose job scheduler container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns job-scheduler lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
@@ -5224,13 +5499,12 @@ retire_compose_api_backend_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose API backend container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns api-backend traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
@@ -5240,13 +5514,12 @@ retire_compose_postgres_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose PostgreSQL container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns PostgreSQL traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
@@ -5256,13 +5529,12 @@ retire_compose_wireguard_tunnel_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose WireGuard tunnel container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns WireGuard tunnel lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
@@ -5272,14 +5544,43 @@ retire_compose_remote_desktop_guacd_container() {
   local subject
   subject="$(dashboard_subject_for_service "${service}")"
   if docker inspect "${container}" >/dev/null 2>&1; then
-    log_status "${subject}" "Removing Retired Compose Container" "${C_YELLOW}"
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "${subject}" "Retirement Failed" "${C_RED}"
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
       die "Failed to remove retired Compose guacd container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  log_status "${subject}" "Retired - K3s Owner" "${C_DIM}"
   printf '[%s] %s Compose container retired; K3s owns guacd lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
+retire_compose_traefik_edge_container() {
+  local service="traefik-edge"
+  local container="borealis-engine-traefik-edge"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose Traefik edge container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  printf '[%s] %s Compose container retired; K3s owns public edge lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+}
+
+retire_compose_site_worker_orchestrator_container() {
+  local service="site-worker-orchestrator"
+  local container="borealis-engine-site-worker-orchestrator"
+  local subject
+  subject="$(dashboard_subject_for_service "${service}")"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose site worker orchestrator container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  printf '[%s] %s Compose container retired; K3s operator owns site-worker lifecycle and Traefik reload no longer uses Docker helper\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
 }
 
 k3s_site_worker_pod_count() {
@@ -6752,6 +7053,7 @@ BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT=${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-${PROFI
 BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT=${BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT:-${PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT}}
 BOREALIS_TRAEFIK_EDGE_CPU_LIMIT=${BOREALIS_TRAEFIK_EDGE_CPU_LIMIT:-${PROFILE_TRAEFIK_EDGE_CPU_LIMIT}}
 BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT=${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-${PROFILE_TRAEFIK_EDGE_PIDS_LIMIT}}
+BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER=k3s
 BOREALIS_POSTGRES_DB_MEMORY_LIMIT=${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-${PROFILE_POSTGRES_DB_MEMORY_LIMIT}}
 BOREALIS_POSTGRES_DB_CPU_LIMIT=${BOREALIS_POSTGRES_DB_CPU_LIMIT:-${PROFILE_POSTGRES_DB_CPU_LIMIT}}
 BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POSTGRES_DB_PIDS_LIMIT}}
@@ -7464,11 +7766,9 @@ changed_build_services() {
   fi
   if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
     printf '%s\n' job-scheduler
-    printf '%s\n' site-worker-orchestrator
   fi
   if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
     printf '%s\n' job-scheduler
-    printf '%s\n' site-worker-orchestrator
   fi
 }
 
@@ -7710,10 +8010,7 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
     except Exception:
         return default
 
-services = [
-    "site-worker-orchestrator",
-    "traefik-edge",
-]
+services = []
 allowed_services = set(services)
 service_images = {service: {"image": "", "hash": ""} for service in services}
 if image_path.is_file():
@@ -7899,6 +8196,7 @@ deploy_engine() {
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
   wait_for_k3s_postgres_cutover_workers
+  ensure_k3s_traefik_edge "${mode}"
   local current_internal_api_base_url=""
   current_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   log_section "Service Reconciliation"
@@ -7925,6 +8223,26 @@ deploy_engine() {
     mapfile -t compose_target_services < <(filter_compose_services "${target_services[@]}")
     target_services=("${compose_target_services[@]}")
   fi
+  if ((${#SERVICE_ROLES[@]} == 0)); then
+    log_status "Docker Compose" "Retired" "${C_DIM}"
+    retire_compose_webui_container
+    recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    recycle_k3s_site_workers_for_runtime_secret_change
+    recycle_k3s_site_workers_for_timezone
+    retire_compose_api_backend_container
+    retire_compose_postgres_container
+    retire_compose_wireguard_tunnel_container
+    retire_compose_remote_desktop_guacd_container
+    retire_compose_traefik_edge_container
+    retire_compose_site_worker_orchestrator_container
+    retire_compose_docker_proxy_container
+    write_deploy_manifest "${mode}" "retired" "${requested_target_services[@]}"
+    log_section "Docker Housekeeping"
+    prune_engine_docker_storage "${mode}"
+    log_section "Engine Deployment Complete"
+    log_webui_url
+    return 0
+  fi
   if deploy_state_matches "${mode}" && all_engine_containers_running "${SERVICE_ROLES[@]}"; then
     log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
     refresh_compose_service_statuses "${SERVICE_ROLES[@]}"
@@ -7936,6 +8254,8 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_traefik_edge_container
+    retire_compose_site_worker_orchestrator_container
     retire_compose_docker_proxy_container
     write_deploy_manifest "${mode}" "skipped"
     log_section "Docker Housekeeping"
@@ -7955,6 +8275,8 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_traefik_edge_container
+    retire_compose_site_worker_orchestrator_container
     retire_compose_docker_proxy_container
     write_deploy_manifest "${mode}" "skipped-k3s-only" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
@@ -7979,6 +8301,8 @@ deploy_engine() {
     retire_compose_postgres_container
     retire_compose_wireguard_tunnel_container
     retire_compose_remote_desktop_guacd_container
+    retire_compose_traefik_edge_container
+    retire_compose_site_worker_orchestrator_container
     retire_compose_docker_proxy_container
     log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
     write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
@@ -8002,6 +8326,8 @@ deploy_engine() {
   retire_compose_postgres_container
   retire_compose_wireguard_tunnel_container
   retire_compose_remote_desktop_guacd_container
+  retire_compose_traefik_edge_container
+  retire_compose_site_worker_orchestrator_container
   retire_compose_docker_proxy_container
   log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
   write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
@@ -8139,6 +8465,25 @@ service_action() {
         log_status "k3s-remote-desktop-guacd" "Ready" "${C_GREEN}"
         return 0
       fi
+      if [[ "${service}" == "traefik-edge" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_k3s_traefik_edge "${mode}"
+        log_status "k3s-traefik-edge" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/traefik-edge" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Restart Failed" "${C_RED}"
+          die "K3s Traefik edge restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+          die "K3s Traefik edge rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+          die "K3s Traefik edge healthcheck failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
       compose_base restart "$(service_compose_name "${service}")"
       ;;
     rebuild)
@@ -8163,6 +8508,8 @@ service_action() {
       retire_compose_postgres_container
       retire_compose_wireguard_tunnel_container
       retire_compose_remote_desktop_guacd_container
+      retire_compose_traefik_edge_container
+      retire_compose_site_worker_orchestrator_container
       retire_compose_docker_proxy_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
@@ -8170,7 +8517,22 @@ service_action() {
       ;;
     reload)
       [[ "${service}" == "traefik-edge" ]] || die "reload supported for traefik-edge only."
-      compose_base restart traefik-edge
+      ensure_k3s_cluster_baseline
+      ensure_k3s_traefik_edge "${mode}"
+      log_status "k3s-traefik-edge" "Reloading" "${C_YELLOW}"
+      if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/traefik-edge" >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Reload Failed" "${C_RED}"
+        die "K3s Traefik edge reload failed. See ${BUILD_LOG}."
+      fi
+      if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+        die "K3s Traefik edge rollout failed after reload. See ${BUILD_LOG}."
+      fi
+      if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+        die "K3s Traefik edge healthcheck failed after reload. See ${BUILD_LOG}."
+      fi
+      log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
       ;;
     reconcile)
       [[ "${service}" == "wireguard-tunnel" ]] || die "reconcile supported for wireguard-tunnel only."
@@ -8192,7 +8554,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }

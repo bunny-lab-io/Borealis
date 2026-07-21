@@ -164,6 +164,7 @@ func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) 
 		"job-scheduler":        "Deployment",
 		"postgres-db":          "StatefulSet",
 		"remote-desktop-guacd": "Deployment",
+		"traefik-edge":         "Deployment",
 		"webui-frontend":       "Deployment",
 		"wireguard-tunnel":     "Deployment",
 	}
@@ -201,6 +202,7 @@ func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) 
 	t.Setenv("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER", "k3s")
 	t.Setenv("BOREALIS_POSTGRES_RUNTIME_OWNER", "k3s")
 	t.Setenv("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER", "k3s")
 	t.Setenv("BOREALIS_WEBUI_RUNTIME_OWNER", "k3s")
 	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
 	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
@@ -223,12 +225,6 @@ func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) 
 			t.Fatalf("kind for %s = %#v", serviceKey, row["kubernetes_kind"])
 		}
 	}
-	for _, serviceKey := range []string{"site-worker-orchestrator", "traefik-edge"} {
-		row := seen[serviceKey]
-		if row == nil || row["runtime"] != "compose" {
-			t.Fatalf("remaining bridge Compose row missing for %s: %#v", serviceKey, rows)
-		}
-	}
 }
 
 type overviewServiceSnapshotStoreStub struct {
@@ -244,7 +240,7 @@ func (s overviewServiceSnapshotStoreStub) overviewServiceSnapshots(context.Conte
 	return s.snapshots, s.err
 }
 
-func TestCollectOverviewServiceRowsUsesSchedulerSnapshotsForComposeBridge(t *testing.T) {
+func TestCollectOverviewServiceRowsIgnoresRetiredComposeBridgeSnapshots(t *testing.T) {
 	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
 	now := time.Now().Unix()
 	store := overviewServiceSnapshotStoreStub{snapshots: map[string]overviewServiceSnapshot{
@@ -278,12 +274,8 @@ func TestCollectOverviewServiceRowsUsesSchedulerSnapshotsForComposeBridge(t *tes
 		seen[cleanText(row["key"])] = row
 	}
 	for _, serviceKey := range []string{"site-worker-orchestrator", "traefik-edge"} {
-		row := seen[serviceKey]
-		if row == nil {
-			t.Fatalf("compose bridge row missing for %s: %#v", serviceKey, rows)
-		}
-		if row["snapshot_source"] != "job-scheduler" || row["runtime"] != "compose" || row["status"] != "healthy" {
-			t.Fatalf("expected scheduler snapshot row for %s, got %#v", serviceKey, row)
+		if row := seen[serviceKey]; row != nil && row["runtime"] == "compose" {
+			t.Fatalf("retired Compose bridge row should be ignored for %s: %#v", serviceKey, rows)
 		}
 	}
 }
