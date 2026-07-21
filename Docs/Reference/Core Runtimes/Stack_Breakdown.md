@@ -284,10 +284,11 @@ Build cache:
 - Traefik routes production and dev WebUI traffic to the K3s `webui-frontend` ClusterIP when `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s`.
 
 Deploy output:
-- `Engine.sh` renders a live ANSI deployment dashboard by default.
-- The dashboard title shows `Production` or `Development`, the Engine network mode, the detected sizing `Profile`, and the active build log path.
+- `Engine.sh` starts with `Starting Borealis Engine Bootstrap`, then installs or verifies the pinned Gum renderer under `Dependencies/Gum/bin/gum` before the deployment dashboard starts.
+- Interactive TTY runs use the Gum dashboard unless `BOREALIS_DEPLOY_UI=plain` is set. Noninteractive output keeps the plain renderer.
+- The Gum dashboard shows the title, mode, network mode, detected sizing profile, runtime ownership, namespace, state counts, active build log path, current step, and a Kubernetes-aware resource table.
 - Service rows start as `Pending...` and update in place as deploy stages run.
-- Service rows render in one table with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
+- Gum service rows render with `Domain`, `Resource`, `Action`, `State`, `Kubernetes`, and `Detail` columns. Plain service rows render with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
 - The `k3s Cluster` rows render first because Engine deploy reconciles the cluster and operator bridge before Docker Compose.
 - `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
 - Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, `Reconciliation`, `Housekeeping`, and `Complete`.

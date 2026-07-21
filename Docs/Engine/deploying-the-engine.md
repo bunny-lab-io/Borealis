@@ -151,7 +151,7 @@ When deploying Borealis, you have to choose the Engine network mode first.  This
 
     Agent install commands include the local CA bundle automatically (this makes the command larger). Automatically-generated agent install commands also include the Engine IP fallback from deployment metadata. The Agent first tries the FQDN normally, then uses that IP only as a connection route hint while keeping FQDN TLS validation. Linux WireGuard tunnel setup also falls back to that IP when `wg-quick` cannot resolve the Engine FQDN. Browsers need the Borealis local CA imported into the operator's device or managed trust store before they show the Engine as trusted. Local deployments do not ask for an outer reverse proxy during interactive deployment and assume that there is none.
 
-During deployment, Borealis installs missing dependencies, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, applies K3s-owned workloads, and keeps the retired Docker Compose manifest empty.
+During deployment, Borealis starts with a short bootstrap, installs the pinned Gum terminal renderer when missing, reconciles the single-node K3s baseline, prepares runtime configuration, builds changed service container images, applies K3s-owned workloads, and keeps the retired Docker Compose manifest empty.
 
 ### Local Redeploy Commands
 After the first install, update and redeploy from the checked-out Borealis repository. Keep the same network mode. Local `Engine.sh` runs use whatever source is already on disk, so pull the current GitHub branch before redeploying when you want newer Engine code.
@@ -285,7 +285,7 @@ After deployment finishes:
 
     ### Launch mechanics
 
-    - `Engine.sh` is the Linux Engine first-run and redeploy path. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
+    - `Engine.sh` is the Linux Engine first-run and redeploy path. It starts by printing `Starting Borealis Engine Bootstrap`, then ensures the pinned Gum binary is available under `Dependencies/Gum/bin/gum` before the deployment dashboard starts. When run from a raw one-liner or with repo options, it syncs source first; local `Engine.sh --network-mode public|local deploy` uses existing on-disk source.
     - `Engine.sh --network-mode public|local deploy` installs missing Engine OS dependencies, reconciles a single-node K3s baseline plus the restricted `borealis-operator` bridge, applies PostgreSQL/API/scheduler/WireGuard/Traefik/WebUI/guacd K3s workloads, defaults to production, and keeps Docker Compose retired under project name `borealis-engine`.
     - `Engine.sh --network-mode public|local deploy dev` runs the same service set but sets the WebUI frontend to Vite HMR behind Traefik and refreshes the runtime HMR source from staged WebUI source. Switching between prod and dev should only recreate WebUI after the stack is already current.
     - `Engine.sh` owns runtime identity setup for Linux Engine containers. It creates/repairs `borealis-engine`, chowns writable service paths under `Engine/Services/`, and writes resource cap env vars into `Engine/Deploy/compose.env`.

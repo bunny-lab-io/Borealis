@@ -84,6 +84,13 @@ K3S_POSTGRES_ENABLED="${BOREALIS_K3S_POSTGRES_ENABLED:-1}"
 K3S_POSTGRES_STORAGE_SIZE="${BOREALIS_K3S_POSTGRES_STORAGE_SIZE:-20Gi}"
 K3S_POSTGRES_ROLLOUT_TIMEOUT="${BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT:-180s}"
 BUILD_CACHE_RETENTION_DAYS=7
+GUM_VERSION="v0.17.0"
+GUM_VERSION_NUMBER="${GUM_VERSION#v}"
+GUM_RELEASE_BASE_URL="${BOREALIS_GUM_RELEASE_BASE_URL:-https://github.com/charmbracelet/gum/releases/download/${GUM_VERSION}}"
+GUM_LINUX_X86_64_SHA256="69ee169bd6387331928864e94d47ed01ef649fbfe875baed1bbf27b5377a6fdb"
+GUM_LINUX_ARM64_SHA256="b0b9ed95cbf7c8b7073f17b9591811f5c001e33c7cfd066ca83ce8a07c576f9c"
+GUM_BIN="${BOREALIS_GUM_BIN:-}"
+GUM_READY=0
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
@@ -191,6 +198,8 @@ DASHBOARD_ITEM_WIDTH=30
 DASHBOARD_STATUS_WIDTH=40
 DASHBOARD_UPDATED_WIDTH=30
 DASHBOARD_DYNAMIC_ROWS=()
+DASHBOARD_CURRENT_SUBJECT=""
+DASHBOARD_CURRENT_STATUS=""
 GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
@@ -518,6 +527,13 @@ dashboard_render_row() {
 dashboard_render_table() {
   local row=""
   dashboard_render_table_header
+  while IFS= read -r row; do
+    dashboard_render_row "${row}"
+  done < <(dashboard_ordered_rows)
+}
+
+dashboard_ordered_rows() {
+  local row=""
   for row in \
     "Ensuring Cluster Exists" \
     "k3s-longhorn-storage" \
@@ -533,14 +549,283 @@ dashboard_render_table() {
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
-    dashboard_render_row "${row}"
+    printf '%s\n' "${row}"
   done
   for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
-    dashboard_render_row "${row}"
+    printf '%s\n' "${row}"
   done
 }
 
-dashboard_render() {
+dashboard_state_for_status() {
+  local status="$1"
+  case "${status}" in
+    Pending...|"")
+      printf '%s\n' "Pending"
+      ;;
+    *Failed*|*Not\ Ready*|*Missing*|*Unexpected*|*Too\ Open*|*Mismatch*)
+      printf '%s\n' "Failed"
+      ;;
+    Retired)
+      printf '%s\n' "Retired"
+      ;;
+    Up-to-Date|Skipped*)
+      printf '%s\n' "Unchanged"
+      ;;
+    Complete|Completed*)
+      printf '%s\n' "Complete"
+      ;;
+    Ready*|Running*|Installed|Service\ Running|Node\ Ready|Cutover\ Data\ Imported)
+      printf '%s\n' "Ready"
+      ;;
+    *)
+      printf '%s\n' "Running"
+      ;;
+  esac
+}
+
+dashboard_action_for_row() {
+  local row="$1"
+  local status="$2"
+  if [[ "${status}" == *"Image"* || "${status}" == *"Building"* ]]; then
+    printf '%s\n' "build"
+    return 0
+  fi
+  if [[ "${status}" == *"Rollout"* || "${status}" == *"Restarting"* || "${status}" == *"Reloading"* ]]; then
+    printf '%s\n' "rollout"
+    return 0
+  fi
+  if [[ "${status}" == *"Ensuring Table"* || "${status}" == *"Schema"* || "${row}" == "k3s-postgres-db" ]]; then
+    printf '%s\n' "schema"
+    return 0
+  fi
+  case "${row}" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' "bootstrap"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "storage"
+      ;;
+    "borealis-operator")
+      printf '%s\n' "operator"
+      ;;
+    "site-worker")
+      printf '%s\n' "workers"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "retire"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "cleanup"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "smoke"
+      ;;
+    *)
+      printf '%s\n' "reconcile"
+      ;;
+  esac
+}
+
+dashboard_kubernetes_for_row() {
+  case "$1" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' "node/k3s"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "longhorn-system"
+      ;;
+    "k3s-postgres-db")
+      printf '%s\n' "statefulset/postgres-db"
+      ;;
+    "borealis-operator")
+      printf '%s\n' "deployment/borealis-operator"
+      ;;
+    "k3s-api-backend")
+      printf '%s\n' "deployment/api-backend"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' "deployment/job-scheduler"
+      ;;
+    "k3s-wireguard-tunnel")
+      printf '%s\n' "deployment/wireguard-tunnel hostNet"
+      ;;
+    "k3s-traefik-edge")
+      printf '%s\n' "deployment/traefik-edge hostNet"
+      ;;
+    "k3s-webui-frontend")
+      printf '%s\n' "deployment/webui-frontend"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' "deployment/remote-desktop-guacd"
+      ;;
+    "site-worker")
+      printf '%s\n' "pods/site-worker-*"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "services 0"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "docker/buildx"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "https"
+      ;;
+    *)
+      printf '%s\n' "-"
+      ;;
+  esac
+}
+
+dashboard_detail_for_row() {
+  local row="$1"
+  local status="$2"
+  case "${status}" in
+    Pending...|"")
+      printf '%s\n' "waiting"
+      ;;
+    *"Ready - Traffic Owner"*)
+      printf '%s\n' "traffic owner"
+      ;;
+    *"Ready - Image (Re)Built"*)
+      printf '%s\n' "image refreshed"
+      ;;
+    *"Ready - StorageClass"*)
+      printf '%s\n' "StorageClass ready"
+      ;;
+    *"Ensuring Table "*)
+      printf '%s\n' "${status#Ensuring }"
+      ;;
+    *)
+      printf '%s\n' "${status}"
+      ;;
+  esac
+}
+
+dashboard_gum_enabled() {
+  [[ "${BOREALIS_DEPLOY_UI:-gum}" != "plain" ]] || return 1
+  [[ "${GUM_READY:-0}" -eq 1 && -n "${GUM_BIN:-}" && -x "${GUM_BIN}" ]] || return 1
+  [[ -t 1 && -z "${NO_COLOR:-}" ]] || return 1
+}
+
+dashboard_cell() {
+  local value="$1"
+  value="${value//$'\t'/ }"
+  value="${value//$'\n'/ }"
+  printf '%s' "${value}"
+}
+
+dashboard_state_counts() {
+  local complete=0
+  local failed=0
+  local pending=0
+  local ready=0
+  local retired=0
+  local running=0
+  local row=""
+  local state=""
+  local status=""
+  local unchanged=0
+  while IFS= read -r row; do
+    status="$(dashboard_status_text "${row}")"
+    state="$(dashboard_state_for_status "${status}")"
+    case "${state}" in
+      Ready) ready=$((ready + 1)) ;;
+      Complete) complete=$((complete + 1)) ;;
+      Failed) failed=$((failed + 1)) ;;
+      Pending) pending=$((pending + 1)) ;;
+      Retired) retired=$((retired + 1)) ;;
+      Running) running=$((running + 1)) ;;
+      Unchanged) unchanged=$((unchanged + 1)) ;;
+    esac
+  done < <(dashboard_ordered_rows)
+  printf 'ready %s | running %s | complete %s | pending %s | unchanged %s | retired %s | failed %s' \
+    "${ready}" "${running}" "${complete}" "${pending}" "${unchanged}" "${retired}" "${failed}"
+}
+
+dashboard_render_gum_summary() {
+  local mode_text="${DASHBOARD_MODE_LABEL:-Production} [${DASHBOARD_NETWORK_LABEL:-Public}]"
+  local profile_text="${DASHBOARD_PROFILE:-Pending...}"
+  local ownership="traffic owners: webui=k3s api=k3s db=k3s edge=k3s wg=k3s | compose=retired"
+  local counts
+  counts="$(dashboard_state_counts)"
+  local summary
+  summary="$(printf 'mode: %s\nprofile: %s\nruntime: k3s single-node | namespace: %s\n%s\n%s\nlog: %s' \
+    "${mode_text}" \
+    "${profile_text}" \
+    "${K3S_NAMESPACE}" \
+    "${ownership}" \
+    "${counts}" \
+    "${BUILD_LOG}")"
+  "${GUM_BIN}" style \
+    --border rounded \
+    --border-foreground 63 \
+    --padding "0 1" \
+    --foreground 252 \
+    "${summary}"
+}
+
+dashboard_render_gum_current() {
+  local subject="${DASHBOARD_CURRENT_SUBJECT:-}"
+  local status="${DASHBOARD_CURRENT_STATUS:-}"
+  if [[ -z "${subject}" ]]; then
+    subject="Deployment"
+    status="Waiting for first phase"
+  fi
+  local body
+  body="$(printf 'current: %s\nstate: %s' "$(dashboard_row_label "${subject}")" "${status}")"
+  "${GUM_BIN}" style \
+    --border rounded \
+    --border-foreground 39 \
+    --padding "0 1" \
+    --foreground 252 \
+    "${body}"
+}
+
+dashboard_render_gum_table() {
+  local cols
+  local widths
+  cols="$(dashboard_terminal_columns)"
+  if ((cols >= 170)); then
+    widths="14,28,10,12,34,48"
+  elif ((cols >= 135)); then
+    widths="12,24,10,12,28,34"
+  else
+    widths="10,20,9,11,22,26"
+  fi
+  {
+    local row=""
+    local status=""
+    while IFS= read -r row; do
+      status="$(dashboard_status_text "${row}")"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
+        "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
+        "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
+        "$(dashboard_cell "$(dashboard_state_for_status "${status}")")" \
+        "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
+        "$(dashboard_cell "$(dashboard_detail_for_row "${row}" "${status}")")"
+    done < <(dashboard_ordered_rows)
+  } | "${GUM_BIN}" table \
+    --print \
+    --separator $'\t' \
+    --columns Domain,Resource,Action,State,Kubernetes,Detail \
+    --widths "${widths}" \
+    --border rounded \
+    --border.foreground 240 \
+    --header.foreground 39
+}
+
+dashboard_render_gum() {
+  dashboard_gum_enabled || return 1
+  printf '\033[H'
+  "${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment"
+  dashboard_render_gum_summary
+  dashboard_render_gum_current
+  dashboard_render_gum_table
+  printf '\033[J'
+}
+
+dashboard_render_plain() {
   [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
   printf '\033[H'
   printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
@@ -553,6 +838,14 @@ dashboard_render() {
   printf 'Log: %s\n' "${BUILD_LOG}"
   dashboard_render_table
   printf '\033[J'
+}
+
+dashboard_render() {
+  [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
+  if dashboard_render_gum; then
+    return 0
+  fi
+  dashboard_render_plain
 }
 
 dashboard_update_status() {
@@ -569,6 +862,8 @@ dashboard_update_status() {
   DASHBOARD_STATUS["${subject}"]="${status}"
   DASHBOARD_COLOR["${subject}"]="${color}"
   DASHBOARD_UPDATED["${subject}"]="$(dashboard_human_timestamp)"
+  DASHBOARD_CURRENT_SUBJECT="${subject}"
+  DASHBOARD_CURRENT_STATUS="${status}"
   if [[ "${subject}" == "Profile" ]]; then
     DASHBOARD_PROFILE="${status}"
   fi
@@ -847,6 +1142,118 @@ detect_distro() {
     . /etc/os-release
     DISTRO_ID="${ID:-unknown}"
   fi
+}
+
+gum_bootstrap_root() {
+  if [[ "${SYNC_REQUESTED:-0}" -eq 1 ]]; then
+    printf '%s\n' "${INSTALL_DIR}/Dependencies/Gum"
+    return 0
+  fi
+  if source_available; then
+    printf '%s\n' "${SCRIPT_DIR}/Dependencies/Gum"
+    return 0
+  fi
+  printf '%s\n' "${INSTALL_DIR}/Dependencies/Gum"
+}
+
+gum_release_arch() {
+  local machine
+  machine="$(uname -m 2>/dev/null || true)"
+  case "${machine}" in
+    x86_64|amd64)
+      printf '%s\n' "x86_64"
+      ;;
+    aarch64|arm64)
+      printf '%s\n' "arm64"
+      ;;
+    *)
+      die "Unsupported Gum architecture '${machine}'. Borealis deploy UI supports Linux x86_64 and arm64."
+      ;;
+  esac
+}
+
+gum_release_sha256() {
+  case "$1" in
+    x86_64)
+      printf '%s\n' "${GUM_LINUX_X86_64_SHA256}"
+      ;;
+    arm64)
+      printf '%s\n' "${GUM_LINUX_ARM64_SHA256}"
+      ;;
+    *)
+      die "Unsupported Gum release architecture '$1'."
+      ;;
+  esac
+}
+
+ensure_gum_bootstrap_dependencies() {
+  command_exists curl && command_exists tar && command_exists gzip && command_exists sha256sum && return 0
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt-get update -qq >/dev/null
+      run_privileged apt-get install -y ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y ca-certificates curl tar gzip coreutils >/dev/null
+      else
+        run_privileged yum install -y ca-certificates curl tar gzip coreutils >/dev/null
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    *)
+      ;;
+  esac
+  command_exists curl && command_exists tar && command_exists gzip && command_exists sha256sum \
+    || die "Gum bootstrap needs curl, tar, gzip, and sha256sum. Install them and rerun Engine.sh."
+}
+
+ensure_gum_bootstrap() {
+  local root
+  root="$(gum_bootstrap_root)"
+  if [[ -n "${GUM_BIN}" && -x "${GUM_BIN}" ]]; then
+    GUM_READY=1
+    export PATH="$(dirname "${GUM_BIN}"):${PATH}"
+    return 0
+  fi
+  GUM_BIN="${root}/bin/gum"
+  if [[ -x "${GUM_BIN}" ]] && "${GUM_BIN}" --version 2>/dev/null | grep -q "${GUM_VERSION_NUMBER}"; then
+    GUM_READY=1
+    export PATH="${root}/bin:${PATH}"
+    return 0
+  fi
+
+  ensure_gum_bootstrap_dependencies
+  local arch
+  local archive
+  local checksum
+  local extracted_dir
+  local tmp_dir
+  arch="$(gum_release_arch)"
+  archive="gum_${GUM_VERSION_NUMBER}_Linux_${arch}.tar.gz"
+  checksum="$(gum_release_sha256 "${arch}")"
+  extracted_dir="gum_${GUM_VERSION_NUMBER}_Linux_${arch}"
+  tmp_dir="$(mktemp -d)"
+
+  curl -fsSL "${GUM_RELEASE_BASE_URL}/${archive}" -o "${tmp_dir}/${archive}" \
+    || die "Failed to download Gum ${GUM_VERSION}."
+  printf '%s  %s\n' "${checksum}" "${tmp_dir}/${archive}" | sha256sum -c - >/dev/null \
+    || die "Gum ${GUM_VERSION} checksum verification failed."
+  tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}" \
+    || die "Failed to extract Gum ${GUM_VERSION}."
+  run_privileged install -m 0755 -d "${root}/bin" \
+    || die "Failed to create Gum dependency directory '${root}/bin'."
+  run_privileged install -m 0755 "${tmp_dir}/${extracted_dir}/gum" "${GUM_BIN}" \
+    || die "Failed to install Gum to '${GUM_BIN}'."
+  rm -rf "${tmp_dir}"
+  GUM_READY=1
+  export PATH="${root}/bin:${PATH}"
 }
 
 selinux_enforcing() {
@@ -8547,6 +8954,14 @@ EOF
 main() {
   parse_launch_options "$@"
   local pending_command="${LAUNCH_ARGS[0]:-deploy}"
+  case "${pending_command}" in
+    -h|--help|help)
+      ;;
+    *)
+      printf 'Starting Borealis Engine Bootstrap\n'
+      ensure_gum_bootstrap
+      ;;
+  esac
   if launch_requires_engine_network_mode "${pending_command}"; then
     require_explicit_engine_network_mode || exit $?
   fi
