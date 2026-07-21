@@ -294,6 +294,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [ ] Fresh install path works.
     - [x] Redeploy path works.
     - [ ] Backup/restore path works.
+    - [x] Operator WebUI smoke passes after Compose retirement: login, Server Info, Device Inventory, Remote Desktop, Remote Shell, Files, Process Management, Service Management, Registry, and Backup Export.
     - [x] Narrow Engine tests pass.
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
     - [x] Live Docker check confirms retired Compose containers are absent.
