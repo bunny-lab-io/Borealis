@@ -187,6 +187,36 @@ func TestLivenessUpdatePersistsAtomically(t *testing.T) {
 	}
 }
 
+func TestResetAuthForEnrollmentClearsTokensAndRemoteOps(t *testing.T) {
+	cfg := Default()
+	cfg.Agent.GUID = "device-guid"
+	cfg.Identity.PrivateKeyPKCS8B64 = "private-key"
+	cfg.Tokens.AccessToken = "access-token"
+	cfg.Tokens.RefreshToken = "refresh-token"
+	cfg.Tokens.AccessExpiresAt = 123
+	cfg.RemoteOps = RemoteOpsSection{
+		Available:       true,
+		SiteID:          1,
+		WorkerGUID:      "worker-guid",
+		RouteGeneration: 2,
+		RoutePathPrefix: "/_borealis/site-workers/worker-guid",
+		BaseURL:         "https://borealis.example.com/_borealis/site-workers/worker-guid",
+		SocketURL:       "https://borealis.example.com/_borealis/site-workers/worker-guid/socket.io",
+	}
+
+	cfg.ResetAuthForEnrollment()
+
+	if cfg.Agent.GUID != "device-guid" || cfg.Identity.PrivateKeyPKCS8B64 != "private-key" {
+		t.Fatalf("identity state changed: %#v %#v", cfg.Agent, cfg.Identity)
+	}
+	if cfg.Tokens.AccessToken != "" || cfg.Tokens.RefreshToken != "" || cfg.Tokens.AccessExpiresAt != 0 {
+		t.Fatalf("tokens not cleared: %#v", cfg.Tokens)
+	}
+	if cfg.RemoteOps.Available || cfg.RemoteOps.BaseURL != "" || cfg.RemoteOps.WorkerGUID != "" {
+		t.Fatalf("remote ops not cleared: %#v", cfg.RemoteOps)
+	}
+}
+
 func TestUpdateWithWriterRecordsStateMetadata(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)

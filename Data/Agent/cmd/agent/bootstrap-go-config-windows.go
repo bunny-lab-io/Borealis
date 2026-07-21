@@ -26,6 +26,9 @@ func writeGoAgentConfig(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	current.ServerURL = agentconfig.NormalizeServerURL(cfg.ServerURL)
 	current.ServerIPFallback = agentconfig.NormalizeServerIPFallback(cfg.ServerIPFallback)
 	current.EnrollmentCode = strings.TrimSpace(cfg.SiteEnrollmentCode)
+	if current.EnrollmentCode != "" {
+		current.ResetAuthForEnrollment()
+	}
 	if strings.TrimSpace(cfg.TrustedEngineCAPEM) != "" {
 		current.Trust.EngineCAPEM = agentconfig.NormalizeEngineCAPEM(cfg.TrustedEngineCAPEM)
 	}

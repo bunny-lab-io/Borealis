@@ -116,6 +116,7 @@ func New(options Options, logger *log.Logger) (*Agent, error) {
 	}
 	if strings.TrimSpace(options.EnrollmentCode) != "" {
 		cfg.EnrollmentCode = strings.TrimSpace(options.EnrollmentCode)
+		cfg.ResetAuthForEnrollment()
 	}
 	if strings.TrimSpace(options.RepoRef) != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)
