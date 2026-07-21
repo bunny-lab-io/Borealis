@@ -266,7 +266,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 11: Compose Retirement
 
-- [ ] Remove Compose ownership only after all K3s-owned services are stable.
+- [x] Remove Compose ownership only after all K3s-owned services are stable.
     - [x] Compose `webui-frontend` retired.
     - [x] Compose `api-backend` retired.
     - [x] Compose `job-scheduler` retired.
@@ -303,9 +303,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Scheduler tests confirm Traefik reload uses the operator path.
     - [x] Orchestrator tests confirm the helper path is retired.
     - [x] `Engine.sh --network-mode public --service webui-frontend restart prod` rolls the K3s WebUI Deployment without restoring the retired Compose WebUI container.
-    - [ ] Live deploy table reports K3s Traefik edge ready and Docker Compose retired.
-    - [ ] Live K3s rollout confirms `deployment/traefik-edge` healthy.
-    - [ ] Live Docker check confirms stale `borealis-engine-traefik-edge` and `borealis-engine-site-worker-orchestrator` containers are absent.
+    - [x] Live deploy table reports K3s Traefik edge ready and Docker Compose retired.
+    - [x] Live K3s rollout confirms `deployment/traefik-edge` healthy.
+    - [x] Live Docker check confirms stale `borealis-engine-traefik-edge` and `borealis-engine-site-worker-orchestrator` containers are absent.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
 ## Open Risks
