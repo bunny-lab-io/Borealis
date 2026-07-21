@@ -388,40 +388,40 @@ dashboard_row_label() {
       printf '%s\n' "PostgreSQL DB"
       ;;
     "Ensuring Cluster Exists")
-      printf '%s\n' "Ensuring Cluster Exists"
+      printf '%s\n' "Ensuring k3s Cluster Exists"
       ;;
     "borealis-operator")
       printf '%s\n' "Borealis Operator"
       ;;
     "k3s-longhorn-storage")
-      printf '%s\n' "Longhorn Storage"
+      printf '%s\n' "Longhorn Cluster Storage"
       ;;
     "k3s-postgres-db")
-      printf '%s\n' "K3s PostgreSQL DB"
+      printf '%s\n' "PostgreSQL Database"
       ;;
     "k3s-api-backend")
-      printf '%s\n' "K3s API Backend"
+      printf '%s\n' "API Backend"
       ;;
     "k3s-job-scheduler")
-      printf '%s\n' "K3s Job Scheduler"
+      printf '%s\n' "Job Scheduler"
       ;;
     "k3s-wireguard-tunnel")
-      printf '%s\n' "K3s WireGuard Tunnel"
+      printf '%s\n' "WireGuard Server"
       ;;
     "k3s-traefik-edge")
-      printf '%s\n' "K3s Traefik Edge"
+      printf '%s\n' "Traefik Reverse Cluster Proxy"
       ;;
     "k3s-webui-frontend")
-      printf '%s\n' "K3s WebUI Frontend"
+      printf '%s\n' "WebUI Frontend"
       ;;
     "k3s-remote-desktop-guacd")
-      printf '%s\n' "Guacamole Bridge"
+      printf '%s\n' "Apache Guacamole"
       ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
       ;;
     "Docker Cleanup")
-      printf '%s\n' "Docker Cleanup"
+      printf '%s\n' "Docker Build Cache Cleanup"
       ;;
     "WebUI Accessible")
       printf '%s\n' "WebUI Accessible"
@@ -554,6 +554,25 @@ dashboard_ordered_rows() {
   for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
     printf '%s\n' "${row}"
   done
+}
+
+dashboard_row_visible_in_gum() {
+  case "$1" in
+    "Docker Compose"|"WebUI Accessible")
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+dashboard_ordered_gum_rows() {
+  local row=""
+  while IFS= read -r row; do
+    dashboard_row_visible_in_gum "${row}" || continue
+    printf '%s\n' "${row}"
+  done < <(dashboard_ordered_rows)
 }
 
 dashboard_state_for_status() {
@@ -711,7 +730,46 @@ dashboard_cell() {
   local value="$1"
   value="${value//$'\t'/ }"
   value="${value//$'\n'/ }"
+  value="${value//$'\r'/ }"
   printf '%s' "${value}"
+}
+
+dashboard_gum_text_style() {
+  local code="$1"
+  local text="$2"
+  printf '\033[%sm%s\033[0m' "${code}" "${text}"
+}
+
+dashboard_gum_label() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
+}
+
+dashboard_gum_state_cell() {
+  local state="$1"
+  case "${state}" in
+    Ready)
+      dashboard_gum_text_style "1;38;5;121" "${state}"
+      ;;
+    Failed)
+      dashboard_gum_text_style "1;38;5;203" "${state}"
+      ;;
+    Running)
+      dashboard_gum_text_style "1;38;5;228" "${state}"
+      ;;
+    Complete)
+      dashboard_gum_text_style "1;38;5;121" "${state}"
+      ;;
+    Unchanged|Retired|Pending)
+      dashboard_gum_text_style "38;5;246" "${state}"
+      ;;
+    *)
+      printf '%s' "${state}"
+      ;;
+  esac
+}
+
+dashboard_gum_header() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
 dashboard_state_counts() {
@@ -737,31 +795,20 @@ dashboard_state_counts() {
       Running) running=$((running + 1)) ;;
       Unchanged) unchanged=$((unchanged + 1)) ;;
     esac
-  done < <(dashboard_ordered_rows)
-  printf 'ready %s | running %s | complete %s | pending %s | unchanged %s | retired %s | failed %s' \
+  done < <(dashboard_ordered_gum_rows)
+  printf 'Ready %s | Running %s | Complete %s | Pending %s | Unchanged %s | Retired %s | Failed %s' \
     "${ready}" "${running}" "${complete}" "${pending}" "${unchanged}" "${retired}" "${failed}"
 }
 
 dashboard_render_gum_summary() {
   local mode_text="${DASHBOARD_MODE_LABEL:-Production} [${DASHBOARD_NETWORK_LABEL:-Public}]"
   local profile_text="${DASHBOARD_PROFILE:-Pending...}"
-  local ownership="traffic owners: webui=k3s api=k3s db=k3s edge=k3s wg=k3s | compose=retired"
   local counts
   counts="$(dashboard_state_counts)"
-  local summary
-  summary="$(printf 'mode: %s\nprofile: %s\nruntime: k3s single-node | namespace: %s\n%s\n%s\nlog: %s' \
-    "${mode_text}" \
-    "${profile_text}" \
-    "${K3S_NAMESPACE}" \
-    "${ownership}" \
-    "${counts}" \
-    "${BUILD_LOG}")"
-  "${GUM_BIN}" style \
-    --border rounded \
-    --border-foreground 63 \
-    --padding "0 1" \
-    --foreground 252 \
-    "${summary}"
+  printf '%s %s\n' "$(dashboard_gum_label "Mode:")" "${mode_text}"
+  printf '%s %s\n' "$(dashboard_gum_label "Profile:")" "${profile_text}"
+  printf '%s %s\n' "$(dashboard_gum_label "Ready:")" "${counts}"
+  printf '%s %s\n' "$(dashboard_gum_label "Log:")" "${BUILD_LOG}"
 }
 
 dashboard_render_gum_current() {
@@ -771,46 +818,44 @@ dashboard_render_gum_current() {
     subject="Deployment"
     status="Waiting for first phase"
   fi
-  local body
-  body="$(printf 'current: %s\nstate: %s' "$(dashboard_row_label "${subject}")" "${status}")"
-  "${GUM_BIN}" style \
-    --border rounded \
-    --border-foreground 39 \
-    --padding "0 1" \
-    --foreground 252 \
-    "${body}"
+  printf '\n%s %s\n' "$(dashboard_gum_label "Current:")" "$(dashboard_row_label "${subject}")"
+  printf '%s %s\n' "$(dashboard_gum_label "State:")" "${status}"
 }
 
 dashboard_render_gum_table() {
   local cols
   local widths
+  local header_columns
   cols="$(dashboard_terminal_columns)"
   if ((cols >= 170)); then
-    widths="14,28,10,12,34,48"
+    widths="14,36,10,12,40"
   elif ((cols >= 135)); then
-    widths="12,24,10,12,28,34"
+    widths="12,32,10,12,34"
   else
-    widths="10,20,9,11,22,26"
+    widths="10,26,9,11,28"
   fi
+  header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Action"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Kubernetes")"
   {
     local row=""
+    local state=""
     local status=""
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      state="$(dashboard_state_for_status "${status}")"
+      printf '%s\t%s\t%s\t%s\t%s\n' \
         "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
         "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
         "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
-        "$(dashboard_cell "$(dashboard_state_for_status "${status}")")" \
-        "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
-        "$(dashboard_cell "$(dashboard_detail_for_row "${row}" "${status}")")"
-    done < <(dashboard_ordered_rows)
+        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+        "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")"
+    done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
     --print \
     --separator $'\t' \
-    --columns Domain,Resource,Action,State,Kubernetes,Detail \
+    --columns "${header_columns}" \
     --widths "${widths}" \
     --border rounded \
+    --lazy-quotes \
     --border.foreground 240 \
     --header.foreground 39
 }
@@ -820,8 +865,9 @@ dashboard_render_gum() {
   printf '\033[H'
   "${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment"
   dashboard_render_gum_summary
-  dashboard_render_gum_current
+  printf '\n'
   dashboard_render_gum_table
+  dashboard_render_gum_current
   printf '\033[J'
 }
 

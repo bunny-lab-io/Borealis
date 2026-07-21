@@ -286,13 +286,15 @@ Build cache:
 Deploy output:
 - `Engine.sh` starts with `Starting Borealis Engine Bootstrap`, then installs or verifies the pinned Gum renderer under `Dependencies/Gum/bin/gum` before the deployment dashboard starts.
 - Interactive TTY runs use the Gum dashboard unless `BOREALIS_DEPLOY_UI=plain` is set. Noninteractive output keeps the plain renderer.
-- The Gum dashboard shows the title, mode, network mode, detected sizing profile, runtime ownership, namespace, state counts, active build log path, current step, and a Kubernetes-aware resource table.
+- The Gum dashboard shows the title, mode/network mode, detected sizing profile, state counts, active build log path, Kubernetes-aware resource table, and current step beneath the table.
 - Service rows start as `Pending...` and update in place as deploy stages run.
-- Gum service rows render with `Domain`, `Resource`, `Action`, `State`, `Kubernetes`, and `Detail` columns. Plain service rows render with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
-- The `k3s Cluster` rows render first because Engine deploy reconciles the cluster and operator bridge before Docker Compose.
+- Gum service rows render with `Domain`, `Resource`, `Action`, `State`, and `Kubernetes` columns. Plain service rows render with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
+- The `State` column uses a mint-green `Ready` marker so operators can scan completed Kubernetes resources quickly.
+- The Gum table omits the retired Docker Compose row and final WebUI smoke row because those are implementation/status details already reflected in log output and final command success.
+- The `k3s Cluster` rows render first because Engine deploy reconciles the cluster and operator bridge before cleanup work.
 - `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
-- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, `Reconciliation`, `Housekeeping`, and `Complete`.
-- Item names are friendly display labels such as `K3s API Backend`, `K3s Job Scheduler`, `K3s Traefik Edge`, `K3s WireGuard Tunnel`, and `PostgreSQL DB`.
+- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, and `Housekeeping` in Gum mode. Plain fallback can still include legacy reconciliation and completion rows.
+- Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Traefik Reverse Cluster Proxy`, `WireGuard Server`, and `PostgreSQL Database`.
 - Service rows use compact status values such as `Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Ready - Image (Re)Built`, `Starting`, `Running`, `Running - Healthy`, `Reconciling Stack`, `Stack Reconciled`, or `Complete`.
 - Shared build-artifact or image-reuse relationships appear only in transient status text. For example, the `Job Scheduler` row may show `[Shares API Backend Image] -> (Re)Building Container Image`. Runtime health updates later replace those sharing notes with K3s readiness state.
 - Database schema setup updates the `PostgreSQL DB` row with table-level progress such as `Ensuring Table "devices" Exists`, writes each table progress line to `Engine/Deploy/build.log`, then returns the row to `Ready - K3s DB` after maintenance completes.
