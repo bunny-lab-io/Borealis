@@ -844,6 +844,9 @@ dashboard_render_gum_table() {
     local row=""
     local state=""
     local status=""
+    # Gum print mode still styles the first data row as selected in a TTY.
+    # Feed one inert row and remove it after rendering so real rows stay uniform.
+    printf '%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " "
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_status "${status}")"
@@ -863,7 +866,7 @@ dashboard_render_gum_table() {
     --lazy-quotes \
     --border.foreground 240 \
     --header.foreground 39 \
-    --selected.foreground 252
+    --selected.foreground 252 | sed '4d'
 }
 
 dashboard_render_gum() {
