@@ -8484,13 +8484,10 @@ service_action() {
         log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
         return 0
       fi
-      compose_base restart "$(service_compose_name "${service}")"
+      die "restart for '${service}' has no retired Docker Compose fallback. Add an explicit K3s handler before enabling this service action."
       ;;
     rebuild)
       local build_service="${service}"
-      if [[ "${service}" == "site-worker-orchestrator" ]]; then
-        build_service="job-scheduler"
-      fi
       build_images "${mode}" "${build_service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
