@@ -213,7 +213,7 @@ dashboard_row_section() {
     "webui-frontend")
       printf '%s\n' "Frontend"
       ;;
-    "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
+    "api-backend"|"api-backend > job-scheduler"|"site-worker"|"remote-desktop-guacd")
       printf '%s\n' "Backend"
       ;;
     "traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
@@ -362,9 +362,6 @@ dashboard_row_label() {
       ;;
     "api-backend > job-scheduler")
       printf '%s\n' "Job Scheduler"
-      ;;
-    "api-backend > job-scheduler > site-worker-orchestrator")
-      printf '%s\n' "Site Worker Orchestrator"
       ;;
     "site-worker")
       printf '%s\n' "Site Worker"
@@ -626,9 +623,6 @@ build_status_subject() {
     job-scheduler)
       printf '%s\n' "api-backend > job-scheduler"
       ;;
-    site-worker-orchestrator)
-      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
-      ;;
     *)
       printf '%s\n' "${service}"
       ;;
@@ -655,9 +649,6 @@ log_build_status() {
       fi
       log_status "k3s-job-scheduler" "${status}" "${color}"
       return 0
-      ;;
-    site-worker-orchestrator)
-      status="[Shares Job Scheduler Image] -> ${status}"
       ;;
     webui-frontend)
       if [[ "${DASHBOARD_STATUS[k3s-webui-frontend]:-}" == "Ready - Traffic Owner" ]]; then
@@ -1143,9 +1134,6 @@ dashboard_subject_for_service() {
   case "$1" in
     job-scheduler)
       printf '%s\n' "api-backend > job-scheduler"
-      ;;
-    site-worker-orchestrator)
-      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
       ;;
     *)
       printf '%s\n' "$1"
