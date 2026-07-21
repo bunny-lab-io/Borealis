@@ -1853,6 +1853,9 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 }
 
 func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Context) error {
+	if !fileExists(siteWorkerOrchestratorSocketPath()) {
+		return nil
+	}
 	client, err := m.orchestratorClient()
 	if err != nil {
 		return err

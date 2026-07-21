@@ -92,6 +92,15 @@ func TestSchedulerManagerMonthlyNextRunPreservesLocalWallClockAcrossDST(t *testi
 	}
 }
 
+func TestRetireDockerSiteWorkersForK3sModeSkipsMissingOrchestratorSocket(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET", filepath.Join(t.TempDir(), "missing.sock"))
+
+	manager := &goSchedulerManager{}
+	if err := manager.retireDockerSiteWorkersForK3sMode(context.Background()); err != nil {
+		t.Fatalf("expected missing retired orchestrator socket to be treated as already drained: %v", err)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},
