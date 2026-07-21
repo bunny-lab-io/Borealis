@@ -772,6 +772,10 @@ dashboard_gum_header() {
   dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
+dashboard_gum_line() {
+  printf '%s\033[K\n' "$1"
+}
+
 dashboard_state_counts() {
   local complete=0
   local failed=0
@@ -805,10 +809,10 @@ dashboard_render_gum_summary() {
   local profile_text="${DASHBOARD_PROFILE:-Pending...}"
   local counts
   counts="$(dashboard_state_counts)"
-  printf '%s %s\n' "$(dashboard_gum_label "Mode:")" "${mode_text}"
-  printf '%s %s\n' "$(dashboard_gum_label "Profile:")" "${profile_text}"
-  printf '%s %s\n' "$(dashboard_gum_label "Ready:")" "${counts}"
-  printf '%s %s\n' "$(dashboard_gum_label "Log:")" "${BUILD_LOG}"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Mode:")" "${mode_text}")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Profile:")" "${profile_text}")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Ready:")" "${counts}")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Log:")" "${BUILD_LOG}")"
 }
 
 dashboard_render_gum_current() {
@@ -818,8 +822,9 @@ dashboard_render_gum_current() {
     subject="Deployment"
     status="Waiting for first phase"
   fi
-  printf '\n%s %s\n' "$(dashboard_gum_label "Current:")" "$(dashboard_row_label "${subject}")"
-  printf '%s %s\n' "$(dashboard_gum_label "State:")" "${status}"
+  dashboard_gum_line ""
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Current:")" "$(dashboard_row_label "${subject}")")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "State:")" "${status}")"
 }
 
 dashboard_render_gum_table() {
@@ -863,9 +868,9 @@ dashboard_render_gum_table() {
 dashboard_render_gum() {
   dashboard_gum_enabled || return 1
   printf '\033[H'
-  "${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment"
+  dashboard_gum_line "$("${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment")"
   dashboard_render_gum_summary
-  printf '\n'
+  dashboard_gum_line ""
   dashboard_render_gum_table
   dashboard_render_gum_current
   printf '\033[J'
