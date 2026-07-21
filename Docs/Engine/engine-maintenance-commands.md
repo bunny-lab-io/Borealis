@@ -37,7 +37,7 @@ Use service-scoped commands when troubleshooting one Engine component without re
 
     ### Runtime behavior
 
-    - Service-scoped commands go through `Engine.sh` so Compose project naming, K3s reconciliation, env loading, and service role detection remain consistent.
+    - Service-scoped commands go through `Engine.sh` so K3s reconciliation, retired Compose manifest state, env loading, and service role detection remain consistent.
     - `api-backend restart` is enough for most backend-only config and code reload checks after a container image already exists.
     - `webui-frontend restart` restarts the K3s WebUI Deployment without rebuilding image layers.
     - `webui-frontend rebuild prod` rebuilds the production WebUI image and reconciles the K3s WebUI workload.

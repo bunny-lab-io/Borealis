@@ -61,6 +61,6 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
 
     ### Runtime behavior
 
-    - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, reconciles K3s-owned workloads, and runs Docker Compose only for services that have not reached cutover.
+    - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, reconciles K3s-owned workloads, and keeps Docker Compose retired through the empty manifest/policy check.
     - Production mode serves the static WebUI from the K3s `webui-frontend` workload through the existing Traefik edge. The retired Compose WebUI container is removed during deploy.
     - Development mode keeps the same stack shape, syncs staged WebUI source into `Engine/Services/webui-frontend/data/web-interface/`, and runs the WebUI through Vite/HMR behind Traefik.
