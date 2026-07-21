@@ -563,7 +563,7 @@ dashboard_update_status() {
   local status="$2"
   local color="$3"
   if [[ "${subject}" == "Database schema" ]]; then
-    subject="postgres-db"
+    subject="k3s-postgres-db"
   fi
   dashboard_ensure_row "${subject}"
   if [[ "${DASHBOARD_STATUS[${subject}]:-}" == "${status}" && "${DASHBOARD_COLOR[${subject}]:-}" == "${color}" ]]; then
