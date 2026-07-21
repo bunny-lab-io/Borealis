@@ -12,7 +12,13 @@ import (
 	"time"
 )
 
-const processCollectingRetryAfterMS = 1200
+const (
+	processCollectingRetryAfterMS        = 1200
+	processListHostServiceTimeoutSeconds = 24.0
+	processListWorkerRequestTimeout      = 25 * time.Second
+	processTerminateTimeoutSeconds       = 30.0
+	processTerminateWorkerRequestTimeout = 31 * time.Second
+)
 
 type deviceProcessStore interface {
 	loadDeviceProcessContext(ctx context.Context, profile operatorProfile, hostname string) (deviceProcessContext, int, error)
@@ -49,13 +55,13 @@ func deviceProcessListHandler(auth *authService) http.HandlerFunc {
 			"hostname":        snapshot.Hostname,
 			"service_mode":    "system",
 			"event_name":      "process_management_request",
-			"timeout_seconds": 8.0,
+			"timeout_seconds": processListHostServiceTimeoutSeconds,
 			"payload": map[string]any{
 				"action":          "list",
 				"max_age_seconds": maxAge,
 				"requested_at":    time.Now().Unix(),
 			},
-		}, 9*time.Second)
+		}, processListWorkerRequestTimeout)
 		if workerErr != nil {
 			writeJSON(w, workerStatus, workerErr)
 			return
@@ -112,7 +118,7 @@ func deviceProcessTerminateHandler(auth *authService) http.HandlerFunc {
 			"hostname":        snapshot.Hostname,
 			"service_mode":    "system",
 			"event_name":      "process_management_request",
-			"timeout_seconds": 15.0,
+			"timeout_seconds": processTerminateTimeoutSeconds,
 			"payload": map[string]any{
 				"action":           "terminate",
 				"pid":              pid,
@@ -120,7 +126,7 @@ func deviceProcessTerminateHandler(auth *authService) http.HandlerFunc {
 				"requested_at":     time.Now().Unix(),
 				"requested_by":     firstText(cleanText(profile.Username), "unknown"),
 			},
-		}, 16*time.Second)
+		}, processTerminateWorkerRequestTimeout)
 		if workerErr != nil {
 			writeJSON(w, workerStatus, workerErr)
 			return

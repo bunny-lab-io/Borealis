@@ -80,6 +80,9 @@ func TestDeviceProcessListHandlerCallsWorkerAndReturnsProcesses(t *testing.T) {
 			if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "process_management_request" {
 				t.Fatalf("unexpected call body %#v", body)
 			}
+			if body["timeout_seconds"] != processListHostServiceTimeoutSeconds {
+				t.Fatalf("unexpected process list timeout %#v", body["timeout_seconds"])
+			}
 			payload, _ := body["payload"].(map[string]any)
 			if payload["action"] != "list" || payload["max_age_seconds"].(float64) != 0.25 {
 				t.Fatalf("unexpected call payload %#v", payload)
@@ -228,6 +231,9 @@ func TestDeviceProcessTerminateCallsWorkerAndReturnsSnapshot(t *testing.T) {
 			sawCall = true
 			if body["hostname"] != "LAB-OPERATOR-01" || body["service_mode"] != "system" || body["event_name"] != "process_management_request" {
 				t.Fatalf("unexpected call body %#v", body)
+			}
+			if body["timeout_seconds"] != processTerminateTimeoutSeconds {
+				t.Fatalf("unexpected process terminate timeout %#v", body["timeout_seconds"])
 			}
 			payload, _ := body["payload"].(map[string]any)
 			if payload["action"] != "terminate" || payload["pid"].(float64) != 1234 || payload["include_children"] != true || payload["requested_by"] != "operator" {
