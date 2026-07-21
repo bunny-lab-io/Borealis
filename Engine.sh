@@ -862,7 +862,8 @@ dashboard_render_gum_table() {
     --border rounded \
     --lazy-quotes \
     --border.foreground 240 \
-    --header.foreground 39
+    --header.foreground 39 \
+    --selected.foreground 252
 }
 
 dashboard_render_gum() {
