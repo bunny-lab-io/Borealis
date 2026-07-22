@@ -173,7 +173,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Preserve internal API token behavior.
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
     - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
-- [ ] Validation:
+- [x] Validation:
     - [x] Bridge pod rollout passes.
     - [x] `curl -fsS http://127.0.0.1:5001/health` passes.
     - [x] `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod` validates Go API bootstrap state against K3s PostgreSQL shadow data.
@@ -184,7 +184,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remote shell, file management, process management, service management, registry, and remote desktop pass after API traffic-owner cutover.
     - [x] Backup export passes after API traffic-owner cutover.
     - [x] All agents appear connected to their site workers after API traffic-owner cutover.
-    - [ ] Realtime SSE works with one replica.
+    - [x] Realtime SSE works with one replica.
     - [x] Compose API removal plan is documented: K3s API owns traffic before stale Compose API container removal; Compose PostgreSQL remains DB owner until Stage 9.
 
 ## Stage 8: Scheduler Cutover
