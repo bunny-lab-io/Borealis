@@ -297,6 +297,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Reject retired `site-worker-orchestrator` roles from the `api-backend` container entrypoint.
     - [x] Remove retired `site-worker-orchestrator` resource-limit env generation from Engine deploy env.
     - [x] Remove unused Docker socket and service-action-helper env generation after Docker helper retirement.
+    - [x] Remove unreachable Docker Compose service reconciliation branches from full Engine deploy.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
