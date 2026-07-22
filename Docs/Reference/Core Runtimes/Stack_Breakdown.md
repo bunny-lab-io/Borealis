@@ -766,7 +766,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     - env settings hash excluding image tag and mode-scoped lines
     - service image tags and input hashes
     - changed services for the last deploy action
-    - Compose action (`up`, `up-scoped`, or `skipped`)
+    - Compose action (`retired` after Stage 11)
     - selected deployment profile and tuned values
     - service list
     - deploy timestamp
@@ -789,7 +789,7 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     Use these files to confirm whether source changes are actually deployed.
 
-    - Edit Docker/Compose source under `Data/Engine/Containers/`.
+    - Edit Engine container, K3s workload, and retired Compose source under `Data/Engine/Containers/`.
     - Do not edit generated runtime under `Engine/` except when reading logs/manifests.
     - Use `Engine.sh --network-mode public|local deploy prod|dev` for full stack deployment.
     - Use `Engine.sh --network-mode public|local --service ...` for scoped service actions.

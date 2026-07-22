@@ -56,10 +56,10 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
     - `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
-    - `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
+    - `Data/Engine/Containers/` - Engine container, K3s workload, and retired Compose source (authoritative).
     - `Data/Agent/` - Agent source (authoritative).
     - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
-    - `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
+    - `Engine/Deploy/` - runtime env, image manifest, deploy manifest, K3s hash files, and build log.
     - `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
     - `Agent/` - Agent runtime copy (regenerated each launch).
     - `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.

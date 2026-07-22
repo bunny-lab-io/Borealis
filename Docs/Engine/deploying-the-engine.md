@@ -94,7 +94,7 @@ bash Engine.sh --network-mode public deploy prod
 ```
 
 ## Configure the Timezone
-Borealis reads the Linux host timezone during every `Engine.sh --network-mode public|local deploy` or redeploy and passes that value into Compose containers and Borealis K3s pods as `TZ` and `BOREALIS_ENGINE_HOST_TIMEZONE`. Engine-managed containers also receive read-only host timezone data mounts so minimal images resolve the same local timezone as the host. Server Info uses that propagated timezone for Engine-local clock displays.
+Borealis reads the Linux host timezone during every `Engine.sh --network-mode public|local deploy` or redeploy and passes that value into Borealis K3s pods as `TZ` and `BOREALIS_ENGINE_HOST_TIMEZONE`. Engine-managed pods also receive read-only host timezone data mounts so minimal images resolve the same local timezone as the host. Server Info uses that propagated timezone for Engine-local clock displays.
 
 Set the timezone before deploying the Engine:
 
@@ -218,7 +218,7 @@ sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ### Docker Storage Cleanup
 Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
 
-`site-worker` images are handled carefully because the scheduler, site-worker orchestrator, and active site-worker containers may need them even when the main Compose stack has moved to a newer image. Borealis keeps the current site-worker image available and removes stale site-worker tags only when no container still references them.
+`site-worker` images are handled carefully because K3s site-worker pods may need the current image after Docker build cleanup. Borealis keeps the current site-worker image available for K3s import and removes stale site-worker tags only when no Docker container still references them.
 
 !!! warning "Shared Docker Hosts"
     Engine hosts should be dedicated to Borealis. Docker cleanup removes unused images and build cache from the host, which may affect unrelated Docker workloads if you co-host them. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` before deploy only when you intentionally need to preserve unused Docker images or build cache.

@@ -245,7 +245,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Stage 7 (queued): `register_realtime` hooks, Engine-side Socket.IO handlers, integration checks, legacy delegation updates.
 
     #### Platform parity
-    - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine plus Docker Compose, not Docker Desktop.
+    - Linux is the Engine target platform. Keep Engine tooling aligned with Docker Engine, Docker Buildx, and K3s, not Docker Desktop.
 
     #### Ansible support (shared state)
     - The Linux Engine now packages Ansible control-node tooling inside worker runtimes and installs Borealis-managed collections into `Engine/Services/api-backend/cache/Ansible/collections` for shared worker access.
