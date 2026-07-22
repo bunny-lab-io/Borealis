@@ -161,7 +161,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | wireguard-tunnel | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
 | shared-engine | Docker Engine (Linux Engine deployment runtime; Docker Desktop not used) | [Apache-2.0](https://github.com/moby/moby/blob/master/LICENSE) |
 | shared-engine | Docker CLI (`docker-ce-cli`, host deployment and service-management helper) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
-| shared-engine | Docker Compose plugin (Linux Engine deployment orchestration) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
+| shared-engine | Docker Compose plugin (development/CI retired-manifest validation) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
 | shared-engine | Docker Buildx plugin / BuildKit (optional local Engine image build cache acceleration) | [Apache-2.0](https://github.com/docker/buildx/blob/master/LICENSE) |
 | shared-engine | Charmbracelet Gum `v0.17.0` (downloaded pinned terminal renderer for `Engine.sh` deployment UI) | [MIT](https://github.com/charmbracelet/gum/blob/main/LICENSE) |
 | shared-engine | K3s Kubernetes runtime (single-node baseline installed by `Engine.sh`; stable channel unless `BOREALIS_K3S_VERSION` is set) | [Apache-2.0](https://github.com/k3s-io/k3s/blob/master/LICENSE) |

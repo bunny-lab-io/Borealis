@@ -264,7 +264,7 @@ sudo k3s kubectl -n borealis exec -i postgres-db-0 -- sh -lc \
 - `Engine.sh deploy` does not delete the K3s PostgreSQL StatefulSet or PVC during normal reconciliation. PVC cleanup is intentionally manual.
 - `Data/Engine/Containers/sterilize-systemd-runtime.sh` attempts a logical dump of the legacy `borealis` database before disabling host PostgreSQL and renaming `Engine/` to `Engine.old/`.
 - Preserved dumps land under the legacy runtime after rename, usually `Engine.old/Deploy/legacy-postgres-borealis-<timestamp>.sql`.
-- Import after first container deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`.
+- Import after first K3s Engine deployment with `./Data/Engine/Containers/import-legacy-postgres-dump.sh Engine.old/Deploy/<dump>.sql`. The helper streams the dump into the K3s `postgres-db-0` pod.
 - Do not run host PostgreSQL on `127.0.0.1:5432` for Borealis after migration; Borealis runtime traffic uses the K3s ClusterIP.
 
 ### Preferred remediation pattern

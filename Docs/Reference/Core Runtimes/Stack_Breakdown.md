@@ -4,7 +4,8 @@ Explain the Borealis Engine K3s runtime, retired Docker Compose manifest, servic
 
 ## Scope
 - Linux Engine only.
-- Docker Engine plus Docker Compose plugin.
+- Docker Engine plus Docker Buildx plugin.
+- Docker Compose plugin is not required by `Engine.sh` deploy after Stage 11. It remains useful for development and CI checks that prove the retired Compose manifest stays empty.
 - No Docker Desktop.
 - Single-node K3s baseline, Longhorn storage baseline, K3s PostgreSQL StatefulSet, K3s API/WebUI/scheduler/WireGuard/Traefik/guacd workloads, and restricted site-worker workloads are reconciled by `Engine.sh`; Docker Compose is retained only as an empty retired manifest.
 - Compose project name: `borealis-engine`.

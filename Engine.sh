@@ -1550,7 +1550,6 @@ sync_and_reexec_if_needed() {
 require_docker() {
   command_exists docker || die "Docker Engine CLI missing. Run Engine.sh deploy after installing Docker Engine."
   docker info >/dev/null 2>&1 || die "Docker daemon unreachable. Start Docker Engine and retry."
-  docker compose version >/dev/null 2>&1 || die "Docker Compose plugin missing. Install docker compose plugin and retry."
 }
 
 require_python() {
@@ -1697,17 +1696,13 @@ EOF
   rm -f "${temp_file}"
 
   run_privileged apt-get update -qq
-  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 }
 
 ensure_engine_dependencies() {
   local needs_install=0
   command_exists python3 || needs_install=1
-  if command_exists docker; then
-    docker compose version >/dev/null 2>&1 || needs_install=1
-  else
-    needs_install=1
-  fi
+  command_exists docker || needs_install=1
 
   if [[ "${needs_install}" -eq 1 ]]; then
     detect_distro
@@ -1717,19 +1712,19 @@ ensure_engine_dependencies() {
         ;;
       rhel|centos|fedora|rocky|almalinux)
         if command_exists dnf; then
-          run_privileged dnf install -y python3 docker docker-compose-plugin
+          run_privileged dnf install -y python3 docker
         else
-          run_privileged yum install -y python3 docker docker-compose-plugin
+          run_privileged yum install -y python3 docker
         fi
         ;;
       arch)
-        run_privileged pacman -Sy --noconfirm python docker docker-compose
+        run_privileged pacman -Sy --noconfirm python docker
         ;;
       opensuse*|sles)
-        run_privileged zypper --non-interactive install python3 docker docker-compose
+        run_privileged zypper --non-interactive install python3 docker
         ;;
       *)
-        die "Unsupported distro '${DISTRO_ID}'. Install Python 3, Docker Engine, and Docker Compose plugin manually."
+        die "Unsupported distro '${DISTRO_ID}'. Install Python 3 and Docker Engine manually."
         ;;
     esac
   fi
