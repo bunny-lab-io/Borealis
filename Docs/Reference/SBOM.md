@@ -64,8 +64,6 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | job-scheduler | Bash | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | job-scheduler | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
 | job-scheduler | Go standard library/runtime (compiled into the Go `api-backend` binary in scheduler mode, with retired orchestrator code still compiled for legacy tests) | [BSD-3-Clause](https://go.dev/LICENSE) |
-| job-scheduler | Docker CLI (`docker-cli`, retained only for legacy orchestrator-compatible image paths; Stage 11 runtime has no Docker socket) | [Apache-2.0](https://github.com/docker/cli/blob/master/LICENSE) |
-| job-scheduler | Docker Compose plugin (`docker-cli-compose`, retained only for legacy orchestrator-compatible image paths; Stage 11 runtime has no Docker socket) | [Apache-2.0](https://github.com/docker/compose/blob/main/LICENSE) |
 | job-scheduler | Python 3 (used by detached `Engine.sh --service` helpers for manifest/env work) | [PSF License](https://docs.python.org/3/license.html) |
 | job-scheduler | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | postgres-db | PostgreSQL container image (`postgres:17-bookworm`) | [PostgreSQL License plus Debian package licenses](https://www.postgresql.org/about/licence/) |

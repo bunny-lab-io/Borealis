@@ -290,6 +290,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remove remaining Compose bridge service rows after Traefik and orchestrator retirement.
     - [x] Stop Docker metadata reads for K3s site-worker rows once operator metrics are present.
     - [x] Retire Compose `docker-proxy` after K3s worker metrics and scheduler service snapshots became authoritative.
+    - [x] Remove Docker CLI, Docker Compose plugin, and retired `compose.yaml` from the K3s `job-scheduler` image.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
