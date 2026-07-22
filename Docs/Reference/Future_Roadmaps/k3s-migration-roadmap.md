@@ -285,6 +285,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Route K3s PostgreSQL restart service actions through `borealis-operator` instead of the Docker helper bridge.
     - [x] Route K3s WireGuard reconcile service actions through the scheduler-mounted control socket instead of the Docker helper bridge.
     - [x] Remove the `site-worker-orchestrator` service-action helper path after Traefik edge cutover.
+    - [x] Remove unused packaged `site-worker-orchestrator` healthcheck wrapper from the K3s `job-scheduler` image.
     - [x] Remove remaining Compose bridge service rows after Traefik and orchestrator retirement.
     - [x] Stop Docker metadata reads for K3s site-worker rows once operator metrics are present.
     - [x] Retire Compose `docker-proxy` after K3s worker metrics and scheduler service snapshots became authoritative.
