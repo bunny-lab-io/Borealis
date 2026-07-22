@@ -262,7 +262,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
         - [x] Operator browser smoke after guacd traffic-owner env propagation.
         - [x] WebUI login, Server Info, Device Inventory, Remote Desktop, Remote Shell, File Management, Process Management, and Service Management pass after WireGuard and guacd cutover.
     - [x] Focused scheduler tests confirm K3s WireGuard reconcile sends only predefined `reconcile` command to the control socket and does not require the helper bridge.
-    - [ ] Live Server Info `Recover Listener` action validates queued scheduler-to-control-socket path after redeploy.
+    - [x] Live Server Info `Recover Listener` action validates queued scheduler-to-control-socket path after redeploy.
     - [ ] Quarantine/revocation removes peer access.
 
 ## Stage 11: Compose Retirement
