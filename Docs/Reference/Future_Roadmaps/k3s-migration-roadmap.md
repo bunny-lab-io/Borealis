@@ -299,6 +299,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remove unused Docker socket and service-action-helper env generation after Docker helper retirement.
     - [x] Remove unreachable Docker Compose service reconciliation branches from full Engine deploy.
     - [x] Remove retired Compose service-action rebuild fallback, old Compose schema initializer, and unused `docker compose up` helper.
+    - [x] Narrow remaining legacy Docker status code to PostgreSQL snapshot support and shared retired-container cleanup.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:

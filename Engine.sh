@@ -1575,52 +1575,32 @@ container_health_status() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_name}" 2>/dev/null || true
 }
 
-dashboard_subject_for_service() {
-  case "$1" in
-    job-scheduler)
-      printf '%s\n' "api-backend > job-scheduler"
+refresh_legacy_postgres_container_status() {
+  local container_status
+  container_status="$(container_health_status "borealis-engine-postgres-db")"
+  case "${container_status}" in
+    healthy)
+      log_status "postgres-db" "Running - Healthy" "${C_GREEN}"
+      ;;
+    running)
+      log_status "postgres-db" "Running" "${C_GREEN}"
+      ;;
+    starting)
+      log_status "postgres-db" "Starting" "${C_YELLOW}"
+      ;;
+    unhealthy)
+      log_status "postgres-db" "Unhealthy" "${C_RED}"
+      ;;
+    exited|dead|removing|paused|restarting|created)
+      log_status "postgres-db" "${container_status}" "${C_RED}"
+      ;;
+    "")
+      log_status "postgres-db" "Missing" "${C_RED}"
       ;;
     *)
-      printf '%s\n' "$1"
+      log_status "postgres-db" "${container_status}" "${C_YELLOW}"
       ;;
   esac
-}
-
-refresh_compose_service_statuses() {
-  local services=("$@")
-  if [[ "${#services[@]}" -eq 0 ]]; then
-    services=("${SERVICE_ROLES[@]}")
-  fi
-  local service=""
-  for service in "${services[@]}"; do
-    local subject
-    local container_status
-    subject="$(dashboard_subject_for_service "${service}")"
-    container_status="$(container_health_status "borealis-engine-${service}")"
-    case "${container_status}" in
-      healthy)
-        log_status "${subject}" "Running - Healthy" "${C_GREEN}"
-        ;;
-      running)
-        log_status "${subject}" "Running" "${C_GREEN}"
-        ;;
-      starting)
-        log_status "${subject}" "Starting" "${C_YELLOW}"
-        ;;
-      unhealthy)
-        log_status "${subject}" "Unhealthy" "${C_RED}"
-        ;;
-      exited|dead|removing|paused|restarting|created)
-        log_status "${subject}" "${container_status}" "${C_RED}"
-        ;;
-      "")
-        log_status "${subject}" "Missing" "${C_RED}"
-        ;;
-      *)
-        log_status "${subject}" "${container_status}" "${C_YELLOW}"
-        ;;
-    esac
-  done
 }
 
 wait_for_postgres_container() {
@@ -4302,7 +4282,7 @@ ensure_compose_postgres_container_for_cutover() {
     log_status "postgres-db" "Failed" "${C_RED}"
     die "Compose PostgreSQL did not become healthy for cutover snapshot. See ${BUILD_LOG}."
   fi
-  refresh_compose_service_statuses postgres-db
+  refresh_legacy_postgres_container_status
   return 0
 }
 
@@ -5774,136 +5754,55 @@ resolve_webui_upstream_host() {
   printf '%s\n' "127.0.0.1"
 }
 
-retire_compose_webui_container() {
-  local service="webui-frontend"
-  local container="borealis-engine-webui-frontend"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
+retire_compose_container() {
+  local service="$1"
+  local container="$2"
+  local display_name="$3"
+  local retired_reason="$4"
   if docker inspect "${container}" >/dev/null 2>&1; then
     printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
     if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
       log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose WebUI container '${container}'. See ${BUILD_LOG}."
+      die "Failed to remove retired Compose ${display_name} container '${container}'. See ${BUILD_LOG}."
     fi
   fi
-  printf '[%s] %s Compose container retired; K3s owns WebUI traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  printf '[%s] %s Compose container retired; %s\n' "$(date +%FT%T)" "${service}" "${retired_reason}" >> "${BUILD_LOG}"
+}
+
+retire_compose_webui_container() {
+  retire_compose_container "webui-frontend" "borealis-engine-webui-frontend" "WebUI" "K3s owns WebUI traffic and lifecycle"
 }
 
 retire_compose_docker_proxy_container() {
-  local service="docker-proxy"
-  local container="borealis-engine-docker-proxy"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      die "Failed to remove retired Compose Docker proxy container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; Server Info no longer uses Docker proxy for K3s worker metrics or bridge service status\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "docker-proxy" "borealis-engine-docker-proxy" "Docker proxy" "Server Info no longer uses Docker proxy for K3s worker metrics or bridge service status"
 }
 
 retire_compose_job_scheduler_container() {
-  local service="job-scheduler"
-  local container="borealis-engine-job-scheduler"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose job scheduler container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns job-scheduler lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "job-scheduler" "borealis-engine-job-scheduler" "job scheduler" "K3s owns job-scheduler lifecycle"
 }
 
 retire_compose_api_backend_container() {
-  local service="api-backend"
-  local container="borealis-engine-api-backend"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose API backend container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns api-backend traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "api-backend" "borealis-engine-api-backend" "API backend" "K3s owns api-backend traffic and lifecycle"
 }
 
 retire_compose_postgres_container() {
-  local service="postgres-db"
-  local container="borealis-engine-postgres-db"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose PostgreSQL container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns PostgreSQL traffic and lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "postgres-db" "borealis-engine-postgres-db" "PostgreSQL" "K3s owns PostgreSQL traffic and lifecycle"
 }
 
 retire_compose_wireguard_tunnel_container() {
-  local service="wireguard-tunnel"
-  local container="borealis-engine-wireguard-tunnel"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose WireGuard tunnel container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns WireGuard tunnel lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "wireguard-tunnel" "borealis-engine-wireguard-tunnel" "WireGuard tunnel" "K3s owns WireGuard tunnel lifecycle"
 }
 
 retire_compose_remote_desktop_guacd_container() {
-  local service="remote-desktop-guacd"
-  local container="borealis-engine-remote-desktop-guacd"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose guacd container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns guacd lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "remote-desktop-guacd" "borealis-engine-remote-desktop-guacd" "guacd" "K3s owns guacd lifecycle"
 }
 
 retire_compose_traefik_edge_container() {
-  local service="traefik-edge"
-  local container="borealis-engine-traefik-edge"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose Traefik edge container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s owns public edge lifecycle\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "traefik-edge" "borealis-engine-traefik-edge" "Traefik edge" "K3s owns public edge lifecycle"
 }
 
 retire_compose_site_worker_orchestrator_container() {
-  local service="site-worker-orchestrator"
-  local container="borealis-engine-site-worker-orchestrator"
-  local subject
-  subject="$(dashboard_subject_for_service "${service}")"
-  if docker inspect "${container}" >/dev/null 2>&1; then
-    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
-    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
-      die "Failed to remove retired Compose site worker orchestrator container '${container}'. See ${BUILD_LOG}."
-    fi
-  fi
-  printf '[%s] %s Compose container retired; K3s operator owns site-worker lifecycle and Traefik reload no longer uses Docker helper\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  retire_compose_container "site-worker-orchestrator" "borealis-engine-site-worker-orchestrator" "site worker orchestrator" "K3s operator owns site-worker lifecycle and Traefik reload no longer uses Docker helper"
 }
 
 k3s_site_worker_pod_count() {
