@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1853,7 +1854,7 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 }
 
 func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Context) error {
-	if !fileExists(siteWorkerOrchestratorSocketPath()) {
+	if !siteWorkerOrchestratorSocketAccepts(ctx) {
 		return nil
 	}
 	client, err := m.orchestratorClient()
@@ -1878,6 +1879,22 @@ func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Conte
 		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
 	}
 	return nil
+}
+
+func siteWorkerOrchestratorSocketAccepts(ctx context.Context) bool {
+	socketPath := siteWorkerOrchestratorSocketPath()
+	if !fileExists(socketPath) {
+		return false
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
+	conn, err := dialer.DialContext(dialCtx, "unix", socketPath)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, containerName string, siteID int64, status string, lanes []string, taskLinks []map[string]any, upstreamPort int64, routeMetadata map[string]any) error {

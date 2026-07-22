@@ -101,6 +101,23 @@ func TestRetireDockerSiteWorkersForK3sModeSkipsMissingOrchestratorSocket(t *test
 	}
 }
 
+func TestRetireDockerSiteWorkersForK3sModeSkipsStaleOrchestratorSocket(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "orchestrator.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close unix socket: %v", err)
+	}
+	t.Setenv("BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET", socketPath)
+
+	manager := &goSchedulerManager{}
+	if err := manager.retireDockerSiteWorkersForK3sMode(context.Background()); err != nil {
+		t.Fatalf("expected stale retired orchestrator socket to be treated as already drained: %v", err)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},

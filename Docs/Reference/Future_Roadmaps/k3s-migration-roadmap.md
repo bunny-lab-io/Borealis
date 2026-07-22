@@ -15,7 +15,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Keep `api-backend`, `job-scheduler`, and migrated workloads Kubernetes-blind or operator-API-only.
 - [x] Use allowlisted Borealis verbs, never raw YAML/kubectl from runtime services.
 - [x] Do not rotate secrets, delete PVCs, or teardown cluster during normal deploy.
-- [ ] Use Longhorn as the Borealis K3s PVC/persistent volume backend for workloads that need durable container storage.
+- [x] Use Longhorn as the Borealis K3s PVC/persistent volume backend for workloads that need durable container storage.
 - [x] Propagate the Engine host timezone into Borealis-managed Compose containers and K3s pods.
 
 ## Stage 1: K3s Baseline
@@ -34,7 +34,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Stage 2: `borealis-operator` Bridge
 
 - [x] Add `borealis-operator` workload in K3s.
-    - [ ] Replace future `site-worker-orchestrator` role.
+    - [x] Replace future `site-worker-orchestrator` role.
     - [x] Expose internal HMAC-authenticated Borealis API.
     - [x] Grant namespace-scoped RBAC only.
     - [x] Support read-only status verbs first.

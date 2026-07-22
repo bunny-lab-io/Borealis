@@ -301,6 +301,7 @@ After deployment finishes:
     - Stage 9 made K3s `postgres-db` the database traffic owner. It uses one Longhorn-backed PVC, runs schema initialization as a K3s Job, points runtime `BOREALIS_DATABASE_URL` at `postgres-db.borealis.svc`, and removes stale Compose PostgreSQL containers during deploy.
     - Stage 10 made K3s `wireguard-tunnel` the tunnel traffic owner. It runs one pinned host-network Deployment, preserves `/dev/net/tun`, `NET_ADMIN`, `NET_RAW`, UDP `30000`, the `borealis-wg` interface, and the service-local control socket, and removes stale Compose WireGuard containers during deploy.
     - Stage 11 made K3s `traefik-edge` the public edge owner. It runs one host-network Deployment, preserves HTTP/HTTPS ports, ACME/local CA state, and watched dynamic route files, and removes stale Compose Traefik plus site-worker-orchestrator containers during deploy.
+    - In K3s-owned site-worker mode, the scheduler treats a missing or stale retired `site-worker-orchestrator` Unix socket as already drained so normal reconcile does not keep retrying a removed Compose-era helper.
     - K3s API exposes authenticated admin status at `GET /api/server/k3s/operator`; it returns operator reachability and summary data without exposing the operator secret.
     - `Agent.exe` handles dependency setup, runtime staging, repair, update checks, service install/uninstall, and runtime for Agent installs.
     - Dev mode (`Engine.sh --network-mode public|local deploy dev`) uses Vite for the WebUI behind the K3s Traefik edge pod, while the Engine API stays on loopback.
