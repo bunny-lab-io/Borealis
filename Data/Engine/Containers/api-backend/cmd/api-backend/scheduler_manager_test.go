@@ -118,6 +118,29 @@ func TestRetireDockerSiteWorkersForK3sModeSkipsStaleOrchestratorSocket(t *testin
 	}
 }
 
+func TestSchedulerSiteWorkerLifecycleModeDefaultsToK3sAfterComposeRetirement(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", "")
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "")
+
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected empty lifecycle mode to default to k3s, got %q", got)
+	}
+
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "surprise")
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected unknown lifecycle mode to fail closed to k3s, got %q", got)
+	}
+}
+
+func TestSchedulerSiteWorkerLifecycleModeKeepsExplicitDockerForLegacyDrainTests(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "compose")
+
+	if got := schedulerSiteWorkerLifecycleMode(); got != "docker" {
+		t.Fatalf("expected explicit legacy compose mode to map to docker, got %q", got)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},

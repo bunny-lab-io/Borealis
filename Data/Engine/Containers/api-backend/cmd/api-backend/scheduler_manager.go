@@ -2763,15 +2763,12 @@ func schedulerSiteWorkerLifecycleMode() string {
 	switch mode {
 	case "k3s", "kubernetes":
 		return "k3s"
-	case "auto", "":
-		if strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_BASE_URL")) != "" && strings.TrimSpace(os.Getenv("BOREALIS_OPERATOR_SECRET")) != "" {
-			return "k3s"
-		}
-		return "docker"
 	case "docker", "compose", "site-worker-orchestrator":
 		return "docker"
+	case "auto", "":
+		return "k3s"
 	default:
-		return "docker"
+		return "k3s"
 	}
 }
 
