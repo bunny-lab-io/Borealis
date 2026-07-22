@@ -1547,14 +1547,6 @@ sync_and_reexec_if_needed() {
   exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}"
 }
 
-compose_base() {
-  docker compose \
-    --project-name "${PROJECT_NAME}" \
-    --env-file "${COMPOSE_ENV}" \
-    -f "${COMPOSE_FILE}" \
-    "$@"
-}
-
 require_docker() {
   command_exists docker || die "Docker Engine CLI missing. Run Engine.sh deploy after installing Docker Engine."
   docker info >/dev/null 2>&1 || die "Docker daemon unreachable. Start Docker Engine and retry."
@@ -1631,49 +1623,6 @@ refresh_compose_service_statuses() {
   done
 }
 
-compose_service_status_is_transient() {
-  case "$1" in
-    ""|created|restarting|starting)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-wait_for_compose_services_to_settle() {
-  local timeout_seconds="$1"
-  shift
-  local services=("$@")
-  if [[ "${#services[@]}" -eq 0 ]]; then
-    services=("${SERVICE_ROLES[@]}")
-  fi
-  local deadline=$((SECONDS + timeout_seconds))
-  local service=""
-  local status=""
-  local pending=0
-  while true; do
-    refresh_compose_service_statuses "${services[@]}"
-    pending=0
-    for service in "${services[@]}"; do
-      status="$(container_health_status "borealis-engine-${service}")"
-      if compose_service_status_is_transient "${status}"; then
-        pending=1
-      fi
-    done
-    if [[ "${pending}" -eq 0 ]]; then
-      refresh_compose_service_statuses "${services[@]}"
-      return 0
-    fi
-    if ((SECONDS >= deadline)); then
-      printf '[%s] Compose service status settle timed out after %ss for services: %s\n' "$(date +%FT%T)" "${timeout_seconds}" "${services[*]}" >> "${BUILD_LOG}"
-      return 1
-    fi
-    sleep 2
-  done
-}
-
 wait_for_postgres_container() {
   local timeout_seconds="${1:-150}"
   local deadline=$((SECONDS + timeout_seconds))
@@ -1709,57 +1658,6 @@ stream_database_schema_output() {
   while IFS= read -r line; do
     handle_database_schema_output_line "${line}"
   done
-}
-
-ensure_engine_database_schema() {
-  local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
-  local schema_fifo=""
-  local schema_fifo_dir=""
-  local schema_exit=0
-  local schema_line
-  local schema_pid=""
-  if [[ -z "${site_worker_image}" ]]; then
-    site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
-  fi
-  [[ -n "${site_worker_image}" ]] || die "Unable to resolve site-worker image for Engine database schema initialization."
-
-  log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
-  compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
-  if ! wait_for_postgres_container 150; then
-    log_status "postgres-db" "Failed" "${C_RED}"
-    die "postgres-db did not become healthy for Engine database schema initialization. See ${BUILD_LOG}."
-  fi
-  refresh_compose_service_statuses postgres-db
-
-  log_status "Database schema" "Preparing Engine tables" "${C_YELLOW}"
-  schema_fifo_dir="$(mktemp -d)"
-  schema_fifo="${schema_fifo_dir}/schema-output"
-  mkfifo "${schema_fifo}"
-  set +o errexit
-  docker run --rm \
-    --network host \
-    --env-file "${COMPOSE_ENV}" \
-    -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
-    -v "${RUNTIME_ROOT}:/opt/Borealis/Engine" \
-    --entrypoint python \
-    "${site_worker_image}" \
-    -u \
-    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))' \
-    > "${schema_fifo}" 2>&1 &
-  schema_pid="$!"
-  while IFS= read -r schema_line; do
-    handle_database_schema_output_line "${schema_line}"
-  done < "${schema_fifo}"
-  wait "${schema_pid}"
-  schema_exit="$?"
-  rm -rf "${schema_fifo_dir}" || true
-  set -o errexit
-  if [[ "${schema_exit}" -ne 0 ]]; then
-    log_status "Database schema" "Failed" "${C_RED}"
-    die "Engine database schema initialization failed. See ${BUILD_LOG}."
-  fi
-  log_status "Database schema" "Ready" "${C_GREEN}"
-  refresh_compose_service_statuses postgres-db
 }
 
 ensure_no_host_postgres_conflict() {
@@ -5876,22 +5774,6 @@ resolve_webui_upstream_host() {
   printf '%s\n' "127.0.0.1"
 }
 
-compose_service_managed() {
-  local service="$1"
-  local candidate=""
-  for candidate in "${SERVICE_ROLES[@]}"; do
-    [[ "${candidate}" == "${service}" ]] && return 0
-  done
-  return 1
-}
-
-filter_compose_services() {
-  local service=""
-  for service in "$@"; do
-    compose_service_managed "${service}" && printf '%s\n' "${service}"
-  done | awk 'NF && !seen[$0]++'
-}
-
 retire_compose_webui_container() {
   local service="webui-frontend"
   local container="borealis-engine-webui-frontend"
@@ -8354,12 +8236,6 @@ validate_service() {
   die "Unknown Engine service '${service}'."
 }
 
-validate_compose_service() {
-  local service="$1"
-  compose_service_managed "${service}" && return 0
-  die "Engine service '${service}' is not managed by Docker Compose."
-}
-
 validate_build_role() {
   local service="$1"
   local candidate=""
@@ -8488,12 +8364,6 @@ deploy_engine() {
     return 0
   fi
   die "Docker Compose service reconciliation is retired. SERVICE_ROLES must remain empty."
-}
-
-service_compose_name() {
-  local service="$1"
-  validate_compose_service "${service}"
-  printf '%s\n' "${service}"
 }
 
 service_action() {
@@ -8645,12 +8515,7 @@ service_action() {
       export_image_manifest_env
       write_image_manifest "${mode}"
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-      if compose_service_managed "${service}"; then
-        log_status "${service}" "Recreating Container" "${C_YELLOW}"
-        compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
-      else
-        log_status "${service}" "Skipping Compose - Retired" "${C_DIM}"
-      fi
+      log_status "${service}" "Skipping Compose - Retired" "${C_DIM}"
       reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
       retire_compose_webui_container
       retire_compose_api_backend_container
