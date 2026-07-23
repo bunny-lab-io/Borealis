@@ -1000,31 +1000,45 @@ dashboard_gum_subtask_cell() {
   dashboard_gum_text_style "38;5;245" "$1"
 }
 
-dashboard_current_status_cell() {
+dashboard_completed_task_count_for_row() {
   local row="$1"
   local status="$2"
   local parent_state="$3"
   local active_index=0
-  local bar_state="${parent_state}"
-  local bar_total=3
-  local bar_units=0
   local completed=0
-  local detail=""
   local index=0
   local label=""
   local patterns=""
-  local step=""
   local sub_state=""
   local target=""
   local total=0
-  step="$(dashboard_title_case_words "$(dashboard_row_label "${row}")")"
   total="$(dashboard_subtask_count "${row}")"
   if ((total == 0)); then
-    detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
-    printf '%s: %s' "${step}" "$(dashboard_gum_subtask_cell "${detail}")"
+    case "${parent_state}" in
+      Ready|Complete|Unchanged|Retired)
+        printf '%s\n' "1"
+        ;;
+      *)
+        printf '%s\n' "0"
+        ;;
+    esac
     return 0
   fi
   active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    printf '%s\n' "$((active_index + 1))"
+    return 0
+  fi
+  case "${parent_state}" in
+    Ready|Complete|Unchanged|Retired)
+      printf '%s\n' "${total}"
+      return 0
+      ;;
+    Pending)
+      printf '%s\n' "0"
+      return 0
+      ;;
+  esac
   while IFS='|' read -r label target patterns; do
     sub_state="$(dashboard_subtask_state "${parent_state}" "${index}" "${active_index}")"
     if [[ "${sub_state}" == "Complete" ]]; then
@@ -1032,66 +1046,89 @@ dashboard_current_status_cell() {
     fi
     index=$((index + 1))
   done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "${completed}"
+}
+
+dashboard_current_task_label() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local active_index=0
+  local index=0
+  local label=""
+  local patterns=""
+  local target=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  if ((total == 0)); then
+    dashboard_title_case_words "$(dashboard_action_for_row "${row}" "${status}")"
+    return 0
+  fi
   if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
-    completed=$((active_index + 1))
-    status="Idle"
-    bar_units=0
-    bar_state="Pending"
+    printf '%s' "Idle"
+    return 0
+  fi
+  case "${parent_state}" in
+    Ready|Complete|Unchanged)
+      printf '%s' "Complete"
+      ;;
+    Pending)
+      printf '%s' "Pending..."
+      ;;
+    *)
+      active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+      while IFS='|' read -r label target patterns; do
+        if ((index == active_index)); then
+          dashboard_title_case_words "${label}"
+          return 0
+        fi
+        index=$((index + 1))
+      done < <(dashboard_subtask_specs_for_row "${row}")
+      printf '%s' "Working"
+      ;;
+  esac
+}
+
+dashboard_gum_task_cell() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local completed=0
+  local label=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  if ((total == 0)); then
+    total=1
+  fi
+  completed="$(dashboard_completed_task_count_for_row "${row}" "${status}" "${parent_state}")"
+  label="$(dashboard_current_task_label "${row}" "${status}" "${parent_state}")"
+  printf '%s %s %s' \
+    "$(dashboard_gum_progress_bar "${completed}" "${total}" "${parent_state}")" \
+    "$(dashboard_gum_text_style "38;5;245" "[${completed}/${total}]")" \
+    "${label}"
+}
+
+dashboard_gum_subtask_status_cell() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local detail=""
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    detail="Idle"
   else
     case "${parent_state}" in
       Ready|Complete|Unchanged)
-        completed="${total}"
-        status="Complete"
-        bar_units="${bar_total}"
-        bar_state="Complete"
+        detail="Complete"
         ;;
       Pending)
-        completed=0
-        status="Pending..."
-        bar_units=0
-        bar_state="Pending"
+        detail="Pending..."
         ;;
-      Failed)
-        bar_units="${bar_total}"
-        bar_state="Failed"
-        ;;
-      Running)
-        bar_units=1
-        bar_state="Running"
+      *)
+        detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
         ;;
     esac
   fi
-  detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
-  printf '%s [%s/%s] %s: %s' \
-    "$(dashboard_gum_progress_bar "${bar_units}" "${bar_total}" "${bar_state}")" \
-    "${completed}" \
-    "${total}" \
-    "${step}" \
-    "$(dashboard_gum_subtask_cell "${detail}")"
-}
-
-dashboard_task_count_for_row() {
-  local row="$1"
-  dashboard_row_visible "${row}" || {
-    printf '%s\n' "0"
-    return 0
-  }
-  printf '%s\n' "1"
-}
-
-dashboard_completed_task_count_for_row() {
-  local row="$1"
-  local state="$2"
-  local total=0
-  total="$(dashboard_task_count_for_row "${row}")"
-  case "${state}" in
-    Ready|Complete|Unchanged|Retired)
-      printf '%s\n' "${total}"
-      ;;
-    *)
-      printf '%s\n' "0"
-      ;;
-  esac
+  dashboard_gum_subtask_cell "${detail}"
 }
 
 dashboard_detail_for_row() {
@@ -1145,41 +1182,37 @@ dashboard_gum_label() {
 
 dashboard_gum_state_cell() {
   local state="$1"
+  local label="$1"
+  if [[ "${state}" == "Running" ]]; then
+    label="Configuring"
+  fi
   case "${state}" in
     Ready)
-      dashboard_gum_text_style "1;32" "${state}"
+      dashboard_gum_text_style "1;32" "${label}"
       ;;
     Failed)
-      dashboard_gum_text_style "1;38;5;203" "${state}"
+      dashboard_gum_text_style "1;38;5;203" "${label}"
       ;;
     Running)
-      dashboard_gum_text_style "1;38;5;228" "${state}"
+      dashboard_gum_text_style "1;38;5;228" "${label}"
       ;;
     Complete)
-      dashboard_gum_text_style "1;32" "${state}"
+      dashboard_gum_text_style "1;32" "${label}"
       ;;
     Unchanged|Retired|Pending)
-      dashboard_gum_text_style "38;5;246" "${state}"
+      dashboard_gum_text_style "38;5;246" "${label}"
       ;;
     *)
-      printf '%s' "${state}"
+      printf '%s' "${label}"
       ;;
   esac
 }
 
-dashboard_gum_state_progress_cell() {
-  local row="$1"
-  local state="$2"
-  local completed=0
-  local total=0
-  total="$(dashboard_task_count_for_row "${row}")"
-  completed="$(dashboard_completed_task_count_for_row "${row}" "${state}")"
-  printf '%s %s' \
-    "$(dashboard_gum_text_style "38;5;245" "[${completed}/${total}]")" \
-    "$(dashboard_gum_state_cell "${state}")"
+dashboard_gum_header() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
-dashboard_gum_header() {
+dashboard_gum_resource_cell() {
   dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
@@ -1213,28 +1246,30 @@ dashboard_render_gum_table() {
   local header_columns
   cols="$(dashboard_terminal_columns)"
   if ((cols >= 180)); then
-    widths="18,128"
+    widths="31,14,54,51"
   elif ((cols >= 150)); then
-    widths="18,108"
+    widths="29,14,46,35"
   elif ((cols >= 120)); then
-    widths="18,80"
+    widths="27,13,39,21"
   else
-    widths="16,57"
+    widths="23,12,34,14"
   fi
-  header_columns="$(dashboard_gum_header "State"),$(dashboard_gum_header "Current Status")"
+  header_columns="$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Status"),$(dashboard_gum_header "Task"),$(dashboard_gum_header "Sub-Task")"
   {
     local row=""
     local state=""
     local status=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
-    printf '%s\t%s\n' " " " "
+    printf '%s\t%s\t%s\t%s\n' " " " " " " " "
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_row "${row}" "${status}")"
-      printf '%s\t%s\n' \
-        "$(dashboard_cell "$(dashboard_gum_state_progress_cell "${row}" "${state}")")" \
-        "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$(dashboard_cell "$(dashboard_gum_resource_cell "$(dashboard_row_label "${row}")")")" \
+        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_task_cell "${row}" "${status}" "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_subtask_status_cell "${row}" "${status}" "${state}")")"
     done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
     --print \
