@@ -27,5 +27,5 @@ jobs:
       - name: Render Engine Compose config
         run: docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config
 
-      - name: Check Engine container policy
+      - name: Check retired Compose policy
         run: python3 Data/Engine/Containers/check-compose-policy.py

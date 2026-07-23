@@ -442,10 +442,9 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     #### Policy validation
 
-    - `Data/Engine/Containers/check-compose-policy.py` renders Compose with `docker compose config --format json` and validates the static service policy.
-    - The policy check fails if retired services return to Compose, privileged mode is enabled, or legacy dynamic worker launch hardening regresses.
-    - The policy check enforces Compose retirement and scans selected legacy service mount contracts that remain in source.
-    - The policy check scans `site_worker_orchestrator.go` for dynamic worker hardening flags and fails if worker launch code contains Docker socket mounts, Traefik mounts, privileged flags, added capabilities, or device flags.
+    - `Data/Engine/Containers/check-compose-policy.py` renders Compose with `docker compose config --format json` and validates that `compose.yaml` remains retired with no services.
+    - The policy check fails if any service returns to Compose ownership after Stage 11.
+    - Static runtime hardening now lives in Engine-authored K3s manifests and focused runtime tests instead of Compose service policy checks.
     - `.github/workflows/engine-container-policy.yml` runs the policy check and Compose validation in CI.
 
     ### WireGuard runtime behavior
