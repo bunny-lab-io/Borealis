@@ -157,7 +157,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 ## Stage 7: API Backend Cutover
 
-- [ ] Move `api-backend` into K3s as one replica.
+- [x] Move `api-backend` into K3s as one replica.
     - [x] Add non-authoritative K3s `api-backend` bridge Deployment.
     - [x] Bind initial bridge API to host loopback port `5001` while Compose API owned `127.0.0.1:5000`.
     - [x] Mirror generated runtime env into `borealis-api-backend-runtime-env`.
@@ -344,10 +344,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live host-network audit identifies required v1 host-network pods: `traefik-edge` for TCP 80/443/health and `wireguard-tunnel` for UDP 30000 plus `/dev/net/tun`.
     - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, and `webui-frontend` are not host-networked.
     - [ ] `api-backend`, `job-scheduler`, and `site-worker-*` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
-- [ ] Runtime service actions must not become raw Kubernetes mutation API.
+- [x] Runtime service actions must not become raw Kubernetes mutation API.
     - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
     - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
-    - [ ] Legacy orchestrator client/source still exists for migration tests and explicit blocked modes; keep deleting unreachable compatibility code when no test or rollback value remains.
+    - [x] Retired orchestrator source and Docker lifecycle fallback are removed; remaining references are fail-closed process-role guards, tests, retired-container cleanup, or PostgreSQL shadow-import migration support.
 - [ ] K3s secrets must not replace Aegis security model.
     - [x] Security whitepaper states K3s Secret encryption at rest is enabled for Kubernetes objects while Aegis remains the Borealis model for protected operator, credential, token, and signing material.
     - [x] Backup/Restore code keeps `engine.aegis_cipher_state` inside the encrypted payload, derives backup keys from the Aegis Cipher, and clears the in-memory Aegis key after restore.
@@ -357,12 +357,12 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [ ] Future PostgreSQL StatefulSet/storage changes must keep runtime env hashes stable unless worker connectivity truly needs replacement.
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
     - [x] Reconnect delay follow-up tracked by [Technical Debt #376](https://github.com/bunny-lab-io/Borealis/issues/376).
-- [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
+- [x] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
     - [x] Live audit confirms Longhorn StorageClass exists as explicit-use only, `postgres-data-postgres-db-0` is `Bound` to StorageClass `longhorn`, and all Longhorn pods report `Running`.
     - [x] Live audit found single-node Longhorn volume robustness is `degraded` because upstream StorageClass provisioned `numberOfReplicas: 3`; tracked by [Technical Debt #378](https://github.com/bunny-lab-io/Borealis/issues/378).
     - [x] Future fresh installs should use a Borealis-owned single-node Longhorn StorageClass or equivalent policy so v1 non-HA volumes do not start degraded.
     - [x] Existing 3-replica Longhorn PVCs are preserved during normal deploy and require an explicit manual migration if replica policy should change later.
-- [ ] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.
+- [x] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.
     - [x] Code audit found no deploy-time PVC delete path for PostgreSQL or Longhorn volumes.
     - [x] Server-side dry-run confirms existing `longhorn` StorageClass replica parameters are immutable, so existing PVC replica-count repair needs a deliberate migration/rebuild workflow rather than normal deploy reconciliation.
 - [ ] Full Engine WebUI unit lane needs K3s-compatible runtime test-cache staging. Tracked by [Technical Debt #377](https://github.com/bunny-lab-io/Borealis/issues/377).
