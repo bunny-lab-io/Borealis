@@ -609,6 +609,7 @@ dashboard_state_for_status() {
 dashboard_state_for_row() {
   local row="$1"
   local status="$2"
+  local state=""
   if [[ "${row}" == "site-worker" ]]; then
     case "${status}" in
       Up-to-Date|Unchanged|Ready*)
@@ -617,7 +618,12 @@ dashboard_state_for_row() {
         ;;
     esac
   fi
-  dashboard_state_for_status "${status}"
+  state="$(dashboard_state_for_status "${status}")"
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    printf '%s\n' "Running"
+    return 0
+  fi
+  printf '%s\n' "${state}"
 }
 
 dashboard_action_for_row() {
@@ -826,7 +832,19 @@ dashboard_status_matches_patterns() {
   return 1
 }
 
-dashboard_subtask_active_index() {
+dashboard_subtask_count() {
+  local row="$1"
+  local count=0
+  local label=""
+  local patterns=""
+  local target=""
+  while IFS='|' read -r label target patterns; do
+    count=$((count + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "${count}"
+}
+
+dashboard_subtask_matching_index() {
   local row="$1"
   local status="$2"
   local index=0
@@ -840,7 +858,43 @@ dashboard_subtask_active_index() {
     fi
     index=$((index + 1))
   done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "-1"
+}
+
+dashboard_subtask_active_index() {
+  local row="$1"
+  local status="$2"
+  local match_index
+  match_index="$(dashboard_subtask_matching_index "${row}" "${status}")"
+  if ((match_index >= 0)); then
+    printf '%s\n' "${match_index}"
+    return 0
+  fi
   printf '%s\n' "0"
+}
+
+dashboard_status_is_completed_subtask_with_pending() {
+  local row="$1"
+  local status="$2"
+  local match_index=0
+  local state=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  ((total > 0)) || return 1
+  match_index="$(dashboard_subtask_matching_index "${row}" "${status}")"
+  ((match_index >= 0 && match_index < total - 1)) || return 1
+  case "${status}" in
+    Up-to-Date|Unchanged|Complete|Completed*|Skipped*|Retired)
+      return 1
+      ;;
+  esac
+  state="$(dashboard_state_for_status "${status}")"
+  case "${state}" in
+    Ready|Complete|Unchanged)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 dashboard_subtask_state() {
@@ -928,6 +982,9 @@ dashboard_current_status_cell() {
   local status="$2"
   local parent_state="$3"
   local active_index=0
+  local bar_state="${parent_state}"
+  local bar_total=3
+  local bar_units=0
   local completed=0
   local index=0
   local label=""
@@ -935,9 +992,7 @@ dashboard_current_status_cell() {
   local sub_state=""
   local target=""
   local total=0
-  while IFS='|' read -r label target patterns; do
-    total=$((total + 1))
-  done < <(dashboard_subtask_specs_for_row "${row}")
+  total="$(dashboard_subtask_count "${row}")"
   if ((total == 0)); then
     printf '%s' "$(dashboard_detail_for_row "${row}" "${status}")"
     return 0
@@ -950,18 +1005,37 @@ dashboard_current_status_cell() {
     fi
     index=$((index + 1))
   done < <(dashboard_subtask_specs_for_row "${row}")
-  case "${parent_state}" in
-    Ready|Complete|Unchanged)
-      completed="${total}"
-      status="Complete"
-      ;;
-    Pending)
-      completed=0
-      status="Pending..."
-      ;;
-  esac
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    completed=$((active_index + 1))
+    status="Idle"
+    bar_units=0
+    bar_state="Pending"
+  else
+    case "${parent_state}" in
+      Ready|Complete|Unchanged)
+        completed="${total}"
+        status="Complete"
+        bar_units="${bar_total}"
+        bar_state="Complete"
+        ;;
+      Pending)
+        completed=0
+        status="Pending..."
+        bar_units=0
+        bar_state="Pending"
+        ;;
+      Failed)
+        bar_units="${bar_total}"
+        bar_state="Failed"
+        ;;
+      Running)
+        bar_units=1
+        bar_state="Running"
+        ;;
+    esac
+  fi
   printf '%s [%s/%s] %s' \
-    "$(dashboard_gum_progress_bar "${completed}" "${total}" "${parent_state}")" \
+    "$(dashboard_gum_progress_bar "${bar_units}" "${bar_total}" "${bar_state}")" \
     "${completed}" \
     "${total}" \
     "$(dashboard_detail_for_row "${row}" "${status}")"
@@ -972,7 +1046,7 @@ dashboard_detail_for_row() {
   local status="$2"
   case "${status}" in
     Pending...|"")
-      printf '%s\n' "waiting"
+      printf '%s\n' "Pending..."
       ;;
     *"Ready - Traffic Owner"*)
       printf '%s\n' "traffic owner"
