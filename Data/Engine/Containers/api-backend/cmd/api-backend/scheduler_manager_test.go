@@ -114,9 +114,14 @@ func TestSchedulerSiteWorkerLifecycleModeRejectsLegacyDockerModes(t *testing.T) 
 		t.Fatalf("expected legacy compose mode to stay k3s, got %q", got)
 	}
 
-	t.Setenv("BOREALIS_ALLOW_LEGACY_DOCKER_SITE_WORKERS", "1")
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "docker")
 	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
-		t.Fatalf("expected removed legacy opt-in to be ignored, got %q", got)
+		t.Fatalf("expected legacy docker mode to stay k3s, got %q", got)
+	}
+
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "site-worker-orchestrator")
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected legacy orchestrator mode to stay k3s, got %q", got)
 	}
 }
 
