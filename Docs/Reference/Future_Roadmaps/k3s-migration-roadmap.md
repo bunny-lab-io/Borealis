@@ -321,6 +321,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] `Engine.sh --network-mode public --service webui-frontend restart prod` rolls the K3s WebUI Deployment without restoring the retired Compose WebUI container.
     - [x] Live deploy table reports K3s Traefik edge ready and Docker Compose retired.
     - [x] Live K3s rollout confirms `deployment/traefik-edge` healthy.
+    - [x] Live redeploy applies `borealis-operator-controller` RBAC and removes legacy `borealis-operator-readonly` Role/RoleBinding.
     - [x] Live Docker check confirms stale `borealis-engine-traefik-edge` and `borealis-engine-site-worker-orchestrator` containers are absent.
     - [x] Docker cache corruption during required image restore is recoverable through builder-cache prune plus no-cache rebuild.
 
