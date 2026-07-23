@@ -357,7 +357,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
     - [x] Live audit confirms Longhorn StorageClass exists as explicit-use only, `postgres-data-postgres-db-0` is `Bound` to StorageClass `longhorn`, and all Longhorn pods report `Running`.
     - [x] Live audit found single-node Longhorn volume robustness is `degraded` because upstream StorageClass provisioned `numberOfReplicas: 3`; tracked by [Technical Debt #378](https://github.com/bunny-lab-io/Borealis/issues/378).
-    - [ ] Future fresh installs should use a Borealis-owned single-node Longhorn StorageClass or equivalent policy so v1 non-HA volumes do not start degraded.
+    - [x] Future fresh installs should use a Borealis-owned single-node Longhorn StorageClass or equivalent policy so v1 non-HA volumes do not start degraded.
+    - [x] Existing 3-replica Longhorn PVCs are preserved during normal deploy and require an explicit manual migration if replica policy should change later.
 - [ ] Stateful data migration must have reversible checkpoints and no automatic Longhorn volume/PVC deletion during normal deploy.
     - [x] Code audit found no deploy-time PVC delete path for PostgreSQL or Longhorn volumes.
     - [x] Server-side dry-run confirms existing `longhorn` StorageClass replica parameters are immutable, so existing PVC replica-count repair needs a deliberate migration/rebuild workflow rather than normal deploy reconciliation.
