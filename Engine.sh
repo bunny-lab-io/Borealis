@@ -8180,26 +8180,7 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
         return default
 
 services = []
-allowed_services = set(services)
-service_images = {service: {"image": "", "hash": ""} for service in services}
-if image_path.is_file():
-    try:
-        image_data = json.loads(image_path.read_text(encoding="utf-8"))
-    except Exception:
-        image_data = {}
-    for service, record in sorted((image_data.get("services") or {}).items()):
-        if service not in allowed_services:
-            continue
-        service_images[service] = {
-            "image": record.get("image") or "",
-            "hash": record.get("hash") or "",
-        }
-    if "site-worker-orchestrator" in allowed_services:
-        scheduler_record = (image_data.get("services") or {}).get("job-scheduler") or {}
-        service_images["site-worker-orchestrator"] = {
-            "image": scheduler_record.get("image") or "",
-            "hash": scheduler_record.get("hash") or "",
-        }
+service_images = {}
 
 env = env_values(env_file)
 payload = {
