@@ -1070,6 +1070,30 @@ dashboard_current_status_cell() {
     "$(dashboard_gum_subtask_cell "${detail}")"
 }
 
+dashboard_task_count_for_row() {
+  local row="$1"
+  dashboard_row_visible "${row}" || {
+    printf '%s\n' "0"
+    return 0
+  }
+  printf '%s\n' "1"
+}
+
+dashboard_completed_task_count_for_row() {
+  local row="$1"
+  local state="$2"
+  local total=0
+  total="$(dashboard_task_count_for_row "${row}")"
+  case "${state}" in
+    Ready|Complete|Unchanged|Retired)
+      printf '%s\n' "${total}"
+      ;;
+    *)
+      printf '%s\n' "0"
+      ;;
+  esac
+}
+
 dashboard_detail_for_row() {
   local row="$1"
   local status="$2"
@@ -1143,6 +1167,18 @@ dashboard_gum_state_cell() {
   esac
 }
 
+dashboard_gum_state_progress_cell() {
+  local row="$1"
+  local state="$2"
+  local completed=0
+  local total=0
+  total="$(dashboard_task_count_for_row "${row}")"
+  completed="$(dashboard_completed_task_count_for_row "${row}" "${state}")"
+  printf '%s %s' \
+    "$(dashboard_gum_text_style "38;5;245" "[${completed}/${total}]")" \
+    "$(dashboard_gum_state_cell "${state}")"
+}
+
 dashboard_gum_header() {
   dashboard_gum_text_style "1;38;5;39" "$1"
 }
@@ -1177,13 +1213,13 @@ dashboard_render_gum_table() {
   local header_columns
   cols="$(dashboard_terminal_columns)"
   if ((cols >= 180)); then
-    widths="10,136"
+    widths="18,128"
   elif ((cols >= 150)); then
-    widths="10,116"
+    widths="18,108"
   elif ((cols >= 120)); then
-    widths="10,88"
+    widths="18,80"
   else
-    widths="9,64"
+    widths="16,57"
   fi
   header_columns="$(dashboard_gum_header "State"),$(dashboard_gum_header "Current Status")"
   {
@@ -1197,7 +1233,7 @@ dashboard_render_gum_table() {
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_row "${row}" "${status}")"
       printf '%s\t%s\n' \
-        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_state_progress_cell "${row}" "${state}")")" \
         "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")"
     done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
