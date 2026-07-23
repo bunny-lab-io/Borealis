@@ -1141,7 +1141,9 @@ dashboard_render_gum_table() {
     --lazy-quotes \
     --border.foreground 240 \
     --header.foreground 39 \
-    --selected.foreground 252 | sed '4d'
+    --selected.foreground 252 | sed '4d' | while IFS= read -r line || [[ -n "${line}" ]]; do
+      dashboard_gum_line "${line}"
+    done
 }
 
 dashboard_render_gum() {
