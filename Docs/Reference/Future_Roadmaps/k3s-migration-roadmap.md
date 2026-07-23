@@ -344,6 +344,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
     - [ ] Legacy orchestrator client/source still exists for migration tests and explicit blocked modes; keep deleting unreachable compatibility code when no test or rollback value remains.
 - [ ] K3s secrets must not replace Aegis security model.
+    - [x] Security whitepaper states K3s Secret encryption at rest is enabled for Kubernetes objects while Aegis remains the Borealis model for protected operator, credential, token, and signing material.
+    - [x] Backup/Restore code keeps `engine.aegis_cipher_state` inside the encrypted payload, derives backup keys from the Aegis Cipher, and clears the in-memory Aegis key after restore.
+    - [ ] Continue treating generated K3s runtime-env Secrets as deployment plumbing, not durable protected-secret authority.
 - [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
