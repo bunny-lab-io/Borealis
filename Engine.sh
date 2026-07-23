@@ -958,7 +958,7 @@ dashboard_gum_progress_bar() {
   done
   case "${state}" in
     Ready|Complete|Unchanged)
-      color="1;38;5;121"
+      color="1;32"
       ;;
     Running)
       color="1;38;5;228"
@@ -989,12 +989,14 @@ dashboard_current_status_cell() {
   local index=0
   local label=""
   local patterns=""
+  local step=""
   local sub_state=""
   local target=""
   local total=0
+  step="$(dashboard_action_for_row "${row}" "${status}")"
   total="$(dashboard_subtask_count "${row}")"
   if ((total == 0)); then
-    printf '%s' "$(dashboard_detail_for_row "${row}" "${status}")"
+    printf '%s: %s' "${step}" "$(dashboard_detail_for_row "${row}" "${status}")"
     return 0
   fi
   active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
@@ -1034,10 +1036,11 @@ dashboard_current_status_cell() {
         ;;
     esac
   fi
-  printf '%s [%s/%s] %s' \
+  printf '%s [%s/%s] %s: %s' \
     "$(dashboard_gum_progress_bar "${bar_units}" "${bar_total}" "${bar_state}")" \
     "${completed}" \
     "${total}" \
+    "${step}" \
     "$(dashboard_detail_for_row "${row}" "${status}")"
 }
 
@@ -1094,7 +1097,7 @@ dashboard_gum_state_cell() {
   local state="$1"
   case "${state}" in
     Ready)
-      dashboard_gum_text_style "1;38;5;121" "${state}"
+      dashboard_gum_text_style "1;32" "${state}"
       ;;
     Failed)
       dashboard_gum_text_style "1;38;5;203" "${state}"
@@ -1103,7 +1106,7 @@ dashboard_gum_state_cell() {
       dashboard_gum_text_style "1;38;5;228" "${state}"
       ;;
     Complete)
-      dashboard_gum_text_style "1;38;5;121" "${state}"
+      dashboard_gum_text_style "1;32" "${state}"
       ;;
     Unchanged|Retired|Pending)
       dashboard_gum_text_style "38;5;246" "${state}"
@@ -1118,46 +1121,19 @@ dashboard_gum_header() {
   dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
-dashboard_gum_line() {
-  printf '%s\033[K\n' "$1"
+dashboard_gum_resource_cell() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
 }
 
-dashboard_state_counts() {
-  local complete=0
-  local failed=0
-  local pending=0
-  local ready=0
-  local retired=0
-  local running=0
-  local row=""
-  local state=""
-  local status=""
-  local unchanged=0
-  while IFS= read -r row; do
-    status="$(dashboard_status_text "${row}")"
-    state="$(dashboard_state_for_row "${row}" "${status}")"
-    case "${state}" in
-      Ready) ready=$((ready + 1)) ;;
-      Complete) complete=$((complete + 1)) ;;
-      Failed) failed=$((failed + 1)) ;;
-      Pending) pending=$((pending + 1)) ;;
-      Retired) retired=$((retired + 1)) ;;
-      Running) running=$((running + 1)) ;;
-      Unchanged) unchanged=$((unchanged + 1)) ;;
-    esac
-  done < <(dashboard_ordered_gum_rows)
-  printf 'Ready %s | Running %s | Complete %s | Pending %s | Unchanged %s | Retired %s | Failed %s' \
-    "${ready}" "${running}" "${complete}" "${pending}" "${unchanged}" "${retired}" "${failed}"
+dashboard_gum_line() {
+  printf '%s\033[K\n' "$1"
 }
 
 dashboard_render_gum_summary() {
   local mode_text="${DASHBOARD_MODE_LABEL:-Production} [${DASHBOARD_NETWORK_LABEL:-Public}]"
   local profile_text="${DASHBOARD_PROFILE:-Pending...}"
-  local counts
-  counts="$(dashboard_state_counts)"
   dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Mode:")" "${mode_text}")"
   dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Profile:")" "${profile_text}")"
-  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Ready:")" "${counts}")"
   dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Log:")" "${BUILD_LOG}")"
 }
 
@@ -1179,32 +1155,29 @@ dashboard_render_gum_table() {
   local header_columns
   cols="$(dashboard_terminal_columns)"
   if ((cols >= 180)); then
-    widths="12,36,10,10,38,68"
+    widths="42,104,10"
   elif ((cols >= 150)); then
-    widths="11,32,9,10,34,50"
+    widths="36,86,10"
   elif ((cols >= 120)); then
-    widths="10,28,8,9,28,36"
+    widths="32,60,10"
   else
-    widths="10,26,8,9,24,28"
+    widths="28,42,9"
   fi
-  header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Kubernetes"),$(dashboard_gum_header "Current Status")"
+  header_columns="$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Current Status"),$(dashboard_gum_header "State")"
   {
     local row=""
     local state=""
     local status=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " "
+    printf '%s\t%s\t%s\n' " " " " " "
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_row "${row}" "${status}")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
-        "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
-        "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
-        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
-        "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
-        "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")"
+      printf '%s\t%s\t%s\n' \
+        "$(dashboard_cell "$(dashboard_gum_resource_cell "$(dashboard_row_label "${row}")")")" \
+        "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")"
     done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
     --print \
