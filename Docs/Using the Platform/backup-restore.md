@@ -44,6 +44,24 @@ Agents keep trust when the restored Engine remains reachable at the same FQDN th
 !!! danger
     Import does not merge. Current users, sites, directory settings, credentials, agents, trust keys, filters, scheduled job definitions, watchdog definitions, and automation content are cleared before the backup is imported.
 
+## K3s Restore Notes
+
+K3s Engines use the same encrypted Backup/Restore workflow. Export, Analyze, and Import run through the K3s `api-backend` pod and the active `BOREALIS_DATABASE_URL`, which points at the ClusterIP `postgres-db.borealis.svc:5432` after K3s PostgreSQL cutover.
+
+Use **Analyze** first when validating a backup on a running production Engine. Analyze decrypts the backup, verifies the Aegis metadata, checks supported table/file identifiers, and compares backup columns against the current PostgreSQL schema without deleting current data or writing imported rows.
+
+!!! danger
+    **Import** is destructive on K3s too. It clears allow-listed Engine configuration and trust tables in the active K3s PostgreSQL database, replaces allow-listed secret/config files on mounted Engine paths, clears mounted Engine service log roots, clears the in-memory Aegis key, and returns `restart_required: true`. Run full Import validation on a fresh or disposable Engine unless production data replacement is intentional.
+
+After a K3s import completes, redeploy the Engine in the same network mode so the K3s API, scheduler, workers, Traefik, and WireGuard pods restart against the restored state:
+
+```sh
+cd /opt/Borealis
+sudo bash Engine.sh --network-mode public deploy prod
+```
+
+Use `--network-mode local` instead when the restored Engine is an Internal-Only deployment.
+
 ??? example "Detailed Codex Breakdown"
 
     ### API endpoints
@@ -64,6 +82,7 @@ Agents keep trust when the restored Engine remains reachable at the same FQDN th
     - Outer backup JSON contains `kind`, `schema_version`, `kdf_params`, `nonce_b64`, and `ciphertext_b64`.
     - Inner payload uses the fixed Borealis backup encryption path: AES-256-GCM with the Aegis-derived key.
     - `engine.aegis_cipher_state` is included inside the encrypted payload and restored unchanged, so the Aegis Cipher does not rotate through backup/restore.
+    - K3s Engines run backup routes through the K3s `api-backend` pod. After Stage 9, `BOREALIS_DATABASE_URL` points at `postgres-db.borealis.svc:5432`, so WebUI imports target K3s PostgreSQL, not retired Compose PostgreSQL.
     - Traefik ACME state must remain `0600` and readable by the `api-backend` runtime user. `Engine.sh` repairs ownership to the Borealis runtime user during deploy so export can read the file without loosening group/world permissions.
     - Analyze uses the same decrypt and validation path as restore, but does not clear current state or import rows.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.

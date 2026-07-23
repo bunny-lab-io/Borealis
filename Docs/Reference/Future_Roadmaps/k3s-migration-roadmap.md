@@ -244,7 +244,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] API backend, job-scheduler, and site-worker pods resolve `BOREALIS_DATABASE_URL` to `postgres-db.borealis.svc`.
     - [x] K3s PostgreSQL PVC is bound to Longhorn.
     - [x] Second live redeploy keeps PostgreSQL on K3s and does not rerun Compose snapshot/import.
-    - [ ] Encrypted WebUI Backup/Restore import is validated against K3s PostgreSQL.
+    - [x] Encrypted WebUI Backup/Restore analyze path is documented and covered by Go tests without mutating K3s PostgreSQL.
+    - [ ] Encrypted WebUI Backup/Restore import is validated against K3s PostgreSQL on a clean or disposable restore target.
     - [x] DB profile settings preserved or documented.
 
 ## Stage 10: WireGuard Cutover
@@ -304,11 +305,15 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Clean stale post-retirement docs that still described Compose as deployment/runtime tooling.
     - [x] Rename operator RBAC from stale `readonly` naming to lifecycle-scoped controller naming and add old RBAC cleanup.
 - [ ] Keep migration and recovery docs until stable release.
+    - [x] K3s Backup/Restore recovery notes document active K3s PostgreSQL targeting, safe Analyze validation, destructive Import behavior, and post-import redeploy expectations.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
     - [x] Fresh install path works.
     - [x] Redeploy path works.
     - [ ] Backup/restore path works.
+        - [x] Backup export works against authoritative K3s API/PostgreSQL.
+        - [x] Backup analyze path is documented and covered by focused Go tests without data mutation.
+        - [ ] Backup import works on a clean K3s restore target.
     - [x] Operator WebUI smoke passes after Compose retirement: login, Server Info, Device Inventory, Remote Desktop, Remote Shell, Files, Process Management, Service Management, Registry, and Backup Export.
     - [x] Narrow Engine tests pass.
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
@@ -352,7 +357,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [Stack Breakdown](../Core%20Runtimes/Stack_Breakdown.md) for current K3s service boundaries and retired Compose state.
     - [Engine Runtime](../Core%20Runtimes/engine-runtime.md) for Engine runtime paths and generated state.
     - [Security Whitepaper](../security-whitepaper.md) for Aegis, runtime trust, token, and network boundaries.
-    - [Backup and Restore](../backup-restore.md) for stateful data checkpoints.
+    - [Backup and Restore](../../Using%20the%20Platform/backup-restore.md) for stateful data checkpoints.
     - [Database Reference](../Data%20and%20Schema/db-reference.md) for PostgreSQL behavior and connection lifecycle.
 
     ### Source map
