@@ -65,7 +65,6 @@ const MASTER_AUTO_SIZE_COLUMNS = ["domain", "name", "health", "state", "enabled"
 const NAME_COLUMN_PRIMARY_COLOR = "#58a6ff";
 const COMPOSE_SERVICE_ACTIONS = Object.freeze({
   "api-backend": [{ id: "restart", label: "Restart", action: "restart" }],
-  "site-worker-orchestrator": [],
   "job-scheduler": [{ id: "restart", label: "Restart", action: "restart" }],
   "traefik-edge": [{ id: "reload", label: "Reload", action: "reload" }],
   "postgres-db": [{ id: "restart", label: "Restart", action: "restart" }],
