@@ -579,6 +579,70 @@ dashboard_ordered_gum_rows() {
   done < <(dashboard_ordered_rows)
 }
 
+dashboard_ordered_gum_groups() {
+  local group=""
+  local previous_group=""
+  local row=""
+  while IFS= read -r row; do
+    group="${DASHBOARD_ROW_SECTION[${row}]:-Events}"
+    if [[ "${group}" != "${previous_group}" ]]; then
+      printf '%s\n' "${group}"
+      previous_group="${group}"
+    fi
+  done < <(dashboard_ordered_gum_rows)
+}
+
+dashboard_ordered_gum_group_rows() {
+  local group="$1"
+  local row=""
+  while IFS= read -r row; do
+    [[ "${DASHBOARD_ROW_SECTION[${row}]:-Events}" == "${group}" ]] || continue
+    printf '%s\n' "${row}"
+  done < <(dashboard_ordered_gum_rows)
+}
+
+dashboard_group_state() {
+  local group="$1"
+  local pending=0
+  local ready=0
+  local row=""
+  local running=0
+  local state=""
+  local status=""
+  local total=0
+  while IFS= read -r row; do
+    status="$(dashboard_status_text "${row}")"
+    state="$(dashboard_state_for_row "${row}" "${status}")"
+    total=$((total + 1))
+    case "${state}" in
+      Failed)
+        printf '%s\n' "Failed"
+        return 0
+        ;;
+      Running)
+        running=1
+        ;;
+      Pending)
+        pending=$((pending + 1))
+        ;;
+      Ready|Complete|Unchanged|Retired)
+        ready=$((ready + 1))
+        ;;
+    esac
+  done < <(dashboard_ordered_gum_group_rows "${group}")
+  if ((total == 0)); then
+    printf '%s\n' "Pending"
+  elif ((running || (ready > 0 && pending > 0))); then
+    printf '%s\n' "Running"
+  elif ((pending == total)); then
+    printf '%s\n' "Pending"
+  elif [[ "${group}" == "Housekeeping" ]]; then
+    printf '%s\n' "Complete"
+  else
+    printf '%s\n' "Ready"
+  fi
+}
+
 dashboard_state_for_status() {
   local status="$1"
   case "${status}" in
@@ -1017,7 +1081,7 @@ dashboard_current_status_cell() {
   local sub_state=""
   local target=""
   local total=0
-  step="$(dashboard_title_case_words "$(dashboard_action_for_row "${row}" "${status}")")"
+  step="$(dashboard_title_case_words "$(dashboard_row_label "${row}")")"
   total="$(dashboard_subtask_count "${row}")"
   if ((total == 0)); then
     detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
@@ -1191,20 +1255,35 @@ dashboard_render_gum_table() {
   fi
   header_columns="$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Current Status"),$(dashboard_gum_header "State")"
   {
+    local group=""
+    local group_state=""
+    local first_row=1
     local row=""
     local state=""
     local status=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
     printf '%s\t%s\t%s\n' " " " " " "
-    while IFS= read -r row; do
-      status="$(dashboard_status_text "${row}")"
-      state="$(dashboard_state_for_row "${row}" "${status}")"
-      printf '%s\t%s\t%s\n' \
-        "$(dashboard_cell "$(dashboard_gum_resource_cell "$(dashboard_row_label "${row}")")")" \
-        "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")" \
-        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")"
-    done < <(dashboard_ordered_gum_rows)
+    while IFS= read -r group; do
+      group_state="$(dashboard_group_state "${group}")"
+      first_row=1
+      while IFS= read -r row; do
+        status="$(dashboard_status_text "${row}")"
+        state="$(dashboard_state_for_row "${row}" "${status}")"
+        if ((first_row)); then
+          printf '%s\t%s\t%s\n' \
+            "$(dashboard_cell "$(dashboard_gum_resource_cell "$(dashboard_title_case_words "${group}")")")" \
+            "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")" \
+            "$(dashboard_cell "$(dashboard_gum_state_cell "${group_state}")")"
+          first_row=0
+        else
+          printf '%s\t%s\t%s\n' \
+            "" \
+            "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")" \
+            ""
+        fi
+      done < <(dashboard_ordered_gum_group_rows "${group}")
+    done < <(dashboard_ordered_gum_groups)
   } | "${GUM_BIN}" table \
     --print \
     --separator $'\t' \
