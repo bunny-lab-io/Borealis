@@ -2764,9 +2764,6 @@ func schedulerSiteWorkerLifecycleMode() string {
 	case "k3s", "kubernetes":
 		return "k3s"
 	case "docker", "compose", "site-worker-orchestrator":
-		if parseBoolEnvDefault("BOREALIS_ALLOW_LEGACY_DOCKER_SITE_WORKERS", false) {
-			return "docker"
-		}
 		return "k3s"
 	case "auto", "":
 		return "k3s"

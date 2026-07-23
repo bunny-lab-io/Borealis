@@ -133,16 +133,16 @@ func TestSchedulerSiteWorkerLifecycleModeDefaultsToK3sAfterComposeRetirement(t *
 	}
 }
 
-func TestSchedulerSiteWorkerLifecycleModeRequiresLegacyDockerOptIn(t *testing.T) {
+func TestSchedulerSiteWorkerLifecycleModeRejectsLegacyDockerModes(t *testing.T) {
 	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "compose")
 
 	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
-		t.Fatalf("expected legacy compose mode without opt-in to stay k3s, got %q", got)
+		t.Fatalf("expected legacy compose mode to stay k3s, got %q", got)
 	}
 
 	t.Setenv("BOREALIS_ALLOW_LEGACY_DOCKER_SITE_WORKERS", "1")
-	if got := schedulerSiteWorkerLifecycleMode(); got != "docker" {
-		t.Fatalf("expected legacy compose mode with opt-in to map to docker, got %q", got)
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected removed legacy opt-in to be ignored, got %q", got)
 	}
 }
 

@@ -296,7 +296,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Remove Docker CLI, Docker Compose plugin, and retired `compose.yaml` from the K3s `job-scheduler` image.
     - [x] Make empty, `auto`, and unknown site-worker lifecycle modes resolve to K3s instead of falling back to retired Docker helpers.
     - [x] Reject retired `site-worker-orchestrator` roles from the K3s `job-scheduler` entrypoint.
-    - [x] Require `BOREALIS_ALLOW_LEGACY_DOCKER_SITE_WORKERS=1` before explicit Docker site-worker lifecycle modes can run.
+    - [x] Remove `BOREALIS_ALLOW_LEGACY_DOCKER_SITE_WORKERS`; explicit Docker site-worker lifecycle modes now resolve to K3s.
     - [x] Reject retired `site-worker-orchestrator` roles from the `api-backend` container entrypoint.
     - [x] Remove retired `site-worker-orchestrator` resource-limit env generation from Engine deploy env.
     - [x] Remove unused Docker socket and service-action-helper env generation after Docker helper retirement.
