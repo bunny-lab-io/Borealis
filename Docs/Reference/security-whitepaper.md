@@ -319,8 +319,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - K3s operator image: `Data/Engine/Containers/borealis-operator/Dockerfile`.
     - Static container hardening and service mount contracts: `Data/Engine/Containers/compose.yaml` and `Data/Engine/Containers/compose.env.example`.
     - Container policy validation: `Data/Engine/Containers/check-compose-policy.py` and `.github/workflows/engine-container-policy.yml`.
-    - Site-worker orchestrator runtime and Docker command construction: `Data/Engine/Containers/api-backend/cmd/api-backend/site_worker_orchestrator.go`.
-    - Scheduler-to-orchestrator/operator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
+    - Scheduler-to-operator lifecycle calls and route ownership: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_manager.go`.
     - K3s site-worker pod template, fixed hostPath allowlist, HMAC lifecycle verbs, and host-loopback bridge annotations: `Data/Engine/Containers/api-backend/cmd/api-backend/borealis_operator.go`.
     - Site-worker bind-host split for K3s host-loopback pods: `Data/Engine/Containers/api-backend/data/services/job_scheduler/worker.py`.
     - Scheduler image and entrypoint routing: `Data/Engine/Containers/job-scheduler/Dockerfile`, `Data/Engine/Containers/job-scheduler/entrypoint.sh`, and `Data/Engine/Containers/job-scheduler/healthcheck.sh`.
@@ -366,7 +365,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Writable paths are explicit hostPath, PVC, or memory-backed `emptyDir` mounts. A read-only root filesystem forces cache, log, run, and state writes into reviewed paths.
     - `api-backend` runs non-root and does not mount the Docker socket. It mounts only its service runtime plus specific Traefik and WireGuard paths required for edge settings and tunnel reconciliation.
     - K3s `job-scheduler` runs non-root and does not mount the Docker socket or a ServiceAccount token. It mounts API cache/logs read-write, API config/secrets read-only, and Traefik dynamic config read-write.
-    - `site-worker-orchestrator` is retired as a long-running Compose service. Its source remains for legacy migration drains and tests, but it no longer owns a runtime Docker socket boundary and deploy no longer creates or mounts its runtime socket directory.
+    - `site-worker-orchestrator` is retired after Stage 11. Deploy still removes stale Compose-era containers with that name, but the Go runtime source, Docker lifecycle fallback, Unix socket, and K3s scheduler mount are removed.
     - `webui-frontend` runs non-root. Runtime source mounts are read-only inside the container; Vite cache and resolved config temp writes use tmpfs, including `node_modules/.vite-temp` in dev mode.
     - K3s `remote-desktop-guacd` runs non-root, exposes guacd only through its ClusterIP Service on port `4822`, mounts only read-only host timezone data, writes only transient in-container file logs under tmpfs, and does not mount the Docker socket.
     - K3s `api-backend`, `job-scheduler`, `webui-frontend`, `remote-desktop-guacd`, Traefik, WireGuard, and site-worker pods mirror the non-root where possible, read-only-root, dropped-capability, tmpfs-style `/tmp`, read-only host timezone data, and CPU/memory cap posture where Kubernetes supports it. Dev WebUI pods also use memory-backed `node_modules/.vite-temp` scratch for Vite config bundles. Kubernetes does not enforce the Compose per-container PID cap here; `Engine.sh` records the desired cap as a pod annotation until a later cutover decides the runtime-level PID policy.
@@ -426,7 +425,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - `api-backend` does not mount the entire `Engine/Services` tree. It receives only its own runtime plus Traefik and WireGuard paths it must manage.
     - K3s `api-backend` receives the same fixed API, Traefik, and WireGuard hostPath allowlist as Compose API previously used plus a generated runtime-env Secret. Its shadow DB validator Job receives only the API runtime hostPath plus a generated runtime-env Secret with `BOREALIS_DATABASE_URL` pointed at K3s PostgreSQL. Neither path receives arbitrary hostPath, kubeconfig, a ServiceAccount token, or Docker socket access.
     - K3s `job-scheduler` does not mount the whole API runtime or WireGuard runtime. It receives the exact API cache/log/config/secrets paths it needs plus the Traefik dynamic directory it owns for worker routes.
-    - Retired `site-worker-orchestrator` source does not mount Traefik config and does not mount broad API runtime paths.
+    - Retired `site-worker-orchestrator` runtime source is removed; no scheduler path launches Docker helper containers or mounts Traefik config through that helper.
     - `remote-desktop-guacd` has no service data host bind mounts and does not receive Engine secrets, Docker socket, Traefik config, API runtime paths, or host log directories. Its only host bind exception is fixed read-only timezone data.
     - WebUI runtime source is mounted read-only into the WebUI container so source edits happen from the host runtime tree, not from inside the container.
     - K3s WebUI dev bridge hostPath use is restricted to the same fixed read-only WebUI source paths as Compose. This is an Engine-authored manifest exception, not a runtime operator API capability.

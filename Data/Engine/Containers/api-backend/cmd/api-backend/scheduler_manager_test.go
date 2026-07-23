@@ -92,32 +92,6 @@ func TestSchedulerManagerMonthlyNextRunPreservesLocalWallClockAcrossDST(t *testi
 	}
 }
 
-func TestRetireDockerSiteWorkersForK3sModeSkipsMissingOrchestratorSocket(t *testing.T) {
-	t.Setenv("BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET", filepath.Join(t.TempDir(), "missing.sock"))
-
-	manager := &goSchedulerManager{}
-	if err := manager.retireDockerSiteWorkersForK3sMode(context.Background()); err != nil {
-		t.Fatalf("expected missing retired orchestrator socket to be treated as already drained: %v", err)
-	}
-}
-
-func TestRetireDockerSiteWorkersForK3sModeSkipsStaleOrchestratorSocket(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "orchestrator.sock")
-	listener, err := net.Listen("unix", socketPath)
-	if err != nil {
-		t.Fatalf("listen unix socket: %v", err)
-	}
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close unix socket: %v", err)
-	}
-	t.Setenv("BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET", socketPath)
-
-	manager := &goSchedulerManager{}
-	if err := manager.retireDockerSiteWorkersForK3sMode(context.Background()); err != nil {
-		t.Fatalf("expected stale retired orchestrator socket to be treated as already drained: %v", err)
-	}
-}
-
 func TestSchedulerSiteWorkerLifecycleModeDefaultsToK3sAfterComposeRetirement(t *testing.T) {
 	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "")
 	t.Setenv("BOREALIS_OPERATOR_BASE_URL", "")
@@ -220,7 +194,7 @@ func TestDurationForOperator(t *testing.T) {
 }
 
 func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
-	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
+	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadataForHost("worker-1", "127.0.0.1", 56001, 61001, "borealis-operator"))
 	content := schedulerRouteYAML(route)
 	for _, expected := range []string{
 		"borealis-site-worker-worker-1-remote-desktop",
@@ -236,7 +210,7 @@ func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
 func TestSchedulerManagerRouteYAMLIncludesHostnameAliases(t *testing.T) {
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "engine.example.test")
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.example.test,alias.example.test")
-	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
+	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadataForHost("worker-1", "127.0.0.1", 56001, 61001, "borealis-operator"))
 
 	content := schedulerRouteYAML(route)
 

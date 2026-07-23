@@ -144,7 +144,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 
 K3s `api-backend` mounts the same fixed API, Traefik, and WireGuard runtime paths the Compose API backend used. It does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
 
-`site-worker-orchestrator` is retired as a long-running Compose service after Stage 11. Its source remains only as legacy migration code and tests for Docker-era site-worker drains; deploy no longer creates or mounts its runtime socket directory.
+`site-worker-orchestrator` is retired after Stage 11. Deploy still removes stale Compose-era containers with that name, but the Go runtime source, Docker lifecycle fallback, Unix socket, and K3s scheduler hostPath mount have been removed.
 
 K3s `job-scheduler` hostPath contract:
 ```text
@@ -273,7 +273,7 @@ Build cache:
 - If Docker cache metadata is corrupt during a required image build or cleanup restore, `Engine.sh` prunes Docker builder cache and retries that image build without cache before failing the deploy.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
-- `job-scheduler` uses the Alpine scheduler image without Docker CLI, Docker Compose plugin, or Docker socket access. It runs only the queue/reconcile mode. Legacy `site-worker-orchestrator` code is still compiled for migration tests, but no long-running Stage 11 service runs the Docker-boundary mode, and the API/scheduler image entrypoints reject retired orchestrator roles before the Go binary starts.
+- `job-scheduler` uses the Alpine scheduler image without Docker CLI, Docker Compose plugin, or Docker socket access. It runs only the queue/reconcile mode. The retired `site-worker-orchestrator` Go runtime source and Docker lifecycle fallback are removed, and the API/scheduler image entrypoints plus Go binary reject retired orchestrator roles.
 - `borealis-operator` uses the same Go api-backend binary in a minimal Alpine image with `ca-certificates` and `tzdata`; it is built locally and imported into K3s containerd instead of started by Compose.
 - Service input hashes come from declared build inputs, not the repo-wide Git commit. A WebUI-only commit should not invalidate `api-backend` or `job-scheduler`.
 - `api-backend`, `job-scheduler`, and `borealis-operator` share the Go api-backend binary. `Engine.sh` builds that binary only when one of those images needs a Docker rebuild, then reuses it for the rest of that deploy pass.

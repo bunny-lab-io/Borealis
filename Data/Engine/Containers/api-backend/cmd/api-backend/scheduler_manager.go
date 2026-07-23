@@ -11,10 +11,8 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -47,14 +45,13 @@ const (
 )
 
 type goSchedulerManager struct {
-	cfg          gatewayConfig
-	store        *postgresOperatorStore
-	secret       []byte
-	apiBase      string
-	projectRoot  string
-	httpClient   *http.Client
-	orchestrator *siteWorkerOrchestratorClient
-	operator     *borealisOperatorClient
+	cfg         gatewayConfig
+	store       *postgresOperatorStore
+	secret      []byte
+	apiBase     string
+	projectRoot string
+	httpClient  *http.Client
+	operator    *borealisOperatorClient
 }
 
 type schedulerWorkItem struct {
@@ -98,13 +95,12 @@ func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
 		return err
 	}
 	manager := &goSchedulerManager{
-		cfg:          cfg,
-		store:        pgStore,
-		secret:       []byte(secret),
-		apiBase:      strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
-		projectRoot:  envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
-		orchestrator: newSiteWorkerOrchestratorClient([]byte(secret)),
+		cfg:         cfg,
+		store:       pgStore,
+		secret:      []byte(secret),
+		apiBase:     strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
+		projectRoot: envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
+		httpClient:  &http.Client{Timeout: 30 * time.Second},
 	}
 	return manager.run(ctx)
 }
@@ -209,21 +205,7 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		if err := m.processAgentMaintenanceWork(ctx); err != nil {
 			log.Printf("failed to process agent maintenance work: %v", err)
 		}
-		if err := m.refreshServiceSnapshots(ctx); err != nil {
-			log.Printf("failed to refresh service snapshots: %v", err)
-		}
 	}
-}
-
-func (m *goSchedulerManager) orchestratorClient() (*siteWorkerOrchestratorClient, error) {
-	if m.orchestrator != nil {
-		return m.orchestrator, nil
-	}
-	if len(m.secret) == 0 {
-		return nil, errors.New("site-worker orchestrator token unavailable")
-	}
-	m.orchestrator = newSiteWorkerOrchestratorClient(m.secret)
-	return m.orchestrator, nil
 }
 
 func (m *goSchedulerManager) operatorClient() (*borealisOperatorClient, error) {
@@ -1117,7 +1099,6 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 	serviceKey := strings.ToLower(cleanText(payload["service_key"]))
 	action := schedulerAnyMap(payload["action"])
 	actionName := strings.ToLower(cleanText(action["action"]))
-	actionMode := strings.ToLower(cleanText(action["mode"]))
 	if serviceKey == "" || actionName == "" {
 		return errors.New("service action payload incomplete")
 	}
@@ -1143,18 +1124,7 @@ func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[s
 			return fmt.Errorf("unsupported borealis-operator service action service=%s action=%s", serviceKey, actionName)
 		}
 	}
-	if !schedulerServiceActionUsesOrchestrator(serviceKey, actionName) {
-		return fmt.Errorf("unsupported service action service=%s action=%s", serviceKey, actionName)
-	}
-	client, err := m.orchestratorClient()
-	if err != nil {
-		return err
-	}
-	if err := client.runServiceAction(ctx, serviceKey, map[string]any{"action": actionName, "mode": actionMode}); err != nil {
-		return err
-	}
-	log.Printf("queued service action via site-worker orchestrator service=%s action=%s", serviceKey, actionName)
-	return nil
+	return fmt.Errorf("unsupported service action service=%s action=%s", serviceKey, actionName)
 }
 
 func (m *goSchedulerManager) runWireGuardControlServiceAction(ctx context.Context, actionName string) error {
@@ -1183,25 +1153,14 @@ func (m *goSchedulerManager) runSiteWorkerRecreate(ctx context.Context, action m
 	if containerName == "" {
 		return errors.New("site-worker recreate payload missing container name")
 	}
-	if schedulerSiteWorkerLifecycleMode() == "k3s" {
-		client, err := m.operatorClient()
-		if err != nil {
-			return err
-		}
-		if _, err := client.retireSiteWorker(ctx, workerGUID, "recreate"); err != nil {
-			return err
-		}
-		log.Printf("site-worker recreate retired K3s pod=%s worker_guid=%s", containerName, workerGUID)
-		return nil
-	}
-	client, err := m.orchestratorClient()
+	client, err := m.operatorClient()
 	if err != nil {
 		return err
 	}
-	if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
+	if _, err := client.retireSiteWorker(ctx, workerGUID, "recreate"); err != nil {
 		return err
 	}
-	log.Printf("site-worker recreate stopped container=%s worker_guid=%s", containerName, workerGUID)
+	log.Printf("site-worker recreate retired K3s pod=%s worker_guid=%s", containerName, workerGUID)
 	return nil
 }
 
@@ -1531,43 +1490,11 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 	if err != nil {
 		log.Printf("site-worker site name lookup failed site_id=%d: %v", siteID, err)
 	}
-	if schedulerSiteWorkerLifecycleMode() == "k3s" {
-		workerGUID = schedulerK3sSiteWorkerGUID(siteID)
-	}
+	workerGUID = schedulerK3sSiteWorkerGUID(siteID)
 	remoteOpsPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
 	remoteDesktopPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
-	if schedulerSiteWorkerLifecycleMode() == "k3s" {
-		containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
-		return m.spawnK3sSiteWorker(ctx, siteID, siteName, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
-	}
-	containerName := siteWorkerNamePrefix + strings.ToLower(cleanText(workerGUID))
-	return m.spawnDockerSiteWorker(ctx, siteID, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
-}
-
-func (m *goSchedulerManager) spawnDockerSiteWorker(ctx context.Context, siteID int64, workerGUID string, containerName string, remoteOpsPort int64, remoteDesktopPort int64) error {
-	metadata := schedulerWorkerRouteMetadata(workerGUID, remoteOpsPort, remoteDesktopPort)
-	if err := m.upsertWorker(ctx, workerGUID, containerName, siteID, schedulerWorkerStatusStarting, []string{}, nil, remoteOpsPort, metadata); err != nil {
-		return err
-	}
-	client, err := m.orchestratorClient()
-	if err != nil {
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-		return err
-	}
-	image := schedulerDesiredSiteWorkerImage()
-	if err := client.launchSiteWorker(ctx, orchestratorLaunchRequest{
-		WorkerGUID:        workerGUID,
-		SiteID:            siteID,
-		ContainerName:     containerName,
-		Image:             image,
-		RemoteOpsPort:     remoteOpsPort,
-		RemoteDesktopPort: remoteDesktopPort,
-	}); err != nil {
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-		return fmt.Errorf("failed to launch %s: %w", containerName, err)
-	}
-	log.Printf("launched Docker site-worker container=%s site_id=%d", containerName, siteID)
-	return nil
+	containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
+	return m.spawnK3sSiteWorker(ctx, siteID, siteName, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 }
 
 func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int64, siteName string, workerGUID string, containerName string, remoteOpsPort int64, remoteDesktopPort int64) error {
@@ -1649,90 +1576,7 @@ func (m *goSchedulerManager) activeWorkerForSite(ctx context.Context, siteID int
 }
 
 func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
-	if schedulerSiteWorkerLifecycleMode() == "k3s" {
-		return m.reconcileK3sSiteWorkers(ctx)
-	}
-	return m.reconcileDockerSiteWorkers(ctx)
-}
-
-func (m *goSchedulerManager) reconcileDockerSiteWorkers(ctx context.Context) error {
-	client, err := m.orchestratorClient()
-	if err != nil {
-		log.Printf("site-worker orchestrator reconcile skipped: %v", err)
-		return nil
-	}
-	snapshots, err := client.listSiteWorkers(ctx)
-	if err != nil {
-		log.Printf("site-worker orchestrator reconcile skipped: %v", err)
-		return nil
-	}
-	desiredImage := schedulerDesiredSiteWorkerImage()
-	sort.SliceStable(snapshots, func(i, j int) bool {
-		leftSite := coerceInt64(snapshots[i]["site_id"])
-		rightSite := coerceInt64(snapshots[j]["site_id"])
-		if leftSite != rightSite {
-			return leftSite < rightSite
-		}
-		leftMatches := schedulerSiteWorkerImageMatches(snapshots[i], desiredImage)
-		rightMatches := schedulerSiteWorkerImageMatches(snapshots[j], desiredImage)
-		if leftMatches != rightMatches {
-			return leftMatches
-		}
-		leftCreated := coerceInt64(snapshots[i]["created_at"])
-		rightCreated := coerceInt64(snapshots[j]["created_at"])
-		if leftCreated != rightCreated {
-			return leftCreated > rightCreated
-		}
-		return cleanText(snapshots[i]["worker_guid"]) < cleanText(snapshots[j]["worker_guid"])
-	})
-	live := []string{}
-	liveSites := map[int64]string{}
-	for _, snapshot := range snapshots {
-		workerGUID := cleanText(snapshot["worker_guid"])
-		siteID := coerceInt64(snapshot["site_id"])
-		if workerGUID == "" || siteID <= 0 {
-			continue
-		}
-		containerName := firstText(cleanText(snapshot["container_name"]), "site-worker-"+workerGUID)
-		if !schedulerSiteWorkerImageMatches(snapshot, desiredImage) {
-			if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
-				log.Printf("failed to stop stale site-worker container=%s worker_guid=%s: %v", containerName, workerGUID, err)
-			} else {
-				log.Printf("stopped stale site-worker container=%s worker_guid=%s image=%s desired=%s", containerName, workerGUID, cleanText(snapshot["configured_image"]), desiredImage)
-			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-			continue
-		}
-		if existing := liveSites[siteID]; existing != "" {
-			if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
-				log.Printf("failed to stop duplicate site-worker container=%s worker_guid=%s site_id=%d: %v", containerName, workerGUID, siteID, err)
-			} else {
-				log.Printf("stopped duplicate site-worker container=%s worker_guid=%s site_id=%d kept_worker_guid=%s", containerName, workerGUID, siteID, existing)
-			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-			continue
-		}
-		liveSites[siteID] = workerGUID
-		live = append(live, workerGUID)
-		remoteOpsPort := coerceInt64(snapshot["remote_ops_port"])
-		if remoteOpsPort <= 0 {
-			remoteOpsPort = schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
-		}
-		remoteDesktopPort := coerceInt64(snapshot["remote_desktop_port"])
-		if remoteDesktopPort <= 0 {
-			remoteDesktopPort = schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
-		}
-		if err := m.upsertWorker(ctx, workerGUID, containerName, siteID, schedulerWorkerStatusRunning, nil, nil, remoteOpsPort, schedulerWorkerRouteMetadata(workerGUID, remoteOpsPort, remoteDesktopPort)); err != nil {
-			return err
-		}
-		if err := m.updateWorkerDockerState(ctx, workerGUID, cleanText(snapshot["docker_state"]), coerceInt64Ptr(snapshot["exit_code"])); err != nil {
-			return err
-		}
-	}
-	if err := m.markMissingWorkersLost(ctx, live); err != nil {
-		return err
-	}
-	return m.pruneOrphanSiteWorkerRouteFiles(ctx)
+	return m.reconcileK3sSiteWorkers(ctx)
 }
 
 func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error {
@@ -1745,9 +1589,6 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 	if err != nil {
 		log.Printf("site-worker K3s reconcile skipped: %v", err)
 		return nil
-	}
-	if err := m.retireDockerSiteWorkersForK3sMode(ctx); err != nil {
-		log.Printf("site-worker Docker cleanup during K3s reconcile skipped: %v", err)
 	}
 	desiredImage := schedulerDesiredSiteWorkerImage()
 	sort.SliceStable(snapshots, func(i, j int) bool {
@@ -1851,50 +1692,6 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		return err
 	}
 	return m.pruneOrphanSiteWorkerRouteFiles(ctx)
-}
-
-func (m *goSchedulerManager) retireDockerSiteWorkersForK3sMode(ctx context.Context) error {
-	if !siteWorkerOrchestratorSocketAccepts(ctx) {
-		return nil
-	}
-	client, err := m.orchestratorClient()
-	if err != nil {
-		return err
-	}
-	snapshots, err := client.listSiteWorkers(ctx)
-	if err != nil {
-		return err
-	}
-	for _, snapshot := range snapshots {
-		workerGUID := cleanText(snapshot["worker_guid"])
-		if workerGUID == "" {
-			continue
-		}
-		containerName := firstText(cleanText(snapshot["container_name"]), "site-worker-"+workerGUID)
-		if err := client.stopSiteWorker(ctx, workerGUID, containerName); err != nil {
-			log.Printf("failed to stop Docker site-worker during K3s lifecycle migration container=%s worker_guid=%s: %v", containerName, workerGUID, err)
-			continue
-		}
-		log.Printf("stopped Docker site-worker during K3s lifecycle migration container=%s worker_guid=%s", containerName, workerGUID)
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-	}
-	return nil
-}
-
-func siteWorkerOrchestratorSocketAccepts(ctx context.Context) bool {
-	socketPath := siteWorkerOrchestratorSocketPath()
-	if !fileExists(socketPath) {
-		return false
-	}
-	dialCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	dialer := &net.Dialer{Timeout: 500 * time.Millisecond}
-	conn, err := dialer.DialContext(dialCtx, "unix", socketPath)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, containerName string, siteID int64, status string, lanes []string, taskLinks []map[string]any, upstreamPort int64, routeMetadata map[string]any) error {
@@ -2113,45 +1910,6 @@ func (m *goSchedulerManager) markMissingWorkersLost(ctx context.Context, live []
 	}
 	schedulerRemoveRouteFiles(routeFiles)
 	return nil
-}
-
-func (m *goSchedulerManager) refreshServiceSnapshots(ctx context.Context) error {
-	client, err := m.orchestratorClient()
-	if err != nil {
-		return nil
-	}
-	snapshots, err := client.serviceSnapshots(ctx)
-	if err != nil {
-		return nil
-	}
-	if len(snapshots) == 0 {
-		return nil
-	}
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	now := time.Now().Unix()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollbackQuietly(tx)
-	for _, snapshot := range snapshots {
-		serviceKey := firstText(cleanText(snapshot["Service"]), cleanText(snapshot["Name"]))
-		if serviceKey == "" {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO engine.job_scheduler_service_snapshots(service_key, payload_json, updated_at)
-			VALUES($1,$2,$3)
-			ON CONFLICT(service_key) DO UPDATE SET payload_json=EXCLUDED.payload_json, updated_at=EXCLUDED.updated_at
-		`, serviceKey, mustJSON(snapshot), now); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }
 
 func (m *goSchedulerManager) expireRunningScheduledRuns(ctx context.Context, now int64) error {
@@ -2724,29 +2482,8 @@ func truncateString(value string, limit int) string {
 	return value[:limit]
 }
 
-func schedulerDockerBin() string {
-	if configured := strings.TrimSpace(os.Getenv("BOREALIS_DOCKER_BIN")); configured != "" {
-		return configured
-	}
-	if path, err := exec.LookPath("docker"); err == nil {
-		return path
-	}
-	return ""
-}
-
-func schedulerComposeEnvFile(projectRoot string) string {
-	if configured := strings.TrimSpace(os.Getenv("BOREALIS_RUNTIME_ENV_FILE")); configured != "" {
-		return configured
-	}
-	return filepath.Join(projectRoot, "Engine", "Deploy", "compose.env")
-}
-
 func schedulerDesiredSiteWorkerImage() string {
 	return envDefault("BOREALIS_SITE_WORKER_IMAGE", "borealis-engine/site-worker:local")
-}
-
-func schedulerServiceActionHelperImage() string {
-	return envDefault("BOREALIS_JOB_SCHEDULER_IMAGE", "borealis-engine/job-scheduler:local")
 }
 
 func schedulerSiteWorkerSocketIOAsyncMode() string {
@@ -2794,10 +2531,6 @@ func schedulerServiceActionUsesOperator(serviceKey string, actionName string) bo
 	}
 }
 
-func schedulerServiceActionUsesOrchestrator(serviceKey string, actionName string) bool {
-	return false
-}
-
 func schedulerServiceActionUsesWireGuardControl(serviceKey string, actionName string) bool {
 	serviceKey = strings.ToLower(strings.TrimSpace(serviceKey))
 	actionName = strings.ToLower(strings.TrimSpace(actionName))
@@ -2832,7 +2565,7 @@ func schedulerBuildRoute(workerGUID, containerName string, siteID int64, upstrea
 		routeDir = filepath.Join(envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"), "Engine", "Services", "traefik-edge", "config", "dynamic")
 	}
 	routeMetadata := copyMap(metadata)
-	lifecycleOwner := firstText(cleanText(routeMetadata["lifecycle_owner"]), "site-worker-orchestrator")
+	lifecycleOwner := firstText(cleanText(routeMetadata["lifecycle_owner"]), "borealis-operator")
 	upstreamHost := firstText(cleanText(routeMetadata["upstream_host"]), "127.0.0.1")
 	routeMetadata["lifecycle_owner"] = lifecycleOwner
 	routeMetadata["route_kind"] = "site_worker"
@@ -2852,13 +2585,9 @@ func schedulerBuildRoute(workerGUID, containerName string, siteID int64, upstrea
 	}
 }
 
-func schedulerWorkerRouteMetadata(workerGUID string, remoteOpsPort, remoteDesktopPort int64) map[string]any {
-	return schedulerWorkerRouteMetadataForHost(workerGUID, "127.0.0.1", remoteOpsPort, remoteDesktopPort, "site-worker-orchestrator")
-}
-
 func schedulerWorkerRouteMetadataForHost(workerGUID string, host string, remoteOpsPort, remoteDesktopPort int64, lifecycleOwner string) map[string]any {
 	host = firstText(strings.TrimSpace(host), "127.0.0.1")
-	lifecycleOwner = firstText(strings.TrimSpace(lifecycleOwner), "site-worker-orchestrator")
+	lifecycleOwner = firstText(strings.TrimSpace(lifecycleOwner), "borealis-operator")
 	return map[string]any{
 		"upstream_host":   host,
 		"lifecycle_owner": lifecycleOwner,
@@ -3033,58 +2762,6 @@ func fnv32(value string) uint32 {
 	return hash
 }
 
-func schedulerDockerSiteWorkerSnapshots(ctx context.Context) ([]map[string]any, error) {
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
-		return nil, errors.New("docker CLI unavailable")
-	}
-	out, err := exec.CommandContext(ctx, dockerBin, "ps", "--filter", "label=borealis.role=site-worker", "--format", "{{.ID}}").Output()
-	if err != nil {
-		return nil, err
-	}
-	ids := strings.Fields(string(out))
-	if len(ids) == 0 {
-		return []map[string]any{}, nil
-	}
-	args := append([]string{"inspect"}, ids...)
-	out, err = exec.CommandContext(ctx, dockerBin, args...).Output()
-	if err != nil {
-		return nil, err
-	}
-	var inspected []map[string]any
-	if err := json.Unmarshal(out, &inspected); err != nil {
-		return nil, err
-	}
-	snapshots := []map[string]any{}
-	for _, item := range inspected {
-		config := nestedMap(item, "Config")
-		labels := mapStringAny(config["Labels"])
-		envItems, _ := config["Env"].([]any)
-		envLookup := envListLookup(envItems)
-		workerGUID := firstText(cleanText(labels["borealis.worker_guid"]), envLookup["BOREALIS_SITE_WORKER_GUID"])
-		siteID := coerceInt64(firstNonEmptyAny(labels["borealis.site_id"], envLookup["BOREALIS_SITE_WORKER_SITE_ID"]))
-		if workerGUID == "" || siteID <= 0 {
-			continue
-		}
-		state := nestedMap(item, "State")
-		name := strings.TrimPrefix(cleanText(item["Name"]), "/")
-		image := cleanText(config["Image"])
-		snapshots = append(snapshots, map[string]any{
-			"worker_guid":         workerGUID,
-			"site_id":             siteID,
-			"container_name":      firstText(name, "site-worker-"+workerGUID),
-			"image":               image,
-			"configured_image":    firstText(cleanText(labels["borealis.site_worker_image"]), envLookup["BOREALIS_SITE_WORKER_IMAGE"], image),
-			"created_at":          schedulerDockerCreatedAt(cleanText(item["Created"])),
-			"docker_state":        firstText(cleanText(state["Status"]), "running"),
-			"exit_code":           coerceInt64(state["ExitCode"]),
-			"remote_ops_port":     coerceInt64(firstNonEmptyAny(labels["borealis.remote_ops_port"], envLookup["BOREALIS_SITE_WORKER_REMOTE_OPS_PORT"])),
-			"remote_desktop_port": coerceInt64(firstNonEmptyAny(labels["borealis.remote_desktop_port"], envLookup["BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT"])),
-		})
-	}
-	return snapshots, nil
-}
-
 func schedulerSiteWorkerImageMatches(snapshot map[string]any, desiredImage string) bool {
 	configured := cleanText(snapshot["configured_image"])
 	if configured != "" {
@@ -3092,36 +2769,6 @@ func schedulerSiteWorkerImageMatches(snapshot map[string]any, desiredImage strin
 	}
 	image := cleanText(snapshot["image"])
 	return image != "" && image == desiredImage
-}
-
-func schedulerDockerCreatedAt(value string) int64 {
-	if value == "" {
-		return 0
-	}
-	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
-		return parsed.Unix()
-	}
-	return 0
-}
-
-func schedulerStopContainer(ctx context.Context, containerName string) error {
-	containerName = strings.TrimSpace(containerName)
-	if containerName == "" {
-		return nil
-	}
-	dockerBin := schedulerDockerBin()
-	if dockerBin == "" {
-		return errors.New("docker CLI unavailable")
-	}
-	out, err := exec.CommandContext(ctx, dockerBin, "stop", containerName).CombinedOutput()
-	if err != nil {
-		text := strings.TrimSpace(string(out))
-		if strings.Contains(text, "No such") {
-			return nil
-		}
-		return fmt.Errorf("%s", text)
-	}
-	return nil
 }
 
 func schedulerRouteFilesForWorkers(ctx context.Context, conn *sql.Conn, workerGUIDs []string) ([]string, error) {

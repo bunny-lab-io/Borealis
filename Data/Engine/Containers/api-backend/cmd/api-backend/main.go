@@ -67,14 +67,6 @@ func main() {
 		return
 	}
 
-	if siteWorkerOrchestratorHealthcheckMode() {
-		if err := runSiteWorkerOrchestratorHealthcheck(rootCtx, cfg); err != nil {
-			log.Printf("site-worker orchestrator healthcheck failed: %v", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	if borealisOperatorClientHealthcheckMode() {
 		if err := runBorealisOperatorClientHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("borealis-operator client healthcheck failed: %v", err)
@@ -83,10 +75,8 @@ func main() {
 		return
 	}
 
-	if siteWorkerOrchestratorMode() {
-		if err := runSiteWorkerOrchestrator(rootCtx, cfg); err != nil {
-			log.Fatalf("site-worker orchestrator exited: %v", err)
-		}
+	if retiredSiteWorkerOrchestratorMode() {
+		log.Fatalf("site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle")
 		return
 	}
 
@@ -292,6 +282,13 @@ func explicitHealthcheckArgMode() bool {
 		"borealis-operator-healthcheck",
 		"operator-healthcheck",
 	)
+}
+
+func retiredSiteWorkerOrchestratorMode() bool {
+	if processArgMatches("site-worker-orchestrator", "worker-orchestrator", "site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck") {
+		return true
+	}
+	return processRoleMatches("site-worker-orchestrator", "worker-orchestrator", "site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck")
 }
 
 func textInSet(value string, allowed ...string) bool {

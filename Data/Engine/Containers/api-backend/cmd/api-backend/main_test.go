@@ -1047,31 +1047,31 @@ func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator")
 	os.Args = []string{"api-backend", "job-scheduler"}
-	if !siteWorkerOrchestratorMode() || schedulerManagerMode() || schedulerHealthcheckMode() || siteWorkerOrchestratorHealthcheckMode() {
-		t.Fatalf("expected site-worker-orchestrator role to select orchestrator mode")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() || schedulerHealthcheckMode() {
+		t.Fatalf("expected site-worker-orchestrator role to select retired-role guard")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator")
 	os.Args = []string{"api-backend", "site-worker-orchestrator-healthcheck"}
-	if siteWorkerOrchestratorMode() || !siteWorkerOrchestratorHealthcheckMode() || schedulerManagerMode() {
-		t.Fatalf("expected site-worker-orchestrator-healthcheck arg to override inherited orchestrator role")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() {
+		t.Fatalf("expected site-worker-orchestrator-healthcheck arg to select retired-role guard")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator-healthcheck")
 	os.Args = []string{"api-backend"}
-	if siteWorkerOrchestratorMode() || !siteWorkerOrchestratorHealthcheckMode() || schedulerManagerMode() {
-		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select orchestrator healthcheck only")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() {
+		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select retired-role guard")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
 	os.Args = []string{"api-backend"}
-	if !borealisOperatorMode() || borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || siteWorkerOrchestratorMode() {
+	if !borealisOperatorMode() || borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || retiredSiteWorkerOrchestratorMode() {
 		t.Fatalf("expected borealis-operator role to select operator mode")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
 	os.Args = []string{"api-backend", "borealis-operator-healthcheck"}
-	if borealisOperatorMode() || !borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || siteWorkerOrchestratorMode() {
+	if borealisOperatorMode() || !borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || retiredSiteWorkerOrchestratorMode() {
 		t.Fatalf("expected borealis-operator-healthcheck arg to override inherited operator role")
 	}
 
