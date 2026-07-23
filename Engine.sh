@@ -531,6 +531,7 @@ dashboard_render_table() {
   local row=""
   dashboard_render_table_header
   while IFS= read -r row; do
+    dashboard_row_visible "${row}" || continue
     dashboard_render_row "${row}"
   done < <(dashboard_ordered_rows)
 }
@@ -559,7 +560,7 @@ dashboard_ordered_rows() {
   done
 }
 
-dashboard_row_visible_in_gum() {
+dashboard_row_visible() {
   case "$1" in
     "Docker Compose"|"WebUI Accessible")
       return 1
@@ -573,7 +574,7 @@ dashboard_row_visible_in_gum() {
 dashboard_ordered_gum_rows() {
   local row=""
   while IFS= read -r row; do
-    dashboard_row_visible_in_gum "${row}" || continue
+    dashboard_row_visible "${row}" || continue
     printf '%s\n' "${row}"
   done < <(dashboard_ordered_rows)
 }
