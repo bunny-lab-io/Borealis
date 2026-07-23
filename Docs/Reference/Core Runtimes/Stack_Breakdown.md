@@ -144,7 +144,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 
 K3s `api-backend` mounts the same fixed API, Traefik, and WireGuard runtime paths the Compose API backend used. It does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
 
-`site-worker-orchestrator` is retired as a long-running Compose service after Stage 11. Its source remains only as legacy migration code and tests for Docker-era site-worker drains.
+`site-worker-orchestrator` is retired as a long-running Compose service after Stage 11. Its source remains only as legacy migration code and tests for Docker-era site-worker drains; deploy no longer creates or mounts its runtime socket directory.
 
 K3s `job-scheduler` hostPath contract:
 ```text

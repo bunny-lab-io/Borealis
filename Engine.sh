@@ -3806,8 +3806,6 @@ $(k3s_timezone_volume_mount_entries)
             - name: api-secrets
               mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
               readOnly: true
-            - name: orchestrator-run
-              mountPath: /opt/Borealis/Engine/Services/site-worker-orchestrator/run
             - name: wireguard-run
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
             - name: traefik-config-root
@@ -3845,10 +3843,6 @@ $(k3s_timezone_volume_entries)
         - name: api-secrets
           hostPath:
             path: ${RUNTIME_ROOT}/Services/api-backend/secrets
-            type: Directory
-        - name: orchestrator-run
-          hostPath:
-            path: ${RUNTIME_ROOT}/Services/site-worker-orchestrator/run
             type: Directory
         - name: wireguard-run
           hostPath:
@@ -6164,7 +6158,6 @@ apply_runtime_service_ownership() {
     "${RUNTIME_ROOT}/Services/traefik-edge" \
     "${RUNTIME_ROOT}/Services/webui-frontend" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd" \
-    "${RUNTIME_ROOT}/Services/site-worker-orchestrator" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel"; do
     [[ -e "${path}" ]] || continue
     chown -R "${owner_uid}:${owner_gid}" "${path}" 2>/dev/null || true
@@ -6201,7 +6194,6 @@ apply_runtime_service_ownership() {
   chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/api-backend/logs/site-workers" 2>/dev/null || true
-  chmod 0775 "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/logs" 2>/dev/null || true
@@ -6256,7 +6248,6 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-ca" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
-    "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
@@ -7455,7 +7446,6 @@ BOREALIS_WIREGUARD_PORT_ALLOWLIST=47002,5900,22
 BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
-BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
 BOREALIS_SITE_WORKER_LIFECYCLE_MODE=${BOREALIS_SITE_WORKER_LIFECYCLE_MODE:-auto}
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
