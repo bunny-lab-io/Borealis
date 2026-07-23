@@ -348,7 +348,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Backup/Restore code keeps `engine.aegis_cipher_state` inside the encrypted payload, derives backup keys from the Aegis Cipher, and clears the in-memory Aegis key after restore.
     - [ ] Continue treating generated K3s runtime-env Secrets as deployment plumbing, not durable protected-secret authority.
 - [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
+    - [x] Code audit confirms normal deploy only recycles K3s site-worker pods for API base URL changes, site-worker runtime Secret hash changes, or timezone mismatch; repeated unchanged deploys should not recycle workers.
+    - [ ] Future PostgreSQL StatefulSet/storage changes must keep runtime env hashes stable unless worker connectivity truly needs replacement.
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
+    - [x] Reconnect delay follow-up tracked by [Technical Debt #376](https://github.com/bunny-lab-io/Borealis/issues/376).
 - [ ] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
     - [x] Live audit confirms Longhorn StorageClass exists as explicit-use only, `postgres-data-postgres-db-0` is `Bound` to StorageClass `longhorn`, and all Longhorn pods report `Running`.
     - [x] Live audit found single-node Longhorn volume robustness is `degraded` because upstream StorageClass provisioned `numberOfReplicas: 3`; tracked by [Technical Debt #378](https://github.com/bunny-lab-io/Borealis/issues/378).
