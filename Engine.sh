@@ -606,6 +606,20 @@ dashboard_state_for_status() {
   esac
 }
 
+dashboard_state_for_row() {
+  local row="$1"
+  local status="$2"
+  if [[ "${row}" == "site-worker" ]]; then
+    case "${status}" in
+      Up-to-Date|Unchanged|Ready*)
+        printf '%s\n' "Ready"
+        return 0
+        ;;
+    esac
+  fi
+  dashboard_state_for_status "${status}"
+}
+
 dashboard_action_for_row() {
   local row="$1"
   local status="$2"
@@ -696,6 +710,177 @@ dashboard_kubernetes_for_row() {
     *)
       printf '%s\n' "-"
       ;;
+  esac
+}
+
+dashboard_subtask_specs_for_row() {
+  case "$1" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' \
+        "Render k3s config|config.yaml.d|Config*" \
+        "Reconcile API firewall|systemd/firewall|Reconciling API Firewall;Firewall Failed" \
+        "Install k3s when missing|systemd/k3s|Installing K3s;Installed;Already Installed;Install Failed" \
+        "Start k3s service|systemd/k3s|Starting K3s Service;Service Running;Service Failed" \
+        "Wait for node readiness|node/k3s|Waiting For Node Readiness;Node Not Ready;Node Ready" \
+        "Verify kubeconfig|k3s.yaml|Kubeconfig*" \
+        "Verify bundled ingress disabled|traefik/servicelb|Verifying Ingress Disabled;Bundled Ingress Active" \
+        "Reconcile Borealis namespace|namespace/borealis|Reconciling Namespace;Ready"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' \
+        "Install storage dependencies|open-iscsi|Installing iSCSI Dependency;iSCSI*" \
+        "Apply Longhorn manifests|longhorn-system|Applying Manifests;Apply Failed" \
+        "Wait for CSI controllers|longhorn-system|Waiting For csi-*;Waiting For longhorn-*;Rollout Failed" \
+        "Reconcile StorageClass policy|storageclass|Reconciling StorageClass Policy;StorageClass*" \
+        "Verify Longhorn ready|storageclass/borealis-longhorn|Ready - StorageClass"
+      ;;
+    "k3s-postgres-db")
+      printf '%s\n' \
+        "Prepare image|image/postgres-db|*Image*;*Building*" \
+        "Apply StatefulSet and services|statefulset/postgres-db|Applying Manifests;Apply Failed" \
+        "Wait for PVC|pvc/postgres-db|Waiting For PVC;PVC Not Bound" \
+        "Wait for rollout|statefulset/postgres-db|Waiting For Rollout;Rollout Failed" \
+        "Run schema initializer|job/postgres-db-schema-initializer|Preparing K3s Engine Tables;Ensuring K3s Engine Tables;K3s Job*" \
+        "Ensure database tables|engine schemas|Ensuring Table *;Ready - K3s DB;Ready - Traffic Owner"
+      ;;
+    "borealis-operator")
+      printf '%s\n' \
+        "Prepare image|image/borealis-operator|*Image*;*Building*" \
+        "Clean legacy RBAC|rbac|Legacy RBAC Cleanup*" \
+        "Apply manifests|deployment/borealis-operator|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/borealis-operator|Waiting For Rollout;Rollout Failed" \
+        "Verify operator API|service/borealis-operator|Ready"
+      ;;
+    "k3s-api-backend")
+      printf '%s\n' \
+        "Prepare Go image|image/api-backend|Building Go binary;*Image*" \
+        "Validate database path|shadow db|Preparing Shadow DB Validator;Validating Shadow DB;Shadow DB*" \
+        "Apply manifests|deployment/api-backend|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/api-backend|Waiting For Rollout;Rollout Failed" \
+        "Own API traffic|127.0.0.1:5001|Ready - Traffic Owner"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' \
+        "Prepare image|image/job-scheduler|*Image*;*Building*" \
+        "Apply manifests|deployment/job-scheduler|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/job-scheduler|Waiting For Rollout;Rollout Failed" \
+        "Own scheduler loop|deployment/job-scheduler|Ready - Traffic Owner"
+      ;;
+    "k3s-wireguard-tunnel")
+      printf '%s\n' \
+        "Prepare image|image/wireguard-tunnel|*Image*;*Building*" \
+        "Apply host-network pod|deployment/wireguard-tunnel|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/wireguard-tunnel|Waiting For Rollout;Rollout Failed" \
+        "Verify control socket|wireguard-control.sock|Verifying Control Socket;Control Socket Failed" \
+        "Verify tunnel listener|udp/30000|Ready"
+      ;;
+    "k3s-traefik-edge")
+      printf '%s\n' \
+        "Prepare image|image/traefik-edge|*Image*;*Building*" \
+        "Apply edge manifests|deployment/traefik-edge|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/traefik-edge|Waiting For Rollout;Rollout Failed" \
+        "Verify ping endpoint|traefik ping|Verifying Ping;Healthcheck Failed" \
+        "Own HTTP/HTTPS traffic|ports 80/443|Ready - Traffic Owner"
+      ;;
+    "k3s-webui-frontend")
+      printf '%s\n' \
+        "Prepare WebUI image|image/webui-frontend|*Image*;*Building*" \
+        "Apply frontend manifests|deployment/webui-frontend|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/webui-frontend|Waiting For Rollout;Rollout Failed" \
+        "Own WebUI traffic|service/webui-frontend|Ready - Traffic Owner;Ready - Bridge"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' \
+        "Prepare guacd image|image/remote-desktop-guacd|*Image*;*Building*" \
+        "Apply guacd manifests|deployment/remote-desktop-guacd|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/remote-desktop-guacd|Waiting For Rollout;Rollout Failed" \
+        "Verify guacd ready|service/remote-desktop-guacd|Ready"
+      ;;
+    "site-worker")
+      printf '%s\n' \
+        "Verify worker image|image/site-worker|*Image*;*Building*" \
+        "Reconcile worker pods|pods/site-worker-*|Waiting For K3s Workers;Ready - K3s DB;Up-to-Date;Ready" \
+        "Recycle for API cutover|pods/site-worker-*|Recycling K3s Workers For API Cutover;Recycled - API Cutover" \
+        "Recycle for runtime env|pods/site-worker-*|Recycling K3s Workers For Runtime Env;Recycled - Runtime Env" \
+        "Recycle for timezone|pods/site-worker-*|Recycling K3s Workers For Timezone;Recycled - Timezone"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' \
+        "Prune inactive images|docker images|Pruning Inactive Container Images;Image Prune Failed" \
+        "Restore required images|docker images|Restoring Required Container Images" \
+        "Prune BuildKit cache|docker buildx|Pruning Engine Build Cache*;Builder Cache Prune Failed;Engine Build Cache*" \
+        "Finish cleanup|docker/buildx|Complete;Completed With Warnings;Skipped"
+      ;;
+  esac
+}
+
+dashboard_status_matches_patterns() {
+  local status="$1"
+  local patterns="$2"
+  local pattern=""
+  local -a pattern_list
+  IFS=';' read -ra pattern_list <<< "${patterns}"
+  for pattern in "${pattern_list[@]}"; do
+    [[ -n "${pattern}" && "${status}" == ${pattern} ]] && return 0
+  done
+  return 1
+}
+
+dashboard_subtask_active_index() {
+  local row="$1"
+  local status="$2"
+  local index=0
+  local label=""
+  local target=""
+  local patterns=""
+  while IFS='|' read -r label target patterns; do
+    if dashboard_status_matches_patterns "${status}" "${patterns:-}"; then
+      printf '%s\n' "${index}"
+      return 0
+    fi
+    index=$((index + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "0"
+}
+
+dashboard_subtask_state() {
+  local parent_state="$1"
+  local index="$2"
+  local active_index="$3"
+  case "${parent_state}" in
+    Ready|Complete|Unchanged)
+      printf '%s\n' "Ready"
+      ;;
+    Failed)
+      if ((index == active_index)); then
+        printf '%s\n' "Failed"
+      elif ((index < active_index)); then
+        printf '%s\n' "Ready"
+      else
+        printf '%s\n' "Pending"
+      fi
+      ;;
+    Running)
+      if ((index < active_index)); then
+        printf '%s\n' "Ready"
+      elif ((index == active_index)); then
+        printf '%s\n' "Running"
+      else
+        printf '%s\n' "Pending"
+      fi
+      ;;
+    *)
+      printf '%s\n' "Pending"
+      ;;
+  esac
+}
+
+dashboard_subtask_marker() {
+  case "$1" in
+    Ready|Complete|Unchanged) printf '%s\n' "[x]" ;;
+    Running) printf '%s\n' "[~]" ;;
+    Failed) printf '%s\n' "[!]" ;;
+    *) printf '%s\n' "[ ]" ;;
   esac
 }
 
@@ -793,7 +978,7 @@ dashboard_state_counts() {
   local unchanged=0
   while IFS= read -r row; do
     status="$(dashboard_status_text "${row}")"
-    state="$(dashboard_state_for_status "${status}")"
+    state="$(dashboard_state_for_row "${row}" "${status}")"
     case "${state}" in
       Ready) ready=$((ready + 1)) ;;
       Complete) complete=$((complete + 1)) ;;
@@ -837,29 +1022,49 @@ dashboard_render_gum_table() {
   local header_columns
   cols="$(dashboard_terminal_columns)"
   if ((cols >= 170)); then
-    widths="14,36,10,12,40"
+    widths="14,42,10,12,56"
   elif ((cols >= 135)); then
-    widths="12,32,10,12,34"
+    widths="12,38,10,12,44"
   else
-    widths="10,26,9,11,28"
+    widths="10,32,9,11,34"
   fi
-  header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Action"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Kubernetes")"
+  header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target")"
   {
     local row=""
+    local active_index=0
+    local index=0
+    local label=""
+    local marker=""
+    local patterns=""
     local state=""
     local status=""
+    local sub_state=""
+    local target=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
     printf '%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " "
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
-      state="$(dashboard_state_for_status "${status}")"
+      state="$(dashboard_state_for_row "${row}" "${status}")"
       printf '%s\t%s\t%s\t%s\t%s\n' \
         "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
         "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
         "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
         "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
         "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")"
+      active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+      index=0
+      while IFS='|' read -r label target patterns; do
+        sub_state="$(dashboard_subtask_state "${state}" "${index}" "${active_index}")"
+        marker="$(dashboard_subtask_marker "${sub_state}")"
+        printf '%s\t%s\t%s\t%s\t%s\n' \
+          "" \
+          "$(dashboard_cell "  ${marker} ${label}")" \
+          "$(dashboard_cell "subtask")" \
+          "$(dashboard_cell "$(dashboard_gum_state_cell "${sub_state}")")" \
+          "$(dashboard_cell "${target}")"
+        index=$((index + 1))
+      done < <(dashboard_subtask_specs_for_row "${row}")
     done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
     --print \
@@ -880,7 +1085,6 @@ dashboard_render_gum() {
   dashboard_render_gum_summary
   dashboard_gum_line ""
   dashboard_render_gum_table
-  dashboard_render_gum_current
   printf '\033[J'
 }
 
