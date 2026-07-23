@@ -333,6 +333,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 ## Open Risks
 
 - [ ] `borealis-operator` RBAC must stay narrower than Docker socket power.
+    - [x] Live `kubectl auth can-i` audit confirms operator ServiceAccount is namespace-scoped, cannot mutate Secrets, cannot read Nodes, cannot read `kube-system` pods, and does not have wildcard Borealis namespace access.
+    - [ ] Operator RBAC still grants namespace-wide pod `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
 - [ ] Host networking must be minimized except WireGuard/edge needs.
 - [ ] Runtime service actions must not become raw Kubernetes mutation API.
 - [ ] K3s secrets must not replace Aegis security model.
