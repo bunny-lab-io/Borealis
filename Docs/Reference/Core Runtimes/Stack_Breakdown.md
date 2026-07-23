@@ -46,11 +46,13 @@ The K3s `api-backend` runs one pod from the same API image, mirrors generated ru
 ## K3s Storage Baseline
 | Component | K3s object | Main responsibility | Exposure |
 | --- | --- | --- | --- |
-| Longhorn | Namespace `longhorn-system`, controller Deployments, DaemonSets, CSI resources, StorageClass `longhorn` by default | Persistent volume backend for future Borealis PVC-backed workloads | Cluster-internal |
+| Longhorn | Namespace `longhorn-system`, controller Deployments, DaemonSets, CSI resources, upstream StorageClass `longhorn`, and Borealis StorageClass `borealis-longhorn` | Persistent volume backend for Borealis PVC-backed workloads | Cluster-internal |
 
 `Engine.sh deploy` reconciles Longhorn before Borealis K3s workloads so PVC-backed cutover stages have a known storage baseline. K3s PostgreSQL is the first authoritative Longhorn-backed Borealis workload. The default manifest is pinned by `BOREALIS_K3S_LONGHORN_VERSION` and can be overridden with `BOREALIS_K3S_LONGHORN_MANIFEST_URL`.
 
-Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for future workload manifests. The current default is `longhorn`; `BOREALIS_K3S_STORAGE_CLASS` remains accepted as a compatibility alias. The upstream Longhorn manifest marks `longhorn` as a default StorageClass, so `Engine.sh` clears that default annotation after every Longhorn reconcile. K3s `local-path` remains default for non-Borealis or ad hoc PVCs until an explicit policy change.
+Borealis uses `BOREALIS_K3S_PVC_STORAGE_CLASS` for workload manifests. Fresh installs default to the Borealis-owned `borealis-longhorn` StorageClass, which uses Longhorn with one replica for the single-node non-HA K3s baseline. `BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS` changes that class name, and `BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT` changes the replica count for new StorageClasses. `BOREALIS_K3S_STORAGE_CLASS` remains accepted as a compatibility alias for explicit operator overrides.
+
+Existing PostgreSQL PVCs keep their current StorageClass during redeploy because StatefulSet volume claim templates and StorageClass parameters are effectively immutable for safe in-place operation. The upstream Longhorn manifest marks `longhorn` as a default StorageClass, so `Engine.sh` clears that default annotation after every Longhorn reconcile and keeps `borealis-longhorn` explicit-use only. K3s `local-path` remains default for non-Borealis or ad hoc PVCs until an explicit policy change.
 
 Longhorn requires host iSCSI support. `Engine.sh deploy` installs or verifies `open-iscsi` on Debian-style systems, `iscsi-initiator-utils` on RHEL-style systems, or equivalent distro packages, loads `iscsi_tcp`, and verifies `iscsid` is running before applying Longhorn. Normal deploy does not delete Longhorn objects, volumes, PVCs, or existing PostgreSQL state.
 

@@ -49,7 +49,10 @@ K3S_LONGHORN_VERSION="${BOREALIS_K3S_LONGHORN_VERSION:-v1.12.0}"
 K3S_LONGHORN_MANIFEST_URL="${BOREALIS_K3S_LONGHORN_MANIFEST_URL:-https://raw.githubusercontent.com/longhorn/longhorn/${K3S_LONGHORN_VERSION}/deploy/longhorn.yaml}"
 K3S_LONGHORN_ROLLOUT_TIMEOUT="${BOREALIS_K3S_LONGHORN_ROLLOUT_TIMEOUT:-300s}"
 K3S_LONGHORN_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-longhorn.sha256"
-K3S_PVC_STORAGE_CLASS="${BOREALIS_K3S_PVC_STORAGE_CLASS:-${BOREALIS_K3S_STORAGE_CLASS:-longhorn}}"
+K3S_LONGHORN_UPSTREAM_STORAGE_CLASS="${BOREALIS_K3S_LONGHORN_UPSTREAM_STORAGE_CLASS:-longhorn}"
+K3S_BOREALIS_LONGHORN_STORAGE_CLASS="${BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS:-borealis-longhorn}"
+K3S_BOREALIS_LONGHORN_REPLICA_COUNT="${BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT:-1}"
+K3S_PVC_STORAGE_CLASS="${BOREALIS_K3S_PVC_STORAGE_CLASS:-${BOREALIS_K3S_STORAGE_CLASS:-${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}}}"
 BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
@@ -1771,6 +1774,12 @@ validate_k3s_longhorn_settings() {
   normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}" >/dev/null
   [[ "${K3S_LONGHORN_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
     || die "BOREALIS_K3S_LONGHORN_NAMESPACE must be a valid Kubernetes namespace name."
+  [[ "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_UPSTREAM_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ "${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" =~ ^[1-9][0-9]*$ ]] \
+    || die "BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT must be a positive integer."
   [[ "${K3S_PVC_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
     || die "BOREALIS_K3S_PVC_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
   [[ -n "${K3S_LONGHORN_MANIFEST_URL}" ]] \
@@ -1799,6 +1808,43 @@ validate_k3s_postgres_settings() {
 
 k3s_postgres_enabled() {
   [[ "$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" == "1" ]]
+}
+
+k3s_pvc_storage_class_explicitly_set() {
+  [[ -n "${BOREALIS_K3S_PVC_STORAGE_CLASS:-}" || -n "${BOREALIS_K3S_STORAGE_CLASS:-}" ]]
+}
+
+current_k3s_postgres_pvc_storage_class() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pvc postgres-data-postgres-db-0 \
+    -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true
+}
+
+current_k3s_postgres_statefulset_storage_class() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
+    -o jsonpath='{.spec.volumeClaimTemplates[0].spec.storageClassName}' 2>/dev/null || true
+}
+
+resolve_k3s_postgres_storage_class() {
+  local storage_class=""
+  storage_class="$(current_k3s_postgres_pvc_storage_class)"
+  if [[ -n "${storage_class}" ]]; then
+    printf '%s\n' "${storage_class}"
+    return 0
+  fi
+  storage_class="$(current_k3s_postgres_statefulset_storage_class)"
+  if [[ -n "${storage_class}" ]]; then
+    printf '%s\n' "${storage_class}"
+    return 0
+  fi
+  if k3s_pvc_storage_class_explicitly_set; then
+    printf '%s\n' "${K3S_PVC_STORAGE_CLASS}"
+    return 0
+  fi
+  printf '%s\n' "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}"
 }
 
 ensure_systemctl_for_k3s() {
@@ -2335,27 +2381,108 @@ wait_for_longhorn_rollouts() {
   done
 }
 
-wait_for_longhorn_storage_class() {
+wait_for_k3s_storage_class() {
+  local storage_class="$1"
+  local status_key="$2"
   local attempt
   for attempt in {1..60}; do
-    if k3s_kubectl get storageclass "${K3S_PVC_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+    if k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
       return 0
     fi
     sleep 2
   done
-  log_status "k3s-longhorn-storage" "StorageClass Missing" "${C_RED}"
-  die "Longhorn StorageClass ${K3S_PVC_STORAGE_CLASS} was not available after reconcile. See ${BUILD_LOG}."
+  log_status "${status_key}" "StorageClass Missing" "${C_RED}"
+  die "K3s StorageClass ${storage_class} was not available after reconcile. See ${BUILD_LOG}."
 }
 
-ensure_longhorn_storage_class_explicit_only() {
+ensure_k3s_storage_class_explicit_only() {
+  local storage_class="$1"
   log_status "k3s-longhorn-storage" "Reconciling StorageClass Policy" "${C_YELLOW}"
-  if ! k3s_kubectl annotate storageclass "${K3S_PVC_STORAGE_CLASS}" \
+  if ! k3s_kubectl annotate storageclass "${storage_class}" \
     storageclass.kubernetes.io/is-default-class=false \
     storageclass.beta.kubernetes.io/is-default-class=false \
     --overwrite >> "${BUILD_LOG}" 2>&1; then
     log_status "k3s-longhorn-storage" "StorageClass Policy Failed" "${C_RED}"
-    die "Failed to mark Longhorn StorageClass ${K3S_PVC_STORAGE_CLASS} as explicit-use only. See ${BUILD_LOG}."
+    die "Failed to mark StorageClass ${storage_class} as explicit-use only. See ${BUILD_LOG}."
   fi
+}
+
+render_borealis_longhorn_storage_class_manifest() {
+  local storage_class="$1"
+  local replica_count="$2"
+  cat <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ${storage_class}
+  labels:
+    app.kubernetes.io/name: ${storage_class}
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: longhorn-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    storageclass.beta.kubernetes.io/is-default-class: "false"
+    borealis.io/longhorn-replica-count: "${replica_count}"
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "${replica_count}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  fsType: ext4
+  dataLocality: disabled
+  unmapMarkSnapChainRemoved: ignored
+  disableRevisionCounter: "true"
+  dataEngine: v1
+  backupTargetName: default
+EOF
+}
+
+ensure_borealis_longhorn_storage_class() {
+  local storage_class="${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}"
+  local replica_count="${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}"
+
+  if [[ "${storage_class}" == "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" ]]; then
+    ensure_k3s_storage_class_explicit_only "${storage_class}"
+    return 0
+  fi
+
+  local provisioner=""
+  local current_replicas=""
+  if k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
+    provisioner="$(k3s_kubectl get storageclass "${storage_class}" -o jsonpath='{.provisioner}' 2>>"${BUILD_LOG}" || true)"
+    current_replicas="$(k3s_kubectl get storageclass "${storage_class}" -o jsonpath='{.parameters.numberOfReplicas}' 2>>"${BUILD_LOG}" || true)"
+    [[ "${provisioner}" == "driver.longhorn.io" ]] \
+      || die "StorageClass ${storage_class} exists but is not a Longhorn StorageClass."
+    [[ "${current_replicas}" == "${replica_count}" ]] \
+      || die "StorageClass ${storage_class} exists with numberOfReplicas=${current_replicas}; StorageClass parameters are immutable. Create a new class name or migrate/delete unused PVCs manually."
+    k3s_kubectl label storageclass "${storage_class}" \
+      app.kubernetes.io/part-of=borealis \
+      app.kubernetes.io/managed-by=Engine.sh \
+      borealis.io/stage=longhorn-storage \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    k3s_kubectl annotate storageclass "${storage_class}" \
+      storageclass.kubernetes.io/is-default-class=false \
+      storageclass.beta.kubernetes.io/is-default-class=false \
+      borealis.io/longhorn-replica-count="${replica_count}" \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    return 0
+  fi
+
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-longhorn-storage-class.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_borealis_longhorn_storage_class_manifest "${storage_class}" "${replica_count}" > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-longhorn-storage" "StorageClass Failed" "${C_RED}"
+    die "Failed to apply Borealis Longhorn StorageClass ${storage_class}. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+  wait_for_k3s_storage_class "${storage_class}" "k3s-longhorn-storage"
 }
 
 ensure_longhorn_storage_baseline() {
@@ -2367,6 +2494,9 @@ ensure_longhorn_storage_baseline() {
       "namespace=${K3S_LONGHORN_NAMESPACE}" \
       "version=${K3S_LONGHORN_VERSION}" \
       "manifest_url=${K3S_LONGHORN_MANIFEST_URL}" \
+      "upstream_storage_class=${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" \
+      "borealis_storage_class=${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" \
+      "borealis_storage_replicas=${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" \
       "storage_class=${K3S_PVC_STORAGE_CLASS}" \
       | sha256sum | awk '{print $1}'
   )"
@@ -2398,12 +2528,16 @@ ensure_longhorn_storage_baseline() {
     borealis.io/longhorn-config-hash="${config_hash}" \
     borealis.io/longhorn-version="${K3S_LONGHORN_VERSION}" \
     borealis.io/longhorn-manifest-url="${K3S_LONGHORN_MANIFEST_URL}" \
+    borealis.io/longhorn-upstream-storage-class="${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" \
+    borealis.io/borealis-longhorn-storage-class="${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" \
+    borealis.io/borealis-longhorn-replica-count="${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" \
     borealis.io/pvc-storage-class="${K3S_PVC_STORAGE_CLASS}" \
     --overwrite >> "${BUILD_LOG}" 2>&1
 
   wait_for_longhorn_rollouts
-  wait_for_longhorn_storage_class
-  ensure_longhorn_storage_class_explicit_only
+  wait_for_k3s_storage_class "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" "k3s-longhorn-storage"
+  ensure_k3s_storage_class_explicit_only "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}"
+  ensure_borealis_longhorn_storage_class
   printf '%s  k3s-longhorn-storage\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
   log_status "k3s-longhorn-storage" "Ready - StorageClass" "${C_GREEN}"
 }
@@ -4103,6 +4237,11 @@ ensure_k3s_postgres_statefulset() {
   traffic_owner="$(normalize_postgres_traffic_owner "${traffic_owner:-$(resolve_postgres_traffic_owner)}")"
   validate_k3s_postgres_settings
 
+  local storage_class
+  storage_class="$(resolve_k3s_postgres_storage_class)"
+  [[ "${storage_class}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "Resolved K3s PostgreSQL StorageClass ${storage_class} is not a valid Kubernetes StorageClass name."
+
   local config_hash
   config_hash="$(
     printf '%s\n' \
@@ -4111,7 +4250,7 @@ ensure_k3s_postgres_statefulset() {
       "enabled=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" \
       "traffic_owner=${traffic_owner}" \
       "mode=${mode}" \
-      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      "storage_class=${storage_class}" \
       "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
       "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
       "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
@@ -4129,9 +4268,9 @@ ensure_k3s_postgres_statefulset() {
     return 0
   fi
 
-  if ! k3s_kubectl get storageclass "${K3S_PVC_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+  if ! k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
     log_status "k3s-postgres-db" "StorageClass Missing" "${C_RED}"
-    die "K3s PostgreSQL requires StorageClass ${K3S_PVC_STORAGE_CLASS}. See ${BUILD_LOG}."
+    die "K3s PostgreSQL requires StorageClass ${storage_class}. See ${BUILD_LOG}."
   fi
 
   local image
@@ -4158,7 +4297,7 @@ ensure_k3s_postgres_statefulset() {
       "postgres_gid=${postgres_gid}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
-      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      "storage_class=${storage_class}" \
       "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
       "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
       "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
@@ -4179,7 +4318,7 @@ ensure_k3s_postgres_statefulset() {
     "${postgres_gid}" \
     "${memory_limit}" \
     "${cpu_limit}" \
-    "${K3S_PVC_STORAGE_CLASS}" \
+    "${storage_class}" \
     "${K3S_POSTGRES_STORAGE_SIZE}" \
     "${traffic_owner}" \
     > "${manifest_file}"
@@ -7103,6 +7242,7 @@ write_compose_env() {
   local api_backend_upstream_host
   local api_backend_upstream_port
   local postgres_traffic_owner
+  local postgres_storage_class
   local postgres_database_url
   local internal_api_base_url
   local engine_ip_fallback=""
@@ -7150,6 +7290,7 @@ write_compose_env() {
   api_backend_upstream_host="$(resolve_api_backend_upstream_host "${api_backend_traffic_owner}")"
   api_backend_upstream_port="$(resolve_api_backend_upstream_port "${api_backend_traffic_owner}")"
   postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
+  postgres_storage_class="$(resolve_k3s_postgres_storage_class)"
   postgres_database_url="$(postgres_database_url_for_owner "${postgres_traffic_owner}" "${db_user}" "${postgres_password}" "${db_name}")"
   internal_api_base_url="http://${api_backend_upstream_host}:${api_backend_upstream_port}"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
@@ -7198,7 +7339,7 @@ BOREALIS_OPERATOR_SECRET=${operator_secret}
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
 BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME=${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}
-BOREALIS_K3S_PVC_STORAGE_CLASS=${K3S_PVC_STORAGE_CLASS}
+BOREALIS_K3S_PVC_STORAGE_CLASS=${postgres_storage_class}
 BOREALIS_K3S_POSTGRES_ENABLED=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")
 BOREALIS_K3S_POSTGRES_STORAGE_SIZE=${K3S_POSTGRES_STORAGE_SIZE}
 BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT=${K3S_POSTGRES_ROLLOUT_TIMEOUT}

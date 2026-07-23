@@ -211,6 +211,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Reconcile Longhorn host iSCSI prerequisites without deleting existing Longhorn resources or PVCs.
     - [x] Keep K3s `local-path` default unchanged for now; future Borealis PVC manifests should request `BOREALIS_K3S_PVC_STORAGE_CLASS` explicitly.
     - [x] Override Longhorn manifest default-StorageClass annotation so Longhorn stays explicit-use only.
+    - [x] Add Borealis-owned single-node Longhorn StorageClass for fresh PVCs while preserving existing PostgreSQL PVC StorageClass on redeploy.
     - [x] Add non-authoritative K3s `postgres-db` shadow StatefulSet with one Longhorn-backed PVC.
     - [x] Set PostgreSQL StatefulSet manifests to use the Longhorn StorageClass.
     - [x] Keep K3s PostgreSQL ClusterIP-only.
@@ -236,6 +237,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Longhorn system pods are ready and StorageClass is available.
     - [x] Live validation found upstream Longhorn default annotation drift; Engine reconcile now clears it after manifest apply.
     - [x] Longhorn volume attaches, mounts, detaches, and reattaches cleanly on the single-node Engine host.
+    - [x] Fresh Longhorn StorageClass policy creates `borealis-longhorn` with one replica without mutating existing `postgres-data-postgres-db-0`.
     - [x] Live deploy creates K3s `postgres-db-0` and `postgres-data-postgres-db-0` without changing Compose DB traffic owner.
     - [x] K3s PostgreSQL readiness passes on the shadow StatefulSet.
     - [x] Logical backup/restore tested through `pg_dump` from Compose PostgreSQL and `pg_restore` into K3s shadow PostgreSQL.
