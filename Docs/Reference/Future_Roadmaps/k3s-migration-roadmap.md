@@ -340,6 +340,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, and `webui-frontend` are not host-networked.
     - [ ] `api-backend`, `job-scheduler`, and `site-worker-*` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
 - [ ] Runtime service actions must not become raw Kubernetes mutation API.
+    - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
+    - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
+    - [ ] Legacy orchestrator client/source still exists for migration tests and explicit blocked modes; keep deleting unreachable compatibility code when no test or rollback value remains.
 - [ ] K3s secrets must not replace Aegis security model.
 - [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
 - [ ] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
