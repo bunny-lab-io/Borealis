@@ -977,6 +977,29 @@ dashboard_gum_progress_bar() {
   printf ']'
 }
 
+dashboard_title_case_words() {
+  local value="$1"
+  local result=""
+  local separator=""
+  local word=""
+  local first=""
+  local -a words=()
+  IFS=' ' read -ra words <<< "${value}"
+  for word in "${words[@]}"; do
+    if [[ -n "${word}" ]]; then
+      first="${word:0:1}"
+      word="${first^^}${word:1}"
+    fi
+    result+="${separator}${word}"
+    separator=" "
+  done
+  printf '%s' "${result}"
+}
+
+dashboard_gum_subtask_cell() {
+  dashboard_gum_text_style "38;5;245" "$1"
+}
+
 dashboard_current_status_cell() {
   local row="$1"
   local status="$2"
@@ -986,6 +1009,7 @@ dashboard_current_status_cell() {
   local bar_total=3
   local bar_units=0
   local completed=0
+  local detail=""
   local index=0
   local label=""
   local patterns=""
@@ -993,10 +1017,11 @@ dashboard_current_status_cell() {
   local sub_state=""
   local target=""
   local total=0
-  step="$(dashboard_action_for_row "${row}" "${status}")"
+  step="$(dashboard_title_case_words "$(dashboard_action_for_row "${row}" "${status}")")"
   total="$(dashboard_subtask_count "${row}")"
   if ((total == 0)); then
-    printf '%s: %s' "${step}" "$(dashboard_detail_for_row "${row}" "${status}")"
+    detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
+    printf '%s: %s' "${step}" "$(dashboard_gum_subtask_cell "${detail}")"
     return 0
   fi
   active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
@@ -1036,12 +1061,13 @@ dashboard_current_status_cell() {
         ;;
     esac
   fi
+  detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
   printf '%s [%s/%s] %s: %s' \
     "$(dashboard_gum_progress_bar "${bar_units}" "${bar_total}" "${bar_state}")" \
     "${completed}" \
     "${total}" \
     "${step}" \
-    "$(dashboard_detail_for_row "${row}" "${status}")"
+    "$(dashboard_gum_subtask_cell "${detail}")"
 }
 
 dashboard_detail_for_row() {
