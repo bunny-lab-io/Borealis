@@ -293,19 +293,19 @@ Deploy output:
 - Service rows start as `Pending...` and update in place as deploy stages run.
 - Gum service rows render with `Domain`, `Resource`, `Action`, `State`, and `Kubernetes` columns. Plain service rows render with `Domain`, `Item`, `Status`, and `Last Status Update` columns.
 - The `State` column uses a mint-green `Ready` marker so operators can scan completed Kubernetes resources quickly.
-- The Gum table omits the retired Docker Compose row and final WebUI smoke row because those are implementation/status details already reflected in log output and final command success.
+- The deployment dashboard omits the retired Docker Compose row and final WebUI smoke row because those are implementation/status details already reflected in log output and final command success.
 - The `k3s Cluster` rows render first because Engine deploy reconciles the cluster and operator bridge before cleanup work.
 - `Last Status Update` uses a human-readable local timestamp such as `July 11th 2026 @ 3:03PM`.
-- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, and `Housekeeping` in Gum mode. Plain fallback can still include legacy reconciliation and completion rows.
+- Domains include `Frontend`, `Backend`, `Networking`, `Database`, `k3s Cluster`, and `Housekeeping`.
 - Item names are friendly display labels such as `API Backend`, `Job Scheduler`, `Traefik Reverse Cluster Proxy`, `WireGuard Server`, and `PostgreSQL Database`.
 - Service rows use compact status values such as `Up-to-Date`, `Building Go binary`, `(Re)Building Container Image`, `Ready - Image (Re)Built`, `Starting`, `Running`, `Running - Healthy`, `Reconciling Stack`, `Stack Reconciled`, or `Complete`.
 - Shared build-artifact or image-reuse relationships appear only in transient status text. For example, the `Job Scheduler` row may show `[Shares API Backend Image] -> (Re)Building Container Image`. Runtime health updates later replace those sharing notes with K3s readiness state.
 - Database schema setup updates the `PostgreSQL DB` row with table-level progress such as `Ensuring Table "devices" Exists`, writes each table progress line to `Engine/Deploy/build.log`, then returns the row to `Ready - K3s DB` after maintenance completes.
-- K3s cluster status uses the `k3s Cluster` domain. `Ensuring Cluster Exists` reports baseline reconcile progress. `Borealis Operator`, `K3s API Backend`, `K3s Job Scheduler`, `K3s WireGuard Tunnel`, `K3s Traefik Edge`, `K3s WebUI Frontend`, and `Guacamole Bridge` report image import, manifest apply, and Deployment rollout.
-- Compose status uses the `Reconciliation` domain and reports `Retired` after Stage 11. The Compose manifest stays empty so deploy can prove no retired service has drifted back into Compose ownership.
+- K3s cluster status uses the `k3s Cluster` domain. `Ensuring k3s Cluster Exists` reports baseline reconcile progress. `Borealis Operator`, `API Backend`, `Job Scheduler`, `WireGuard Server`, `Traefik Reverse Cluster Proxy`, `WebUI Frontend`, and `Apache Guacamole` report image import, manifest apply, and Deployment rollout.
+- Build log and deploy manifest still record Compose action as `retired` after Stage 11. The visible dashboard omits that row, and the Compose manifest stays empty so deploy can prove no retired service has drifted back into Compose ownership.
 - Image/cache pruning uses the `Housekeeping` domain.
 - Cleanup reports Engine Buildx cache retention as removed and retained cache export counts.
-- Successful deploys finish by updating the `Complete` domain with the WebUI URL.
+- Successful deploys still log the final WebUI URL and show it in the dashboard footer `Current`/`State` fields.
 - Full Docker build detail remains in `Engine/Deploy/build.log`.
 
 WebUI targets:
