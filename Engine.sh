@@ -1027,22 +1027,31 @@ dashboard_render_gum_current() {
 dashboard_render_gum_table() {
   local cols
   local compact_pairs=0
+  local mirrored_pairs=0
   local widths
   local header_columns
   cols="$(dashboard_terminal_columns)"
-  if ((cols >= 170)); then
+  if ((cols >= 210)); then
     compact_pairs=1
-    widths="12,34,10,10,36,56"
-  elif ((cols >= 135)); then
+    mirrored_pairs=1
+    widths="12,38,10,10,36,38,10,36"
+  elif ((cols >= 180)); then
     compact_pairs=1
-    widths="11,30,9,10,30,42"
+    mirrored_pairs=1
+    widths="11,32,9,10,30,32,10,30"
+  elif ((cols >= 155)); then
+    compact_pairs=1
+    mirrored_pairs=1
+    widths="10,27,8,9,24,27,9,24"
   elif ((cols >= 120)); then
     compact_pairs=1
     widths="10,28,8,9,26,32"
   else
     widths="10,32,9,11,34"
   fi
-  if ((compact_pairs)); then
+  if ((mirrored_pairs)); then
+    header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target"),$(dashboard_gum_header "Checkpoint"),$(dashboard_gum_header "Check State"),$(dashboard_gum_header "Check Target")"
+  elif ((compact_pairs)); then
     header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target"),$(dashboard_gum_header "Checkpoint")"
   else
     header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target")"
@@ -1064,7 +1073,9 @@ dashboard_render_gum_table() {
     local target=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
-    if ((compact_pairs)); then
+    if ((mirrored_pairs)); then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " " " " " "
+    elif ((compact_pairs)); then
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " "
     else
       printf '%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " "
@@ -1072,7 +1083,17 @@ dashboard_render_gum_table() {
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_row "${row}" "${status}")"
-      if ((compact_pairs)); then
+      if ((mirrored_pairs)); then
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
+          "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
+          "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
+          "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+          "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
+          "" \
+          "" \
+          ""
+      elif ((compact_pairs)); then
         printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
           "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
           "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
@@ -1103,7 +1124,17 @@ dashboard_render_gum_table() {
           left_state="${sub_state}"
           left_target="${target}"
         else
-          if ((compact_pairs)); then
+          if ((mirrored_pairs)); then
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "" \
+              "$(dashboard_cell "  ${left_marker} ${left_label}")" \
+              "" \
+              "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
+              "$(dashboard_cell "${left_target}")" \
+              "$(dashboard_cell "  ${marker} ${label}")" \
+              "$(dashboard_cell "$(dashboard_gum_state_cell "${sub_state}")")" \
+              "$(dashboard_cell "${target}")"
+          elif ((compact_pairs)); then
             printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
               "" \
               "$(dashboard_cell "  ${left_marker} ${left_label}")" \
@@ -1127,7 +1158,17 @@ dashboard_render_gum_table() {
         index=$((index + 1))
       done < <(dashboard_subtask_specs_for_row "${row}")
       if [[ -n "${left_label}" ]]; then
-        if ((compact_pairs)); then
+        if ((mirrored_pairs)); then
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "" \
+            "$(dashboard_cell "  ${left_marker} ${left_label}")" \
+            "" \
+            "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
+            "$(dashboard_cell "${left_target}")" \
+            "" \
+            "" \
+            ""
+        elif ((compact_pairs)); then
           printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
             "" \
             "$(dashboard_cell "  ${left_marker} ${left_label}")" \
