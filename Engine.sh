@@ -2753,7 +2753,7 @@ automountServiceAccountToken: true
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
   namespace: ${K3S_NAMESPACE}
   labels:
     app.kubernetes.io/name: borealis-operator
@@ -2785,7 +2785,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
   namespace: ${K3S_NAMESPACE}
   labels:
     app.kubernetes.io/name: borealis-operator
@@ -2799,7 +2799,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-readonly
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -2946,6 +2946,18 @@ spec:
 EOF
 }
 
+retire_legacy_borealis_operator_readonly_rbac() {
+  local legacy_name="${BOREALIS_OPERATOR_SERVICE_NAME}-readonly"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete rolebinding "${legacy_name}" --ignore-not-found=true >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Legacy RBAC Cleanup Failed" "${C_RED}"
+    die "Failed to remove legacy Borealis operator RoleBinding '${legacy_name}'. See ${BUILD_LOG}."
+  fi
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete role "${legacy_name}" --ignore-not-found=true >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Legacy RBAC Cleanup Failed" "${C_RED}"
+    die "Failed to remove legacy Borealis operator Role '${legacy_name}'. See ${BUILD_LOG}."
+  fi
+}
+
 ensure_borealis_operator_bridge() {
   local image="${IMAGE_TAGS[borealis-operator]:-}"
   [[ -n "${image}" ]] || image="$(previous_image_tag borealis-operator)"
@@ -2960,7 +2972,7 @@ ensure_borealis_operator_bridge() {
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v1" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
@@ -2977,6 +2989,7 @@ ensure_borealis_operator_bridge() {
     die "Failed to apply Borealis operator manifests. See ${BUILD_LOG}."
   fi
   rm -f "${manifest_file}"
+  retire_legacy_borealis_operator_readonly_rbac
 
   log_status "borealis-operator" "Waiting For Rollout" "${C_YELLOW}"
   if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${BOREALIS_OPERATOR_SERVICE_NAME}" --timeout=90s >> "${BUILD_LOG}" 2>&1; then

@@ -302,6 +302,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Narrow remaining legacy Docker status code to PostgreSQL snapshot support and shared retired-container cleanup.
     - [x] Stop Engine deploy from installing/requiring Docker Compose plugin and retarget legacy dump import helper to K3s PostgreSQL.
     - [x] Clean stale post-retirement docs that still described Compose as deployment/runtime tooling.
+    - [x] Rename operator RBAC from stale `readonly` naming to lifecycle-scoped controller naming and add old RBAC cleanup.
 - [ ] Keep migration and recovery docs until stable release.
 - [x] Update `Docs/Reference/Core Runtimes/Stack_Breakdown.md`, `engine-runtime.md`, `security-whitepaper.md`, SBOM if dependencies changed.
 - [ ] Validation:
