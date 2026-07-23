@@ -875,21 +875,96 @@ dashboard_subtask_state() {
   esac
 }
 
-dashboard_subtask_marker() {
-  case "$1" in
-    Ready|Complete|Unchanged) printf '%s\n' "[x]" ;;
-    Running) printf '%s\n' "[~]" ;;
-    Failed) printf '%s\n' "[!]" ;;
-    *) printf '%s\n' "[ ]" ;;
+dashboard_gum_progress_bar() {
+  local completed="$1"
+  local total="$2"
+  local state="$3"
+  local width=12
+  local filled=0
+  local empty=0
+  local fill=""
+  local rest=""
+  local i=0
+  local color="38;5;246"
+  if ((total > 0)); then
+    filled=$((completed * width / total))
+  fi
+  if ((completed > 0 && filled == 0)); then
+    filled=1
+  fi
+  if ((filled > width)); then
+    filled="${width}"
+  fi
+  empty=$((width - filled))
+  for ((i = 0; i < filled; i++)); do
+    fill+="#"
+  done
+  for ((i = 0; i < empty; i++)); do
+    rest+="-"
+  done
+  case "${state}" in
+    Ready|Complete|Unchanged)
+      color="1;38;5;121"
+      ;;
+    Running)
+      color="1;38;5;228"
+      ;;
+    Failed)
+      color="1;38;5;203"
+      ;;
   esac
+  printf '['
+  if [[ -n "${fill}" ]]; then
+    dashboard_gum_text_style "${color}" "${fill}"
+  fi
+  if [[ -n "${rest}" ]]; then
+    dashboard_gum_text_style "38;5;240" "${rest}"
+  fi
+  printf ']'
 }
 
-dashboard_subtask_pair_cell() {
-  local marker="$1"
-  local state="$2"
-  local label="$3"
-  local target="$4"
-  printf '%s %s %s -> %s' "${marker}" "$(dashboard_gum_state_cell "${state}")" "${label}" "${target}"
+dashboard_current_status_cell() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local active_index=0
+  local completed=0
+  local index=0
+  local label=""
+  local patterns=""
+  local sub_state=""
+  local target=""
+  local total=0
+  while IFS='|' read -r label target patterns; do
+    total=$((total + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  if ((total == 0)); then
+    printf '%s' "$(dashboard_detail_for_row "${row}" "${status}")"
+    return 0
+  fi
+  active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+  while IFS='|' read -r label target patterns; do
+    sub_state="$(dashboard_subtask_state "${parent_state}" "${index}" "${active_index}")"
+    if [[ "${sub_state}" == "Complete" ]]; then
+      completed=$((completed + 1))
+    fi
+    index=$((index + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  case "${parent_state}" in
+    Ready|Complete|Unchanged)
+      completed="${total}"
+      status="Complete"
+      ;;
+    Pending)
+      completed=0
+      status="Pending..."
+      ;;
+  esac
+  printf '%s [%s/%s] %s' \
+    "$(dashboard_gum_progress_bar "${completed}" "${total}" "${parent_state}")" \
+    "${completed}" \
+    "${total}" \
+    "$(dashboard_detail_for_row "${row}" "${status}")"
 }
 
 dashboard_detail_for_row() {
@@ -1026,165 +1101,36 @@ dashboard_render_gum_current() {
 
 dashboard_render_gum_table() {
   local cols
-  local compact_pairs=0
-  local mirrored_pairs=0
   local widths
   local header_columns
   cols="$(dashboard_terminal_columns)"
-  if ((cols >= 210)); then
-    compact_pairs=1
-    mirrored_pairs=1
-    widths="12,38,10,10,36,38,10,36"
-  elif ((cols >= 180)); then
-    compact_pairs=1
-    mirrored_pairs=1
-    widths="11,32,9,10,30,32,10,30"
-  elif ((cols >= 155)); then
-    compact_pairs=1
-    mirrored_pairs=1
-    widths="10,27,8,9,24,27,9,24"
+  if ((cols >= 180)); then
+    widths="12,36,10,10,38,68"
+  elif ((cols >= 150)); then
+    widths="11,32,9,10,34,50"
   elif ((cols >= 120)); then
-    compact_pairs=1
-    widths="10,28,8,9,26,32"
+    widths="10,28,8,9,28,36"
   else
-    widths="10,32,9,11,34"
+    widths="10,26,8,9,24,28"
   fi
-  if ((mirrored_pairs)); then
-    header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target"),$(dashboard_gum_header "Checkpoint"),$(dashboard_gum_header "Check State"),$(dashboard_gum_header "Check Target")"
-  elif ((compact_pairs)); then
-    header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target"),$(dashboard_gum_header "Checkpoint")"
-  else
-    header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Target")"
-  fi
+  header_columns="$(dashboard_gum_header "Domain"),$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Step"),$(dashboard_gum_header "State"),$(dashboard_gum_header "Kubernetes"),$(dashboard_gum_header "Current Status")"
   {
     local row=""
-    local active_index=0
-    local index=0
-    local label=""
-    local left_label=""
-    local left_marker=""
-    local left_state=""
-    local left_target=""
-    local marker=""
-    local patterns=""
     local state=""
     local status=""
-    local sub_state=""
-    local target=""
     # Gum print mode still styles the first data row as selected in a TTY.
     # Feed one inert row and remove it after rendering so real rows stay uniform.
-    if ((mirrored_pairs)); then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " " " " " "
-    elif ((compact_pairs)); then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " "
-    else
-      printf '%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " "
-    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' " " " " " " " " " " " "
     while IFS= read -r row; do
       status="$(dashboard_status_text "${row}")"
       state="$(dashboard_state_for_row "${row}" "${status}")"
-      if ((mirrored_pairs)); then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-          "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
-          "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
-          "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
-          "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
-          "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
-          "" \
-          "" \
-          ""
-      elif ((compact_pairs)); then
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-          "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
-          "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
-          "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
-          "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
-          "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
-          ""
-      else
-        printf '%s\t%s\t%s\t%s\t%s\n' \
-          "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
-          "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
-          "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
-          "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
-          "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")"
-      fi
-      active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
-      index=0
-      left_label=""
-      left_marker=""
-      left_state=""
-      left_target=""
-      while IFS='|' read -r label target patterns; do
-        sub_state="$(dashboard_subtask_state "${state}" "${index}" "${active_index}")"
-        marker="$(dashboard_subtask_marker "${sub_state}")"
-        if [[ -z "${left_label}" ]]; then
-          left_label="${label}"
-          left_marker="${marker}"
-          left_state="${sub_state}"
-          left_target="${target}"
-        else
-          if ((mirrored_pairs)); then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "" \
-              "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-              "" \
-              "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-              "$(dashboard_cell "${left_target}")" \
-              "$(dashboard_cell "  ${marker} ${label}")" \
-              "$(dashboard_cell "$(dashboard_gum_state_cell "${sub_state}")")" \
-              "$(dashboard_cell "${target}")"
-          elif ((compact_pairs)); then
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-              "" \
-              "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-              "" \
-              "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-              "$(dashboard_cell "${left_target}")" \
-              "$(dashboard_cell "$(dashboard_subtask_pair_cell "${marker}" "${sub_state}" "${label}" "${target}")")"
-          else
-            printf '%s\t%s\t%s\t%s\t%s\n' \
-              "" \
-              "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-              "" \
-              "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-              "$(dashboard_cell "${left_target} | $(dashboard_subtask_pair_cell "${marker}" "${sub_state}" "${label}" "${target}")")"
-          fi
-          left_label=""
-          left_marker=""
-          left_state=""
-          left_target=""
-        fi
-        index=$((index + 1))
-      done < <(dashboard_subtask_specs_for_row "${row}")
-      if [[ -n "${left_label}" ]]; then
-        if ((mirrored_pairs)); then
-          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "" \
-            "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-            "" \
-            "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-            "$(dashboard_cell "${left_target}")" \
-            "" \
-            "" \
-            ""
-        elif ((compact_pairs)); then
-          printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-            "" \
-            "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-            "" \
-            "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-            "$(dashboard_cell "${left_target}")" \
-            ""
-        else
-          printf '%s\t%s\t%s\t%s\t%s\n' \
-            "" \
-            "$(dashboard_cell "  ${left_marker} ${left_label}")" \
-            "" \
-            "$(dashboard_cell "$(dashboard_gum_state_cell "${left_state}")")" \
-            "$(dashboard_cell "${left_target}")"
-        fi
-      fi
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(dashboard_cell "${DASHBOARD_ROW_SECTION[${row}]:-Events}")" \
+        "$(dashboard_cell "$(dashboard_row_label "${row}")")" \
+        "$(dashboard_cell "$(dashboard_action_for_row "${row}" "${status}")")" \
+        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+        "$(dashboard_cell "$(dashboard_kubernetes_for_row "${row}")")" \
+        "$(dashboard_cell "$(dashboard_current_status_cell "${row}" "${status}" "${state}")")"
     done < <(dashboard_ordered_gum_rows)
   } | "${GUM_BIN}" table \
     --print \
