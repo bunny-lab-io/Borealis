@@ -336,6 +336,9 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Live `kubectl auth can-i` audit confirms operator ServiceAccount is namespace-scoped, cannot mutate Secrets, cannot read Nodes, cannot read `kube-system` pods, and does not have wildcard Borealis namespace access.
     - [ ] Operator RBAC still grants namespace-wide pod `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
 - [ ] Host networking must be minimized except WireGuard/edge needs.
+    - [x] Live host-network audit identifies required v1 host-network pods: `traefik-edge` for TCP 80/443/health and `wireguard-tunnel` for UDP 30000 plus `/dev/net/tun`.
+    - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, and `webui-frontend` are not host-networked.
+    - [ ] `api-backend`, `job-scheduler`, and `site-worker-*` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
 - [ ] Runtime service actions must not become raw Kubernetes mutation API.
 - [ ] K3s secrets must not replace Aegis security model.
 - [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
