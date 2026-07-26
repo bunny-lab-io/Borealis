@@ -365,10 +365,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
     - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
     - [x] Retired orchestrator source and Docker lifecycle fallback are removed; remaining references are fail-closed process-role guards, tests, retired-container cleanup, or PostgreSQL shadow-import migration support.
-- [ ] K3s secrets must not replace Aegis security model.
+- [x] K3s secrets must not replace Aegis security model.
     - [x] Security whitepaper states K3s Secret encryption at rest is enabled for Kubernetes objects while Aegis remains the Borealis model for protected operator, credential, token, and signing material.
     - [x] Backup/Restore code keeps `engine.aegis_cipher_state` inside the encrypted payload, derives backup keys from the Aegis Cipher, and clears the in-memory Aegis key after restore.
-    - [ ] Continue treating generated K3s runtime-env Secrets as deployment plumbing, not durable protected-secret authority.
+    - [x] Continue treating generated K3s runtime-env Secrets as deployment plumbing, not durable protected-secret authority.
+        - [x] Code audit confirms generated K3s runtime Secrets are rendered from deploy env and consumed through `envFrom.secretRef` for pods/jobs; durable API secrets remain mounted Engine paths and Aegis/database-managed payloads.
 - [ ] Future PostgreSQL rollouts must avoid unnecessary site-worker churn and agent disconnects.
     - [x] Code audit confirms normal deploy only recycles K3s site-worker pods for API base URL changes, site-worker runtime Secret hash changes, or timezone mismatch; repeated unchanged deploys should not recycle workers.
     - [ ] Future PostgreSQL StatefulSet/storage changes must keep runtime env hashes stable unless worker connectivity truly needs replacement.
