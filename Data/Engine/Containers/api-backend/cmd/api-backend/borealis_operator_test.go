@@ -299,10 +299,33 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	t.Setenv("BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST", "borealis-engine/site-worker:sha-cccccccccccc")
 	t.Setenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH", "runtime-hash-test")
 	var createdPod map[string]any
+	var createdService map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
 			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			if err := json.NewDecoder(r.Body).Decode(&createdService); err != nil {
+				t.Fatal(err)
+			}
+			spec := nestedMap(createdService, "spec")
+			if cleanText(spec["type"]) != "ClusterIP" {
+				t.Fatalf("site-worker service must be ClusterIP: %#v", spec)
+			}
+			selector := nestedMap(spec, "selector")
+			if cleanText(selector["borealis.io/worker-guid"]) != "worker-safe" {
+				t.Fatalf("site-worker service selector must target worker guid: %#v", selector)
+			}
+			ports, _ := spec["ports"].([]any)
+			if len(ports) != 2 {
+				t.Fatalf("expected remote ops and remote desktop service ports: %#v", ports)
+			}
+			if rawSpec, ok := createdService["spec"].(map[string]any); ok {
+				rawSpec["clusterIP"] = "10.43.10.7"
+			}
+			writeJSON(w, http.StatusCreated, createdService)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/borealis/pods":
 			if err := json.NewDecoder(r.Body).Decode(&createdPod); err != nil {
 				t.Fatal(err)
@@ -318,8 +341,11 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 			if spec["automountServiceAccountToken"] != false {
 				t.Fatalf("site-worker pod must not mount service account token: %#v", spec)
 			}
-			if spec["hostNetwork"] != true {
-				t.Fatalf("site-worker pod must use host loopback bridge during Compose transition: %#v", spec)
+			if spec["hostNetwork"] != false {
+				t.Fatalf("site-worker pod must not use host networking after ClusterIP routing: %#v", spec)
+			}
+			if cleanText(spec["dnsPolicy"]) != "ClusterFirst" {
+				t.Fatalf("site-worker pod should use normal cluster DNS: %#v", spec)
 			}
 			volumes, _ := spec["volumes"].([]any)
 			hostPaths := map[string]bool{}
@@ -373,6 +399,9 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if cleanText(annotations["borealis.io/runtime-config-hash"]) != "runtime-hash-test" {
 		t.Fatalf("unexpected runtime config hash annotation: %#v", annotations)
 	}
+	if cleanText(annotations["borealis.io/network-mode"]) != "cluster-ip" {
+		t.Fatalf("expected ClusterIP network mode annotation: %#v", annotations)
+	}
 	spec := nestedMap(createdPod, "spec")
 	containers, _ := spec["containers"].([]any)
 	if len(containers) != 1 {
@@ -388,6 +417,15 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 	if envByName["BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH"] != "runtime-hash-test" {
 		t.Fatalf("expected runtime config hash env, got %#v", envByName)
 	}
+	if envByName["BOREALIS_SITE_WORKER_BIND_HOST"] != "0.0.0.0" {
+		t.Fatalf("expected site-worker pod network bind, got %#v", envByName)
+	}
+	if envByName["BOREALIS_SITE_WORKER_REMOTE_OPS_HOST"] != "10.43.10.7" {
+		t.Fatalf("expected service ClusterIP as worker route host, got %#v", envByName)
+	}
+	if cleanText(payload["service_cluster_ip"]) != "10.43.10.7" {
+		t.Fatalf("expected service ClusterIP in launch payload: %#v", payload)
+	}
 }
 
 func TestBorealisOperatorLaunchSiteWorkerKeepsFullUUIDAsWorkerIdentity(t *testing.T) {
@@ -397,6 +435,17 @@ func TestBorealisOperatorLaunchSiteWorkerKeepsFullUUIDAsWorkerIdentity(t *testin
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
 			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			var createdService map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&createdService); err != nil {
+				t.Fatal(err)
+			}
+			if rawSpec, ok := createdService["spec"].(map[string]any); ok {
+				rawSpec["clusterIP"] = "10.43.10.8"
+			}
+			writeJSON(w, http.StatusCreated, createdService)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/namespaces/borealis/pods":
 			if err := json.NewDecoder(r.Body).Decode(&createdPod); err != nil {
 				t.Fatal(err)
@@ -455,8 +504,8 @@ func TestBorealisOperatorListSiteWorkersAttachesKubernetesMetrics(t *testing.T) 
 								"borealis.io/image-ref":           "borealis-engine/site-worker:sha-cccccccccccc",
 								"borealis.io/remote-ops-port":     "56001",
 								"borealis.io/remote-desktop-port": "61001",
-								"borealis.io/remote-ops-host":     "127.0.0.1",
-								"borealis.io/network-mode":        "host-loopback",
+								"borealis.io/remote-ops-host":     "site-worker-bunny-lab.borealis.svc.cluster.local",
+								"borealis.io/network-mode":        "cluster-ip",
 							},
 						},
 						"spec": map[string]any{
@@ -478,6 +527,35 @@ func TestBorealisOperatorListSiteWorkersAttachesKubernetesMetrics(t *testing.T) 
 							"startTime": "2026-07-19T03:00:00Z",
 							"conditions": []any{
 								map[string]any{"type": "Ready", "status": "True"},
+							},
+						},
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-bunny-lab",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/worker-guid":      "worker-1",
+								"borealis.io/site-id":          "7",
+							},
+							"annotations": map[string]any{
+								"borealis.io/network-mode": "cluster-ip",
+								"borealis.io/service-dns":  "site-worker-bunny-lab.borealis.svc.cluster.local",
+							},
+						},
+						"spec": map[string]any{
+							"type":      "ClusterIP",
+							"clusterIP": "10.43.10.9",
+							"ports": []any{
+								map[string]any{"name": "remote-ops", "port": 56001, "targetPort": "remote-ops", "protocol": "TCP"},
+								map[string]any{"name": "remote-desktop", "port": 61001, "targetPort": "remote-desktop", "protocol": "TCP"},
 							},
 						},
 					},
@@ -536,6 +614,12 @@ func TestBorealisOperatorListSiteWorkersAttachesKubernetesMetrics(t *testing.T) 
 	if got := metrics["cpu_usage_millicores"]; got != float64(125) {
 		t.Fatalf("expected millicore summary, got %#v", metrics)
 	}
+	if got := workers[0]["service_cluster_ip"]; got != "10.43.10.9" {
+		t.Fatalf("expected site-worker Service ClusterIP, got %#v worker=%#v", got, workers[0])
+	}
+	if got := workers[0]["remote_ops_host"]; got != "10.43.10.9" {
+		t.Fatalf("expected service ClusterIP route host, got %#v worker=%#v", got, workers[0])
+	}
 }
 
 func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing.T) {
@@ -543,6 +627,19 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{
+				map[string]any{"metadata": map[string]any{"name": "site-worker-worker-safe", "namespace": "borealis", "labels": map[string]any{
+					"app.kubernetes.io/component":  "site-worker",
+					"app.kubernetes.io/managed-by": "borealis-operator",
+					"borealis.io/worker-guid":      "worker-safe",
+				}}},
+				map[string]any{"metadata": map[string]any{"name": "site-worker-user-owned", "namespace": "borealis", "labels": map[string]any{
+					"app.kubernetes.io/component":  "site-worker",
+					"app.kubernetes.io/managed-by": "manual",
+					"borealis.io/worker-guid":      "worker-safe",
+				}}},
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
 			writeJSON(w, http.StatusOK, map[string]any{"items": []any{
 				map[string]any{"metadata": map[string]any{"name": "site-worker-worker-safe", "namespace": "borealis", "labels": map[string]any{
 					"app.kubernetes.io/component":  "site-worker",
@@ -569,8 +666,17 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("expected retire success status=%d payload=%#v err=%v", status, payload, err)
 	}
-	if len(deleted) != 1 || deleted[0] != "/api/v1/namespaces/borealis/pods/site-worker-worker-safe" {
-		t.Fatalf("unexpected deleted pods: %#v", deleted)
+	expectedDeletes := map[string]bool{
+		"/api/v1/namespaces/borealis/pods/site-worker-worker-safe":     true,
+		"/api/v1/namespaces/borealis/services/site-worker-worker-safe": true,
+	}
+	if len(deleted) != len(expectedDeletes) {
+		t.Fatalf("unexpected delete count paths=%#v", deleted)
+	}
+	for _, path := range deleted {
+		if !expectedDeletes[path] {
+			t.Fatalf("unexpected delete path %s paths=%#v", path, deleted)
+		}
 	}
 }
 

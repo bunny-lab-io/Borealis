@@ -3313,6 +3313,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete"]
   - apiGroups: ["apps"]
     resources: ["deployments", "replicasets", "statefulsets"]
     verbs: ["get", "list"]
@@ -3518,7 +3521,7 @@ ensure_borealis_operator_bridge() {
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v1" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then

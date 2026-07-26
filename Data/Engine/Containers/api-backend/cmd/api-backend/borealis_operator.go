@@ -542,21 +542,56 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 	if len(existing) > 0 {
 		return nil, http.StatusConflict, fmt.Errorf("site-worker %s already has %d K3s pod(s)", workerGUID, len(existing))
 	}
+	staleServices, err := o.siteWorkerServicesByGUID(ctx, workerGUID)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	for _, service := range staleServices {
+		metadata := nestedMap(service, "metadata")
+		name := cleanText(metadata["name"])
+		if name == "" {
+			continue
+		}
+		if err := o.kubeDelete(ctx, "core", "services", name, map[string]any{
+			"apiVersion": "v1",
+			"kind":       "DeleteOptions",
+		}); err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+	}
 	siteName := cleanText(req.SiteName)
 	siteSlug := siteWorkerSiteSlug(req.SiteID, siteName)
 	podName := siteWorkerNameForSite(req.SiteID, siteName, workerGUID)
 	if !borealisOperatorKubernetesObjectNameAllowed(podName) {
 		return nil, http.StatusBadRequest, errors.New("generated site-worker pod name must be a Kubernetes DNS label segment")
 	}
-	pod := o.siteWorkerPodManifest(podName, req.SiteID, siteName, siteSlug, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
-	created, err := o.kubeCreate(ctx, "core", "pods", pod)
+	serviceName := siteWorkerServiceNameForSite(req.SiteID, siteName, workerGUID)
+	if !borealisOperatorKubernetesObjectNameAllowed(serviceName) {
+		return nil, http.StatusBadRequest, errors.New("generated site-worker service name must be a Kubernetes DNS label segment")
+	}
+	service := o.siteWorkerServiceManifest(serviceName, req.SiteID, siteName, siteSlug, workerGUID, remoteOpsPort, remoteDesktopPort)
+	createdService, err := o.kubeCreate(ctx, "core", "services", service)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
+	serviceSummary := summarizeBorealisSiteWorkerService(createdService)
+	serviceHost := firstText(cleanText(serviceSummary["cluster_ip"]), siteWorkerServiceDNSName(serviceName, o.namespace))
+	pod := o.siteWorkerPodManifest(podName, serviceName, serviceHost, req.SiteID, siteName, siteSlug, workerGUID, imageRef, profileName, profile, remoteOpsPort, remoteDesktopPort)
+	created, err := o.kubeCreate(ctx, "core", "pods", pod)
+	if err != nil {
+		_ = o.kubeDelete(context.Background(), "core", "services", serviceName, map[string]any{
+			"apiVersion": "v1",
+			"kind":       "DeleteOptions",
+		})
+		return nil, http.StatusBadGateway, err
+	}
+	podSummary := summarizeBorealisSiteWorkerPod(created)
+	attachBorealisSiteWorkerServiceSummary(podSummary, serviceSummary, o.namespace)
 	return map[string]any{
 		"ok":                  true,
 		"launched":            true,
 		"pod_name":            podName,
+		"service_name":        serviceName,
 		"worker_guid":         workerGUID,
 		"site_id":             req.SiteID,
 		"site_name":           siteName,
@@ -565,8 +600,10 @@ func (o *borealisOperator) launchSiteWorker(ctx context.Context, req borealisOpe
 		"resource_profile":    profileName,
 		"remote_ops_port":     remoteOpsPort,
 		"remote_desktop_port": remoteDesktopPort,
-		"remote_ops_host":     "127.0.0.1",
-		"pod":                 summarizeBorealisSiteWorkerPod(created),
+		"remote_ops_host":     firstText(cleanText(podSummary["remote_ops_host"]), serviceHost),
+		"service_cluster_ip":  cleanText(serviceSummary["cluster_ip"]),
+		"service":             serviceSummary,
+		"pod":                 podSummary,
 	}, http.StatusAccepted, nil
 }
 
@@ -582,7 +619,11 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 	if err != nil {
 		return nil, http.StatusBadGateway, err
 	}
-	if len(pods) == 0 {
+	services, err := o.siteWorkerServicesByGUID(ctx, workerGUID)
+	if err != nil {
+		return nil, http.StatusBadGateway, err
+	}
+	if len(pods) == 0 && len(services) == 0 {
 		return map[string]any{"ok": true, "missing": true, "worker_guid": workerGUID}, http.StatusOK, nil
 	}
 	retired := make([]string, 0, len(pods))
@@ -601,12 +642,29 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 		}
 		retired = append(retired, name)
 	}
+	retiredServices := make([]string, 0, len(services))
+	for _, service := range services {
+		metadata := nestedMap(service, "metadata")
+		name := cleanText(metadata["name"])
+		if name == "" {
+			continue
+		}
+		if err := o.kubeDelete(ctx, "core", "services", name, map[string]any{
+			"apiVersion": "v1",
+			"kind":       "DeleteOptions",
+		}); err != nil {
+			return nil, http.StatusBadGateway, err
+		}
+		retiredServices = append(retiredServices, name)
+	}
 	return map[string]any{
-		"ok":            true,
-		"worker_guid":   workerGUID,
-		"reason":        cleanText(req.Reason),
-		"retired_pods":  retired,
-		"retired_count": len(retired),
+		"ok":                    true,
+		"worker_guid":           workerGUID,
+		"reason":                cleanText(req.Reason),
+		"retired_pods":          retired,
+		"retired_services":      retiredServices,
+		"retired_count":         len(retired),
+		"retired_service_count": len(retiredServices),
 	}, http.StatusOK, nil
 }
 
@@ -615,6 +673,11 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 	if err != nil {
 		return nil, err
 	}
+	services, err := o.kubeListItems(ctx, "core", "services")
+	if err != nil {
+		return nil, err
+	}
+	servicesByGUID := borealisSiteWorkerServiceSummariesByGUID(services)
 	podMetricsByName, _ := o.kubernetesPodMetricsByName(ctx)
 	workers := make([]map[string]any, 0)
 	for _, pod := range pods {
@@ -627,6 +690,9 @@ func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]an
 			continue
 		}
 		worker := summarizeBorealisSiteWorkerPod(pod)
+		if service := servicesByGUID[cleanText(worker["worker_guid"])]; len(service) > 0 {
+			attachBorealisSiteWorkerServiceSummary(worker, service, o.namespace)
+		}
 		if metrics := podMetricsByName[name]; len(metrics) > 0 {
 			attachKubernetesPodMetrics(worker, pod, metrics)
 		}
@@ -965,12 +1031,98 @@ func (o *borealisOperator) siteWorkerPodsByGUID(ctx context.Context, workerGUID 
 	return result, nil
 }
 
-func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, siteName string, siteSlug string, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
+func (o *borealisOperator) siteWorkerServicesByGUID(ctx context.Context, workerGUID string) ([]map[string]any, error) {
+	services, err := o.kubeListItems(ctx, "core", "services")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]any, 0)
+	for _, service := range services {
+		metadata := nestedMap(service, "metadata")
+		labels := mapStringAny(metadata["labels"])
+		if cleanText(labels["borealis.io/worker-guid"]) != workerGUID {
+			continue
+		}
+		if strings.ToLower(cleanText(labels["app.kubernetes.io/component"])) != "site-worker" {
+			continue
+		}
+		if cleanText(labels["app.kubernetes.io/managed-by"]) != "borealis-operator" {
+			continue
+		}
+		result = append(result, service)
+	}
+	return result, nil
+}
+
+func siteWorkerServiceNameForSite(siteID int64, siteName string, workerGUID string) string {
+	return siteWorkerNameForSite(siteID, siteName, workerGUID)
+}
+
+func siteWorkerServiceDNSName(serviceName string, namespace string) string {
+	serviceName = strings.TrimSpace(serviceName)
+	namespace = firstText(strings.TrimSpace(namespace), "borealis")
+	if serviceName == "" {
+		return ""
+	}
+	return serviceName + "." + namespace + ".svc.cluster.local"
+}
+
+func (o *borealisOperator) siteWorkerServiceManifest(serviceName string, siteID int64, siteName string, siteSlug string, workerGUID string, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
+	labels := map[string]string{
+		"app.kubernetes.io/name":       "site-worker",
+		"app.kubernetes.io/part-of":    "borealis",
+		"app.kubernetes.io/managed-by": "borealis-operator",
+		"app.kubernetes.io/component":  "site-worker",
+		"borealis.io/workload":         "site-worker",
+		"borealis.io/worker-guid":      workerGUID,
+		"borealis.io/site-id":          fmt.Sprintf("%d", siteID),
+	}
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Service",
+		"metadata": map[string]any{
+			"name":      serviceName,
+			"namespace": o.namespace,
+			"labels":    labels,
+			"annotations": map[string]string{
+				"borealis.io/stage":               "site-worker-migration",
+				"borealis.io/site-name":           siteName,
+				"borealis.io/site-slug":           siteSlug,
+				"borealis.io/route-owner":         "job-scheduler",
+				"borealis.io/network-mode":        "cluster-ip",
+				"borealis.io/service-dns":         siteWorkerServiceDNSName(serviceName, o.namespace),
+				"borealis.io/remote-ops-port":     fmt.Sprintf("%d", remoteOpsPort),
+				"borealis.io/remote-desktop-port": fmt.Sprintf("%d", remoteDesktopPort),
+			},
+		},
+		"spec": map[string]any{
+			"type":     "ClusterIP",
+			"selector": labels,
+			"ports": []map[string]any{
+				{
+					"name":       "remote-ops",
+					"port":       remoteOpsPort,
+					"targetPort": "remote-ops",
+					"protocol":   "TCP",
+				},
+				{
+					"name":       "remote-desktop",
+					"port":       remoteDesktopPort,
+					"targetPort": "remote-desktop",
+					"protocol":   "TCP",
+				},
+			},
+		},
+	}
+}
+
+func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName string, serviceHost string, siteID int64, siteName string, siteSlug string, workerGUID string, imageRef string, profileName string, profile borealisOperatorResourceProfile, remoteOpsPort int64, remoteDesktopPort int64) map[string]any {
 	projectRoot := envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis")
 	apiRoot := filepath.Join(projectRoot, "Engine", "Services", "api-backend")
 	runtimeSecretName := envDefault("BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME", "borealis-site-worker-runtime-env")
 	runtimeConfigHash := strings.TrimSpace(os.Getenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH"))
 	logRoot := filepath.Join(apiRoot, "logs", "site-workers")
+	serviceHost = firstText(strings.TrimSpace(serviceHost), siteWorkerServiceDNSName(serviceName, o.namespace))
 	return map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Pod",
@@ -994,8 +1146,10 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 				"borealis.io/site-name":           siteName,
 				"borealis.io/site-slug":           siteSlug,
 				"borealis.io/route-owner":         "job-scheduler",
-				"borealis.io/network-mode":        "host-loopback",
-				"borealis.io/remote-ops-host":     "127.0.0.1",
+				"borealis.io/network-mode":        "cluster-ip",
+				"borealis.io/service-name":        serviceName,
+				"borealis.io/service-dns":         siteWorkerServiceDNSName(serviceName, o.namespace),
+				"borealis.io/remote-ops-host":     serviceHost,
 				"borealis.io/remote-ops-port":     fmt.Sprintf("%d", remoteOpsPort),
 				"borealis.io/remote-desktop-port": fmt.Sprintf("%d", remoteDesktopPort),
 				"borealis.io/runtime-config-hash": runtimeConfigHash,
@@ -1004,8 +1158,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 		"spec": map[string]any{
 			"automountServiceAccountToken": false,
 			"enableServiceLinks":           false,
-			"hostNetwork":                  true,
-			"dnsPolicy":                    "ClusterFirstWithHostNet",
+			"hostNetwork":                  false,
+			"dnsPolicy":                    "ClusterFirst",
 			"restartPolicy":                "OnFailure",
 			"securityContext": map[string]any{
 				"runAsNonRoot": true,
@@ -1033,8 +1187,9 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, siteID int64, s
 						{"name": "BOREALIS_SITE_WORKER_GUID", "value": workerGUID},
 						{"name": "BOREALIS_SITE_WORKER_SITE_ID", "value": fmt.Sprintf("%d", siteID)},
 						{"name": "BOREALIS_SITE_WORKER_CONTAINER_NAME", "value": podName},
-						{"name": "BOREALIS_SITE_WORKER_BIND_HOST", "value": "127.0.0.1"},
-						{"name": "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST", "value": "127.0.0.1"},
+						{"name": "BOREALIS_SITE_WORKER_SERVICE_NAME", "value": serviceName},
+						{"name": "BOREALIS_SITE_WORKER_BIND_HOST", "value": "0.0.0.0"},
+						{"name": "BOREALIS_SITE_WORKER_REMOTE_OPS_HOST", "value": serviceHost},
 						{"name": "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT", "value": fmt.Sprintf("%d", remoteOpsPort)},
 						{"name": "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT", "value": fmt.Sprintf("%d", remoteDesktopPort)},
 						{"name": "BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES", "value": "0"},
@@ -1235,6 +1390,88 @@ func summarizeBorealisSiteWorkerPod(pod map[string]any) map[string]any {
 	summary["docker_state"] = phase
 	summary["lifecycle_owner"] = "borealis-operator"
 	return summary
+}
+
+func summarizeBorealisSiteWorkerService(service map[string]any) map[string]any {
+	metadata := nestedMap(service, "metadata")
+	labels := mapStringAny(metadata["labels"])
+	annotations := mapStringAny(metadata["annotations"])
+	spec := nestedMap(service, "spec")
+	name := cleanText(metadata["name"])
+	namespace := cleanText(metadata["namespace"])
+	if namespace == "" {
+		namespace = "borealis"
+	}
+	ports := []map[string]any{}
+	for _, rawPort := range schedulerAnyList(spec["ports"]) {
+		port := mapStringAny(rawPort)
+		if len(port) == 0 {
+			continue
+		}
+		ports = append(ports, map[string]any{
+			"name":        cleanText(port["name"]),
+			"port":        coerceInt64(port["port"]),
+			"target_port": cleanText(port["targetPort"]),
+			"protocol":    firstText(cleanText(port["protocol"]), "TCP"),
+		})
+	}
+	return map[string]any{
+		"name":         name,
+		"namespace":    namespace,
+		"labels":       labels,
+		"annotations":  annotations,
+		"worker_guid":  cleanText(labels["borealis.io/worker-guid"]),
+		"site_id":      coerceInt64(labels["borealis.io/site-id"]),
+		"cluster_ip":   cleanText(spec["clusterIP"]),
+		"dns_name":     firstText(cleanText(annotations["borealis.io/service-dns"]), siteWorkerServiceDNSName(name, namespace)),
+		"network_mode": firstText(cleanText(annotations["borealis.io/network-mode"]), "cluster-ip"),
+		"service_type": firstText(cleanText(spec["type"]), "ClusterIP"),
+		"ports":        ports,
+	}
+}
+
+func borealisSiteWorkerServiceSummariesByGUID(services []map[string]any) map[string]map[string]any {
+	result := map[string]map[string]any{}
+	for _, service := range services {
+		metadata := nestedMap(service, "metadata")
+		labels := mapStringAny(metadata["labels"])
+		workerGUID := cleanText(labels["borealis.io/worker-guid"])
+		if workerGUID == "" {
+			continue
+		}
+		if strings.ToLower(cleanText(labels["app.kubernetes.io/component"])) != "site-worker" {
+			continue
+		}
+		if cleanText(labels["app.kubernetes.io/managed-by"]) != "borealis-operator" {
+			continue
+		}
+		result[workerGUID] = summarizeBorealisSiteWorkerService(service)
+	}
+	return result
+}
+
+func attachBorealisSiteWorkerServiceSummary(worker map[string]any, service map[string]any, namespace string) {
+	if worker == nil || len(service) == 0 {
+		return
+	}
+	serviceName := cleanText(service["name"])
+	clusterIP := cleanText(service["cluster_ip"])
+	dnsName := firstText(cleanText(service["dns_name"]), siteWorkerServiceDNSName(serviceName, namespace))
+	serviceHost := firstText(clusterIP, dnsName)
+	if serviceName != "" {
+		worker["service_name"] = serviceName
+	}
+	if clusterIP != "" {
+		worker["service_cluster_ip"] = clusterIP
+	}
+	if dnsName != "" {
+		worker["service_dns"] = dnsName
+	}
+	if serviceHost != "" {
+		worker["remote_ops_host"] = serviceHost
+	}
+	worker["network_mode"] = "cluster-ip"
+	worker["service"] = service
 }
 
 func attachKubernetesPodMetrics(summary map[string]any, pod map[string]any, metrics map[string]any) {

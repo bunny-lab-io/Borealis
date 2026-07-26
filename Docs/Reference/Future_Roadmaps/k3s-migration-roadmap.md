@@ -121,7 +121,11 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Keep route files owned by `job-scheduler`.
     - [x] Keep worker listeners bound to `127.0.0.1` inside host-network K3s pods.
     - [x] Prune terminal route rows and orphaned `site-worker-*.yml` files during scheduler reconciliation.
-    - [ ] Replace temporary host-loopback worker bridge with ClusterIP-only routing after API/PostgreSQL cutover makes it practical.
+    - [x] Replace temporary host-loopback worker bridge with per-worker ClusterIP routing after API/PostgreSQL cutover.
+        - [x] `borealis-operator` creates one fixed-template ClusterIP Service per site worker.
+        - [x] K3s site-worker pods bind on pod networking instead of host loopback.
+        - [x] `job-scheduler` route rows and Traefik route files point at the worker Service ClusterIP or DNS name.
+        - [x] Scheduler reconciliation retires old host-loopback worker pods so demand reconciliation can relaunch ClusterIP-backed workers.
 - [x] Validation:
     - [x] Focused operator/scheduler unit tests pass.
     - [x] Static `Engine.sh` and Python worker checks pass.
@@ -136,6 +140,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] K3s resource metrics appear in Sites and Server Info.
     - [x] Stale workers retire cleanly.
     - [x] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
+    - [x] Focused Go tests confirm new K3s site-worker pods are not host-networked and route through a per-worker ClusterIP Service.
+    - [ ] Live redeploy validates existing host-loopback site-worker pods retire and relaunch through ClusterIP Services without manual Agent service restart.
     - [ ] Agent release rollout validates stale connected Socket.IO sessions self-recover without manual Agent service restart.
 
 ## Stage 6: Production WebUI Cutover
@@ -339,11 +345,12 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
 - [ ] `borealis-operator` RBAC must stay narrower than Docker socket power.
     - [x] Live `kubectl auth can-i` audit confirms operator ServiceAccount is namespace-scoped, cannot mutate Secrets, cannot read Nodes, cannot read `kube-system` pods, and does not have wildcard Borealis namespace access.
-    - [ ] Operator RBAC still grants namespace-wide pod `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
+    - [ ] Operator RBAC still grants namespace-wide pod and Service `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod/service templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
 - [ ] Host networking must be minimized except WireGuard/edge needs.
     - [x] Live host-network audit identifies required v1 host-network pods: `traefik-edge` for TCP 80/443/health and `wireguard-tunnel` for UDP 30000 plus `/dev/net/tun`.
     - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, and `webui-frontend` are not host-networked.
-    - [ ] `api-backend`, `job-scheduler`, and `site-worker-*` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
+    - [x] Code change moves K3s `site-worker-*` pods off host networking and onto per-worker ClusterIP Services.
+    - [ ] `api-backend` and `job-scheduler` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
 - [x] Runtime service actions must not become raw Kubernetes mutation API.
     - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
     - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
@@ -408,7 +415,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 
     - `borealis-operator` is the planned runtime K3s writer. `Engine.sh` remains the deployment-time writer for cluster bootstrap and fixed operator manifests.
     - Runtime services call operator verbs, not Kubernetes APIs.
-    - Operator verbs must map to known Borealis workloads and fixed pod templates.
+    - Operator verbs must map to known Borealis workloads and fixed pod/service templates.
     - No raw YAML apply, arbitrary pod spec, arbitrary image/env/volume/service account, or broad host access should be exposed through runtime APIs.
     - K3s Secrets and RBAC help isolate runtime state but do not replace Aegis for protected Borealis secrets.
     - Longhorn provides K3s persistent storage for workloads that need PVCs; it does not replace Borealis backup/restore, Aegis, or explicit data-migration checkpoints.

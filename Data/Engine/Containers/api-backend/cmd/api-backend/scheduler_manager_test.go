@@ -251,6 +251,32 @@ func TestSchedulerK3sSiteWorkerTerminalPhase(t *testing.T) {
 	}
 }
 
+func TestSchedulerK3sSiteWorkerServiceHostRequiresClusterIPRoute(t *testing.T) {
+	host, reason := schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode":    "host-loopback",
+		"remote_ops_host": "127.0.0.1",
+	})
+	if host != "127.0.0.1" || reason != "cluster_ip_route_migration" {
+		t.Fatalf("expected host-loopback migration, host=%q reason=%q", host, reason)
+	}
+
+	host, reason = schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode": "cluster-ip",
+	})
+	if host != "" || reason != "cluster_ip_service_missing" {
+		t.Fatalf("expected missing service migration, host=%q reason=%q", host, reason)
+	}
+
+	host, reason = schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode":       "cluster-ip",
+		"service_cluster_ip": "10.43.10.9",
+		"remote_ops_host":    "site-worker-test.borealis.svc.cluster.local",
+	})
+	if host != "10.43.10.9" || reason != "" {
+		t.Fatalf("expected ClusterIP route host, host=%q reason=%q", host, reason)
+	}
+}
+
 func TestSchedulerK3sSiteWorkerGUIDStableBySite(t *testing.T) {
 	first := schedulerK3sSiteWorkerGUID(7)
 	second := schedulerK3sSiteWorkerGUID(7)

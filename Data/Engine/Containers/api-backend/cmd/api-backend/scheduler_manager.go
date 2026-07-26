@@ -1652,6 +1652,26 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
 			continue
 		}
+		serviceHost, clusterIPMigrationReason := schedulerK3sSiteWorkerServiceHost(snapshot)
+		if clusterIPMigrationReason == "cluster_ip_route_migration" {
+			networkMode := strings.ToLower(cleanText(snapshot["network_mode"]))
+			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_route_migration"); err != nil {
+				log.Printf("failed to retire host-loopback K3s site-worker pod=%s worker_guid=%s network_mode=%s: %v", containerName, workerGUID, networkMode, err)
+			} else {
+				log.Printf("retired host-loopback K3s site-worker pod=%s worker_guid=%s for ClusterIP route migration", containerName, workerGUID)
+			}
+			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			continue
+		}
+		if clusterIPMigrationReason == "cluster_ip_service_missing" {
+			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_service_missing"); err != nil {
+				log.Printf("failed to retire K3s site-worker missing ClusterIP service pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			} else {
+				log.Printf("retired K3s site-worker missing ClusterIP service pod=%s worker_guid=%s", containerName, workerGUID)
+			}
+			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			continue
+		}
 		if existing := liveSites[siteID]; existing != "" {
 			if _, err := client.retireSiteWorker(ctx, workerGUID, "duplicate_site"); err != nil {
 				log.Printf("failed to retire duplicate K3s site-worker pod=%s worker_guid=%s site_id=%d: %v", containerName, workerGUID, siteID, err)
@@ -1675,7 +1695,6 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		if boolFromAny(snapshot["ready"]) && strings.EqualFold(cleanText(snapshot["kubernetes_phase"]), "Running") {
 			status = schedulerWorkerStatusRunning
 		}
-		serviceHost := firstText(cleanText(snapshot["service_cluster_ip"]), cleanText(snapshot["remote_ops_host"]))
 		metadata := schedulerWorkerRouteMetadataForHost(workerGUID, serviceHost, remoteOpsPort, remoteDesktopPort, "borealis-operator")
 		upstreamPort := int64(0)
 		if serviceHost != "" {
@@ -2493,6 +2512,18 @@ func schedulerSiteWorkerSocketIOAsyncMode() string {
 func schedulerK3sSiteWorkerTerminal(snapshot map[string]any) bool {
 	phase := strings.ToLower(cleanText(snapshot["kubernetes_phase"]))
 	return phase == "failed" || phase == "succeeded"
+}
+
+func schedulerK3sSiteWorkerServiceHost(snapshot map[string]any) (string, string) {
+	networkMode := strings.ToLower(cleanText(snapshot["network_mode"]))
+	serviceHost := firstText(cleanText(snapshot["service_cluster_ip"]), cleanText(snapshot["service_dns"]), cleanText(snapshot["remote_ops_host"]))
+	if networkMode != "" && networkMode != "cluster-ip" {
+		return serviceHost, "cluster_ip_route_migration"
+	}
+	if networkMode == "cluster-ip" && serviceHost == "" {
+		return serviceHost, "cluster_ip_service_missing"
+	}
+	return serviceHost, ""
 }
 
 func schedulerSiteWorkerLifecycleMode() string {
