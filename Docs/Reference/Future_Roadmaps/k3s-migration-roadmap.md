@@ -182,7 +182,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Preserve internal API token behavior.
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
     - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
-- [ ] Validation:
+- [x] Validation:
     - [x] Bridge pod rollout passes.
     - [x] Pre-ClusterIP bridge `curl -fsS http://127.0.0.1:5001/health` passed.
     - [x] `Engine.sh --network-mode public|local --service api-backend shadow-db-validate prod` validates Go API bootstrap state against K3s PostgreSQL shadow data.
@@ -195,7 +195,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] All agents appear connected to their site workers after API traffic-owner cutover.
     - [x] Realtime SSE works with one replica.
     - [x] Compose API removal plan is documented: K3s API owns traffic before stale Compose API container removal; Compose PostgreSQL remains DB owner until Stage 9.
-    - [ ] Live redeploy validates `api-backend` Service DNS routing, non-host-network pod state, Service health, and public API/Socket.IO routing after ClusterIP cutover.
+    - [x] Live redeploy validates `api-backend` Service DNS routing, non-host-network pod state, Service health, and public API/Socket.IO routing after ClusterIP cutover.
 
 ## Stage 8: Scheduler Cutover
 
@@ -207,13 +207,13 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Keep scheduler Kubernetes-blind: no ServiceAccount token, no kubeconfig, no Docker socket.
     - [x] Keep temporary host-loopback access to K3s API and Compose PostgreSQL until PostgreSQL/API Service cutover cleanup.
     - [x] Move K3s `job-scheduler` off host networking and target internal API calls through `api-backend.borealis.svc.cluster.local:5001`.
-- [ ] Validation:
+- [x] Validation:
     - [x] Scheduled job tick creates expected runs after live redeploy.
     - [x] Service actions route through operator for K3s-owned restart paths in focused Go tests.
     - [x] No duplicate scheduler loops in deployment model: Compose service removed, stale container retired before K3s rollout, and K3s Deployment uses `Recreate`.
     - [x] Live redeploy confirms exactly one K3s scheduler pod and no Compose `borealis-engine-job-scheduler` container.
     - [x] Scoped `job-scheduler` rebuild applies the retired-orchestrator cleanup and fresh logs stay quiet for stale `site-worker-orchestrator` socket probes.
-    - [ ] Live redeploy confirms `job-scheduler` is not host-networked and `BOREALIS_INTERNAL_API_BASE_URL` uses the K3s API Service DNS.
+    - [x] Live redeploy confirms `job-scheduler` is not host-networked and `BOREALIS_INTERNAL_API_BASE_URL` uses the K3s API Service DNS.
 
 ## Stage 9: PostgreSQL Cutover
 
@@ -352,12 +352,12 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [ ] `borealis-operator` RBAC must stay narrower than Docker socket power.
     - [x] Live `kubectl auth can-i` audit confirms operator ServiceAccount is namespace-scoped, cannot mutate Secrets, cannot read Nodes, cannot read `kube-system` pods, and does not have wildcard Borealis namespace access.
     - [ ] Operator RBAC still grants namespace-wide pod and Service `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod/service templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
-- [ ] Host networking must be minimized except WireGuard/edge needs.
+- [x] Host networking must be minimized except WireGuard/edge needs.
     - [x] Live host-network audit identifies required v1 host-network pods: `traefik-edge` for TCP 80/443/health and `wireguard-tunnel` for UDP 30000 plus `/dev/net/tun`.
     - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, `webui-frontend`, and `site-worker-*` are not host-networked.
     - [x] Code and live redeploy move K3s `site-worker-*` pods off host networking and onto per-worker ClusterIP Services.
     - [x] Code moves K3s `api-backend` and `job-scheduler` off host networking and routes API consumers through the `api-backend` ClusterIP Service DNS.
-    - [ ] Live redeploy validates `api-backend` and `job-scheduler` are not host-networked, `api-backend` Service endpoints are ready, Traefik routes API traffic through Service DNS, and scheduler/site-worker runtime env uses the Service URL.
+    - [x] Live redeploy validates `api-backend` and `job-scheduler` are not host-networked, `api-backend` Service endpoints are ready, Traefik routes API traffic through Service DNS, and scheduler/site-worker runtime env uses the Service URL.
 - [x] Runtime service actions must not become raw Kubernetes mutation API.
     - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
     - [x] Code audit confirms scheduler service actions route supported K3s restart/reload actions through `RestartKnownWorkload` and WireGuard reconcile through the fixed control-socket command, not raw YAML or kubectl.
