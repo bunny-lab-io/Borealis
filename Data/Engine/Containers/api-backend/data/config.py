@@ -13,8 +13,8 @@ site-worker, Ansible, scheduler healthcheck, and migration helpers.
 
 Launch overview
 ---------------
-The Go api-backend listens on loopback HTTP and expects the embedded Traefik +
-Let's Encrypt edge to own all public HTTPS traffic. Configuration is assembled from (in precedence
+The Go api-backend listens on internal HTTP behind the Borealis Traefik edge,
+which owns public HTTPS traffic. Configuration is assembled from (in precedence
 order): ``config`` mapping overrides provided to :func:`load_runtime_config`,
 environment variables prefixed with ``BOREALIS_``, and finally built-in
 defaults. Key environment variables are

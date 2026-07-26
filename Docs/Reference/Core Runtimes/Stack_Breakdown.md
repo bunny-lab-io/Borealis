@@ -20,8 +20,8 @@ Explain the Borealis Engine K3s runtime, retired Docker Compose manifest, servic
 | --- | --- | --- | --- |
 | `borealis-operator` | Deployment, ServiceAccount, Role, RoleBinding, Secret, ClusterIP Service | Internal bridge for Borealis cluster status and restricted lifecycle verbs | `borealis-operator.borealis.svc`, port `8088` |
 | `postgres-db` | StatefulSet, Secret, ClusterIP Services, Longhorn PVC | Authoritative PostgreSQL runtime after Stage 9 cutover | `postgres-db.borealis.svc`, port `5432` |
-| `api-backend` | Deployment, Secret | Authoritative Go API backend, live operator sessions, VNC session broker, workflow/runtime APIs after Stage 7 cutover | host-network loopback `127.0.0.1:5001` |
-| `job-scheduler` | Deployment, Secret | Authoritative scheduler manager, Postgres work leases, service-action queue, and K3s site-worker reconciliation after Stage 8 | host-network loopback to K3s API bridge |
+| `api-backend` | Deployment, Secret, ClusterIP Service | Authoritative Go API backend, live operator sessions, VNC session broker, workflow/runtime APIs after Stage 7 cutover | `api-backend.borealis.svc`, port `5001` |
+| `job-scheduler` | Deployment, Secret | Authoritative scheduler manager, Postgres work leases, service-action queue, and K3s site-worker reconciliation after Stage 8 | No public Service; internal API calls use `api-backend.borealis.svc:5001` |
 | `wireguard-tunnel` | Deployment, Secret | Authoritative WireGuard interface, peer config, firewall/routing, and constrained control socket after Stage 10 | host-network UDP `30000`, interface `borealis-wg` |
 | `traefik-edge` | Deployment, Secret | Authoritative public HTTP/HTTPS edge, ACME/local CA, UI/API/Socket.IO/VNC routing, watched dynamic route files after Stage 11 | host-network `80`, `443`, health `127.0.0.1:8082` |
 | `webui-frontend` | Deployment, ClusterIP Service | Production WebUI target and dev/HMR runtime after Stage 6 cutover | `webui-frontend.borealis.svc`, port `8000` |
@@ -36,9 +36,9 @@ K3s `postgres-db` uses one replica, a Longhorn-backed PVC named `postgres-data-p
 
 Stage 9 cutover used the previous shadow import path as proof, then normal deploy quiesced K3s API/scheduler/site-worker writers, imported a final logical snapshot from Compose PostgreSQL, changed runtime `BOREALIS_DATABASE_URL` to the K3s Service, ran a K3s schema initializer Job, and retired stale Compose `borealis-engine-postgres-db` containers. `Engine.sh --network-mode public|local --service postgres-db shadow-import prod` is now a legacy pre-cutover validation command and refuses to run once K3s owns traffic.
 
-The K3s `api-backend` runs one pod from the same API image, mirrors generated runtime env into `borealis-api-backend-runtime-env`, binds only to `127.0.0.1:${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}` through host networking, and owns API background loops after Stage 7 cutover with `BOREALIS_API_BACKGROUND_LOOPS=1`. K3s Traefik routes `/api` and `/socket.io` to the configured K3s API loopback upstream, and `Engine.sh` removes stale `borealis-engine-api-backend` containers during deploy.
+The K3s `api-backend` runs one pod from the same API image, mirrors generated runtime env into `borealis-api-backend-runtime-env`, listens on pod networking at `${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}`, and exposes the `api-backend.borealis.svc` ClusterIP Service. The API pod keeps in-pod health and self-calls on loopback, while K3s Traefik, scheduler, and site-worker runtime env target the Service DNS. It owns API background loops after Stage 7 cutover with `BOREALIS_API_BACKGROUND_LOOPS=1`, and `Engine.sh` removes stale `borealis-engine-api-backend` containers during deploy.
 
-`job-scheduler` runs one K3s replica with a `Recreate` rollout strategy so deploys do not create overlapping scheduler loops. It has no ServiceAccount token, no kubeconfig, and no Docker socket. It uses K3s PostgreSQL through `postgres-db.borealis.svc`, uses host networking only to reach the K3s API bridge on `127.0.0.1:5001`, receives runtime env through `borealis-job-scheduler-runtime-env`, and keeps fixed hostPath access to API cache/log/config/secrets plus Traefik dynamic route files.
+`job-scheduler` runs one K3s replica with a `Recreate` rollout strategy so deploys do not create overlapping scheduler loops. It has no ServiceAccount token, no kubeconfig, and no Docker socket. It uses K3s PostgreSQL through `postgres-db.borealis.svc`, calls the K3s API backend through `api-backend.borealis.svc.cluster.local:5001`, receives runtime env through `borealis-job-scheduler-runtime-env`, and keeps fixed hostPath access to API cache/log/config/secrets plus Traefik dynamic route files.
 
 `traefik-edge` runs as one K3s host-network pod. It keeps Borealis-managed Traefik as public edge, certificate owner, and watched dynamic-route reader without using bundled K3s Traefik, ServiceLB, or Kubernetes Ingress. It mounts only `Engine/Services/traefik-edge`, receives a scoped runtime Secret, and keeps existing ACME/local CA files and dynamic route hotload behavior.
 
@@ -70,7 +70,7 @@ Default runtime policy:
 - K3s `traefik-edge` runs as UID `0` with the Borealis runtime group because host-network ports `80` and `443` need low-port bind rights and Traefik must renew strict `0600` ACME state owned by the Borealis runtime user for Backup/Restore export. It drops all default capabilities and adds only `NET_BIND_SERVICE` plus `DAC_OVERRIDE`.
 - K3s `wireguard-tunnel` remains explicit root exception because WireGuard interface setup needs `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW`. It runs as UID `0` with the Borealis runtime group so dropped DAC capabilities do not block its service-local control socket. It still uses `no-new-privileges`, dropped default capabilities, read-only root filesystem, writable service-local run directory, and resource limits.
 - No long-running Engine service mounts the Docker socket after Stage 11 Compose retirement.
-- K3s `api-backend`, `job-scheduler`, `webui-frontend`, `remote-desktop-guacd`, `traefik-edge`, `wireguard-tunnel`, and site-worker pods run with no ServiceAccount token, dropped default capabilities where possible, read-only root filesystems, `RuntimeDefault` seccomp, tmpfs-style `emptyDir` for `/tmp`, read-only host timezone data mounts, and CPU/memory limits. WebUI, guacd, and site-workers stay ClusterIP-only; API, scheduler, Traefik, and WireGuard use host networking only to preserve current HTTP/HTTPS, WireGuard, and bridge contracts. Dev WebUI bridge pods also receive memory-backed writable `node_modules/.vite` and `node_modules/.vite-temp` mounts because Vite writes optimized dependency and resolved config bundles there.
+- K3s `api-backend`, `job-scheduler`, `webui-frontend`, `remote-desktop-guacd`, `traefik-edge`, `wireguard-tunnel`, and site-worker pods run with no ServiceAccount token, dropped default capabilities where possible, read-only root filesystems, `RuntimeDefault` seccomp, tmpfs-style `emptyDir` for `/tmp`, read-only host timezone data mounts, and CPU/memory limits. API, WebUI, guacd, and site-workers stay ClusterIP-only; scheduler uses pod networking without a Service; Traefik and WireGuard use host networking only to preserve current HTTP/HTTPS and WireGuard listener contracts. Dev WebUI bridge pods also receive memory-backed writable `node_modules/.vite` and `node_modules/.vite-temp` mounts because Vite writes optimized dependency and resolved config bundles there.
 - K3s `postgres-db` uses a short-lived root init container with only `CHOWN`, `DAC_OVERRIDE`, and `FOWNER` capabilities to create and own the PostgreSQL PVC data subdirectory across first-run and retry paths. The main PostgreSQL container still runs as the PostgreSQL runtime UID with dropped capabilities, `no-new-privileges`, read-only root filesystem, memory-backed scratch mounts, and ClusterIP-only exposure.
 
 Writable bind mounts are service runtime paths under `Engine/Services/`. `Engine.sh` chowns those paths to the runtime owner during deploy while preserving stricter modes for API secrets, WireGuard secrets, and Traefik ACME storage. PostgreSQL runtime state now lives on the Longhorn PVC and is not deleted during normal deploy.
@@ -143,7 +143,7 @@ Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wiregu
 
 `api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket; Server Info reads K3s workload status from `borealis-operator`, and scheduler/site-worker task state comes from job-scheduler snapshots. Sites reads K3s site-worker metrics through the operator-backed `/api/server/workers` payload and skips Docker metadata reads once K3s metadata is present. Service actions are queued for K3s `job-scheduler`, which routes K3s-owned workload/site-worker lifecycle to `borealis-operator`.
 
-K3s `api-backend` mounts the same fixed API, Traefik, and WireGuard runtime paths the Compose API backend used. It does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
+K3s `api-backend` mounts the same fixed API, Traefik, and WireGuard runtime paths the Compose API backend used. It does not use host networking and does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
 
 `site-worker-orchestrator` is retired after Stage 11. Deploy still removes stale Compose-era containers with that name, but the Go runtime source, Docker lifecycle fallback, Unix socket, and K3s scheduler hostPath mount have been removed.
 
@@ -228,9 +228,9 @@ Borealis uses host bind mounts for runtime ownership clarity, not named volumes 
 17. Import the `wireguard-tunnel` image into K3s containerd when missing, remove any stale Compose `borealis-engine-wireguard-tunnel` container, apply the K3s host-network Deployment, and verify the control socket.
 18. Import the `postgres-db` image into K3s containerd when missing, apply the PostgreSQL StatefulSet/Service/PVC manifests, and wait for PVC binding plus StatefulSet rollout.
 19. Run Engine schema initialization as a K3s Job against `postgres-db.borealis.svc`.
-20. Import the `api-backend` image into K3s containerd when missing, apply the API traffic-owner manifest, and wait for Deployment rollout.
-21. Remove any stale Compose `borealis-engine-job-scheduler` container, import the `job-scheduler` image into K3s containerd when missing, apply the authoritative scheduler manifest, and wait for Deployment rollout.
-22. Validate and apply the K3s `traefik-edge` Deployment after stale Compose Traefik is stopped, then verify the Traefik ping endpoint.
+20. Import the `api-backend` image into K3s containerd when missing, apply the API Service/Deployment traffic-owner manifest, wait for Deployment rollout, then reconcile K3s Traefik so public API and Socket.IO routes target the API Service DNS.
+21. Remove any stale Compose `borealis-engine-job-scheduler` container, import the `job-scheduler` image into K3s containerd when missing, apply the authoritative scheduler manifest with API Service DNS, and wait for Deployment rollout.
+22. Verify the K3s `traefik-edge` ping endpoint after edge reconciliation.
 23. Remove stale retired Compose containers for all former Engine services.
 24. Write `Engine/Deploy/deploy-manifest.json` with Compose action `retired`.
 25. Prune inactive Docker images, Docker builder cache, and Engine Buildx cache exports older than 7 days after successful reconciliation.
@@ -326,12 +326,12 @@ sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout stat
 4. `wireguard-tunnel` must create the Unix control socket.
 5. K3s `remote-desktop-guacd` must accept ClusterIP TCP connections on port `4822`.
 6. K3s `webui-frontend` must pass its Deployment readiness probe before Traefik is rendered with `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s`. Once K3s owns the route, Compose `webui-frontend` is retired and stale containers are removed during deploy.
-7. K3s `api-backend` must pass its Deployment readiness probe and return HTTP `200` from `http://127.0.0.1:5001/health`.
-8. K3s `job-scheduler` waits for its Deployment readiness probe after PostgreSQL schema initialization and API cutover reconcile. Its probe verifies PostgreSQL access; API-dependent queue work targets K3s API on `127.0.0.1:5001`.
-9. K3s `traefik-edge` starts after K3s API/WebUI readiness gates in `Engine.sh`.
+7. K3s `api-backend` must pass its Deployment readiness probe and expose HTTP `200` health through the `api-backend` ClusterIP Service.
+8. K3s `job-scheduler` waits for its Deployment readiness probe after PostgreSQL schema initialization and API cutover reconcile. Its probe verifies PostgreSQL access; API-dependent queue work targets `api-backend.borealis.svc.cluster.local:5001`.
+9. K3s `traefik-edge` starts after K3s API/WebUI readiness gates in `Engine.sh` and is reconciled immediately after API Service rollout.
 10. K3s `traefik-edge` must pass Traefik ping healthcheck on the loopback `borealis-health` entrypoint.
 
-Traefik is the public edge. API stays on loopback behind Traefik. Production and dev WebUI are routed from Traefik to the K3s Service ClusterIP.
+Traefik is the public edge. API stays cluster-internal behind Traefik through the K3s `api-backend` Service. Production and dev WebUI are routed from Traefik to the K3s Service ClusterIP.
 
 ## Production vs Dev Mode
 Production mode:
@@ -342,7 +342,7 @@ bash Engine.sh --network-mode local deploy prod
 Production behavior:
 - `BOREALIS_WEBUI_MODE=prod` is scoped to WebUI.
 - K3s WebUI frontend serves built static UI.
-- Traefik routes public HTTPS to the K3s WebUI ClusterIP, API loopback, VNC loopback, and watched dynamic site-worker route files that target per-worker ClusterIP Services.
+- Traefik routes public HTTPS to the K3s WebUI ClusterIP, API ClusterIP Service, VNC loopback, and watched dynamic site-worker route files that target per-worker ClusterIP Services.
 
 Dev mode:
 ```sh
@@ -476,7 +476,7 @@ docker compose \
 
 API liveness:
 ```sh
-curl -fsS http://127.0.0.1:5001/health
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/api-backend -- borealis-api-backend-go api-healthcheck
 ```
 
 K3s API rollout:
@@ -551,8 +551,9 @@ sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout stat
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/traefik-edge
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/webui-frontend
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout status deployment/remote-desktop-guacd
-sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service postgres-db webui-frontend remote-desktop-guacd
-curl -fsS http://127.0.0.1:5001/health
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis get service postgres-db api-backend webui-frontend remote-desktop-guacd
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/api-backend -- borealis-api-backend-go api-healthcheck
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/job-scheduler -- sh -lc 'case "$BOREALIS_INTERNAL_API_BASE_URL" in http://api-backend.borealis.svc.cluster.local:5001) echo scheduler-api-url=k3s ;; *) exit 1 ;; esac'
 curl -fsS http://127.0.0.1:8082/ping
 sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/api-backend -- sh -lc 'case "$BOREALIS_DATABASE_URL" in *@postgres-db.borealis.svc:5432/*) echo api-backend-db-url=k3s ;; *) exit 1 ;; esac'
 ```
@@ -658,8 +659,8 @@ If `api-backend` does not start:
 5. Read `Engine/Deploy/build.log` if image build changed.
 
 If `traefik-edge` returns `502`:
-1. Check K3s `api-backend` health on `127.0.0.1:5001`.
-2. Check `BOREALIS_API_BACKEND_UPSTREAM_HOST`, `BOREALIS_API_BACKEND_UPSTREAM_PORT`, `BOREALIS_WEBUI_TRAFFIC_OWNER`, and `BOREALIS_WEBUI_UPSTREAM_HOST` in `Engine/Deploy/compose.env`.
+1. Check K3s `api-backend` rollout, Service endpoints, and in-pod healthcheck.
+2. Check `BOREALIS_API_BACKEND_UPSTREAM_HOST`, `BOREALIS_API_BACKEND_UPSTREAM_PORT`, `BOREALIS_INTERNAL_API_BASE_URL`, `BOREALIS_WEBUI_TRAFFIC_OWNER`, and `BOREALIS_WEBUI_UPSTREAM_HOST` in `Engine/Deploy/compose.env`.
 3. Check WebUI listener at the configured upstream host on port `8000`; after Stage 6 this is the K3s Service ClusterIP.
 4. Check `Engine/Services/traefik-edge/logs/`.
 5. Reload Traefik only after confirming backend listeners.
@@ -778,9 +779,9 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     `Engine/Deploy/borealis-operator.sha256` records the operator manifest inputs: image tag, namespace, Service name, listen port, HMAC secret, and generated immutable image allowlists.
 
-    `Engine/Deploy/k3s-api-backend.sha256` records Stage 7 API traffic-owner inputs: API image, deploy mode, namespace, runtime owner IDs, loopback port, runtime-env hash, traffic owner, and profile resource caps.
+    `Engine/Deploy/k3s-api-backend.sha256` records Stage 7 API traffic-owner inputs: API image, deploy mode, namespace, runtime owner IDs, Service DNS, listen host, port, runtime-env hash, traffic owner, and profile resource caps.
 
-    `Engine/Deploy/k3s-job-scheduler.sha256` records Stage 8 scheduler inputs: scheduler image, site-worker image, deploy mode, namespace, runtime owner IDs, runtime-env hash, API loopback target, K3s lifecycle mode, and profile resource caps.
+    `Engine/Deploy/k3s-job-scheduler.sha256` records Stage 8 scheduler inputs: scheduler image, site-worker image, deploy mode, namespace, runtime owner IDs, runtime-env hash, API Service DNS target, K3s lifecycle mode, and profile resource caps.
 
     `Engine/Deploy/k3s-postgres-db.sha256` records Stage 9 PostgreSQL traffic-owner inputs: PostgreSQL image, deploy mode, namespace, runtime IDs, runtime-env hash, traffic owner, StorageClass, PVC size, generated Secret name, and profile PostgreSQL resource caps.
 

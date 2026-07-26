@@ -72,12 +72,12 @@ K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-traefik-edge.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
-K3S_API_BACKEND_BRIDGE_VERSION="2"
+K3S_API_BACKEND_BRIDGE_VERSION="3"
 K3S_API_BACKEND_DB_VALIDATION_VERSION="2"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="4"
-K3S_JOB_SCHEDULER_VERSION="3"
+K3S_JOB_SCHEDULER_VERSION="4"
 K3S_WIREGUARD_TUNNEL_VERSION="1"
 K3S_TRAEFIK_EDGE_VERSION="1"
 K3S_POSTGRES_VERSION="3"
@@ -3621,6 +3621,8 @@ render_k3s_api_backend_bridge_manifest() {
   local memory_limit="$6"
   local cpu_limit="$7"
   local traffic_owner="$8"
+  local service_host
+  service_host="$(api_backend_service_dns_name)"
   cat <<EOF
 apiVersion: v1
 kind: Secret
@@ -3636,6 +3638,33 @@ type: Opaque
 data:
 $(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-backend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-cutover
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "cluster-ip"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${port}
+      targetPort: http
+      protocol: TCP
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -3650,7 +3679,7 @@ metadata:
     borealis.io/stage: api-backend-cutover
   annotations:
     borealis.io/bridge-config-hash: "${config_hash}"
-    borealis.io/network-mode: "host-loopback"
+    borealis.io/network-mode: "cluster-ip"
     borealis.io/traffic-owner: "${traffic_owner}"
 spec:
   replicas: 1
@@ -3672,16 +3701,17 @@ spec:
         borealis.io/stage: api-backend-cutover
       annotations:
         borealis.io/bridge-config-hash: "${config_hash}"
-        borealis.io/network-mode: "host-loopback"
+        borealis.io/network-mode: "cluster-ip"
         borealis.io/traffic-owner: "${traffic_owner}"
-        borealis.io/listen-host: "127.0.0.1"
+        borealis.io/listen-host: "0.0.0.0"
         borealis.io/listen-port: "${port}"
+        borealis.io/service-host: "${service_host}"
         borealis.io/pids-limit: "$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -3703,7 +3733,7 @@ spec:
           env:
 $(k3s_timezone_env_entries)
             - name: BOREALIS_GO_API_HOST
-              value: "127.0.0.1"
+              value: "0.0.0.0"
             - name: BOREALIS_GO_API_PORT
               value: "${port}"
             - name: BOREALIS_API_HEALTH_HOST
@@ -3822,6 +3852,7 @@ ensure_k3s_api_backend_bridge() {
   local cpu_limit
   local runtime_env_hash
   local traffic_owner
+  local service_host
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
@@ -3829,6 +3860,7 @@ ensure_k3s_api_backend_bridge() {
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
   traffic_owner="$(resolve_api_backend_traffic_owner)"
+  service_host="$(api_backend_service_dns_name)"
 
   local config_hash
   config_hash="$(
@@ -3840,6 +3872,10 @@ ensure_k3s_api_backend_bridge() {
       "runtime_gid=${runtime_gid}" \
       "image=${image}" \
       "port=${port}" \
+      "network_mode=cluster-ip" \
+      "service=api-backend" \
+      "service_host=${service_host}" \
+      "listen_host=0.0.0.0" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
       "traffic_owner=${traffic_owner}" \
@@ -4112,7 +4148,7 @@ metadata:
     borealis.io/stage: scheduler-cutover
   annotations:
     borealis.io/scheduler-config-hash: "${config_hash}"
-    borealis.io/network-mode: "host-loopback"
+    borealis.io/network-mode: "cluster-ip"
     borealis.io/runtime-owner: "k3s"
 spec:
   replicas: 1
@@ -4134,15 +4170,15 @@ spec:
         borealis.io/stage: scheduler-cutover
       annotations:
         borealis.io/scheduler-config-hash: "${config_hash}"
-        borealis.io/network-mode: "host-loopback"
+        borealis.io/network-mode: "cluster-ip"
         borealis.io/runtime-owner: "k3s"
         borealis.io/site-worker-image: "${site_worker_image}"
         borealis.io/pids-limit: "$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
       securityContext:
         runAsNonRoot: true
         runAsUser: ${runtime_uid}
@@ -4291,7 +4327,7 @@ ensure_k3s_job_scheduler() {
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_CPU_LIMIT)")"
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
   api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
-  internal_api_base="http://127.0.0.1:${api_bridge_port}"
+  internal_api_base="http://$(api_backend_service_dns_name):${api_bridge_port}"
 
   local config_hash
   config_hash="$(
@@ -4305,6 +4341,7 @@ ensure_k3s_job_scheduler() {
       "site_worker_image=${site_worker_image}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "network_mode=cluster-ip" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
       "internal_api_base=${internal_api_base}" \
@@ -6121,6 +6158,7 @@ reconcile_k3s_bridge_for_scoped_rebuild() {
   ensure_borealis_operator_bridge
   if [[ "${service}" == "api-backend" ]]; then
     ensure_k3s_api_backend_bridge "${mode}"
+    ensure_k3s_traefik_edge "${mode}"
     retire_compose_api_backend_container
   elif [[ "${service}" == "job-scheduler" ]]; then
     retire_compose_job_scheduler_container
@@ -6279,10 +6317,19 @@ postgres_database_url_for_owner() {
   esac
 }
 
+k3s_service_dns_name() {
+  local service_name="$1"
+  printf '%s.%s.svc.cluster.local\n' "${service_name}" "${K3S_NAMESPACE}"
+}
+
+api_backend_service_dns_name() {
+  k3s_service_dns_name "api-backend"
+}
+
 resolve_api_backend_upstream_host() {
   local traffic_owner="$1"
   if [[ "${traffic_owner}" == "k3s" ]]; then
-    printf '%s\n' "127.0.0.1"
+    api_backend_service_dns_name
     return 0
   fi
   printf '%s\n' "127.0.0.1"
@@ -8751,10 +8798,10 @@ deploy_engine() {
   fi
   ensure_k3s_engine_database_schema "${mode}"
   ensure_k3s_api_backend_bridge "${mode}"
+  ensure_k3s_traefik_edge "${mode}"
   retire_compose_job_scheduler_container
   ensure_k3s_job_scheduler "${mode}"
   wait_for_k3s_postgres_cutover_workers
-  ensure_k3s_traefik_edge "${mode}"
   local current_internal_api_base_url=""
   current_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   log_section "Service Reconciliation"
@@ -8840,6 +8887,7 @@ service_action() {
         ensure_k3s_cluster_baseline
         ensure_borealis_operator_bridge
         ensure_k3s_api_backend_bridge "${mode}"
+        ensure_k3s_traefik_edge "${mode}"
         log_status "k3s-api-backend" "Restarting" "${C_YELLOW}"
         if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/api-backend" >> "${BUILD_LOG}" 2>&1; then
           log_status "k3s-api-backend" "Restart Failed" "${C_RED}"

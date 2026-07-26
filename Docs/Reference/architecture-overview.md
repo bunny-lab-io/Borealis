@@ -108,9 +108,9 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - WireGuard for remote protocol transport (shell, VNC, future protocols).
 
     ### Container service map
-    - `api-backend`: K3s host-loopback `127.0.0.1:5001`, Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+    - `api-backend`: K3s ClusterIP `api-backend.borealis.svc:5001`, Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
     - `webui-frontend`: K3s ClusterIP `:8000` for production WebUI and dev/HMR after WebUI cutover.
     - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
     - `postgres-db`: K3s ClusterIP `postgres-db.borealis.svc:5432`, Longhorn-backed persistent database state.
-    - `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.
+    - `remote-desktop-guacd`: K3s ClusterIP `remote-desktop-guacd.borealis.svc:4822`, VNC-only Guacamole daemon.
     - `wireguard-tunnel`: K3s host-network UDP `30000`, `borealis-wg`, WireGuard command control socket.
