@@ -141,7 +141,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Stale workers retire cleanly.
     - [x] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
     - [x] Focused Go tests confirm new K3s site-worker pods are not host-networked and route through a per-worker ClusterIP Service.
-    - [ ] Live redeploy validates existing host-loopback site-worker pods retire and relaunch through ClusterIP Services without manual Agent service restart.
+    - [x] Live redeploy validates existing host-loopback site-worker pods retire and relaunch through ClusterIP Services without manual Agent service restart.
     - [ ] Agent release rollout validates stale connected Socket.IO sessions self-recover without manual Agent service restart.
 
 ## Stage 6: Production WebUI Cutover
@@ -348,8 +348,8 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [ ] Operator RBAC still grants namespace-wide pod and Service `create/delete` for dynamic site workers; continue relying on HMAC operator API allowlists and fixed pod/service templates until site-worker lifecycle can move behind a narrower Kubernetes primitive.
 - [ ] Host networking must be minimized except WireGuard/edge needs.
     - [x] Live host-network audit identifies required v1 host-network pods: `traefik-edge` for TCP 80/443/health and `wireguard-tunnel` for UDP 30000 plus `/dev/net/tun`.
-    - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, and `webui-frontend` are not host-networked.
-    - [x] Code change moves K3s `site-worker-*` pods off host networking and onto per-worker ClusterIP Services.
+    - [x] Live host-network audit confirms `borealis-operator`, `postgres-db`, `remote-desktop-guacd`, `webui-frontend`, and `site-worker-*` are not host-networked.
+    - [x] Code and live redeploy move K3s `site-worker-*` pods off host networking and onto per-worker ClusterIP Services.
     - [ ] `api-backend` and `job-scheduler` still use host networking for loopback bridge routes and transitional control paths; replace with ClusterIP-only routing where practical after final bridge cleanup.
 - [x] Runtime service actions must not become raw Kubernetes mutation API.
     - [x] Code audit confirms operator command surface is fixed to named verbs in `borealisOperatorAllowedVerbs` and `executeCommand`; unsupported verbs return `unsupported Borealis operator verb`.
