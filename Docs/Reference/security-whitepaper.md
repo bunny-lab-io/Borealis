@@ -363,7 +363,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Hardened K3s workloads declare CPU and memory limits from profile-managed runtime settings with operator override support.
     - Most static workloads run as `${BOREALIS_ENGINE_RUNTIME_OWNER_UID}:${BOREALIS_ENGINE_RUNTIME_OWNER_GID}`.
     - Writable paths are explicit hostPath, PVC, or memory-backed `emptyDir` mounts. A read-only root filesystem forces cache, log, run, and state writes into reviewed paths.
-    - `api-backend` runs non-root and does not mount the Docker socket. It mounts only its service runtime plus specific Traefik and WireGuard paths required for edge settings and tunnel reconciliation.
+    - `api-backend` runs non-root and does not mount the Docker socket. Its service root is a scratch `emptyDir`; only API cache, config, logs, and secrets are hostPath-mounted, alongside specific Traefik and WireGuard paths required for edge settings and tunnel reconciliation.
     - K3s `job-scheduler` runs non-root and does not mount the Docker socket or a ServiceAccount token. It mounts API cache/logs read-write, API config/secrets read-only, and Traefik dynamic config read-write.
     - `site-worker-orchestrator` is retired after Stage 11. Deploy still removes stale Compose-era containers with that name, but the Go runtime source, Docker lifecycle fallback, Unix socket, and K3s scheduler mount are removed.
     - `webui-frontend` runs non-root. Runtime source mounts are read-only inside the container; Vite cache and resolved config temp writes use tmpfs, including `node_modules/.vite-temp` in dev mode.
@@ -388,7 +388,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Container and K3s pod names must use the `site-worker-` prefix. Docker-backed workers keep `site-worker-<worker_guid>` names until Docker-backed mode is retired. K3s bridge workers use deterministic `site-worker-<sanitized-site-name>` pod names when the scheduler can resolve the site name; their worker GUID is deterministic per site so Agent Socket.IO route URLs stay stable across deploys and pod replacement.
     - Site create and rename requests reject names that would produce an empty K3s worker slug, duplicate another site's normalized slug, or exceed the K3s object-name budget.
     - Images must match `BOREALIS_SITE_WORKER_IMAGE` or `BOREALIS_SITE_WORKER_IMAGE_ALLOWLIST`.
-    - Workers run with host networking because current Traefik routes target per-worker loopback ports.
+    - Workers use pod networking behind per-worker ClusterIP Services while keeping stable route URLs through scheduler-managed Traefik dynamic routes.
     - Workers run as the Borealis runtime UID/GID from `compose.env`.
     - Workers use `no-new-privileges`, `--cap-drop ALL`, `--read-only`, tmpfs `/tmp`, `--memory`, `--cpus`, and `--pids-limit`.
     - Worker resource caps come from `BOREALIS_SITE_WORKER_MEMORY_LIMIT`, `BOREALIS_SITE_WORKER_CPU_LIMIT`, and `BOREALIS_SITE_WORKER_PIDS_LIMIT`.
@@ -396,7 +396,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Workers get `BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0`, so legacy worker route helpers keep database state only and cannot write Traefik route files.
     - Workers mount API logs/site-worker logs read-write, API cache read-write, API config read-only, and API secrets read-only.
     - K3s bridge workers receive the same runtime path contract through a fixed operator-authored pod template. Runtime env is projected through the `borealis-site-worker-runtime-env` K3s Secret so the operator does not need Kubernetes Secret read permission. They also receive fixed read-only host timezone data mounts so worker-local logs and time calculations match the Engine host timezone.
-    - K3s bridge workers, Stage 7 API, and Stage 8 scheduler use `hostNetwork: true` and bind or call loopback only because guacd, WireGuard, and remote-operation route paths still depend on Engine host loopback. PostgreSQL already uses the K3s ClusterIP Service. Remove these exceptions when remote desktop and remaining host-loopback cutovers make ClusterIP-only workloads practical.
+    - K3s site workers, Stage 7 API, and Stage 8 scheduler now use pod networking and Service DNS. Host-network exceptions remain limited to `traefik-edge` for HTTP/HTTPS/health ports and `wireguard-tunnel` for UDP tunnel ownership.
     - K3s bridge worker pods use `restartPolicy: OnFailure` so transient worker crashes restart without granting the pod Kubernetes API access. Clean idle TTL exits still complete, and scheduler reconcile retires terminal pods before replacement.
     - Workers do not mount `/var/run/docker.sock`.
     - Workers do not mount Traefik config.
@@ -422,8 +422,8 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     - Borealis uses host bind mounts for runtime ownership clarity and backup/restore visibility. Named Docker volumes are not treated as a security boundary.
     - Security comes from service-specific mount targets, read-only flags, non-root users, dropped capabilities, read-only root filesystems, and single-writer ownership.
-    - `api-backend` does not mount the entire `Engine/Services` tree. It receives only its own runtime plus Traefik and WireGuard paths it must manage.
-    - K3s `api-backend` receives the same fixed API, Traefik, and WireGuard hostPath allowlist as Compose API previously used plus a generated runtime-env Secret. Its shadow DB validator Job receives only the API runtime hostPath plus a generated runtime-env Secret with `BOREALIS_DATABASE_URL` pointed at K3s PostgreSQL. Neither path receives arbitrary hostPath, kubeconfig, a ServiceAccount token, or Docker socket access.
+    - `api-backend` does not mount the entire `Engine/Services` tree or its whole service root from hostPath. It receives an `emptyDir` service root, exact API cache/config/logs/secrets hostPath mounts, and the Traefik/WireGuard paths it must manage.
+    - K3s `api-backend` receives the fixed API subpath, Traefik, and WireGuard hostPath allowlist plus a generated runtime-env Secret. Its shadow DB validator Job receives a scratch API service root, read-only API secrets, and a generated runtime-env Secret with `BOREALIS_DATABASE_URL` pointed at K3s PostgreSQL. The PostgreSQL schema initializer receives a scratch API service root only. None of these paths receive arbitrary hostPath, kubeconfig, a ServiceAccount token, or Docker socket access.
     - K3s `job-scheduler` does not mount the whole API runtime or WireGuard runtime. It receives the exact API cache/log/config/secrets paths it needs plus the Traefik dynamic directory it owns for worker routes.
     - Retired `site-worker-orchestrator` runtime source is removed; no scheduler path launches Docker helper containers or mounts Traefik config through that helper.
     - `remote-desktop-guacd` has no service data host bind mounts and does not receive Engine secrets, Docker socket, Traefik config, API runtime paths, or host log directories. Its only host bind exception is fixed read-only timezone data.

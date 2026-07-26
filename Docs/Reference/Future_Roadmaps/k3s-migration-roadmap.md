@@ -182,6 +182,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Preserve internal API token behavior.
     - [x] Preserve logs/secrets/cache path contracts through fixed hostPath bridge mounts.
     - [ ] Replace fixed hostPath bridge mounts with Longhorn PVC/Secret/ConfigMap mapping where durable pod-local storage is required.
+        - [x] Remove broad `api-backend` service-root hostPath mounts from API, shadow DB validator, and PostgreSQL schema Job manifests; keep only reviewed subpath mounts or scratch roots.
 - [x] Validation:
     - [x] Bridge pod rollout passes.
     - [x] Pre-ClusterIP bridge `curl -fsS http://127.0.0.1:5001/health` passed.

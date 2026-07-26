@@ -131,7 +131,11 @@ All Borealis K3s pods receive these fixed read-only host timezone data mounts:
 
 `api-backend`:
 ```text
-Engine/Services/api-backend -> /opt/Borealis/Engine/Services/api-backend
+emptyDir scratch root -> /opt/Borealis/Engine/Services/api-backend
+Engine/Services/api-backend/cache -> /opt/Borealis/Engine/Services/api-backend/cache
+Engine/Services/api-backend/config -> /opt/Borealis/Engine/Services/api-backend/config
+Engine/Services/api-backend/logs -> /opt/Borealis/Engine/Services/api-backend/logs
+Engine/Services/api-backend/secrets -> /opt/Borealis/Engine/Services/api-backend/secrets
 Engine/Services/traefik-edge/config -> /opt/Borealis/Engine/Services/traefik-edge/config
 Engine/Services/traefik-edge/env    -> /opt/Borealis/Engine/Services/traefik-edge/env
 Engine/Services/traefik-edge/logs   -> /opt/Borealis/Engine/Services/traefik-edge/logs
@@ -141,9 +145,9 @@ Engine/Services/wireguard-tunnel/run     -> /opt/Borealis/Engine/Services/wiregu
 Engine/Services/wireguard-tunnel/secrets -> /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
 ```
 
-`api-backend` does not mount the whole `Engine/Services` tree. It receives its own runtime plus specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket; Server Info reads K3s workload status from `borealis-operator`, and scheduler/site-worker task state comes from job-scheduler snapshots. Sites reads K3s site-worker metrics through the operator-backed `/api/server/workers` payload and skips Docker metadata reads once K3s metadata is present. Service actions are queued for K3s `job-scheduler`, which routes K3s-owned workload/site-worker lifecycle to `borealis-operator`.
+`api-backend` does not mount the whole `Engine/Services` tree or its whole service root from hostPath. It receives an `emptyDir` service root plus exact API cache/config/logs/secrets subpaths and specific Traefik and WireGuard paths needed for edge settings and tunnel control. It does not mount the Docker socket; Server Info reads K3s workload status from `borealis-operator`, and scheduler/site-worker task state comes from job-scheduler snapshots. Sites reads K3s site-worker metrics through the operator-backed `/api/server/workers` payload and skips Docker metadata reads once K3s metadata is present. Service actions are queued for K3s `job-scheduler`, which routes K3s-owned workload/site-worker lifecycle to `borealis-operator`.
 
-K3s `api-backend` mounts the same fixed API, Traefik, and WireGuard runtime paths the Compose API backend used. It does not use host networking and does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
+K3s `api-backend` mounts only the reviewed API subpaths plus fixed Traefik and WireGuard runtime paths. It does not use host networking and does not mount kubeconfig, a ServiceAccount token, or the Docker socket. The pod uses the generated K3s Secret `borealis-api-backend-runtime-env` because Kubernetes pods do not support Compose `env_file`; the Secret mirrors deploy-time env and does not replace Aegis-protected application secrets.
 
 `site-worker-orchestrator` is retired after Stage 11. Deploy still removes stale Compose-era containers with that name, but the Go runtime source, Docker lifecycle fallback, Unix socket, and K3s scheduler hostPath mount have been removed.
 

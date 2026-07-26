@@ -72,8 +72,8 @@ K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-traefik-edge.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
 K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
-K3S_API_BACKEND_BRIDGE_VERSION="3"
-K3S_API_BACKEND_DB_VALIDATION_VERSION="2"
+K3S_API_BACKEND_BRIDGE_VERSION="4"
+K3S_API_BACKEND_DB_VALIDATION_VERSION="3"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="4"
@@ -3782,8 +3782,16 @@ $(k3s_timezone_env_entries)
             - name: tmp
               mountPath: /tmp
 $(k3s_timezone_volume_mount_entries)
-            - name: api-backend-runtime
+            - name: api-backend-root
               mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-cache
+              mountPath: /opt/Borealis/Engine/Services/api-backend/cache
+            - name: api-config
+              mountPath: /opt/Borealis/Engine/Services/api-backend/config
+            - name: api-logs
+              mountPath: /opt/Borealis/Engine/Services/api-backend/logs
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
             - name: traefik-edge-config
               mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
             - name: traefik-edge-env
@@ -3804,9 +3812,24 @@ $(k3s_timezone_volume_mount_entries)
             medium: Memory
             sizeLimit: 128Mi
 $(k3s_timezone_volume_entries)
-        - name: api-backend-runtime
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: api-cache
           hostPath:
-            path: ${RUNTIME_ROOT}/Services/api-backend
+            path: ${RUNTIME_ROOT}/Services/api-backend/cache
+            type: Directory
+        - name: api-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/config
+            type: Directory
+        - name: api-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/logs
+            type: Directory
+        - name: api-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
             type: Directory
         - name: traefik-edge-config
           hostPath:
@@ -4015,17 +4038,23 @@ $(k3s_timezone_env_entries)
             - name: tmp
               mountPath: /tmp
 $(k3s_timezone_volume_mount_entries)
-            - name: api-backend-runtime
+            - name: api-backend-root
               mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
             medium: Memory
             sizeLimit: 128Mi
 $(k3s_timezone_volume_entries)
-        - name: api-backend-runtime
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: api-secrets
           hostPath:
-            path: ${RUNTIME_ROOT}/Services/api-backend
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
             type: Directory
 EOF
 }
@@ -5033,7 +5062,7 @@ $(k3s_timezone_env_entries)
             - name: tmp
               mountPath: /tmp
 $(k3s_timezone_volume_mount_entries)
-            - name: api-backend-runtime
+            - name: api-backend-root
               mountPath: /opt/Borealis/Engine/Services/api-backend
       volumes:
         - name: tmp
@@ -5041,10 +5070,9 @@ $(k3s_timezone_volume_mount_entries)
             medium: Memory
             sizeLimit: 128Mi
 $(k3s_timezone_volume_entries)
-        - name: api-backend-runtime
-          hostPath:
-            path: ${RUNTIME_ROOT}/Services/api-backend
-            type: Directory
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
 EOF
 }
 
