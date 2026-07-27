@@ -62,6 +62,9 @@ sudo bash Engine.sh --network-mode public deploy prod
 
 Use `--network-mode local` instead when the restored Engine is an Internal-Only deployment.
 
+!!! warning
+    Wait for this redeploy to finish before reinstalling or re-enrolling agents. If an agent receives a new access token from an API pod that started before restore replaced the Engine auth files, the site-worker may reject the management socket as `invalid_token` until the agent refreshes its short-lived token or the agent service restarts after the Engine redeploy.
+
 ## Validate a K3s Restore Target
 
 Validate full Import on a fresh or disposable Engine, not on the production Engine that exported the backup. The target should use the same network mode and FQDN plan as the Engine you intend to recover.
@@ -73,7 +76,7 @@ Validate full Import on a fresh or disposable Engine, not on the production Engi
 5. Select **Analyze** and confirm the reported table and file counts match the expected backup contents.
 6. Type `RESTORE ENGINE CONFIG BACKUP`.
 7. Select **Import**.
-8. Redeploy the Engine in the same network mode.
+8. Redeploy the Engine in the same network mode and wait for the rollout checks to pass before reconnecting agents.
 9. Sign in, unlock Aegis, and run the normal post-restore smoke checks.
 
 !!! warning
