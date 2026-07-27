@@ -773,7 +773,7 @@ finally:
     #### `patch_policies`
     - Status: Active.
     - Purpose: Global, site, and device filter patch policy definitions.
-    - Columns include: `id`, `name`, `policy_type`, `enabled`, `locked`, `role_scope`, `approval_mode`, `deferral_days`, `managed_update_mode`, install/reboot schedule fields, reboot force flag, and audit actor/timestamps.
+    - Columns include: `id`, `name`, `policy_type`, `enabled`, `locked`, `role_scope`, `approval_mode`, `deferral_days`, `managed_update_mode`, legacy `class_toggles_json`, install/reboot schedule fields, legacy `reboot_policy_json`, reboot force flag, and audit actor/timestamps.
     - Used by:
     - `/api/patches/policies*`.
     - Scheduler patch policy evaluation.
@@ -784,6 +784,7 @@ finally:
     - Site policy scope is stored in `patch_policy_sites`; device filter scope is stored in `patch_policy_targets`.
     - `patch_policy_exclusions` stores `unmanaged`, `frozen`, and `managed_override` coverage. Device hostname exclusions include `site_id` when no device GUID is present so duplicate hostnames across sites remain distinct. Exclusions still count as covered for conflict detection.
     - `patch_policy_rules` stores approve/block rules and `override_parent_block` confirmation. Approve and block rules inherit downward as baseline policy behavior; child approval of a parent block requires an explicit override flag.
+    - `class_toggles_json` and `reboot_policy_json` are retained for Backup/Restore compatibility with earlier Patch Management backups. Current policy behavior uses explicit rules and schedule columns.
 
     #### `patch_policy_runs`
     - Status: Active history.
