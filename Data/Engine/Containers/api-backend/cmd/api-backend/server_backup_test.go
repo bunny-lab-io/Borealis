@@ -474,6 +474,76 @@ func TestEngineBackupBootstrapRestoreImportsAndClearsKey(t *testing.T) {
 	}
 }
 
+func TestEngineBackupRestoreSchedulesOperatorRuntimeRefresh(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	state := engineBackupTestState(t, key)
+	payload := engineBackupTestPayload(t, state)
+	doc := encryptedEngineBackupTestDocument(t, payload, key, state)
+	store := &engineBackupTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	aegis := &engineBackupTestAegis{key: key, state: state}
+	auth := newEngineBackupTestAuth(store, aegis, bootstrapPhaseLoginRequired)
+	receivedCommand := false
+	operatorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/command" {
+			t.Fatalf("unexpected operator path %q", r.URL.Path)
+		}
+		if r.Header.Get(borealisOperatorTokenHeader) != goBorealisOperatorToken([]byte("operator-secret")) {
+			t.Fatalf("missing operator HMAC token")
+		}
+		var command borealisOperatorCommandRequest
+		if err := json.NewDecoder(r.Body).Decode(&command); err != nil {
+			t.Fatalf("decode operator command: %v", err)
+		}
+		if command.Verb != "StartPostRestoreRefresh" {
+			t.Fatalf("expected post-restore refresh command, got %#v", command)
+		}
+		if coerceInt64(command.Params["delay_seconds"]) != 2 {
+			t.Fatalf("expected restore refresh delay 2, got %#v", command.Params)
+		}
+		receivedCommand = true
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"verb": command.Verb,
+			"result": map[string]any{
+				"scheduled":            true,
+				"starts_after_seconds": int64(2),
+				"workloads":            []any{"api-backend", "wireguard-tunnel", "traefik-edge", "job-scheduler"},
+			},
+		})
+	}))
+	defer operatorServer.Close()
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "operator-secret")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", operatorServer.URL)
+	request := httptest.NewRequest(http.MethodPost, "/api/server/backup/restore", strings.NewReader(engineBackupRestoreJSON(t, doc, "correct-cipher", engineBackupConfirmationText)))
+	addEngineBackupAuthCookie(t, request, auth, "Admin")
+	recorder := httptest.NewRecorder()
+
+	engineBackupRestoreHandler(auth, false).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected restore ok, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !receivedCommand {
+		t.Fatalf("restore did not ask borealis-operator to refresh runtime")
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode restore response: %v", err)
+	}
+	if boolFromAny(response["restart_required"]) {
+		t.Fatalf("automatic refresh should clear manual restart requirement: %#v", response)
+	}
+	runtimeRefresh := asMap(response["runtime_refresh"])
+	if !boolFromAny(runtimeRefresh["scheduled"]) || boolFromAny(runtimeRefresh["manual_restart_required"]) {
+		t.Fatalf("restore response should report scheduled automatic refresh: %#v", runtimeRefresh)
+	}
+	operatorResult := asMap(runtimeRefresh["operator_result"])
+	if !boolFromAny(operatorResult["scheduled"]) {
+		t.Fatalf("operator result should be preserved in response: %#v", runtimeRefresh)
+	}
+}
+
 func TestEngineBackupClearRuntimeLogsOnlyAllowsEngineServiceLogRoots(t *testing.T) {
 	root := t.TempDir()
 	logRoot := filepath.Join(root, "Engine", "Services", "api-backend", "logs")

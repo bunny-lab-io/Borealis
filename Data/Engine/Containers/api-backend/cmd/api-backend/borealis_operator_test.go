@@ -656,31 +656,59 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
-			writeJSON(w, http.StatusOK, map[string]any{"items": []any{
-				map[string]any{"metadata": map[string]any{"name": "site-worker-worker-safe", "namespace": "borealis", "labels": map[string]any{
-					"app.kubernetes.io/component":  "site-worker",
-					"app.kubernetes.io/managed-by": "borealis-operator",
-					"borealis.io/worker-guid":      "worker-safe",
-				}}},
-				map[string]any{"metadata": map[string]any{"name": "site-worker-user-owned", "namespace": "borealis", "labels": map[string]any{
-					"app.kubernetes.io/component":  "site-worker",
-					"app.kubernetes.io/managed-by": "manual",
-					"borealis.io/worker-guid":      "worker-safe",
-				}}},
-			}})
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-worker-safe",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/worker-guid":      "worker-safe",
+							},
+						},
+					},
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-user-owned",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "manual",
+								"borealis.io/worker-guid":      "worker-safe",
+							},
+						},
+					},
+				},
+			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
-			writeJSON(w, http.StatusOK, map[string]any{"items": []any{
-				map[string]any{"metadata": map[string]any{"name": "site-worker-worker-safe", "namespace": "borealis", "labels": map[string]any{
-					"app.kubernetes.io/component":  "site-worker",
-					"app.kubernetes.io/managed-by": "borealis-operator",
-					"borealis.io/worker-guid":      "worker-safe",
-				}}},
-				map[string]any{"metadata": map[string]any{"name": "site-worker-user-owned", "namespace": "borealis", "labels": map[string]any{
-					"app.kubernetes.io/component":  "site-worker",
-					"app.kubernetes.io/managed-by": "manual",
-					"borealis.io/worker-guid":      "worker-safe",
-				}}},
-			}})
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-worker-safe",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/worker-guid":      "worker-safe",
+							},
+						},
+					},
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-user-owned",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "manual",
+								"borealis.io/worker-guid":      "worker-safe",
+							},
+						},
+					},
+				},
+			})
 		case r.Method == http.MethodDelete:
 			deleted = append(deleted, r.URL.Path)
 			writeJSON(w, http.StatusOK, map[string]any{"status": "Success"})
@@ -705,6 +733,99 @@ func TestBorealisOperatorRetireSiteWorkerDeletesOnlyManagedWorkerPods(t *testing
 	for _, path := range deleted {
 		if !expectedDeletes[path] {
 			t.Fatalf("unexpected delete path %s paths=%#v", path, deleted)
+		}
+	}
+}
+
+func TestBorealisOperatorPostRestoreRefreshRetiresWorkersAndRestartsRuntime(t *testing.T) {
+	patched := map[string]int{}
+	deleted := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("expected Kubernetes bearer token, got %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-bunny-lab",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/workload":         "site-worker",
+								"borealis.io/worker-guid":      "worker-refresh",
+								"borealis.io/site-id":          "1",
+							},
+						},
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/namespaces/borealis/services":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"items": []any{
+					map[string]any{
+						"metadata": map[string]any{
+							"name":      "site-worker-bunny-lab",
+							"namespace": "borealis",
+							"labels": map[string]any{
+								"app.kubernetes.io/component":  "site-worker",
+								"app.kubernetes.io/managed-by": "borealis-operator",
+								"borealis.io/workload":         "site-worker",
+								"borealis.io/worker-guid":      "worker-refresh",
+								"borealis.io/site-id":          "1",
+							},
+						},
+					},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/apis/metrics.k8s.io/v1beta1/namespaces/borealis/pods":
+			writeJSON(w, http.StatusOK, map[string]any{"items": []any{}})
+		case r.Method == http.MethodDelete:
+			deleted[r.URL.Path] = true
+			writeJSON(w, http.StatusOK, map[string]any{"status": "Success"})
+		case strings.HasPrefix(r.URL.Path, "/apis/apps/v1/namespaces/borealis/deployments/"):
+			serviceKey := strings.TrimPrefix(r.URL.Path, "/apis/apps/v1/namespaces/borealis/deployments/")
+			switch r.Method {
+			case http.MethodGet:
+				writeJSON(w, http.StatusOK, borealisOperatorNamedTestDeployment(serviceKey, int64(patched[serviceKey]+1), int64(patched[serviceKey]+1)))
+			case http.MethodPatch:
+				var patch map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+					t.Fatal(err)
+				}
+				metadata := nestedMap(nestedMap(patch, "spec"), "template")
+				annotations := mapStringAny(nestedMap(metadata, "metadata")["annotations"])
+				if cleanText(annotations["borealis.io/restarted-at"]) == "" {
+					t.Fatalf("restart patch missing restarted-at annotation: %#v", patch)
+				}
+				patched[serviceKey]++
+				writeJSON(w, http.StatusOK, borealisOperatorNamedTestDeployment(serviceKey, int64(patched[serviceKey]+1), int64(patched[serviceKey]+1)))
+			default:
+				t.Fatalf("unexpected method %s path %s", r.Method, r.URL.Path)
+			}
+		default:
+			t.Fatalf("unexpected Kubernetes request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	operator := borealisOperatorTestClient(server)
+	operator.runPostRestoreRefresh(0, []string{"api-backend", "wireguard-tunnel", "traefik-edge", "job-scheduler"})
+
+	for _, path := range []string{
+		"/api/v1/namespaces/borealis/pods/site-worker-bunny-lab",
+		"/api/v1/namespaces/borealis/services/site-worker-bunny-lab",
+	} {
+		if !deleted[path] {
+			t.Fatalf("expected post-restore refresh to delete %s, deleted=%#v", path, deleted)
+		}
+	}
+	for _, serviceKey := range []string{"api-backend", "wireguard-tunnel", "traefik-edge", "job-scheduler"} {
+		if patched[serviceKey] != 1 {
+			t.Fatalf("expected exactly one restart patch for %s, patched=%#v", serviceKey, patched)
 		}
 	}
 }
@@ -778,6 +899,36 @@ func borealisOperatorTestDeployment(image string, generation int64, observedGene
 			"readyReplicas":      ready,
 			"availableReplicas":  ready,
 			"updatedReplicas":    updated,
+		},
+	}
+}
+
+func borealisOperatorNamedTestDeployment(serviceKey string, generation int64, observedGeneration int64) map[string]any {
+	return map[string]any{
+		"metadata": map[string]any{
+			"name":       serviceKey,
+			"namespace":  "borealis",
+			"generation": generation,
+			"labels": map[string]any{
+				"app.kubernetes.io/managed-by": "Engine.sh",
+				"borealis.io/service-key":      serviceKey,
+			},
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"template": map[string]any{
+				"spec": map[string]any{
+					"containers": []any{
+						map[string]any{"name": serviceKey, "image": "borealis-engine/" + serviceKey + ":sha-aaaaaaaaaaaa"},
+					},
+				},
+			},
+		},
+		"status": map[string]any{
+			"observedGeneration": observedGeneration,
+			"readyReplicas":      int64(1),
+			"availableReplicas":  int64(1),
+			"updatedReplicas":    int64(1),
 		},
 	}
 }

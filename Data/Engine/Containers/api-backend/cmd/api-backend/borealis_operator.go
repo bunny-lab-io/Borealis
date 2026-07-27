@@ -45,6 +45,7 @@ var borealisOperatorMutationVerbs = []string{
 	"ScaleKnownWorkload",
 	"LaunchSiteWorker",
 	"RetireSiteWorker",
+	"StartPostRestoreRefresh",
 }
 
 var borealisOperatorAllowedVerbs = append(append([]string{}, borealisOperatorReadOnlyVerbs...), borealisOperatorMutationVerbs...)
@@ -115,6 +116,10 @@ type borealisOperatorLaunchSiteWorkerRequest struct {
 type borealisOperatorRetireSiteWorkerRequest struct {
 	WorkerGUID string `json:"worker_guid"`
 	Reason     string `json:"reason"`
+}
+
+type borealisOperatorPostRestoreRefreshRequest struct {
+	DelaySeconds int64 `json:"delay_seconds"`
 }
 
 type borealisOperatorResourceProfile struct {
@@ -295,6 +300,12 @@ func (o *borealisOperator) executeCommand(ctx context.Context, verb string, para
 			return nil, http.StatusBadRequest, err
 		}
 		return o.retireSiteWorker(ctx, req)
+	case "StartPostRestoreRefresh":
+		var req borealisOperatorPostRestoreRefreshRequest
+		if err := decodeBorealisOperatorParams(params, &req); err != nil {
+			return nil, http.StatusBadRequest, err
+		}
+		return o.startPostRestoreRefresh(req), http.StatusAccepted, nil
 	default:
 		return nil, http.StatusBadRequest, fmt.Errorf("unsupported Borealis operator verb %q", verb)
 	}
@@ -666,6 +677,64 @@ func (o *borealisOperator) retireSiteWorker(ctx context.Context, req borealisOpe
 		"retired_count":         len(retired),
 		"retired_service_count": len(retiredServices),
 	}, http.StatusOK, nil
+}
+
+func (o *borealisOperator) startPostRestoreRefresh(req borealisOperatorPostRestoreRefreshRequest) map[string]any {
+	delaySeconds := req.DelaySeconds
+	if delaySeconds <= 0 {
+		delaySeconds = 2
+	}
+	if delaySeconds > 30 {
+		delaySeconds = 30
+	}
+	workloads := []string{"api-backend", "wireguard-tunnel", "traefik-edge", "job-scheduler"}
+	go o.runPostRestoreRefresh(time.Duration(delaySeconds)*time.Second, workloads)
+	return map[string]any{
+		"scheduled":            true,
+		"starts_after_seconds": delaySeconds,
+		"site_workers":         "retire_existing",
+		"workloads":            workloads,
+	}
+}
+
+func (o *borealisOperator) runPostRestoreRefresh(delay time.Duration, workloads []string) {
+	if o == nil || o.kube == nil {
+		log.Printf("post-restore runtime refresh skipped: Kubernetes client unavailable")
+		return
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	workers, err := o.listSiteWorkers(ctx)
+	if err != nil {
+		log.Printf("post-restore runtime refresh failed to list site-workers: %v", err)
+	} else {
+		seenWorkers := map[string]bool{}
+		for _, worker := range workers {
+			workerGUID := strings.ToLower(cleanText(worker["worker_guid"]))
+			if workerGUID == "" || seenWorkers[workerGUID] {
+				continue
+			}
+			seenWorkers[workerGUID] = true
+			if _, status, err := o.retireSiteWorker(ctx, borealisOperatorRetireSiteWorkerRequest{
+				WorkerGUID: workerGUID,
+				Reason:     "backup_restore_runtime_refresh",
+			}); err != nil {
+				log.Printf("post-restore runtime refresh failed to retire site-worker worker_guid=%s status=%d err=%v", workerGUID, status, err)
+			}
+		}
+	}
+
+	for _, serviceKey := range workloads {
+		if _, status, err := o.restartKnownWorkload(ctx, borealisOperatorRestartRequest{ServiceKey: serviceKey}); err != nil {
+			log.Printf("post-restore runtime refresh failed to restart service=%s status=%d err=%v", serviceKey, status, err)
+			continue
+		}
+		log.Printf("post-restore runtime refresh restarted service=%s", serviceKey)
+	}
 }
 
 func (o *borealisOperator) listSiteWorkers(ctx context.Context) ([]map[string]any, error) {
@@ -1978,6 +2047,12 @@ func (c *borealisOperatorClient) retireSiteWorker(ctx context.Context, workerGUI
 	return c.command(ctx, "RetireSiteWorker", map[string]any{
 		"worker_guid": workerGUID,
 		"reason":      reason,
+	})
+}
+
+func (c *borealisOperatorClient) startPostRestoreRefresh(ctx context.Context) (map[string]any, error) {
+	return c.command(ctx, "StartPostRestoreRefresh", map[string]any{
+		"delay_seconds": 2,
 	})
 }
 

@@ -56,7 +56,15 @@ function restoreSuccessMessage(payload) {
   const rowCount = Number(payload?.rows_restored || 0);
   const fileCount = Number(payload?.files_restored || 0);
   const logCount = Number(payload?.logs_cleared || 0);
-  return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. API restart and Aegis unlock required.`;
+  const refreshScheduled = payload?.runtime_refresh?.scheduled === true;
+  const restartRequired = payload?.restart_required === true || payload?.runtime_refresh?.manual_restart_required === true;
+  if (refreshScheduled) {
+    return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Engine services are refreshing automatically; sign back in and unlock Aegis after the refresh finishes.`;
+  }
+  if (restartRequired) {
+    return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Restart Engine services, then sign back in and unlock Aegis.`;
+  }
+  return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Sign back in and unlock Aegis.`;
 }
 
 function BackupRestoreTool({ mode }) {
