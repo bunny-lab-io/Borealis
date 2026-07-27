@@ -348,7 +348,7 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
 
     #### Runtime identity and ownership
 
-    - `Engine.sh` creates or repairs a `borealis-engine` system group and user during deploy. Defaults are UID/GID `64646`, shell `nologin` when available, no interactive login path, and no normal home directory.
+    - `Engine.sh` creates or repairs a `borealis-engine` system group and user during deploy. Defaults are UID/GID `64646`, shell `nologin` when available, no interactive login path, and no normal home directory. On shadow-utils hosts, deploy passes explicit `SYS_UID_MAX` and `SYS_GID_MAX` overrides while creating the account so the fixed high Borealis runtime ID does not trigger distro default system-ID range warnings.
     - Deploy fails instead of silently reusing a mismatched UID/GID when the configured `borealis-engine` name or numeric ID is already bound to another account.
     - `Engine.sh` writes `BOREALIS_ENGINE_RUNTIME_OWNER_UID`, `BOREALIS_ENGINE_RUNTIME_OWNER_GID`, `BOREALIS_ENGINE_RUNTIME_USER`, and `BOREALIS_ENGINE_RUNTIME_GROUP` into `Engine/Deploy/compose.env`.
     - `Engine.sh` still detects the host Docker socket group for legacy metadata, but no long-running Stage 11 Engine service receives `/var/run/docker.sock`.

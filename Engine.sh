@@ -1562,7 +1562,11 @@ ensure_engine_runtime_identity() {
     die "gid ${ENGINE_RUNTIME_GID} already belongs to ${existing_gid_group}; set a free Borealis runtime id before deploy."
   fi
   if [[ -z "${existing_group_gid}" ]]; then
-    run_privileged groupadd --system --gid "${ENGINE_RUNTIME_GID}" "${ENGINE_RUNTIME_GROUP}" \
+    local groupadd_args=(--system --gid "${ENGINE_RUNTIME_GID}")
+    if groupadd --help 2>&1 | grep -q -- '--key'; then
+      groupadd_args=(-K SYS_GID_MAX=65534 "${groupadd_args[@]}")
+    fi
+    run_privileged groupadd "${groupadd_args[@]}" "${ENGINE_RUNTIME_GROUP}" \
       || die "Failed to create ${ENGINE_RUNTIME_GROUP} runtime group."
   fi
 
@@ -1584,13 +1588,19 @@ ensure_engine_runtime_identity() {
     if [[ ! -x "${nologin_shell}" ]]; then
       nologin_shell="/bin/false"
     fi
+    local useradd_args=(
+      --system
+      --uid "${ENGINE_RUNTIME_UID}"
+      --gid "${ENGINE_RUNTIME_GROUP}"
+      --home-dir /nonexistent
+      --no-create-home
+      --shell "${nologin_shell}"
+    )
+    if useradd --help 2>&1 | grep -q -- '--key'; then
+      useradd_args=(-K SYS_UID_MAX=65534 "${useradd_args[@]}")
+    fi
     run_privileged useradd \
-      --system \
-      --uid "${ENGINE_RUNTIME_UID}" \
-      --gid "${ENGINE_RUNTIME_GROUP}" \
-      --home-dir /nonexistent \
-      --no-create-home \
-      --shell "${nologin_shell}" \
+      "${useradd_args[@]}" \
       "${ENGINE_RUNTIME_USER}" \
       || die "Failed to create ${ENGINE_RUNTIME_USER} runtime user."
   fi

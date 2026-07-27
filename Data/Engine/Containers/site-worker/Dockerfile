@@ -18,8 +18,8 @@ RUN apt-get update \
         rsync \
         sshpass \
         wireguard-tools \
-    && groupadd --system --gid "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
-    && useradd --system --uid "${BOREALIS_ENGINE_RUNTIME_UID}" --gid "${BOREALIS_ENGINE_RUNTIME_GID}" --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin borealis-engine \
+    && groupadd -K SYS_GID_MAX=65534 --system --gid "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
+    && useradd -K SYS_UID_MAX=65534 --system --uid "${BOREALIS_ENGINE_RUNTIME_UID}" --gid "${BOREALIS_ENGINE_RUNTIME_GID}" --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin borealis-engine \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/Borealis
