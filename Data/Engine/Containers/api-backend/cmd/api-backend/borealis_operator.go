@@ -1122,6 +1122,8 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 	runtimeSecretName := envDefault("BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME", "borealis-site-worker-runtime-env")
 	runtimeConfigHash := strings.TrimSpace(os.Getenv("BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH"))
 	logRoot := filepath.Join(apiRoot, "logs", "site-workers")
+	runtimeUID := borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_UID", 64646)
+	runtimeGID := borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", 64646)
 	serviceHost = firstText(strings.TrimSpace(serviceHost), siteWorkerServiceDNSName(serviceName, o.namespace))
 	return map[string]any{
 		"apiVersion": "v1",
@@ -1163,11 +1165,32 @@ func (o *borealisOperator) siteWorkerPodManifest(podName string, serviceName str
 			"restartPolicy":                "OnFailure",
 			"securityContext": map[string]any{
 				"runAsNonRoot": true,
-				"runAsUser":    borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_UID", 64646),
-				"runAsGroup":   borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", 64646),
-				"fsGroup":      borealisOperatorRuntimeIDEnv("BOREALIS_ENGINE_RUNTIME_OWNER_GID", 64646),
+				"runAsUser":    runtimeUID,
+				"runAsGroup":   runtimeGID,
+				"fsGroup":      runtimeGID,
 				"seccompProfile": map[string]any{
 					"type": "RuntimeDefault",
+				},
+			},
+			"initContainers": []map[string]any{
+				{
+					"name":            "prepare-site-worker-logs",
+					"image":           imageRef,
+					"imagePullPolicy": "IfNotPresent",
+					"command":         []string{"sh", "-c"},
+					"args": []string{
+						fmt.Sprintf("mkdir -p %s && chown %d:%d %s && chmod 0775 %s", shellQuote(logRoot), runtimeUID, runtimeGID, shellQuote(logRoot), shellQuote(logRoot)),
+					},
+					"securityContext": map[string]any{
+						"runAsNonRoot":             false,
+						"runAsUser":                int64(0),
+						"runAsGroup":               int64(0),
+						"allowPrivilegeEscalation": false,
+						"readOnlyRootFilesystem":   true,
+					},
+					"volumeMounts": []map[string]any{
+						{"name": "api-logs-site-workers", "mountPath": logRoot},
+					},
 				},
 			},
 			"containers": []map[string]any{

@@ -347,6 +347,35 @@ func TestBorealisOperatorLaunchSiteWorkerBuildsSafePod(t *testing.T) {
 			if cleanText(spec["dnsPolicy"]) != "ClusterFirst" {
 				t.Fatalf("site-worker pod should use normal cluster DNS: %#v", spec)
 			}
+			initContainers, _ := spec["initContainers"].([]any)
+			if len(initContainers) != 1 {
+				t.Fatalf("site-worker pod should prepare writable log hostPath before startup: %#v", initContainers)
+			}
+			logPrep := schedulerAnyMap(initContainers[0])
+			if cleanText(logPrep["name"]) != "prepare-site-worker-logs" {
+				t.Fatalf("unexpected site-worker init container: %#v", logPrep)
+			}
+			if cleanText(logPrep["image"]) != "borealis-engine/site-worker:sha-cccccccccccc" {
+				t.Fatalf("site-worker log prep should use site-worker image: %#v", logPrep)
+			}
+			logPrepArgs, _ := logPrep["args"].([]any)
+			if len(logPrepArgs) != 1 {
+				t.Fatalf("site-worker log prep should have one shell command: %#v", logPrepArgs)
+			}
+			logPrepCommand := cleanText(logPrepArgs[0])
+			if !strings.Contains(logPrepCommand, "chown 64646:64646 '/opt/Borealis/Engine/Services/api-backend/logs/site-workers'") ||
+				!strings.Contains(logPrepCommand, "chmod 0775 '/opt/Borealis/Engine/Services/api-backend/logs/site-workers'") {
+				t.Fatalf("site-worker log prep should repair log hostPath ownership: %s", logPrepCommand)
+			}
+			logPrepMounts, _ := logPrep["volumeMounts"].([]any)
+			if len(logPrepMounts) != 1 {
+				t.Fatalf("site-worker log prep should mount only log hostPath: %#v", logPrepMounts)
+			}
+			logPrepMount := schedulerAnyMap(logPrepMounts[0])
+			if cleanText(logPrepMount["name"]) != "api-logs-site-workers" ||
+				cleanText(logPrepMount["mountPath"]) != "/opt/Borealis/Engine/Services/api-backend/logs/site-workers" {
+				t.Fatalf("site-worker log prep should mount log hostPath: %#v", logPrepMount)
+			}
 			volumes, _ := spec["volumes"].([]any)
 			hostPaths := map[string]bool{}
 			for _, rawVolume := range volumes {
