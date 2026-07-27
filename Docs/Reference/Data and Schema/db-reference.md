@@ -20,6 +20,8 @@ sites (id) --------------------< device_sites (site_id)
 devices (guid) ----------------< refresh_tokens (guid)
 devices (guid) ----------------< device_keys (guid)
 devices (guid) ----------------< device_approvals (guid, optional)
+devices.agent_id -------------< device_vpn_ip_leases (agent_id)
+devices.agent_id -------------< device_vpn_key_leases (agent_id)
 agent enrollment fingerprint ---< enrollment_code_failures (logical identity)
 
 scheduled_jobs (id) ----------< scheduled_job_runs (job_id)
@@ -561,6 +563,29 @@ finally:
     - `agent_id` primary key.
     - Notes:
     - Created by migrations; currently unused by active APIs/services.
+
+    #### `device_vpn_ip_leases`
+    - Status: Active.
+    - Purpose: Durable WireGuard virtual IP lease map for agents.
+    - Columns: `agent_id`, `virtual_ip`, `updated_at`.
+    - Constraints and indexes:
+    - `agent_id` primary key.
+    - `uq_device_vpn_ip_leases_virtual_ip` unique index on `virtual_ip`.
+    - Used by:
+    - Go VPN tunnel service when restoring or persisting peer IP assignments.
+    - Backup/Restore durable device trust state.
+
+    #### `device_vpn_key_leases`
+    - Status: Active.
+    - Purpose: Durable WireGuard client key lease map for agents.
+    - Columns: `agent_id`, `client_private_key`, `client_public_key`, `updated_at`.
+    - Constraints and indexes:
+    - `agent_id` primary key.
+    - Used by:
+    - Go VPN tunnel service when restoring or persisting per-agent WireGuard keypairs.
+    - Backup/Restore durable device trust state.
+    - Notes:
+    - Created by normal Engine schema initialization before Backup/Restore runs. The Go VPN runtime also keeps a compatibility `CREATE TABLE IF NOT EXISTS` guard for older deployments.
 
     ### Operations and UI State
     #### `activity_history`

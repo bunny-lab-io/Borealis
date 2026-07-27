@@ -51,7 +51,11 @@ def apply_all(
     _run_schema_step(progress_callback, ("devices",), lambda: _ensure_devices_table(conn))
     _run_schema_step(progress_callback, ("device_keys",), lambda: _ensure_device_aux_tables(conn))
     _run_schema_step(progress_callback, ("device_vpn_config",), lambda: _ensure_device_vpn_config_table(conn))
-    _run_schema_step(progress_callback, ("device_vpn_ip_leases",), lambda: _ensure_device_vpn_ip_lease_table(conn))
+    _run_schema_step(
+        progress_callback,
+        ("device_vpn_ip_leases", "device_vpn_key_leases"),
+        lambda: _ensure_device_vpn_lease_tables(conn),
+    )
     _run_schema_step(progress_callback, ("refresh_tokens",), lambda: _ensure_refresh_token_table(conn))
     _run_schema_step(progress_callback, ("device_approvals",), lambda: _ensure_device_approval_table(conn))
     _run_schema_step(progress_callback, ("enrollment_code_failures",), lambda: _ensure_enrollment_code_failure_table(conn))
@@ -182,7 +186,7 @@ def _ensure_device_vpn_config_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_device_vpn_ip_lease_table(conn: sqlite3.Connection) -> None:
+def _ensure_device_vpn_lease_tables(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
         """
@@ -199,6 +203,25 @@ def _ensure_device_vpn_ip_lease_table(conn: sqlite3.Connection) -> None:
             ON device_vpn_ip_leases(virtual_ip)
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS device_vpn_key_leases (
+            agent_id TEXT PRIMARY KEY,
+            client_private_key TEXT NOT NULL,
+            client_public_key TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute("PRAGMA table_info(device_vpn_key_leases)")
+    key_lease_columns = {str(row[1]) for row in cur.fetchall()}
+    for column_name, column_sql in (
+        ("client_private_key", "ALTER TABLE device_vpn_key_leases ADD COLUMN client_private_key TEXT NOT NULL DEFAULT ''"),
+        ("client_public_key", "ALTER TABLE device_vpn_key_leases ADD COLUMN client_public_key TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "ALTER TABLE device_vpn_key_leases ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"),
+    ):
+        if column_name not in key_lease_columns:
+            cur.execute(column_sql)
 
 
 def _ensure_refresh_token_table(conn: sqlite3.Connection) -> None:

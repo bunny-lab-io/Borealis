@@ -62,7 +62,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 | `agent-role` | Engine-side Agent RoleManager import and role health behavior. |
 | `ansible` | Engine Ansible runner behavior. |
 | `assemblies` | Assembly cache, import/export, payload, permission, execution type, and official catalog behavior. |
-| `core` | Core API, edge runtime, Engine secret config, and web UI API checks. |
+| `core` | Core API, database schema bootstrap, edge runtime, Engine secret config, and web UI API checks. |
 | `devices` | Device APIs, purge flow, filters, and session inventory. |
 | `enrollment` | Agent enrollment and token API behavior. |
 | `files` | Engine file management API behavior. |
