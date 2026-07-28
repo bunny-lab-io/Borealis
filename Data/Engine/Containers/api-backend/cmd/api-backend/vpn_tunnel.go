@@ -1779,16 +1779,36 @@ func (w *wireGuardRuntime) runCommand(args []string) (int, string, string) {
 }
 
 func runWireGuardControlCommand(socketPath string, args []string) (int, string, string, error) {
-	conn, err := net.DialTimeout("unix", socketPath, 30*time.Second)
+	return runWireGuardControlSocketPayload(context.Background(), socketPath, map[string]any{"command": "run", "args": args, "timeout": 30}, 30*time.Second)
+}
+
+func runWireGuardControlSocketCommand(ctx context.Context, socketPath string, command string, timeout time.Duration) (int, string, string, error) {
+	command = cleanText(command)
+	if command == "" {
+		return 1, "", "", errors.New("missing wireguard control command")
+	}
+	return runWireGuardControlSocketPayload(ctx, socketPath, map[string]any{"command": command}, timeout)
+}
+
+func runWireGuardControlSocketPayload(ctx context.Context, socketPath string, payload map[string]any, timeout time.Duration) (int, string, string, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	dialer := net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		return 1, "", "", err
 	}
 	defer conn.Close()
-	payload, _ := json.Marshal(map[string]any{"command": "run", "args": args, "timeout": 30})
-	if _, err := conn.Write(append(payload, '\n')); err != nil {
+	rawPayload, _ := json.Marshal(payload)
+	if _, err := conn.Write(append(rawPayload, '\n')); err != nil {
 		return 1, "", "", err
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	_ = conn.SetReadDeadline(deadline)
 	raw, err := io.ReadAll(io.LimitReader(conn, 1024*1024))
 	if err != nil {
 		return 1, "", "", err

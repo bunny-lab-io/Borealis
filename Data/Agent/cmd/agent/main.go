@@ -374,6 +374,7 @@ func persistInstallConfig(options agentruntime.Options) error {
 	}
 	if options.EnrollmentCode != "" {
 		cfg.EnrollmentCode = options.EnrollmentCode
+		cfg.ResetAuthForEnrollment()
 	}
 	if options.RepoRef != "" {
 		cfg.Agent.Branch = agentconfig.NormalizeBranch(options.RepoRef)

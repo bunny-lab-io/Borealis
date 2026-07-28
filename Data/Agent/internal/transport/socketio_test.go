@@ -114,6 +114,190 @@ func TestConnectAcksUnsupportedEvent(t *testing.T) {
 	}
 }
 
+func TestEmitWithAckReceivesServerAck(t *testing.T) {
+	ackCh := make(chan []any, 1)
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+			return
+		}
+		_, eventPacket, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if !strings.HasPrefix(string(eventPacket), `421["connect_agent"`) {
+			errCh <- fmt.Errorf("connect_agent packet = %q", string(eventPacket))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`431[{"status":"ok","worker_guid":"worker-1"}]`)); err != nil {
+			errCh <- err
+			return
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.OnConnected(func(ctx context.Context) error {
+		ack, err := client.EmitWithAck(ctx, "connect_agent", map[string]any{"agent_id": "A"}, time.Second)
+		if err != nil {
+			errCh <- err
+			return err
+		}
+		ackCh <- ack
+		return nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(ctx)
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case ack := <-ackCh:
+		first, ok := ack[0].(map[string]any)
+		if !ok || first["status"] != "ok" || first["worker_guid"] != "worker-1" {
+			t.Fatalf("ack payload = %#v", ack)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for ack")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for connect exit")
+	}
+}
+
+func TestConnectedCallbackErrorClosesSocketWithOriginalError(t *testing.T) {
+	errCh := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			errCh <- err
+			return
+		}
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if string(message) != "40" {
+			errCh <- fmt.Errorf("open ack = %q", string(message))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			errCh <- err
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.OnConnected(func(context.Context) error {
+		return fmt.Errorf("registration failed")
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Connect(context.Background())
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "registration failed") {
+			t.Fatalf("Connect error = %v, want registration failure", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for connect failure")
+	}
+}
+
+func TestConnectReturnsAfterReadIdleTimeout(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	connected := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/socket.io/" {
+			t.Errorf("path = %q", r.URL.Path)
+			return
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade failed: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("0{}")); err != nil {
+			t.Errorf("write open failed: %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read namespace connect failed: %v", err)
+			return
+		}
+		if string(msg) != "40" {
+			t.Errorf("namespace connect = %q", string(msg))
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`40{"sid":"agent-sid"}`)); err != nil {
+			t.Errorf("write namespace ack failed: %v", err)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	client.SetConnectTimeout(time.Second)
+	client.SetReadIdleTimeout(40 * time.Millisecond)
+	client.OnConnected(func(context.Context) error {
+		connected <- struct{}{}
+		return nil
+	})
+	err := client.Connect(context.Background())
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		t.Fatalf("Connect error = %v, want timeout", err)
+	}
+	select {
+	case <-connected:
+	default:
+		t.Fatal("socket did not reach connected state before idle timeout")
+	}
+}
+
 func TestConnectRespondsToPingWhileEventHandlerRuns(t *testing.T) {
 	handlerStarted := make(chan struct{})
 	releaseHandler := make(chan struct{})

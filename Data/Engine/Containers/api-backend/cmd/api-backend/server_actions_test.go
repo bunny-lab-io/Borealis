@@ -66,25 +66,25 @@ func serverActionRequest(method string, path string, body string) *http.Request 
 	return request
 }
 
-func TestServerServiceActionQueuesSelectedAction(t *testing.T) {
+func TestServerServiceActionQueuesTraefikReloadAction(t *testing.T) {
 	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
 	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	mux := http.NewServeMux()
 	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/webui-frontend/action", `{"id":"rebuild_prod"}`))
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/traefik-edge/action", `{"action":"reload"}`))
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.serviceKey != "webui-frontend" || cleanText(store.action["action"]) != "rebuild" || cleanText(store.action["mode"]) != "prod" {
+	if store.serviceKey != "traefik-edge" || cleanText(store.action["action"]) != "reload" {
 		t.Fatalf("unexpected queued action service=%q action=%+v", store.serviceKey, store.action)
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["queued"] != true || payload["mode"] != "prod" || payload["work_item_id"].(float64) != 88 {
+	if payload["queued"] != true || payload["work_item_id"].(float64) != 88 {
 		t.Fatalf("unexpected payload %+v", payload)
 	}
 }
@@ -105,14 +105,30 @@ func TestServerServiceRestartQueuesRestartAction(t *testing.T) {
 	}
 }
 
-func TestServerServiceActionRejectsInvalidAction(t *testing.T) {
+func TestServerServiceWebUIRestartQueuesRestartAction(t *testing.T) {
 	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
 	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	mux := http.NewServeMux()
 	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/webui-frontend/action", `{"action":"rebuild"}`))
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/webui-frontend/restart", `{}`))
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if store.serviceKey != "webui-frontend" || cleanText(store.action["action"]) != "restart" {
+		t.Fatalf("unexpected queued action service=%q action=%+v", store.serviceKey, store.action)
+	}
+}
+
+func TestServerServiceActionRejectsWebUIRebuild(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	store := &fakeServerServiceActionStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
+	mux := http.NewServeMux()
+	registerServerActionRoutes(mux, testServerActionAuth(store), http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, serverActionRequest(http.MethodPost, "/api/server/services/webui-frontend/action", `{"action":"rebuild","mode":"prod"}`))
 	if recorder.Code != http.StatusBadRequest || store.serviceKey != "" {
 		t.Fatalf("unexpected status=%d service=%q", recorder.Code, store.serviceKey)
 	}

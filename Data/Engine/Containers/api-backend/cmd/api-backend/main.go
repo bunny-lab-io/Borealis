@@ -51,6 +51,14 @@ func main() {
 		return
 	}
 
+	if apiDBHealthcheckMode() {
+		if err := runGoAPIDBHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("Go api-backend DB healthcheck failed: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if schedulerHealthcheckMode() {
 		if err := runGoJobSchedulerHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("Go job-scheduler healthcheck failed: %v", err)
@@ -59,17 +67,22 @@ func main() {
 		return
 	}
 
-	if siteWorkerOrchestratorHealthcheckMode() {
-		if err := runSiteWorkerOrchestratorHealthcheck(rootCtx, cfg); err != nil {
-			log.Printf("site-worker orchestrator healthcheck failed: %v", err)
+	if borealisOperatorClientHealthcheckMode() {
+		if err := runBorealisOperatorClientHealthcheck(rootCtx, cfg); err != nil {
+			log.Printf("borealis-operator client healthcheck failed: %v", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	if siteWorkerOrchestratorMode() {
-		if err := runSiteWorkerOrchestrator(rootCtx, cfg); err != nil {
-			log.Fatalf("site-worker orchestrator exited: %v", err)
+	if retiredSiteWorkerOrchestratorMode() {
+		log.Fatalf("site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle")
+		return
+	}
+
+	if borealisOperatorMode() {
+		if err := runBorealisOperator(rootCtx, cfg); err != nil {
+			log.Fatalf("borealis-operator exited: %v", err)
 		}
 		return
 	}
@@ -111,6 +124,7 @@ func main() {
 	registerServerTimeRoutes(mux, auth)
 	registerAgentReleaseChannelRoutes(mux, auth, fallback)
 	registerServerOverviewRoutes(mux, auth, operatorRealtime, fallback)
+	registerBorealisOperatorRoutes(mux, auth)
 	registerServerSettingsRoutes(mux, auth, fallback)
 	registerServerWorkerRoutes(mux, auth, fallback)
 	registerServerActionRoutes(mux, auth, fallback)
@@ -143,7 +157,11 @@ func main() {
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, fallback)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
-	startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
+	if apiBackgroundLoopsEnabled() {
+		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
+	} else {
+		log.Printf("Go api-backend background loops disabled")
+	}
 
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.ListenHost, cfg.ListenPort),
@@ -214,6 +232,13 @@ func apiHealthcheckMode() bool {
 	return processRoleMatches("api-healthcheck", "api-backend-healthcheck")
 }
 
+func apiDBHealthcheckMode() bool {
+	if processArgMatches("api-db-healthcheck", "api-backend-db-healthcheck", "api-shadow-db-healthcheck") {
+		return true
+	}
+	return processRoleMatches("api-db-healthcheck", "api-backend-db-healthcheck", "api-shadow-db-healthcheck")
+}
+
 func schedulerHealthcheckMode() bool {
 	if processArgMatches("job-scheduler-healthcheck", "scheduler-healthcheck") {
 		return true
@@ -247,11 +272,23 @@ func explicitHealthcheckArgMode() bool {
 	return processArgMatches(
 		"api-healthcheck",
 		"api-backend-healthcheck",
+		"api-db-healthcheck",
+		"api-backend-db-healthcheck",
+		"api-shadow-db-healthcheck",
 		"job-scheduler-healthcheck",
 		"scheduler-healthcheck",
 		"site-worker-orchestrator-healthcheck",
 		"worker-orchestrator-healthcheck",
+		"borealis-operator-healthcheck",
+		"operator-healthcheck",
 	)
+}
+
+func retiredSiteWorkerOrchestratorMode() bool {
+	if processArgMatches("site-worker-orchestrator", "worker-orchestrator", "site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck") {
+		return true
+	}
+	return processRoleMatches("site-worker-orchestrator", "worker-orchestrator", "site-worker-orchestrator-healthcheck", "worker-orchestrator-healthcheck")
 }
 
 func textInSet(value string, allowed ...string) bool {
@@ -292,6 +329,40 @@ func runGoAPIHealthcheck(ctx context.Context, cfg gatewayConfig) error {
 	return nil
 }
 
+func runGoAPIDBHealthcheck(ctx context.Context, cfg gatewayConfig) error {
+	auth, closeAuth, err := newAuthService(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeAuth()
+
+	checkTimeout := cfg.DBConnectTimeout + 15*time.Second
+	if checkTimeout < 15*time.Second {
+		checkTimeout = 15 * time.Second
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+
+	state, err := currentBootstrapState(checkCtx, auth)
+	if err != nil {
+		return fmt.Errorf("bootstrap state query failed: %w", err)
+	}
+	phase := strings.TrimSpace(fmt.Sprint(state["phase"]))
+	if phase == "" {
+		return errors.New("bootstrap phase empty")
+	}
+	log.Printf(
+		"Go api-backend DB healthcheck passed: phase=%s configured=%v locked=%v user_count=%v admin_count=%v ready_admin_count=%v",
+		phase,
+		state["configured"],
+		state["locked"],
+		state["user_count"],
+		state["admin_count"],
+		state["ready_admin_count"],
+	)
+	return nil
+}
+
 func loadConfig() (gatewayConfig, error) {
 	return gatewayConfig{
 		ListenHost:       envDefault("BOREALIS_GO_API_HOST", "127.0.0.1"),
@@ -306,6 +377,18 @@ func loadConfig() (gatewayConfig, error) {
 		AuthTokenTTL:     envDurationSeconds("BOREALIS_TOKEN_TTL_SECONDS", 30*24*time.Hour),
 		ShutdownTimeout:  envDurationSeconds("BOREALIS_GO_API_SHUTDOWN_TIMEOUT_SECONDS", 20*time.Second),
 	}, nil
+}
+
+func apiBackgroundLoopsEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("BOREALIS_API_BACKGROUND_LOOPS")))
+	switch value {
+	case "", "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func envDefault(name, fallback string) string {

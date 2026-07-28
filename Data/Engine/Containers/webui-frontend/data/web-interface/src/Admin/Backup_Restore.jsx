@@ -30,6 +30,9 @@ const PAGE_TITLE = "Backup or Restore Engine Configuration";
 const PAGE_SUBTITLE =
   "Export or import an encrypted JSON file of all Engine settings excluding logs, device activity history, and scheduled job history.";
 const RESTORE_CONFIRMATION = "RESTORE ENGINE CONFIG BACKUP";
+const RESTORE_REFRESH_MIN_WAIT_MS = 35000;
+const RESTORE_REFRESH_MAX_WAIT_MS = 120000;
+const RESTORE_REFRESH_POLL_MS = 3000;
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const backupAnalysisGridTheme = themeQuartz.withParams({
   accentColor: "#7dd3fc",
@@ -44,6 +47,12 @@ const iconFontFamily = '"Quartz Regular"';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function filenameFromDisposition(header) {
   const raw = String(header || "");
   const match = raw.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
@@ -56,7 +65,91 @@ function restoreSuccessMessage(payload) {
   const rowCount = Number(payload?.rows_restored || 0);
   const fileCount = Number(payload?.files_restored || 0);
   const logCount = Number(payload?.logs_cleared || 0);
-  return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. API restart and Aegis unlock required.`;
+  const refreshScheduled = payload?.runtime_refresh?.scheduled === true;
+  const restartRequired = payload?.restart_required === true || payload?.runtime_refresh?.manual_restart_required === true;
+  if (refreshScheduled) {
+    return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Engine services are refreshing automatically; sign back in and unlock Aegis after the refresh finishes.`;
+  }
+  if (restartRequired) {
+    return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Restart Engine services, then sign back in and unlock Aegis.`;
+  }
+  return `Restored ${tableCount} tables, ${rowCount} rows, ${fileCount} files, and cleared ${logCount} log entries. Borealis will finish any required runtime refresh before sign-in continues.`;
+}
+
+function restoreRefreshIsScheduled(payload) {
+  return payload?.runtime_refresh?.scheduled === true;
+}
+
+function restoreRefreshMinimumWait(payload) {
+  const operator = payload?.runtime_refresh?.operator_result || {};
+  const startsAfterSeconds = Number(operator?.starts_after_seconds || 0);
+  return Math.max(RESTORE_REFRESH_MIN_WAIT_MS, (startsAfterSeconds + 30) * 1000);
+}
+
+async function waitForRestoreRuntimeReady(payload, setRestoreRefresh) {
+  const startedAt = Date.now();
+  const minimumWaitMs = restoreRefreshMinimumWait(payload);
+  let consecutiveReady = 0;
+  let checkCount = 0;
+
+  setRestoreRefresh({
+    title: "Engine Runtime Refresh In Progress",
+    message:
+      "Borealis is restarting backend services so restored keys, sessions, WireGuard state, and site-worker routing load cleanly. Stay on this page; it will continue when the Engine is ready.",
+  });
+
+  while (Date.now() - startedAt < RESTORE_REFRESH_MAX_WAIT_MS) {
+    await sleep(RESTORE_REFRESH_POLL_MS);
+    checkCount += 1;
+    const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    const waitingForMinimum = Date.now() - startedAt < minimumWaitMs;
+    try {
+      const response = await fetch("/api/bootstrap/state", {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        throw new Error(`bootstrap_state_http_${response.status}`);
+      }
+      const state = await response.json().catch(() => ({}));
+      const phase = String(state?.phase || "");
+      if (waitingForMinimum) {
+        consecutiveReady = 0;
+        setRestoreRefresh({
+          title: "Engine Runtime Refresh In Progress",
+          message: `Backend responded after ${elapsedSeconds}s. Waiting for the restore refresh window to finish before showing Aegis or login.`,
+        });
+        continue;
+      }
+      consecutiveReady += 1;
+      setRestoreRefresh({
+        title: "Engine Runtime Refresh Nearly Finished",
+        message: `Backend is responding again (${consecutiveReady}/2 stable checks). Current startup phase: ${phase || "checking"}.`,
+      });
+      if (consecutiveReady >= 2) {
+        setRestoreRefresh({
+          title: "Engine Runtime Refresh Complete",
+          message: "Borealis is ready for Aegis unlock and operator login.",
+          severity: "success",
+        });
+        return true;
+      }
+    } catch {
+      consecutiveReady = 0;
+      setRestoreRefresh({
+        title: "Engine Runtime Refresh In Progress",
+        message: `Backend is restarting or reconnecting (${elapsedSeconds}s elapsed, ${checkCount} checks). This is expected immediately after restore.`,
+      });
+    }
+  }
+
+  setRestoreRefresh({
+    title: "Engine Runtime Refresh Taking Longer Than Expected",
+    message:
+      "The restore import succeeded, but automatic readiness polling reached its wait limit. Continue only after the Engine finishes restarting.",
+    severity: "warning",
+  });
+  return false;
 }
 
 function BackupRestoreTool({ mode }) {
@@ -74,6 +167,7 @@ function BackupRestoreTool({ mode }) {
   const [isExporting, setIsExporting] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [restoreRefresh, setRestoreRefresh] = useState(null);
 
   const isBootstrap = mode === "bootstrap";
   const backupSignature = useMemo(
@@ -217,6 +311,7 @@ function BackupRestoreTool({ mode }) {
     if (!canRestore) return;
     setIsRestoring(true);
     setNotice(null);
+    setRestoreRefresh(null);
     try {
       const endpoint = isBootstrap
         ? "/api/bootstrap/backup/restore"
@@ -237,8 +332,14 @@ function BackupRestoreTool({ mode }) {
       }
       const message = restoreSuccessMessage(payload);
       setNotice({ severity: "success", message });
+      if (restoreRefreshIsScheduled(payload)) {
+        const runtimeReady = await waitForRestoreRuntimeReady(payload, setRestoreRefresh);
+        if (!runtimeReady) {
+          return;
+        }
+      }
       await refreshBootstrapState();
-      setTimeout(() => navigate(APP_PATHS.login, { replace: true }), 1200);
+      navigate(APP_PATHS.login, { replace: true });
     } catch (error) {
       setNotice({
         severity: "error",
@@ -253,6 +354,7 @@ function BackupRestoreTool({ mode }) {
     if (!canAnalyze) return;
     setIsAnalyzing(true);
     setNotice(null);
+    setRestoreRefresh(null);
     clearAnalysis();
     const signature = backupSignature;
     try {
@@ -532,6 +634,16 @@ function BackupRestoreTool({ mode }) {
       </Box>
 
       {isExporting || isAnalyzing || isRestoring ? <LinearProgress sx={{ borderRadius: 999 }} /> : null}
+      {restoreRefresh ? (
+        <Alert severity={restoreRefresh.severity || "info"}>
+          <Stack spacing={0.5}>
+            <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+              {restoreRefresh.title}
+            </Typography>
+            <Typography variant="body2">{restoreRefresh.message}</Typography>
+          </Stack>
+        </Alert>
+      ) : null}
       {notice ? <Alert severity={notice.severity}>{notice.message}</Alert> : null}
     </Stack>
   );

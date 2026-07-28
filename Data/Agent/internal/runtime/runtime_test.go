@@ -320,13 +320,18 @@ func TestWatchdogDecisionMatrix(t *testing.T) {
 		},
 		{
 			name:  "socket disconnected restart",
-			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "disconnected", LastSocketStateAt: now.Add(-181 * time.Second).Unix(), Now: now},
-			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_disconnected_age=3m1s"},
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "disconnected", LastSocketStateAt: now.Add(-91 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_disconnected_age=1m31s"},
 		},
 		{
 			name:  "socket connecting restart",
-			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "connecting", LastSocketStateAt: now.Add(-181 * time.Second).Unix(), Now: now},
-			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_connecting_age=3m1s"},
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "connecting", LastSocketStateAt: now.Add(-91 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_connecting_age=1m31s"},
+		},
+		{
+			name:  "socket connected stale restart",
+			input: watchdogDecisionInput{ServiceExists: true, ServiceRunning: true, LastLocalTickAt: now.Add(-30 * time.Second).Unix(), LastSocketState: "connected", LastSocketStateAt: now.Add(-91 * time.Second).Unix(), Now: now},
+			want:  watchdogDecision{Action: "restart_service", Outcome: "needed", Reason: "socket_connected_age=1m31s"},
 		},
 		{
 			name:  "stale heartbeat restart",
@@ -399,9 +404,42 @@ func TestEngineSocketRoleSnapshot(t *testing.T) {
 	}
 
 	agent.socketState = "connected"
+	agent.socketStateAt = now - int64((watchdogSocketStaleAfter + time.Second).Seconds())
+	staleConnected := agent.engineSocketRoleSnapshot(now)
+	if staleConnected.Status != "unhealthy" || staleConnected.StatusCode != "unhealthy" {
+		t.Fatalf("stale connected socket status = %s/%s, want unhealthy", staleConnected.Status, staleConnected.StatusCode)
+	}
+	if staleConnected.Detail != "Engine Socket.IO control channel has stale connected state." {
+		t.Fatalf("stale connected socket detail = %q", staleConnected.Detail)
+	}
+
+	agent.socketState = "connected"
 	agent.socketStateAt = now
 	healthy := agent.engineSocketRoleSnapshot(now)
 	if healthy.Status != "healthy" || healthy.StatusCode != "healthy" {
 		t.Fatalf("connected socket status = %s/%s, want healthy", healthy.Status, healthy.StatusCode)
+	}
+}
+
+func TestValidateSocketRegistrationAck(t *testing.T) {
+	if err := validateSocketRegistrationAck([]any{map[string]any{"status": "ok"}}); err != nil {
+		t.Fatalf("valid ack rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		ack  []any
+		want string
+	}{
+		{name: "missing", ack: nil, want: "missing ack"},
+		{name: "invalid", ack: []any{"ok"}, want: "invalid payload"},
+		{name: "rejected", ack: []any{map[string]any{"error": "invalid_token", "status_code": 401}}, want: "invalid_token"},
+		{name: "bad status", ack: []any{map[string]any{"status": "starting"}}, want: "status=starting"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateSocketRegistrationAck(tc.ack)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }

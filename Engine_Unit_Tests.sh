@@ -211,6 +211,7 @@ engine_python_files_for_domain() {
     core)
       emit_existing_paths \
         "${test_root}/test_core_api.py" \
+        "${test_root}/test_database_schema.py" \
         "${test_root}/test_edge_runtime.py" \
         "${test_root}/test_engine_secret_config.py" \
         "${test_root}/test_web_ui.py"
@@ -243,12 +244,9 @@ engine_python_files_for_domain() {
         "${test_root}/test_site_worker_socket.py" \
         "${test_root}/test_vnc_api.py" \
         "${test_root}/test_vnc_proxy.py" \
-        "${test_root}/test_vnc_sessions.py" \
         "${test_root}/test_vpn_shell.py" \
-        "${test_root}/test_vpn_tunnel_service.py" \
         "${test_root}/test_websocket_registry.py" \
-        "${test_root}/test_wireguard_control_server.py" \
-        "${test_root}/test_wireguard_server.py"
+        "${test_root}/test_wireguard_control_server.py"
       ;;
     runtime-overrides)
       emit_existing_paths \

@@ -65,12 +65,7 @@ const MASTER_AUTO_SIZE_COLUMNS = ["domain", "name", "health", "state", "enabled"
 const NAME_COLUMN_PRIMARY_COLOR = "#58a6ff";
 const COMPOSE_SERVICE_ACTIONS = Object.freeze({
   "api-backend": [{ id: "restart", label: "Restart", action: "restart" }],
-  "site-worker-orchestrator": [],
   "job-scheduler": [{ id: "restart", label: "Restart", action: "restart" }],
-  "webui-frontend": [
-    { id: "rebuild_prod", label: "Rebuild Prod", action: "rebuild", mode: "prod" },
-    { id: "rebuild_dev", label: "Rebuild Dev", action: "rebuild", mode: "dev" },
-  ],
   "traefik-edge": [{ id: "reload", label: "Reload", action: "reload" }],
   "postgres-db": [{ id: "restart", label: "Restart", action: "restart" }],
   "remote-desktop-guacd": [{ id: "restart", label: "Restart", action: "restart" }],
@@ -333,6 +328,19 @@ function formatPercent(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "0%";
   return `${num.toFixed(num >= 10 ? 0 : 1)}%`;
+}
+
+function workerResourceSummary(row) {
+  const stats = row?.docker_stats;
+  if (!stats || typeof stats !== "object" || !Object.keys(stats).length) return "";
+  const source = String(stats?.source || row?.container_metrics_source || "").trim();
+  const sourceLabel = source === "metrics.k8s.io" ? "K3s" : "Docker";
+  const memoryUsage = Number(stats?.memory_usage_bytes || 0);
+  const memoryLimit = Number(stats?.memory_limit_bytes || 0);
+  const memoryLabel = memoryLimit > 0
+    ? `${formatBytes(memoryUsage)} / ${formatBytes(memoryLimit)}`
+    : formatBytes(memoryUsage);
+  return `${sourceLabel} CPU ${formatPercent(stats?.cpu_percent)} · RAM ${memoryLabel}`;
 }
 
 function formatDateTime(value) {
@@ -1303,6 +1311,13 @@ export default function ServerInfo() {
         actions: [],
       },
       {
+        id: "webui_route_owner",
+        name: "WebUI Route Owner",
+        value: formatTitleCase(host?.webui_traffic_owner || "unknown"),
+        details: host?.webui_upstream?.display ? `Upstream ${host.webui_upstream.display}` : "Upstream unavailable",
+        actions: [],
+      },
+      {
         id: "site_worker_scheduled_tasks",
         name: "Site Worker Scheduled Tasks",
         value: Number(siteWorkerSettings?.scheduled_task_concurrency_limit || 5),
@@ -1536,15 +1551,26 @@ export default function ServerInfo() {
               },
             ];
       const serviceState = String(row?.display_status || row?.docker_status || row?.active_state || "").trim();
+      const serviceRuntime = String(row?.runtime || "").trim().toLowerCase();
       return {
         id: `services:${row?.unit_name || index}`,
         domain: "Services",
         name: row?.label || "Service",
-        details: row?.compose_service ? `${row.compose_service} · ${row?.unit_name || "container"}` : row?.unit_name || "—",
-        value: row?.runtime === "compose" ? "Docker Compose" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
+        details:
+          serviceRuntime === "k3s"
+            ? `${row?.kubernetes_kind || "Deployment"} · ${row?.unit_name || row?.kubernetes_name || "workload"}`
+            : row?.compose_service
+              ? `${row.compose_service} · ${row?.unit_name || "container"}`
+              : row?.unit_name || "—",
+        value: serviceRuntime === "compose" ? "Docker Compose" : serviceRuntime === "k3s" ? "K3s" : row?.main_pid ? `PID ${row.main_pid}` : "Systemd Unit",
         health: String(row?.docker_health || row?.status || "").trim().toLowerCase(),
         state: serviceState ? formatTitleCase(serviceState) : formatTitleCase(row?.active_state),
-        enabled: row?.runtime === "compose" ? "Compose" : formatTitleCase(row?.enabled_state),
+        enabled:
+          serviceRuntime === "compose" && String(row?.enabled_state || "compose").trim().toLowerCase() === "compose"
+            ? "Compose"
+            : serviceRuntime === "k3s"
+              ? "K3s"
+            : formatTitleCase(row?.enabled_state),
         started: row?.started_at ? formatDateTime(row.started_at) : "Unavailable",
         actions,
         sort_order: index,
@@ -1569,10 +1595,12 @@ export default function ServerInfo() {
       const isManager = Number(row?.site_id || 0) <= 0;
       const firstLink = links.find((link) => String(link?.path || "").trim());
       const taskLabels = links.map((link) => String(link?.label || link?.kind || "").trim()).filter(Boolean).join(", ");
+      const resourceSummary = workerResourceSummary(row);
       const detailParts = [
         isManager ? "Manager" : `Site ${row?.site_id || "—"}`,
         lanes,
         taskLabels,
+        resourceSummary,
         `claimed ${Number(row?.claimed_count || 0)}`,
       ].filter(Boolean);
       return {

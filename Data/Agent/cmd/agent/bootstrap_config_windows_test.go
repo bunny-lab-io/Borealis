@@ -73,6 +73,15 @@ func TestWriteGoAgentConfigPreservesExistingIdentityAndTrust(t *testing.T) {
 	cfg.Identity.PublicKeySPKIB64 = "public-key"
 	cfg.Tokens.AccessToken = "access-token"
 	cfg.Tokens.RefreshToken = "refresh-token"
+	cfg.RemoteOps = agentconfig.RemoteOpsSection{
+		Available:       true,
+		SiteID:          7,
+		WorkerGUID:      "old-worker",
+		RouteGeneration: 3,
+		RoutePathPrefix: "/_borealis/site-workers/old-worker",
+		BaseURL:         "https://old.example.com/_borealis/site-workers/old-worker",
+		SocketURL:       "https://old.example.com/_borealis/site-workers/old-worker/socket.io",
+	}
 	cfg.Trust.ServerSigningKeySPKIB64 = "server-signing-key"
 	if err := agentconfig.Save(agentConfigPath(installDir), &cfg); err != nil {
 		t.Fatal(err)
@@ -102,8 +111,11 @@ func TestWriteGoAgentConfigPreservesExistingIdentityAndTrust(t *testing.T) {
 	if loaded.Identity.PrivateKeyPKCS8B64 != "private-key" || loaded.Identity.PublicKeySPKIB64 != "public-key" {
 		t.Fatalf("device keypair changed: %#v", loaded.Identity)
 	}
-	if loaded.Tokens.AccessToken != "access-token" || loaded.Tokens.RefreshToken != "refresh-token" {
-		t.Fatalf("tokens changed: %#v", loaded.Tokens)
+	if loaded.Tokens.AccessToken != "" || loaded.Tokens.RefreshToken != "" {
+		t.Fatalf("tokens not cleared for explicit enrollment: %#v", loaded.Tokens)
+	}
+	if loaded.RemoteOps.Available || loaded.RemoteOps.BaseURL != "" || loaded.RemoteOps.WorkerGUID != "" {
+		t.Fatalf("remote ops route not cleared for explicit enrollment: %#v", loaded.RemoteOps)
 	}
 	if loaded.Trust.ServerSigningKeySPKIB64 != "server-signing-key" {
 		t.Fatalf("server signing trust changed: %q", loaded.Trust.ServerSigningKeySPKIB64)

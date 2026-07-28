@@ -49,9 +49,9 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/github/token` (Admin) - update GitHub API token.
     - `GET /api/server/backup/export` (Admin) - export encrypted Engine configuration backup JSON. Requires Aegis configured and unlocked.
     - `POST /api/server/backup/analyze` (Admin) - decrypt and validate encrypted backup JSON with the supplied Aegis Cipher, then return high-level import counts without modifying Engine state.
-    - `POST /api/server/backup/restore` (Admin) - sterilize current Engine configuration/trust state, import encrypted backup JSON, clear operator cookies, and return `restart_required: true`.
+    - `POST /api/server/backup/restore` (Admin) - sterilize current Engine configuration/trust state, import encrypted backup JSON, clear operator cookies, and return runtime-refresh status. K3s Engines schedule automatic refresh through `borealis-operator`; fallback responses set `restart_required: true`.
     - `POST /api/bootstrap/backup/analyze` (No Authentication, bootstrap only) - decrypt and validate encrypted backup JSON before normal login is enabled, then return high-level import counts without modifying Engine state.
-    - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - import encrypted backup JSON before normal login is enabled. Requires the source Aegis Cipher and typed confirmation `RESTORE ENGINE CONFIG BACKUP`.
+    - `POST /api/bootstrap/backup/restore` (No Authentication, bootstrap only) - import encrypted backup JSON before normal login is enabled, then return runtime-refresh status. Requires the source Aegis Cipher and typed confirmation `RESTORE ENGINE CONFIG BACKUP`.
 
     ### Enrollment and Tokens
     - `POST /api/agent/enroll/request` (No Authentication) - submit enrollment request.
@@ -140,12 +140,12 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/device_list_views` (Token Authenticated) - create saved view.
     - `PUT /api/device_list_views/<int:view_id>` (Token Authenticated) - update saved view.
     - `DELETE /api/device_list_views/<int:view_id>` (Token Authenticated) - delete saved view.
-    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs.
-    - `POST /api/sites` (Admin) - create site.
+    - `GET /api/sites` (Token Authenticated) - list sites visible to the current operator, plus `public_base_url` / `public_hostname` metadata for install-command UIs. Site rows include `site_worker_slug` and `site_worker_name` for K3s bridge naming visibility.
+    - `POST /api/sites` (Admin) - create site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/delete` (Admin) - delete sites.
     - `GET /api/sites/device_map` (Token Authenticated) - hostname to site map for devices in the current operator's site scope.
     - `POST /api/sites/assign` (Admin) - assign devices to site.
-    - `POST /api/sites/rename` (Admin) - rename site.
+    - `POST /api/sites/rename` (Admin) - rename site. Rejects site-worker slug conflicts, empty slugs, and slugs longer than 51 characters.
     - `POST /api/sites/<site_id>/auto-approval` (Admin) - set or clear temporary site-level enrollment auto-approval.
     - `GET /api/repo/current_hash` (Device or Token Authenticated) - current agent repo hash for optional `repo`, `branch`, and `ttl` query parameters; feature branch refs with slashes are supported.
     - `GET /api/agent/hash` (Device Authenticated) - get agent hash.
@@ -247,13 +247,14 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
 
     ### Server Info and Logs
     - `GET /api/server/time` (Operator Session) - server clock.
-    - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed service state in container mode, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
-    - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, and optional Docker inspect size metadata when Docker metadata is available.
+    - `GET /api/server/timezones` (Operator Session) - current Engine timezone metadata for Server Info. Timezone mutation is not supported by this endpoint.
+    - `GET /api/server/overview` (Admin) - consolidated Engine host overview used by the Server Info dashboard, including Compose-backed and K3s-backed service state in container mode, WebUI traffic owner/upstream metadata, retired Compose workload state when K3s owns a route, public cert status, live operator sessions, WireGuard runtime state, Aegis state, and host resource basics.
+    - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, K3s Metrics Server CPU/RAM stats for bridge workers when `borealis-operator` can read podmetrics, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
     - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.
     - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
-    - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached container service action through `job-scheduler`; Docker-backed execution is handed to `site-worker-orchestrator` and `Engine.sh --service`. Supported container actions are `docker-proxy restart`, `api-backend restart`, `job-scheduler restart`, `webui-frontend rebuild prod|dev`, `traefik-edge reload`, `postgres-db restart`, `remote-desktop-guacd restart`, and `wireguard-tunnel reconcile`.
+    - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
     - `GET /api/server/logs` (Admin) - list logs and retention.

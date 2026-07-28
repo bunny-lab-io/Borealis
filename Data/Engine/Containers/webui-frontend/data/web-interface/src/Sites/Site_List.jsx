@@ -78,6 +78,66 @@ const SITE_WORKER_CONTAINER_COLUMN_ID = "site_worker_container_id";
 const CONNECTED_DEVICES_COLUMN_ID = "connected_devices";
 const RUNNING_TASKS_COLUMN_ID = "assigned_task_groups";
 const AUTO_SIZE_COLUMNS = [SITE_WORKER_CONTAINER_COLUMN_ID, CONNECTED_DEVICES_COLUMN_ID];
+export const SITE_WORKER_NAME_PREFIX = "site-worker-";
+export const SITE_WORKER_KUBERNETES_NAME_MAX = 63;
+export const SITE_WORKER_SITE_SLUG_MAX = SITE_WORKER_KUBERNETES_NAME_MAX - SITE_WORKER_NAME_PREFIX.length;
+
+export function siteWorkerSiteSlug(siteName) {
+  const normalized = String(siteName || "").trim().toLowerCase();
+  let slug = "";
+  let lastWasSeparator = false;
+  for (const item of normalized) {
+    const code = item.charCodeAt(0);
+    const isAlpha = code >= 97 && code <= 122;
+    const isNumber = code >= 48 && code <= 57;
+    if (isAlpha || isNumber) {
+      slug += item;
+      lastWasSeparator = false;
+      continue;
+    }
+    if (item === " " || item === "\t" || item === "\n" || item === "\r" || item === "-" || item === "_") {
+      if (slug.length > 0 && !lastWasSeparator) {
+        slug += "-";
+        lastWasSeparator = true;
+      }
+    }
+  }
+  return slug.replace(/^-+|-+$/g, "");
+}
+
+export function validateSiteWorkerSiteName(siteName, sites = [], excludeSiteId = null) {
+  const siteSlug = siteWorkerSiteSlug(siteName);
+  if (!siteSlug) {
+    return {
+      title: "Site Name Invalid",
+      message: "Site name must contain at least one ASCII letter or number.",
+    };
+  }
+  if (siteSlug.length > SITE_WORKER_SITE_SLUG_MAX) {
+    return {
+      title: "Site Name Too Long",
+      message: `Site name creates <b>${siteSlug.length}</b> site-worker slug characters. Maximum is <b>${SITE_WORKER_SITE_SLUG_MAX}</b>.`,
+    };
+  }
+  const conflict = (sites || []).find((site) => {
+    const siteID = site?.id ?? site?.site_id;
+    if (excludeSiteId != null && String(siteID) === String(excludeSiteId)) {
+      return false;
+    }
+    return siteWorkerSiteSlug(site?.name) === siteSlug;
+  });
+  if (conflict) {
+    return {
+      title: "Site Name Already Used",
+      message: `Site name maps to existing worker name <b>${SITE_WORKER_NAME_PREFIX}${siteSlug}</b>. Rename <b>${conflict?.name || "the existing site"}</b> first.`,
+    };
+  }
+  return null;
+}
+
+function siteMutationErrorMessage(payload, fallback) {
+  return String(payload?.message || payload?.error || fallback || "Site update failed.");
+}
 const DEFAULT_INSTALL_BRANCH = "main";
 const BOREALIS_GITHUB_REPO = "bunny-lab-io/Borealis";
 const GITHUB_BRANCHES_API_URL = `https://api.github.com/repos/${BOREALIS_GITHUB_REPO}/branches`;
@@ -99,7 +159,7 @@ const TASK_SECTIONS = [
 
 const CONNECTION_SECTIONS = [
   { key: "connected", label: "Connected", color: "#00d18c" },
-  { key: "disconnected", label: "Disconnected", color: "#ff4f4f" },
+  { key: "disconnected", label: "Reconnecting", color: "#ffb347" },
   { key: "offline", label: "Offline", color: "#999999" },
 ];
 
@@ -631,6 +691,11 @@ function isActiveWorker(worker) {
   return ["starting", "running", "idle"].includes(normalized);
 }
 
+function isActiveSiteWorkerRow(row) {
+  const status = String(row?.site_worker_status || row?.raw_site_worker?.status || "").trim().toLowerCase();
+  return Boolean(row?.site_worker_guid || row?.site_worker_container_name) && ["starting", "running", "idle"].includes(status);
+}
+
 function workIdentity(work) {
   const id = String(work?.id ?? "").trim();
   if (id) return `id:${id}`;
@@ -933,6 +998,7 @@ function buildWorkerRowsBySite(payload, nowSeconds) {
         site_worker_container_storage_limit_bytes: Number(worker?.container_storage_limit_bytes || 0),
         site_worker_container_storage_limit_source: String(worker?.container_storage_limit_source || "").trim(),
         site_worker_docker_stats: worker?.docker_stats || null,
+        site_worker_status: String(worker?.status || "").trim(),
         connected_devices: deviceCounts.connected_devices,
         site_device_count: deviceCounts.site_device_count,
         site_online_device_count: deviceCounts.site_online_device_count,
@@ -990,6 +1056,7 @@ function mergeSiteWorkerRows(sites, payload, nowSeconds) {
         site_worker_container_storage_limit_bytes: 0,
         site_worker_container_storage_limit_source: "",
         site_worker_docker_stats: null,
+        site_worker_status: "",
         connected_devices: 0,
         site_device_count: total,
         site_online_device_count: online,
@@ -1042,7 +1109,10 @@ export function siteWorkerContainerRefreshValue(row) {
   return [
     row?.site_worker_payload_ready ? "ready" : "pending",
     row?.site_worker_container_id,
+    row?.site_worker_status,
     row?.site_worker_resource_history_key,
+    row?.raw_site_worker?.container_metrics_source,
+    stats?.source,
     latest?.sampledAtMs,
     stats?.read_at,
     stats?.cpu_percent,
@@ -1288,10 +1358,11 @@ function SiteWorkerContainerCell(params) {
     );
   }
   if (!hasDockerStats(row.site_worker_docker_stats)) {
+    const activeWorker = isActiveSiteWorkerRow(row);
     return (
       <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "100%" }}>
         <Typography sx={{ color: "rgba(148,163,184,0.82)", fontSize: 12, fontFamily: gridFontFamily }}>
-          Site Worker Not Running
+          {activeWorker ? "Worker Metrics Unavailable" : "Site Worker Not Running"}
         </Typography>
       </Box>
     );
@@ -1455,6 +1526,9 @@ function SiteWorkerStatsCell(params) {
       </Typography>
     );
   }
+  const source = String(stats?.source || params?.data?.raw_site_worker?.container_metrics_source || "").trim();
+  const kubernetesStats = source === "metrics.k8s.io";
+  const sourceLabel = kubernetesStats ? "K3s Metrics Server" : "Docker";
   const history = Array.isArray(params?.data?.site_worker_resource_history) ? params.data.site_worker_resource_history : [];
   const fallbackSample = {
     cpuPercent: Math.max(0, Number(stats.cpu_percent || 0)),
@@ -1483,7 +1557,7 @@ function SiteWorkerStatsCell(params) {
       label: "CPU",
       value: formatDockerStatPercent(latest.cpuPercent),
       scaleLabel: formatDockerStatPercent(cpuMax),
-      tooltip: `Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
+      tooltip: `${sourceLabel} | Current ${formatDockerStatPercent(latest.cpuPercent)} | 60s max ${formatDockerStatPercent(cpuMax)}`,
       color: "#7dd3fc",
       valueKey: "cpuPercent",
       maxValue: cpuMax,
@@ -1493,40 +1567,44 @@ function SiteWorkerStatsCell(params) {
       value: formatDockerStatBytes(latest.memoryUsageBytes),
       scaleLabel: latest.memoryLimitBytes > 0 ? formatDockerStatBytes(latest.memoryLimitBytes) : formatDockerStatBytes(ramMax),
       tooltip: latest.memoryLimitBytes > 0
-        ? `${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
-        : `${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
+        ? `${sourceLabel} | ${formatDockerStatBytes(latest.memoryUsageBytes)} / ${formatDockerStatBytes(latest.memoryLimitBytes)}`
+        : `${sourceLabel} | ${formatDockerStatBytes(latest.memoryUsageBytes)} | 60s max ${formatDockerStatBytes(ramMax)}`,
       color: "#c084fc",
       valueKey: "memoryUsageBytes",
       maxValue: ramMax,
     },
-    {
-      label: "NET",
-      value: formatDockerStatRate(latest.netTotalBps),
-      scaleLabel: formatDockerStatRate(netMax),
-      tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
-      color: "#34d399",
-      valueKey: "netTotalBps",
-      maxValue: netMax,
-    },
-    {
-      label: "DISK",
-      value: formatDockerStatBytes(latest.diskUsageBytes),
-      scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
-      tooltip: latest.diskLimitBytes > 0
-        ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
-        : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
-      color: "#fbbf24",
-      valueKey: "diskUsageBytes",
-      maxValue: diskMax,
-    },
   ];
+  if (!kubernetesStats) {
+    metrics.push(
+      {
+        label: "NET",
+        value: formatDockerStatRate(latest.netTotalBps),
+        scaleLabel: formatDockerStatRate(netMax),
+        tooltip: `${formatDockerStatRate(latest.netTotalBps)} total | In ${formatDockerStatRate(latest.netInputBps)} | Out ${formatDockerStatRate(latest.netOutputBps)}`,
+        color: "#34d399",
+        valueKey: "netTotalBps",
+        maxValue: netMax,
+      },
+      {
+        label: "DISK",
+        value: formatDockerStatBytes(latest.diskUsageBytes),
+        scaleLabel: latest.diskLimitBytes > 0 ? formatDockerStatBytes(latest.diskLimitBytes) : formatDockerStatBytes(diskMax),
+        tooltip: latest.diskLimitBytes > 0
+          ? `${formatDockerStatBytes(latest.diskUsageBytes)} / ${formatDockerStatBytes(latest.diskLimitBytes)}${latest.diskLimitSource ? ` | ${latest.diskLimitSource}` : ""}`
+          : `${formatDockerStatBytes(latest.diskUsageBytes)} | 60s max ${formatDockerStatBytes(diskMax)} | Writable ${formatDockerStatBytes(latest.diskWritableBytes)}`,
+        color: "#fbbf24",
+        valueKey: "diskUsageBytes",
+        maxValue: diskMax,
+      },
+    );
+  }
   return (
     <Box
       sx={{
         width: "100%",
         minWidth: 0,
         display: "grid",
-        gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+        gridTemplateColumns: kubernetesStats ? "repeat(2, minmax(0, 1fr))" : "repeat(4, minmax(0, 1fr))",
         gap: 0.4,
       }}
     >
@@ -3276,16 +3354,27 @@ export default function SiteList() {
         open={createOpen}
         onCancel={() => setCreateOpen(false)}
         onCreate={async (name, description) => {
+          const validation = validateSiteWorkerSiteName(name, rows);
+          if (validation) {
+            await sendNotification({
+              title: validation.title,
+              message: validation.message,
+              icon: "warning",
+              variant: "error",
+            });
+            return;
+          }
           try {
             const res = await fetch("/api/sites", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ name, description }),
             });
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
               setCreateOpen(false);
               if (name) {
-                sendNotification({
+                await sendNotification({
                   title: "Site Created",
                   message: `Site ${name} Created Successfully. Configure patch coverage at <b>${APP_PATHS.patchManagementSitePolicies}</b>.`,
                   icon: "success",
@@ -3293,8 +3382,22 @@ export default function SiteList() {
                 });
               }
               fetchSites();
+              return;
             }
-          } catch {}
+            await sendNotification({
+              title: "Site Not Created",
+              message: siteMutationErrorMessage(data, "Unable to create site."),
+              icon: "warning",
+              variant: "error",
+            });
+          } catch {
+            await sendNotification({
+              title: "Site Not Created",
+              message: "Unable to reach Borealis API.",
+              icon: "warning",
+              variant: "error",
+            });
+          }
         }}
       />
 
@@ -3335,19 +3438,44 @@ export default function SiteList() {
           const selId = renameSiteId ?? (selectedIds.size === 1 ? Array.from(selectedIds)[0] : null);
           if (!selId) return;
           const oldName = rows.find((r) => r.id === selId)?.name || "Site";
+          const validation = validateSiteWorkerSiteName(newName, rows, selId);
+          if (validation) {
+            await sendNotification({
+              title: validation.title,
+              message: validation.message,
+              icon: "warning",
+              variant: "error",
+            });
+            return;
+          }
           try {
             const res = await fetch("/api/sites/rename", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ id: selId, new_name: newName }),
             });
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
               setRenameOpen(false);
               setRenameSiteId(null);
-              sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
+              await sendNotification(`Site ${oldName} Renamed as ${newName} Successfully`);
               fetchSites();
+              return;
             }
-          } catch {}
+            await sendNotification({
+              title: "Site Not Renamed",
+              message: siteMutationErrorMessage(data, "Unable to rename site."),
+              icon: "warning",
+              variant: "error",
+            });
+          } catch {
+            await sendNotification({
+              title: "Site Not Renamed",
+              message: "Unable to reach Borealis API.",
+              icon: "warning",
+              variant: "error",
+            });
+          }
         }}
       />
 

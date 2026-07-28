@@ -27,7 +27,73 @@ WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
+K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
+K3S_SERVICE_NAME="${BOREALIS_K3S_SERVICE_NAME:-k3s}"
+K3S_CONFIG_DIR="${BOREALIS_K3S_CONFIG_DIR:-/etc/rancher/k3s/config.yaml.d}"
+K3S_BOREALIS_CONFIG="${BOREALIS_K3S_CONFIG_PATH:-${K3S_CONFIG_DIR}/10-borealis.yaml}"
+K3S_KUBECONFIG="${BOREALIS_K3S_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+K3S_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-baseline.sha256"
+K3S_FIREWALL_SCRIPT="${BOREALIS_K3S_FIREWALL_SCRIPT:-/usr/local/lib/borealis/k3s-api-firewall.sh}"
+K3S_FIREWALL_SERVICE="${BOREALIS_K3S_FIREWALL_SERVICE:-borealis-k3s-api-firewall.service}"
+K3S_API_PORT="${BOREALIS_K3S_API_PORT:-6443}"
+K3S_CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
+K3S_SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
+K3S_KUBECONFIG_MODE="${BOREALIS_K3S_KUBECONFIG_MODE:-0600}"
+K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
+K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
+K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
+K3S_BASELINE_VERSION="1"
+K3S_LONGHORN_ENABLED="${BOREALIS_K3S_LONGHORN_ENABLED:-1}"
+K3S_LONGHORN_NAMESPACE="${BOREALIS_K3S_LONGHORN_NAMESPACE:-longhorn-system}"
+K3S_LONGHORN_VERSION="${BOREALIS_K3S_LONGHORN_VERSION:-v1.12.0}"
+K3S_LONGHORN_MANIFEST_URL="${BOREALIS_K3S_LONGHORN_MANIFEST_URL:-https://raw.githubusercontent.com/longhorn/longhorn/${K3S_LONGHORN_VERSION}/deploy/longhorn.yaml}"
+K3S_LONGHORN_ROLLOUT_TIMEOUT="${BOREALIS_K3S_LONGHORN_ROLLOUT_TIMEOUT:-300s}"
+K3S_LONGHORN_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-longhorn.sha256"
+K3S_LONGHORN_UPSTREAM_STORAGE_CLASS="${BOREALIS_K3S_LONGHORN_UPSTREAM_STORAGE_CLASS:-longhorn}"
+K3S_BOREALIS_LONGHORN_STORAGE_CLASS="${BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS:-borealis-longhorn}"
+K3S_BOREALIS_LONGHORN_REPLICA_COUNT="${BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT:-1}"
+K3S_PVC_STORAGE_CLASS="${BOREALIS_K3S_PVC_STORAGE_CLASS:-${BOREALIS_K3S_STORAGE_CLASS:-${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}}}"
+BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
+BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
+BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
+BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME:-borealis-api-backend-runtime-env}"
+BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME="${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME:-borealis-api-backend-shadow-db-runtime-env}"
+BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME="${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME:-borealis-job-scheduler-runtime-env}"
+BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME="${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME:-borealis-wireguard-tunnel-runtime-env}"
+BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME="${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME:-borealis-traefik-edge-runtime-env}"
+BOREALIS_API_BACKEND_K3S_BRIDGE_PORT="${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT:-5001}"
+BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
+BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
+K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
+K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
+K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
+K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-wireguard-tunnel.sha256"
+K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-traefik-edge.sha256"
+K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
+K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
+BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
+K3S_API_BACKEND_BRIDGE_VERSION="4"
+K3S_API_BACKEND_DB_VALIDATION_VERSION="3"
+K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
+K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
+K3S_BRIDGE_WORKLOADS_VERSION="4"
+K3S_JOB_SCHEDULER_VERSION="4"
+K3S_WIREGUARD_TUNNEL_VERSION="1"
+K3S_TRAEFIK_EDGE_VERSION="1"
+K3S_POSTGRES_VERSION="3"
+K3S_POSTGRES_SCHEMA_JOB_NAME="${BOREALIS_K3S_POSTGRES_SCHEMA_JOB_NAME:-postgres-db-schema-initializer}"
+K3S_POSTGRES_SCHEMA_TIMEOUT="${BOREALIS_K3S_POSTGRES_SCHEMA_TIMEOUT:-180s}"
+K3S_POSTGRES_ENABLED="${BOREALIS_K3S_POSTGRES_ENABLED:-1}"
+K3S_POSTGRES_STORAGE_SIZE="${BOREALIS_K3S_POSTGRES_STORAGE_SIZE:-20Gi}"
+K3S_POSTGRES_ROLLOUT_TIMEOUT="${BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT:-180s}"
 BUILD_CACHE_RETENTION_DAYS=7
+GUM_VERSION="v0.17.0"
+GUM_VERSION_NUMBER="${GUM_VERSION#v}"
+GUM_RELEASE_BASE_URL="${BOREALIS_GUM_RELEASE_BASE_URL:-https://github.com/charmbracelet/gum/releases/download/${GUM_VERSION}}"
+GUM_LINUX_X86_64_SHA256="69ee169bd6387331928864e94d47ed01ef649fbfe875baed1bbf27b5377a6fdb"
+GUM_LINUX_ARM64_SHA256="b0b9ed95cbf7c8b7073f17b9591811f5c001e33c7cfd066ca83ce8a07c576f9c"
+GUM_BIN="${BOREALIS_GUM_BIN:-}"
+GUM_READY=0
 DEFAULT_INSTALL_DIR="/opt/Borealis"
 DEFAULT_REPO_URL="https://github.com/bunny-lab-io/Borealis.git"
 DEFAULT_REPO_REF="main"
@@ -54,18 +120,18 @@ LAUNCH_ARGS=()
 if [[ -n "${REPO_REF}" ]]; then
   REPO_REF_EXPLICIT=1
 fi
-SERVICE_ROLES=(
-  "docker-proxy"
-  "api-backend"
-  "site-worker-orchestrator"
-  "job-scheduler"
-  "webui-frontend"
+SERVICE_ROLES=()
+SERVICE_ACTION_ROLES=(
   "traefik-edge"
-  "postgres-db"
   "remote-desktop-guacd"
   "wireguard-tunnel"
+  "postgres-db"
+  "api-backend"
+  "job-scheduler"
+  "webui-frontend"
 )
 BUILD_ROLES=(
+  "borealis-operator"
   "api-backend"
   "job-scheduler"
   "traefik-edge"
@@ -77,6 +143,9 @@ BUILD_ROLES=(
 )
 BUILD_SECTION_FRONTEND=(
   "webui-frontend"
+)
+BUILD_SECTION_K3S_CLUSTER=(
+  "borealis-operator"
 )
 BUILD_SECTION_BACKEND=(
   "api-backend"
@@ -120,6 +189,7 @@ declare -A DASHBOARD_COLOR
 declare -A DASHBOARD_UPDATED
 declare -A DASHBOARD_ROW_SECTION
 CURRENT_BUILD_SELECTION=()
+K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT=0
 DASHBOARD_ACTIVE=0
 DASHBOARD_CURSOR_HIDDEN=0
 DASHBOARD_MODE_LABEL=""
@@ -131,6 +201,8 @@ DASHBOARD_ITEM_WIDTH=30
 DASHBOARD_STATUS_WIDTH=40
 DASHBOARD_UPDATED_WIDTH=30
 DASHBOARD_DYNAMIC_ROWS=()
+DASHBOARD_CURRENT_SUBJECT=""
+DASHBOARD_CURRENT_STATUS=""
 GO_API_BACKEND_BINARY_PREPARED=0
 
 log() {
@@ -139,7 +211,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "webui-frontend"|"api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd"|"docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"postgres-db"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "site-worker"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -153,10 +225,10 @@ dashboard_row_section() {
     "webui-frontend")
       printf '%s\n' "Frontend"
       ;;
-    "api-backend"|"api-backend > job-scheduler"|"api-backend > job-scheduler > site-worker-orchestrator"|"site-worker"|"remote-desktop-guacd")
+    "api-backend"|"api-backend > job-scheduler"|"site-worker"|"remote-desktop-guacd")
       printf '%s\n' "Backend"
       ;;
-    "docker-proxy"|"traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
+    "traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
       printf '%s\n' "Networking"
       ;;
     "postgres-db"|"Profile")
@@ -164,6 +236,9 @@ dashboard_row_section() {
       ;;
     "Docker Compose")
       printf '%s\n' "Reconciliation"
+      ;;
+    "Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd")
+      printf '%s\n' "k3s Cluster"
       ;;
     "Docker Cleanup")
       printf '%s\n' "Housekeeping"
@@ -198,16 +273,17 @@ dashboard_ensure_row() {
 dashboard_seed_rows() {
   local row=""
   for row in \
-    "webui-frontend" \
-    "api-backend" \
-    "api-backend > job-scheduler" \
-    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "Ensuring Cluster Exists" \
+    "k3s-longhorn-storage" \
+    "k3s-postgres-db" \
+    "borealis-operator" \
+    "k3s-api-backend" \
+    "k3s-job-scheduler" \
+    "k3s-wireguard-tunnel" \
+    "k3s-traefik-edge" \
+    "k3s-webui-frontend" \
+    "k3s-remote-desktop-guacd" \
     "site-worker" \
-    "remote-desktop-guacd" \
-    "docker-proxy" \
-    "traefik-edge" \
-    "wireguard-tunnel" \
-    "postgres-db" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
@@ -299,17 +375,11 @@ dashboard_row_label() {
     "api-backend > job-scheduler")
       printf '%s\n' "Job Scheduler"
       ;;
-    "api-backend > job-scheduler > site-worker-orchestrator")
-      printf '%s\n' "Site Worker Orchestrator"
-      ;;
     "site-worker")
       printf '%s\n' "Site Worker"
       ;;
     "remote-desktop-guacd")
       printf '%s\n' "Guacamole Remote Desktop"
-      ;;
-    "docker-proxy")
-      printf '%s\n' "Docker Proxy"
       ;;
     "traefik-edge")
       printf '%s\n' "Traefik Reverse Proxy"
@@ -320,11 +390,41 @@ dashboard_row_label() {
     "postgres-db")
       printf '%s\n' "PostgreSQL DB"
       ;;
+    "Ensuring Cluster Exists")
+      printf '%s\n' "Ensuring k3s Cluster Exists"
+      ;;
+    "borealis-operator")
+      printf '%s\n' "Borealis Operator"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "Longhorn Cluster Storage"
+      ;;
+    "k3s-postgres-db")
+      printf '%s\n' "PostgreSQL Database"
+      ;;
+    "k3s-api-backend")
+      printf '%s\n' "API Backend"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' "Job Scheduler"
+      ;;
+    "k3s-wireguard-tunnel")
+      printf '%s\n' "WireGuard Server"
+      ;;
+    "k3s-traefik-edge")
+      printf '%s\n' "Traefik Reverse Cluster Proxy"
+      ;;
+    "k3s-webui-frontend")
+      printf '%s\n' "WebUI Frontend"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' "Apache Guacamole"
+      ;;
     "Docker Compose")
       printf '%s\n' "Docker Compose"
       ;;
     "Docker Cleanup")
-      printf '%s\n' "Docker Cleanup"
+      printf '%s\n' "Docker Build Cache Cleanup"
       ;;
     "WebUI Accessible")
       printf '%s\n' "WebUI Accessible"
@@ -430,28 +530,772 @@ dashboard_render_row() {
 dashboard_render_table() {
   local row=""
   dashboard_render_table_header
+  while IFS= read -r row; do
+    dashboard_row_visible "${row}" || continue
+    dashboard_render_row "${row}"
+  done < <(dashboard_ordered_rows)
+}
+
+dashboard_ordered_rows() {
+  local row=""
   for row in \
-    "webui-frontend" \
-    "api-backend" \
-    "api-backend > job-scheduler" \
-    "api-backend > job-scheduler > site-worker-orchestrator" \
+    "Ensuring Cluster Exists" \
+    "k3s-longhorn-storage" \
+    "k3s-postgres-db" \
+    "borealis-operator" \
+    "k3s-api-backend" \
+    "k3s-job-scheduler" \
+    "k3s-wireguard-tunnel" \
+    "k3s-traefik-edge" \
+    "k3s-webui-frontend" \
+    "k3s-remote-desktop-guacd" \
     "site-worker" \
-    "remote-desktop-guacd" \
-    "docker-proxy" \
-    "traefik-edge" \
-    "wireguard-tunnel" \
-    "postgres-db" \
     "Docker Compose" \
     "Docker Cleanup" \
     "WebUI Accessible"; do
-    dashboard_render_row "${row}"
+    printf '%s\n' "${row}"
   done
   for row in "${DASHBOARD_DYNAMIC_ROWS[@]}"; do
-    dashboard_render_row "${row}"
+    printf '%s\n' "${row}"
   done
 }
 
-dashboard_render() {
+dashboard_row_visible() {
+  case "$1" in
+    "Docker Compose"|"WebUI Accessible")
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+dashboard_ordered_gum_rows() {
+  local row=""
+  while IFS= read -r row; do
+    dashboard_row_visible "${row}" || continue
+    printf '%s\n' "${row}"
+  done < <(dashboard_ordered_rows)
+}
+
+dashboard_state_for_status() {
+  local status="$1"
+  case "${status}" in
+    Pending...|"")
+      printf '%s\n' "Pending"
+      ;;
+    *Failed*|*Not\ Ready*|*Missing*|*Unexpected*|*Too\ Open*|*Mismatch*)
+      printf '%s\n' "Failed"
+      ;;
+    Retired)
+      printf '%s\n' "Retired"
+      ;;
+    Up-to-Date|Skipped*)
+      printf '%s\n' "Unchanged"
+      ;;
+    Complete|Completed*)
+      printf '%s\n' "Complete"
+      ;;
+    Ready*|Running*|Installed|Service\ Running|Node\ Ready|Cutover\ Data\ Imported)
+      printf '%s\n' "Ready"
+      ;;
+    *)
+      printf '%s\n' "Running"
+      ;;
+  esac
+}
+
+dashboard_state_for_row() {
+  local row="$1"
+  local status="$2"
+  local state=""
+  if [[ "${row}" == "site-worker" ]]; then
+    case "${status}" in
+      Up-to-Date|Unchanged|Ready*)
+        printf '%s\n' "Ready"
+        return 0
+        ;;
+    esac
+  fi
+  state="$(dashboard_state_for_status "${status}")"
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    printf '%s\n' "Running"
+    return 0
+  fi
+  printf '%s\n' "${state}"
+}
+
+dashboard_action_for_row() {
+  local row="$1"
+  local status="$2"
+  if [[ "${status}" == *"Image"* || "${status}" == *"Building"* ]]; then
+    printf '%s\n' "build"
+    return 0
+  fi
+  if [[ "${status}" == *"Rollout"* || "${status}" == *"Restarting"* || "${status}" == *"Reloading"* ]]; then
+    printf '%s\n' "rollout"
+    return 0
+  fi
+  if [[ "${status}" == *"Ensuring Table"* || "${status}" == *"Schema"* || "${row}" == "k3s-postgres-db" ]]; then
+    printf '%s\n' "schema"
+    return 0
+  fi
+  case "${row}" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' "bootstrap"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "storage"
+      ;;
+    "borealis-operator")
+      printf '%s\n' "operator"
+      ;;
+    "site-worker")
+      printf '%s\n' "workers"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "retire"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "cleanup"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "smoke"
+      ;;
+    *)
+      printf '%s\n' "reconcile"
+      ;;
+  esac
+}
+
+dashboard_kubernetes_for_row() {
+  case "$1" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' "node/k3s"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' "longhorn-system"
+      ;;
+    "k3s-postgres-db")
+      printf '%s\n' "statefulset/postgres-db"
+      ;;
+    "borealis-operator")
+      printf '%s\n' "deployment/borealis-operator"
+      ;;
+    "k3s-api-backend")
+      printf '%s\n' "deployment/api-backend"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' "deployment/job-scheduler"
+      ;;
+    "k3s-wireguard-tunnel")
+      printf '%s\n' "deployment/wireguard-tunnel hostNet"
+      ;;
+    "k3s-traefik-edge")
+      printf '%s\n' "deployment/traefik-edge hostNet"
+      ;;
+    "k3s-webui-frontend")
+      printf '%s\n' "deployment/webui-frontend"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' "deployment/remote-desktop-guacd"
+      ;;
+    "site-worker")
+      printf '%s\n' "pods/site-worker-*"
+      ;;
+    "Docker Compose")
+      printf '%s\n' "services 0"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' "docker/buildx"
+      ;;
+    "WebUI Accessible")
+      printf '%s\n' "https"
+      ;;
+    *)
+      printf '%s\n' "-"
+      ;;
+  esac
+}
+
+dashboard_subtask_specs_for_row() {
+  case "$1" in
+    "Ensuring Cluster Exists")
+      printf '%s\n' \
+        "Render k3s config|config.yaml.d|Config*" \
+        "Reconcile API firewall|systemd/firewall|Reconciling API Firewall;Firewall Failed" \
+        "Install k3s when missing|systemd/k3s|Installing K3s;Installed;Already Installed;Install Failed" \
+        "Start k3s service|systemd/k3s|Starting K3s Service;Service Running;Service Failed" \
+        "Wait for node readiness|node/k3s|Waiting For Node Readiness;Node Not Ready;Node Ready" \
+        "Verify kubeconfig|k3s.yaml|Kubeconfig*" \
+        "Verify bundled ingress disabled|traefik/servicelb|Verifying Ingress Disabled;Bundled Ingress Active" \
+        "Reconcile Borealis namespace|namespace/borealis|Reconciling Namespace;Ready"
+      ;;
+    "k3s-longhorn-storage")
+      printf '%s\n' \
+        "Install storage dependencies|open-iscsi|Installing iSCSI Dependency;iSCSI*" \
+        "Apply Longhorn manifests|longhorn-system|Applying Manifests;Apply Failed" \
+        "Wait for CSI controllers|longhorn-system|Waiting For csi-*;Waiting For longhorn-*;Rollout Failed" \
+        "Reconcile StorageClass policy|storageclass|Reconciling StorageClass Policy;StorageClass*" \
+        "Verify Longhorn ready|storageclass/borealis-longhorn|Ready - StorageClass"
+      ;;
+    "k3s-postgres-db")
+      printf '%s\n' \
+        "Prepare image|image/postgres-db|*Image*;*Building*" \
+        "Apply StatefulSet and services|statefulset/postgres-db|Applying Manifests;Apply Failed" \
+        "Wait for PVC|pvc/postgres-db|Waiting For PVC;PVC Not Bound" \
+        "Wait for rollout|statefulset/postgres-db|Waiting For Rollout;Rollout Failed" \
+        "Run schema initializer|job/postgres-db-schema-initializer|Preparing K3s Engine Tables;Ensuring K3s Engine Tables;K3s Job*" \
+        "Ensure database tables|engine schemas|Ensuring Table *;Ready - K3s DB;Ready - Traffic Owner"
+      ;;
+    "borealis-operator")
+      printf '%s\n' \
+        "Prepare image|image/borealis-operator|*Image*;*Building*" \
+        "Clean legacy RBAC|rbac|Legacy RBAC Cleanup*" \
+        "Apply manifests|deployment/borealis-operator|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/borealis-operator|Waiting For Rollout;Rollout Failed" \
+        "Verify operator API|service/borealis-operator|Ready"
+      ;;
+    "k3s-api-backend")
+      printf '%s\n' \
+        "Prepare Go image|image/api-backend|Building Go binary;*Image*" \
+        "Validate database path|shadow db|Preparing Shadow DB Validator;Validating Shadow DB;Shadow DB*" \
+        "Apply manifests|deployment/api-backend|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/api-backend|Waiting For Rollout;Rollout Failed" \
+        "Own API traffic|127.0.0.1:5001|Ready - Traffic Owner"
+      ;;
+    "k3s-job-scheduler")
+      printf '%s\n' \
+        "Prepare image|image/job-scheduler|*Image*;*Building*" \
+        "Apply manifests|deployment/job-scheduler|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/job-scheduler|Waiting For Rollout;Rollout Failed" \
+        "Own scheduler loop|deployment/job-scheduler|Ready - Traffic Owner"
+      ;;
+    "k3s-wireguard-tunnel")
+      printf '%s\n' \
+        "Prepare image|image/wireguard-tunnel|*Image*;*Building*" \
+        "Apply host-network pod|deployment/wireguard-tunnel|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/wireguard-tunnel|Waiting For Rollout;Rollout Failed" \
+        "Verify control socket|wireguard-control.sock|Verifying Control Socket;Control Socket Failed" \
+        "Verify tunnel listener|udp/30000|Ready"
+      ;;
+    "k3s-traefik-edge")
+      printf '%s\n' \
+        "Prepare image|image/traefik-edge|*Image*;*Building*" \
+        "Apply edge manifests|deployment/traefik-edge|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/traefik-edge|Waiting For Rollout;Rollout Failed" \
+        "Verify ping endpoint|traefik ping|Verifying Ping;Healthcheck Failed" \
+        "Own HTTP/HTTPS traffic|ports 80/443|Ready - Traffic Owner"
+      ;;
+    "k3s-webui-frontend")
+      printf '%s\n' \
+        "Prepare WebUI image|image/webui-frontend|*Image*;*Building*" \
+        "Apply frontend manifests|deployment/webui-frontend|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/webui-frontend|Waiting For Rollout;Rollout Failed" \
+        "Own WebUI traffic|service/webui-frontend|Ready - Traffic Owner;Ready - Bridge"
+      ;;
+    "k3s-remote-desktop-guacd")
+      printf '%s\n' \
+        "Prepare guacd image|image/remote-desktop-guacd|*Image*;*Building*" \
+        "Apply guacd manifests|deployment/remote-desktop-guacd|Applying Manifests;Apply Failed" \
+        "Wait for rollout|deployment/remote-desktop-guacd|Waiting For Rollout;Rollout Failed" \
+        "Verify guacd ready|service/remote-desktop-guacd|Ready"
+      ;;
+    "site-worker")
+      printf '%s\n' \
+        "Verify worker image|image/site-worker|*Image*;*Building*" \
+        "Reconcile worker pods|pods/site-worker-*|Waiting For K3s Workers;Ready - K3s DB;Up-to-Date;Ready" \
+        "Recycle for API cutover|pods/site-worker-*|Recycling K3s Workers For API Cutover;Recycled - API Cutover" \
+        "Recycle for runtime env|pods/site-worker-*|Recycling K3s Workers For Runtime Env;Recycled - Runtime Env" \
+        "Recycle for timezone|pods/site-worker-*|Recycling K3s Workers For Timezone;Recycled - Timezone"
+      ;;
+    "Docker Cleanup")
+      printf '%s\n' \
+        "Prune inactive images|docker images|Pruning Inactive Container Images;Image Prune Failed" \
+        "Restore required images|docker images|Restoring Required Container Images" \
+        "Prune BuildKit cache|docker buildx|Pruning Engine Build Cache*;Builder Cache Prune Failed;Engine Build Cache*" \
+        "Finish cleanup|docker/buildx|Complete;Completed With Warnings;Skipped"
+      ;;
+  esac
+}
+
+dashboard_status_matches_patterns() {
+  local status="$1"
+  local patterns="$2"
+  local pattern=""
+  local -a pattern_list
+  IFS=';' read -ra pattern_list <<< "${patterns}"
+  for pattern in "${pattern_list[@]}"; do
+    [[ -n "${pattern}" && "${status}" == ${pattern} ]] && return 0
+  done
+  return 1
+}
+
+dashboard_subtask_count() {
+  local row="$1"
+  local count=0
+  local label=""
+  local patterns=""
+  local target=""
+  while IFS='|' read -r label target patterns; do
+    count=$((count + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "${count}"
+}
+
+dashboard_subtask_matching_index() {
+  local row="$1"
+  local status="$2"
+  local index=0
+  local label=""
+  local target=""
+  local patterns=""
+  while IFS='|' read -r label target patterns; do
+    if dashboard_status_matches_patterns "${status}" "${patterns:-}"; then
+      printf '%s\n' "${index}"
+      return 0
+    fi
+    index=$((index + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "-1"
+}
+
+dashboard_subtask_active_index() {
+  local row="$1"
+  local status="$2"
+  local match_index
+  match_index="$(dashboard_subtask_matching_index "${row}" "${status}")"
+  if ((match_index >= 0)); then
+    printf '%s\n' "${match_index}"
+    return 0
+  fi
+  printf '%s\n' "0"
+}
+
+dashboard_status_is_completed_subtask_with_pending() {
+  local row="$1"
+  local status="$2"
+  local match_index=0
+  local state=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  ((total > 0)) || return 1
+  match_index="$(dashboard_subtask_matching_index "${row}" "${status}")"
+  ((match_index >= 0 && match_index < total - 1)) || return 1
+  case "${status}" in
+    Up-to-Date|Unchanged|Complete|Completed*|Skipped*|Retired)
+      return 1
+      ;;
+  esac
+  state="$(dashboard_state_for_status "${status}")"
+  case "${state}" in
+    Ready|Complete|Unchanged)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+dashboard_subtask_state() {
+  local parent_state="$1"
+  local index="$2"
+  local active_index="$3"
+  case "${parent_state}" in
+    Ready|Complete|Unchanged)
+      printf '%s\n' "Complete"
+      ;;
+    Failed)
+      if ((index == active_index)); then
+        printf '%s\n' "Failed"
+      elif ((index < active_index)); then
+        printf '%s\n' "Complete"
+      else
+        printf '%s\n' "Pending"
+      fi
+      ;;
+    Running)
+      if ((index < active_index)); then
+        printf '%s\n' "Complete"
+      elif ((index == active_index)); then
+        printf '%s\n' "Running"
+      else
+        printf '%s\n' "Pending"
+      fi
+      ;;
+    *)
+      printf '%s\n' "Pending"
+      ;;
+  esac
+}
+
+dashboard_gum_progress_bar() {
+  local completed="$1"
+  local total="$2"
+  local state="$3"
+  local width=12
+  local filled=0
+  local empty=0
+  local fill=""
+  local rest=""
+  local i=0
+  local color="38;5;246"
+  if ((total > 0)); then
+    filled=$((completed * width / total))
+  fi
+  if ((completed > 0 && filled == 0)); then
+    filled=1
+  fi
+  if ((filled > width)); then
+    filled="${width}"
+  fi
+  empty=$((width - filled))
+  for ((i = 0; i < filled; i++)); do
+    fill+="#"
+  done
+  for ((i = 0; i < empty; i++)); do
+    rest+="-"
+  done
+  case "${state}" in
+    Ready|Complete|Unchanged)
+      color="1;32"
+      ;;
+    Running)
+      color="1;38;5;228"
+      ;;
+    Failed)
+      color="1;38;5;203"
+      ;;
+  esac
+  printf '['
+  if [[ -n "${fill}" ]]; then
+    dashboard_gum_text_style "${color}" "${fill}"
+  fi
+  if [[ -n "${rest}" ]]; then
+    dashboard_gum_text_style "38;5;240" "${rest}"
+  fi
+  printf ']'
+}
+
+dashboard_title_case_words() {
+  local value="$1"
+  local result=""
+  local separator=""
+  local word=""
+  local first=""
+  local -a words=()
+  IFS=' ' read -ra words <<< "${value}"
+  for word in "${words[@]}"; do
+    if [[ -n "${word}" ]]; then
+      first="${word:0:1}"
+      word="${first^^}${word:1}"
+    fi
+    result+="${separator}${word}"
+    separator=" "
+  done
+  printf '%s' "${result}"
+}
+
+dashboard_gum_subtask_cell() {
+  dashboard_gum_text_style "38;5;245" "$1"
+}
+
+dashboard_completed_task_count_for_row() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local active_index=0
+  local completed=0
+  local index=0
+  local label=""
+  local patterns=""
+  local sub_state=""
+  local target=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  if ((total == 0)); then
+    case "${parent_state}" in
+      Ready|Complete|Unchanged|Retired)
+        printf '%s\n' "1"
+        ;;
+      *)
+        printf '%s\n' "0"
+        ;;
+    esac
+    return 0
+  fi
+  active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    printf '%s\n' "$((active_index + 1))"
+    return 0
+  fi
+  case "${parent_state}" in
+    Ready|Complete|Unchanged|Retired)
+      printf '%s\n' "${total}"
+      return 0
+      ;;
+    Pending)
+      printf '%s\n' "0"
+      return 0
+      ;;
+  esac
+  while IFS='|' read -r label target patterns; do
+    sub_state="$(dashboard_subtask_state "${parent_state}" "${index}" "${active_index}")"
+    if [[ "${sub_state}" == "Complete" ]]; then
+      completed=$((completed + 1))
+    fi
+    index=$((index + 1))
+  done < <(dashboard_subtask_specs_for_row "${row}")
+  printf '%s\n' "${completed}"
+}
+
+dashboard_current_task_label() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local active_index=0
+  local index=0
+  local label=""
+  local patterns=""
+  local target=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  if ((total == 0)); then
+    dashboard_title_case_words "$(dashboard_action_for_row "${row}" "${status}")"
+    return 0
+  fi
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    printf '%s' "Idle"
+    return 0
+  fi
+  case "${parent_state}" in
+    Ready|Complete|Unchanged)
+      printf '%s' "Complete"
+      ;;
+    Pending)
+      printf '%s' "Pending..."
+      ;;
+    *)
+      active_index="$(dashboard_subtask_active_index "${row}" "${status}")"
+      while IFS='|' read -r label target patterns; do
+        if ((index == active_index)); then
+          dashboard_title_case_words "${label}"
+          return 0
+        fi
+        index=$((index + 1))
+      done < <(dashboard_subtask_specs_for_row "${row}")
+      printf '%s' "Working"
+      ;;
+  esac
+}
+
+dashboard_gum_task_cell() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local completed=0
+  local label=""
+  local total=0
+  total="$(dashboard_subtask_count "${row}")"
+  if ((total == 0)); then
+    total=1
+  fi
+  completed="$(dashboard_completed_task_count_for_row "${row}" "${status}" "${parent_state}")"
+  label="$(dashboard_current_task_label "${row}" "${status}" "${parent_state}")"
+  printf '%s %s %s' \
+    "$(dashboard_gum_progress_bar "${completed}" "${total}" "${parent_state}")" \
+    "$(dashboard_gum_text_style "38;5;245" "[${completed}/${total}]")" \
+    "${label}"
+}
+
+dashboard_gum_subtask_status_cell() {
+  local row="$1"
+  local status="$2"
+  local parent_state="$3"
+  local detail=""
+  if dashboard_status_is_completed_subtask_with_pending "${row}" "${status}"; then
+    detail="Idle"
+  else
+    case "${parent_state}" in
+      Ready|Complete|Unchanged)
+        detail="Complete"
+        ;;
+      Pending)
+        detail="Pending..."
+        ;;
+      *)
+        detail="$(dashboard_title_case_words "$(dashboard_detail_for_row "${row}" "${status}")")"
+        ;;
+    esac
+  fi
+  dashboard_gum_subtask_cell "${detail}"
+}
+
+dashboard_detail_for_row() {
+  local row="$1"
+  local status="$2"
+  case "${status}" in
+    Pending...|"")
+      printf '%s\n' "Pending..."
+      ;;
+    *"Ready - Traffic Owner"*)
+      printf '%s\n' "traffic owner"
+      ;;
+    *"Ready - Image (Re)Built"*)
+      printf '%s\n' "image refreshed"
+      ;;
+    *"Ready - StorageClass"*)
+      printf '%s\n' "StorageClass ready"
+      ;;
+    *"Ensuring Table "*)
+      printf '%s\n' "${status#Ensuring }"
+      ;;
+    *)
+      printf '%s\n' "${status}"
+      ;;
+  esac
+}
+
+dashboard_gum_enabled() {
+  [[ "${BOREALIS_DEPLOY_UI:-gum}" != "plain" ]] || return 1
+  [[ "${GUM_READY:-0}" -eq 1 && -n "${GUM_BIN:-}" && -x "${GUM_BIN}" ]] || return 1
+  [[ -t 1 && -z "${NO_COLOR:-}" ]] || return 1
+}
+
+dashboard_cell() {
+  local value="$1"
+  value="${value//$'\t'/ }"
+  value="${value//$'\n'/ }"
+  value="${value//$'\r'/ }"
+  printf '%s' "${value}"
+}
+
+dashboard_gum_text_style() {
+  local code="$1"
+  local text="$2"
+  printf '\033[%sm%s\033[0m' "${code}" "${text}"
+}
+
+dashboard_gum_label() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
+}
+
+dashboard_gum_state_cell() {
+  local state="$1"
+  local label="$1"
+  if [[ "${state}" == "Running" ]]; then
+    label="Configuring"
+  fi
+  case "${state}" in
+    Ready)
+      dashboard_gum_text_style "1;32" "${label}"
+      ;;
+    Failed)
+      dashboard_gum_text_style "1;38;5;203" "${label}"
+      ;;
+    Running)
+      dashboard_gum_text_style "1;38;5;228" "${label}"
+      ;;
+    Complete)
+      dashboard_gum_text_style "1;32" "${label}"
+      ;;
+    Unchanged|Retired|Pending)
+      dashboard_gum_text_style "38;5;246" "${label}"
+      ;;
+    *)
+      printf '%s' "${label}"
+      ;;
+  esac
+}
+
+dashboard_gum_header() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
+}
+
+dashboard_gum_resource_cell() {
+  dashboard_gum_text_style "1;38;5;39" "$1"
+}
+
+dashboard_gum_line() {
+  printf '%s\033[K\n' "$1"
+}
+
+dashboard_render_gum_summary() {
+  local mode_text="${DASHBOARD_MODE_LABEL:-Production} [${DASHBOARD_NETWORK_LABEL:-Public}]"
+  local profile_text="${DASHBOARD_PROFILE:-Pending...}"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Mode:")" "${mode_text}")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Profile:")" "${profile_text}")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Log:")" "${BUILD_LOG}")"
+}
+
+dashboard_render_gum_current() {
+  local subject="${DASHBOARD_CURRENT_SUBJECT:-}"
+  local status="${DASHBOARD_CURRENT_STATUS:-}"
+  if [[ -z "${subject}" ]]; then
+    subject="Deployment"
+    status="Waiting for first phase"
+  fi
+  dashboard_gum_line ""
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "Current:")" "$(dashboard_row_label "${subject}")")"
+  dashboard_gum_line "$(printf '%s %s' "$(dashboard_gum_label "State:")" "${status}")"
+}
+
+dashboard_render_gum_table() {
+  local cols
+  local widths
+  local header_columns
+  cols="$(dashboard_terminal_columns)"
+  if ((cols >= 180)); then
+    widths="31,14,54,51"
+  elif ((cols >= 150)); then
+    widths="29,14,46,35"
+  elif ((cols >= 120)); then
+    widths="27,13,39,21"
+  else
+    widths="23,12,34,14"
+  fi
+  header_columns="$(dashboard_gum_header "Resource"),$(dashboard_gum_header "Status"),$(dashboard_gum_header "Task"),$(dashboard_gum_header "Sub-Task")"
+  {
+    local row=""
+    local state=""
+    local status=""
+    # Gum print mode still styles the first data row as selected in a TTY.
+    # Feed one inert row and remove it after rendering so real rows stay uniform.
+    printf '%s\t%s\t%s\t%s\n' " " " " " " " "
+    while IFS= read -r row; do
+      status="$(dashboard_status_text "${row}")"
+      state="$(dashboard_state_for_row "${row}" "${status}")"
+      printf '%s\t%s\t%s\t%s\n' \
+        "$(dashboard_cell "$(dashboard_gum_resource_cell "$(dashboard_row_label "${row}")")")" \
+        "$(dashboard_cell "$(dashboard_gum_state_cell "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_task_cell "${row}" "${status}" "${state}")")" \
+        "$(dashboard_cell "$(dashboard_gum_subtask_status_cell "${row}" "${status}" "${state}")")"
+    done < <(dashboard_ordered_gum_rows)
+  } | "${GUM_BIN}" table \
+    --print \
+    --separator $'\t' \
+    --columns "${header_columns}" \
+    --widths "${widths}" \
+    --border rounded \
+    --lazy-quotes \
+    --border.foreground 240 \
+    --header.foreground 39 \
+    --selected.foreground 252 | sed '4d' | while IFS= read -r line || [[ -n "${line}" ]]; do
+      dashboard_gum_line "${line}"
+    done
+}
+
+dashboard_render_gum() {
+  dashboard_gum_enabled || return 1
+  printf '\033[H'
+  dashboard_gum_line "$("${GUM_BIN}" style --bold --foreground 39 "Borealis Engine Deployment")"
+  dashboard_render_gum_summary
+  dashboard_gum_line ""
+  dashboard_render_gum_table
+  printf '\033[J'
+}
+
+dashboard_render_plain() {
   [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
   printf '\033[H'
   printf '%bBorealis Engine Deployment%b\n' "${C_BLUE}${C_BOLD}" "${C_RESET}"
@@ -466,12 +1310,20 @@ dashboard_render() {
   printf '\033[J'
 }
 
+dashboard_render() {
+  [[ "${DASHBOARD_ACTIVE}" -eq 1 ]] || return 0
+  if dashboard_render_gum; then
+    return 0
+  fi
+  dashboard_render_plain
+}
+
 dashboard_update_status() {
   local subject="$1"
   local status="$2"
   local color="$3"
   if [[ "${subject}" == "Database schema" ]]; then
-    subject="postgres-db"
+    subject="k3s-postgres-db"
   fi
   dashboard_ensure_row "${subject}"
   if [[ "${DASHBOARD_STATUS[${subject}]:-}" == "${status}" && "${DASHBOARD_COLOR[${subject}]:-}" == "${color}" ]]; then
@@ -480,6 +1332,8 @@ dashboard_update_status() {
   DASHBOARD_STATUS["${subject}"]="${status}"
   DASHBOARD_COLOR["${subject}"]="${color}"
   DASHBOARD_UPDATED["${subject}"]="$(dashboard_human_timestamp)"
+  DASHBOARD_CURRENT_SUBJECT="${subject}"
+  DASHBOARD_CURRENT_STATUS="${status}"
   if [[ "${subject}" == "Profile" ]]; then
     DASHBOARD_PROFILE="${status}"
   fi
@@ -534,9 +1388,6 @@ build_status_subject() {
     job-scheduler)
       printf '%s\n' "api-backend > job-scheduler"
       ;;
-    site-worker-orchestrator)
-      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
-      ;;
     *)
       printf '%s\n' "${service}"
       ;;
@@ -548,11 +1399,61 @@ log_build_status() {
   local status="$2"
   local color="$3"
   case "${service}" in
-    job-scheduler)
-      status="[Shares API Backend Image] -> ${status}"
+    api-backend)
+      if [[ "${DASHBOARD_STATUS[k3s-api-backend]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s API backend remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-api-backend" "${status}" "${color}"
+      return 0
       ;;
-    site-worker-orchestrator)
-      status="[Shares Job Scheduler Image] -> ${status}"
+    job-scheduler)
+      if [[ "${DASHBOARD_STATUS[k3s-job-scheduler]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s job scheduler remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-job-scheduler" "${status}" "${color}"
+      return 0
+      ;;
+    webui-frontend)
+      if [[ "${DASHBOARD_STATUS[k3s-webui-frontend]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s WebUI frontend remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-webui-frontend" "${status}" "${color}"
+      return 0
+      ;;
+    remote-desktop-guacd)
+      if [[ "${DASHBOARD_STATUS[k3s-remote-desktop-guacd]:-}" == "Ready" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s guacd remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-remote-desktop-guacd" "${status}" "${color}"
+      return 0
+      ;;
+    postgres-db)
+      if [[ "${DASHBOARD_STATUS[k3s-postgres-db]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s PostgreSQL remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-postgres-db" "${status}" "${color}"
+      return 0
+      ;;
+    wireguard-tunnel)
+      if [[ "${DASHBOARD_STATUS[k3s-wireguard-tunnel]:-}" == "Ready" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s WireGuard tunnel remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-wireguard-tunnel" "${status}" "${color}"
+      return 0
+      ;;
+    traefik-edge)
+      if [[ "${DASHBOARD_STATUS[k3s-traefik-edge]:-}" == "Ready - Traffic Owner" ]]; then
+        printf '[%s] %s image status preserved as %s; K3s Traefik edge remains traffic owner\n' "$(date +%FT%T)" "${service}" "${status}" >> "${BUILD_LOG}"
+        return 0
+      fi
+      log_status "k3s-traefik-edge" "${status}" "${color}"
+      return 0
       ;;
   esac
   log_status "$(build_status_subject "${service}")" "${status}" "${color}"
@@ -587,10 +1488,6 @@ build_section_images() {
   for service in "${section_services[@]}"; do
     selected_build_role_present "${service}" "${CURRENT_BUILD_SELECTION[@]}" || continue
     build_service_image "${service}" "${mode}"
-    if [[ "${service}" == "job-scheduler" ]]; then
-      log_build_status "site-worker-orchestrator" "Ready - Shared Image" "${C_GREEN}"
-      printf '[%s] site-worker-orchestrator uses shared image %s\n' "$(date +%FT%T)" "${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}" >> "${BUILD_LOG}"
-    fi
   done
 }
 
@@ -665,7 +1562,11 @@ ensure_engine_runtime_identity() {
     die "gid ${ENGINE_RUNTIME_GID} already belongs to ${existing_gid_group}; set a free Borealis runtime id before deploy."
   fi
   if [[ -z "${existing_group_gid}" ]]; then
-    run_privileged groupadd --system --gid "${ENGINE_RUNTIME_GID}" "${ENGINE_RUNTIME_GROUP}" \
+    local groupadd_args=(--system --gid "${ENGINE_RUNTIME_GID}")
+    if groupadd --help 2>&1 | grep -q -- '--key'; then
+      groupadd_args=(-K SYS_GID_MAX=65534 "${groupadd_args[@]}")
+    fi
+    run_privileged groupadd "${groupadd_args[@]}" "${ENGINE_RUNTIME_GROUP}" \
       || die "Failed to create ${ENGINE_RUNTIME_GROUP} runtime group."
   fi
 
@@ -687,25 +1588,22 @@ ensure_engine_runtime_identity() {
     if [[ ! -x "${nologin_shell}" ]]; then
       nologin_shell="/bin/false"
     fi
+    local useradd_args=(
+      --system
+      --uid "${ENGINE_RUNTIME_UID}"
+      --gid "${ENGINE_RUNTIME_GROUP}"
+      --home-dir /nonexistent
+      --no-create-home
+      --shell "${nologin_shell}"
+    )
+    if useradd --help 2>&1 | grep -q -- '--key'; then
+      useradd_args=(-K SYS_UID_MAX=65534 "${useradd_args[@]}")
+    fi
     run_privileged useradd \
-      --system \
-      --uid "${ENGINE_RUNTIME_UID}" \
-      --gid "${ENGINE_RUNTIME_GROUP}" \
-      --home-dir /nonexistent \
-      --no-create-home \
-      --shell "${nologin_shell}" \
+      "${useradd_args[@]}" \
       "${ENGINE_RUNTIME_USER}" \
       || die "Failed to create ${ENGINE_RUNTIME_USER} runtime user."
   fi
-}
-
-resolve_docker_socket_gid() {
-  local docker_socket="${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}"
-  if [[ -S "${docker_socket}" || -e "${docker_socket}" ]]; then
-    stat -c '%g' "${docker_socket}" 2>/dev/null || printf '0\n'
-    return 0
-  fi
-  printf '0\n'
 }
 
 detect_distro() {
@@ -715,6 +1613,118 @@ detect_distro() {
     . /etc/os-release
     DISTRO_ID="${ID:-unknown}"
   fi
+}
+
+gum_bootstrap_root() {
+  if [[ "${SYNC_REQUESTED:-0}" -eq 1 ]]; then
+    printf '%s\n' "${INSTALL_DIR}/Dependencies/Gum"
+    return 0
+  fi
+  if source_available; then
+    printf '%s\n' "${SCRIPT_DIR}/Dependencies/Gum"
+    return 0
+  fi
+  printf '%s\n' "${INSTALL_DIR}/Dependencies/Gum"
+}
+
+gum_release_arch() {
+  local machine
+  machine="$(uname -m 2>/dev/null || true)"
+  case "${machine}" in
+    x86_64|amd64)
+      printf '%s\n' "x86_64"
+      ;;
+    aarch64|arm64)
+      printf '%s\n' "arm64"
+      ;;
+    *)
+      die "Unsupported Gum architecture '${machine}'. Borealis deploy UI supports Linux x86_64 and arm64."
+      ;;
+  esac
+}
+
+gum_release_sha256() {
+  case "$1" in
+    x86_64)
+      printf '%s\n' "${GUM_LINUX_X86_64_SHA256}"
+      ;;
+    arm64)
+      printf '%s\n' "${GUM_LINUX_ARM64_SHA256}"
+      ;;
+    *)
+      die "Unsupported Gum release architecture '$1'."
+      ;;
+  esac
+}
+
+ensure_gum_bootstrap_dependencies() {
+  command_exists curl && command_exists tar && command_exists gzip && command_exists sha256sum && return 0
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt-get update -qq >/dev/null
+      run_privileged apt-get install -y ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y ca-certificates curl tar gzip coreutils >/dev/null
+      else
+        run_privileged yum install -y ca-certificates curl tar gzip coreutils >/dev/null
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install ca-certificates curl tar gzip coreutils >/dev/null
+      ;;
+    *)
+      ;;
+  esac
+  command_exists curl && command_exists tar && command_exists gzip && command_exists sha256sum \
+    || die "Gum bootstrap needs curl, tar, gzip, and sha256sum. Install them and rerun Engine.sh."
+}
+
+ensure_gum_bootstrap() {
+  local root
+  root="$(gum_bootstrap_root)"
+  if [[ -n "${GUM_BIN}" && -x "${GUM_BIN}" ]]; then
+    GUM_READY=1
+    export PATH="$(dirname "${GUM_BIN}"):${PATH}"
+    return 0
+  fi
+  GUM_BIN="${root}/bin/gum"
+  if [[ -x "${GUM_BIN}" ]] && "${GUM_BIN}" --version 2>/dev/null | grep -q "${GUM_VERSION_NUMBER}"; then
+    GUM_READY=1
+    export PATH="${root}/bin:${PATH}"
+    return 0
+  fi
+
+  ensure_gum_bootstrap_dependencies
+  local arch
+  local archive
+  local checksum
+  local extracted_dir
+  local tmp_dir
+  arch="$(gum_release_arch)"
+  archive="gum_${GUM_VERSION_NUMBER}_Linux_${arch}.tar.gz"
+  checksum="$(gum_release_sha256 "${arch}")"
+  extracted_dir="gum_${GUM_VERSION_NUMBER}_Linux_${arch}"
+  tmp_dir="$(mktemp -d)"
+
+  curl -fsSL "${GUM_RELEASE_BASE_URL}/${archive}" -o "${tmp_dir}/${archive}" \
+    || die "Failed to download Gum ${GUM_VERSION}."
+  printf '%s  %s\n' "${checksum}" "${tmp_dir}/${archive}" | sha256sum -c - >/dev/null \
+    || die "Gum ${GUM_VERSION} checksum verification failed."
+  tar -xzf "${tmp_dir}/${archive}" -C "${tmp_dir}" \
+    || die "Failed to extract Gum ${GUM_VERSION}."
+  run_privileged install -m 0755 -d "${root}/bin" \
+    || die "Failed to create Gum dependency directory '${root}/bin'."
+  run_privileged install -m 0755 "${tmp_dir}/${extracted_dir}/gum" "${GUM_BIN}" \
+    || die "Failed to install Gum to '${GUM_BIN}'."
+  rm -rf "${tmp_dir}"
+  GUM_READY=1
+  export PATH="${root}/bin:${PATH}"
 }
 
 selinux_enforcing() {
@@ -962,18 +1972,9 @@ sync_and_reexec_if_needed() {
   exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}"
 }
 
-compose_base() {
-  docker compose \
-    --project-name "${PROJECT_NAME}" \
-    --env-file "${COMPOSE_ENV}" \
-    -f "${COMPOSE_FILE}" \
-    "$@"
-}
-
 require_docker() {
   command_exists docker || die "Docker Engine CLI missing. Run Engine.sh deploy after installing Docker Engine."
   docker info >/dev/null 2>&1 || die "Docker daemon unreachable. Start Docker Engine and retry."
-  docker compose version >/dev/null 2>&1 || die "Docker Compose plugin missing. Install docker compose plugin and retry."
 }
 
 require_python() {
@@ -998,98 +1999,32 @@ container_health_status() {
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container_name}" 2>/dev/null || true
 }
 
-dashboard_subject_for_service() {
-  case "$1" in
-    job-scheduler)
-      printf '%s\n' "api-backend > job-scheduler"
+refresh_legacy_postgres_container_status() {
+  local container_status
+  container_status="$(container_health_status "borealis-engine-postgres-db")"
+  case "${container_status}" in
+    healthy)
+      log_status "postgres-db" "Running - Healthy" "${C_GREEN}"
       ;;
-    site-worker-orchestrator)
-      printf '%s\n' "api-backend > job-scheduler > site-worker-orchestrator"
+    running)
+      log_status "postgres-db" "Running" "${C_GREEN}"
       ;;
-    *)
-      printf '%s\n' "$1"
+    starting)
+      log_status "postgres-db" "Starting" "${C_YELLOW}"
       ;;
-  esac
-}
-
-refresh_compose_service_statuses() {
-  local services=("$@")
-  if [[ "${#services[@]}" -eq 0 ]]; then
-    services=("${SERVICE_ROLES[@]}")
-  fi
-  local service=""
-  for service in "${services[@]}"; do
-    local subject
-    local container_status
-    subject="$(dashboard_subject_for_service "${service}")"
-    container_status="$(container_health_status "borealis-engine-${service}")"
-    case "${container_status}" in
-      healthy)
-        log_status "${subject}" "Running - Healthy" "${C_GREEN}"
-        ;;
-      running)
-        log_status "${subject}" "Running" "${C_GREEN}"
-        ;;
-      starting)
-        log_status "${subject}" "Starting" "${C_YELLOW}"
-        ;;
-      unhealthy)
-        log_status "${subject}" "Unhealthy" "${C_RED}"
-        ;;
-      exited|dead|removing|paused|restarting|created)
-        log_status "${subject}" "${container_status}" "${C_RED}"
-        ;;
-      "")
-        log_status "${subject}" "Missing" "${C_RED}"
-        ;;
-      *)
-        log_status "${subject}" "${container_status}" "${C_YELLOW}"
-        ;;
-    esac
-  done
-}
-
-compose_service_status_is_transient() {
-  case "$1" in
-    ""|created|restarting|starting)
-      return 0
+    unhealthy)
+      log_status "postgres-db" "Unhealthy" "${C_RED}"
+      ;;
+    exited|dead|removing|paused|restarting|created)
+      log_status "postgres-db" "${container_status}" "${C_RED}"
+      ;;
+    "")
+      log_status "postgres-db" "Missing" "${C_RED}"
       ;;
     *)
-      return 1
+      log_status "postgres-db" "${container_status}" "${C_YELLOW}"
       ;;
   esac
-}
-
-wait_for_compose_services_to_settle() {
-  local timeout_seconds="$1"
-  shift
-  local services=("$@")
-  if [[ "${#services[@]}" -eq 0 ]]; then
-    services=("${SERVICE_ROLES[@]}")
-  fi
-  local deadline=$((SECONDS + timeout_seconds))
-  local service=""
-  local status=""
-  local pending=0
-  while true; do
-    refresh_compose_service_statuses "${services[@]}"
-    pending=0
-    for service in "${services[@]}"; do
-      status="$(container_health_status "borealis-engine-${service}")"
-      if compose_service_status_is_transient "${status}"; then
-        pending=1
-      fi
-    done
-    if [[ "${pending}" -eq 0 ]]; then
-      refresh_compose_service_statuses "${services[@]}"
-      return 0
-    fi
-    if ((SECONDS >= deadline)); then
-      printf '[%s] Compose service status settle timed out after %ss for services: %s\n' "$(date +%FT%T)" "${timeout_seconds}" "${services[*]}" >> "${BUILD_LOG}"
-      return 1
-    fi
-    sleep 2
-  done
 }
 
 wait_for_postgres_container() {
@@ -1129,58 +2064,10 @@ stream_database_schema_output() {
   done
 }
 
-ensure_engine_database_schema() {
-  local site_worker_image="${IMAGE_TAGS[site-worker]:-}"
-  local schema_fifo=""
-  local schema_fifo_dir=""
-  local schema_exit=0
-  local schema_line
-  local schema_pid=""
-  if [[ -z "${site_worker_image}" ]]; then
-    site_worker_image="$(read_env_value BOREALIS_SITE_WORKER_IMAGE)"
-  fi
-  [[ -n "${site_worker_image}" ]] || die "Unable to resolve site-worker image for Engine database schema initialization."
-
-  log_status "Database schema" "Starting PostgreSQL" "${C_YELLOW}"
-  compose_base up -d --no-deps --no-build postgres-db >> "${BUILD_LOG}" 2>&1
-  if ! wait_for_postgres_container 150; then
-    log_status "postgres-db" "Failed" "${C_RED}"
-    die "postgres-db did not become healthy for Engine database schema initialization. See ${BUILD_LOG}."
-  fi
-  refresh_compose_service_statuses postgres-db
-
-  log_status "Database schema" "Preparing Engine tables" "${C_YELLOW}"
-  schema_fifo_dir="$(mktemp -d)"
-  schema_fifo="${schema_fifo_dir}/schema-output"
-  mkfifo "${schema_fifo}"
-  set +o errexit
-  docker run --rm \
-    --network host \
-    --env-file "${COMPOSE_ENV}" \
-    -e PYTHONPATH="/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent" \
-    -v "${RUNTIME_ROOT}:/opt/Borealis/Engine" \
-    --entrypoint python \
-    "${site_worker_image}" \
-    -u \
-    -c 'import os; from Data.Engine.database import initialise_engine_database; initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))' \
-    > "${schema_fifo}" 2>&1 &
-  schema_pid="$!"
-  while IFS= read -r schema_line; do
-    handle_database_schema_output_line "${schema_line}"
-  done < "${schema_fifo}"
-  wait "${schema_pid}"
-  schema_exit="$?"
-  rm -rf "${schema_fifo_dir}" || true
-  set -o errexit
-  if [[ "${schema_exit}" -ne 0 ]]; then
-    log_status "Database schema" "Failed" "${C_RED}"
-    die "Engine database schema initialization failed. See ${BUILD_LOG}."
-  fi
-  log_status "Database schema" "Ready" "${C_GREEN}"
-  refresh_compose_service_statuses postgres-db
-}
-
 ensure_no_host_postgres_conflict() {
+  if [[ "$(resolve_postgres_traffic_owner)" == "k3s" ]]; then
+    return 0
+  fi
   if host_postgres_units_active && ! container_running borealis-engine-postgres-db; then
     die "Host PostgreSQL is active on this machine and conflicts with container postgres-db on 127.0.0.1:5432. Stop and disable host PostgreSQL before deploying."
   fi
@@ -1234,17 +2121,13 @@ EOF
   rm -f "${temp_file}"
 
   run_privileged apt-get update -qq
-  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  run_privileged apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
 }
 
 ensure_engine_dependencies() {
   local needs_install=0
   command_exists python3 || needs_install=1
-  if command_exists docker; then
-    docker compose version >/dev/null 2>&1 || needs_install=1
-  else
-    needs_install=1
-  fi
+  command_exists docker || needs_install=1
 
   if [[ "${needs_install}" -eq 1 ]]; then
     detect_distro
@@ -1254,19 +2137,19 @@ ensure_engine_dependencies() {
         ;;
       rhel|centos|fedora|rocky|almalinux)
         if command_exists dnf; then
-          run_privileged dnf install -y python3 docker docker-compose-plugin
+          run_privileged dnf install -y python3 docker
         else
-          run_privileged yum install -y python3 docker docker-compose-plugin
+          run_privileged yum install -y python3 docker
         fi
         ;;
       arch)
-        run_privileged pacman -Sy --noconfirm python docker docker-compose
+        run_privileged pacman -Sy --noconfirm python docker
         ;;
       opensuse*|sles)
-        run_privileged zypper --non-interactive install python3 docker docker-compose
+        run_privileged zypper --non-interactive install python3 docker
         ;;
       *)
-        die "Unsupported distro '${DISTRO_ID}'. Install Python 3, Docker Engine, and Docker Compose plugin manually."
+        die "Unsupported distro '${DISTRO_ID}'. Install Python 3 and Docker Engine manually."
         ;;
     esac
   fi
@@ -1277,6 +2160,4061 @@ ensure_engine_dependencies() {
 
   require_python
   require_docker
+}
+
+validate_k3s_baseline_settings() {
+  [[ "${K3S_API_PORT}" =~ ^[0-9]+$ && "${K3S_API_PORT}" -ge 1 && "${K3S_API_PORT}" -le 65535 ]] \
+    || die "BOREALIS_K3S_API_PORT must be a numeric TCP port from 1 through 65535."
+  [[ "${K3S_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_NAMESPACE must be a valid Kubernetes namespace name."
+  [[ "${K3S_KUBECONFIG_MODE}" =~ ^0?[0-7]{3}$ ]] \
+    || die "BOREALIS_K3S_KUBECONFIG_MODE must be an octal file mode like 0600."
+  [[ "${K3S_CLUSTER_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
+    || die "BOREALIS_K3S_CLUSTER_CIDR must be an IPv4 CIDR, for example 10.42.0.0/16."
+  [[ "${K3S_SERVICE_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
+    || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
+}
+
+normalize_enabled_flag() {
+  local label="$1"
+  local raw="${2:-}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    1|true|yes|on|enabled)
+      printf '%s\n' "1"
+      ;;
+    0|false|no|off|disabled)
+      printf '%s\n' "0"
+      ;;
+    *)
+      die "${label} must be one of 1, 0, true, false, yes, no, on, off, enabled, or disabled."
+      ;;
+  esac
+}
+
+validate_k3s_longhorn_settings() {
+  normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}" >/dev/null
+  [[ "${K3S_LONGHORN_NAMESPACE}" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_NAMESPACE must be a valid Kubernetes namespace name."
+  [[ "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_UPSTREAM_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ "${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" =~ ^[1-9][0-9]*$ ]] \
+    || die "BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT must be a positive integer."
+  [[ "${K3S_PVC_STORAGE_CLASS}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "BOREALIS_K3S_PVC_STORAGE_CLASS must be a valid Kubernetes StorageClass name."
+  [[ -n "${K3S_LONGHORN_MANIFEST_URL}" ]] \
+    || die "BOREALIS_K3S_LONGHORN_MANIFEST_URL must not be empty when Longhorn reconcile is enabled."
+  [[ "${K3S_LONGHORN_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)?$ ]] \
+    || die "BOREALIS_K3S_LONGHORN_ROLLOUT_TIMEOUT must be a kubectl timeout like 300s or 5m."
+}
+
+k3s_longhorn_enabled() {
+  [[ "$(normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}")" == "1" ]]
+}
+
+validate_k3s_storage_quantity() {
+  local label="$1"
+  local raw="$2"
+  [[ "${raw}" =~ ^[1-9][0-9]*([EPTGMK]i?|m)?$ ]] \
+    || die "${label} must be a Kubernetes storage quantity like 20Gi."
+}
+
+validate_k3s_postgres_settings() {
+  normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}" >/dev/null
+  validate_k3s_storage_quantity "BOREALIS_K3S_POSTGRES_STORAGE_SIZE" "${K3S_POSTGRES_STORAGE_SIZE}"
+  [[ "${K3S_POSTGRES_ROLLOUT_TIMEOUT}" =~ ^[0-9]+(s|m|h)?$ ]] \
+    || die "BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT must be a kubectl timeout like 180s or 3m."
+}
+
+k3s_postgres_enabled() {
+  [[ "$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" == "1" ]]
+}
+
+k3s_pvc_storage_class_explicitly_set() {
+  [[ -n "${BOREALIS_K3S_PVC_STORAGE_CLASS:-}" || -n "${BOREALIS_K3S_STORAGE_CLASS:-}" ]]
+}
+
+current_k3s_postgres_pvc_storage_class() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pvc postgres-data-postgres-db-0 \
+    -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true
+}
+
+current_k3s_postgres_statefulset_storage_class() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
+    -o jsonpath='{.spec.volumeClaimTemplates[0].spec.storageClassName}' 2>/dev/null || true
+}
+
+resolve_k3s_postgres_storage_class() {
+  local storage_class=""
+  storage_class="$(current_k3s_postgres_pvc_storage_class)"
+  if [[ -n "${storage_class}" ]]; then
+    printf '%s\n' "${storage_class}"
+    return 0
+  fi
+  storage_class="$(current_k3s_postgres_statefulset_storage_class)"
+  if [[ -n "${storage_class}" ]]; then
+    printf '%s\n' "${storage_class}"
+    return 0
+  fi
+  if k3s_pvc_storage_class_explicitly_set; then
+    printf '%s\n' "${K3S_PVC_STORAGE_CLASS}"
+    return 0
+  fi
+  printf '%s\n' "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}"
+}
+
+ensure_systemctl_for_k3s() {
+  command_exists systemctl || die "Borealis-managed K3s baseline currently requires systemd/systemctl."
+}
+
+ensure_k3s_install_dependencies() {
+  local needs_install=0
+  command_exists curl || needs_install=1
+  command_exists iptables || needs_install=1
+  [[ "${needs_install}" -eq 1 ]] || return 0
+
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      run_privileged apt-get update -qq
+      run_privileged apt-get install -y ca-certificates curl iptables
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        run_privileged dnf install -y ca-certificates curl iptables
+      else
+        run_privileged yum install -y ca-certificates curl iptables
+      fi
+      ;;
+    arch)
+      run_privileged pacman -Sy --noconfirm ca-certificates curl iptables
+      ;;
+    opensuse*|sles)
+      run_privileged zypper --non-interactive install ca-certificates curl iptables
+      ;;
+    *)
+      die "Unsupported distro '${DISTRO_ID}'. Install curl, ca-certificates, and iptables before K3s baseline reconcile."
+      ;;
+  esac
+}
+
+k3s_binary_path() {
+  if command_exists k3s; then
+    command -v k3s
+    return 0
+  fi
+  if [[ -x /usr/local/bin/k3s ]]; then
+    printf '%s\n' "/usr/local/bin/k3s"
+    return 0
+  fi
+  if [[ -x /usr/bin/k3s ]]; then
+    printf '%s\n' "/usr/bin/k3s"
+    return 0
+  fi
+  return 1
+}
+
+k3s_service_unit_exists() {
+  ensure_systemctl_for_k3s
+  if systemctl list-unit-files "${K3S_SERVICE_NAME}.service" --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${K3S_SERVICE_NAME}.service"; then
+    return 0
+  fi
+  [[ -f "/etc/systemd/system/${K3S_SERVICE_NAME}.service" \
+    || -f "/lib/systemd/system/${K3S_SERVICE_NAME}.service" \
+    || -f "/usr/lib/systemd/system/${K3S_SERVICE_NAME}.service" ]]
+}
+
+k3s_cluster_installed() {
+  k3s_binary_path >/dev/null 2>&1 || return 1
+  k3s_service_unit_exists
+}
+
+k3s_kubectl() {
+  local k3s_bin
+  k3s_bin="$(k3s_binary_path)" || die "K3s binary missing after install."
+  run_privileged "${k3s_bin}" kubectl --kubeconfig "${K3S_KUBECONFIG}" "$@"
+}
+
+render_k3s_borealis_config() {
+  cat <<EOF
+# Borealis-managed K3s baseline. Engine.sh owns this file.
+write-kubeconfig-mode: "${K3S_KUBECONFIG_MODE}"
+cluster-cidr: "${K3S_CLUSTER_CIDR}"
+service-cidr: "${K3S_SERVICE_CIDR}"
+disable:
+  - "traefik"
+  - "servicelb"
+secrets-encryption: true
+node-label:
+  - "borealis.io/engine-node=true"
+EOF
+}
+
+render_k3s_api_firewall_script() {
+  cat <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+CHAIN="BOREALIS-K3S-API"
+PORT="${BOREALIS_K3S_API_PORT:-6443}"
+CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
+SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
+
+iptables -N "${CHAIN}" 2>/dev/null || true
+iptables -F "${CHAIN}"
+iptables -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A "${CHAIN}" -i lo -j ACCEPT
+iptables -A "${CHAIN}" -s 127.0.0.0/8 -j ACCEPT
+for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
+  iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
+  iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
+done
+iptables -A "${CHAIN}" -j DROP
+
+if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
+  iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"
+fi
+EOF
+}
+
+render_k3s_api_firewall_unit() {
+  cat <<EOF
+[Unit]
+Description=Borealis K3s API firewall
+Wants=network-online.target
+After=network-online.target
+Before=${K3S_SERVICE_NAME}.service
+
+[Service]
+Type=oneshot
+Environment=BOREALIS_K3S_API_PORT=${K3S_API_PORT}
+Environment=BOREALIS_K3S_CLUSTER_CIDR=${K3S_CLUSTER_CIDR}
+Environment=BOREALIS_K3S_SERVICE_CIDR=${K3S_SERVICE_CIDR}
+ExecStart=${K3S_FIREWALL_SCRIPT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+install_temp_file_if_changed() {
+  local temp_file="$1"
+  local target="$2"
+  local mode="$3"
+  local desired_hash
+  local current_hash=""
+  desired_hash="$(sha256sum "${temp_file}" | awk '{print $1}')"
+  if run_privileged test -f "${target}"; then
+    current_hash="$(run_privileged sha256sum "${target}" 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  if [[ "${current_hash}" == "${desired_hash}" ]]; then
+    return 1
+  fi
+  run_privileged install -m "${mode}" -D "${temp_file}" "${target}"
+  return 0
+}
+
+write_k3s_borealis_config() {
+  mkdir -p "${DEPLOY_DIR}"
+  local temp_file
+  local desired_hash
+  temp_file="$(mktemp)"
+  render_k3s_borealis_config > "${temp_file}"
+  desired_hash="$(sha256sum "${temp_file}" | awk '{print $1}')"
+
+  local changed=0
+  if install_temp_file_if_changed "${temp_file}" "${K3S_BOREALIS_CONFIG}" 0644; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+  printf '%s  %s\n' "${desired_hash}" "${K3S_BOREALIS_CONFIG}" > "${K3S_CONFIG_HASH_FILE}"
+  if [[ "${changed}" -eq 1 ]]; then
+    printf '[%s] K3s Borealis config reconciled as %s\n' "$(date +%FT%T)" "${K3S_BOREALIS_CONFIG}" >> "${BUILD_LOG}"
+    return 0
+  fi
+  printf '[%s] K3s Borealis config unchanged as %s\n' "$(date +%FT%T)" "${K3S_BOREALIS_CONFIG}" >> "${BUILD_LOG}"
+  return 1
+}
+
+write_k3s_api_firewall_files() {
+  local changed=0
+  local temp_file
+
+  temp_file="$(mktemp)"
+  render_k3s_api_firewall_script > "${temp_file}"
+  if install_temp_file_if_changed "${temp_file}" "${K3S_FIREWALL_SCRIPT}" 0755; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+
+  temp_file="$(mktemp)"
+  render_k3s_api_firewall_unit > "${temp_file}"
+  if install_temp_file_if_changed "${temp_file}" "/etc/systemd/system/${K3S_FIREWALL_SERVICE}" 0644; then
+    changed=1
+  fi
+  rm -f "${temp_file}"
+
+  if [[ "${changed}" -eq 1 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+ensure_k3s_api_firewall() {
+  log_status "Ensuring Cluster Exists" "Reconciling API Firewall" "${C_YELLOW}"
+  if write_k3s_api_firewall_files; then
+    run_privileged systemctl daemon-reload
+  else
+    run_privileged systemctl daemon-reload >/dev/null 2>&1 || true
+  fi
+  if ! run_privileged systemctl enable "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
+    die "Failed to enable ${K3S_FIREWALL_SERVICE}. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged systemctl restart "${K3S_FIREWALL_SERVICE}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
+    die "Failed to apply K3s API firewall. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged iptables -C INPUT -p tcp --dport "${K3S_API_PORT}" -j BOREALIS-K3S-API >/dev/null 2>&1; then
+    log_status "Ensuring Cluster Exists" "Firewall Failed" "${C_RED}"
+    die "K3s API firewall rule missing after reconcile."
+  fi
+}
+
+install_k3s_if_missing() {
+  if k3s_cluster_installed; then
+    log_status "Ensuring Cluster Exists" "Already Installed" "${C_GREEN}"
+    return 1
+  fi
+
+  log_status "Ensuring Cluster Exists" "Installing K3s" "${C_YELLOW}"
+  local install_env=(INSTALL_K3S_EXEC="server")
+  if [[ -n "${K3S_INSTALL_VERSION}" ]]; then
+    install_env+=(INSTALL_K3S_VERSION="${K3S_INSTALL_VERSION}")
+  else
+    install_env+=(INSTALL_K3S_CHANNEL="${K3S_INSTALL_CHANNEL}")
+  fi
+  if ! run_privileged env "${install_env[@]}" bash -c 'set -o pipefail; curl -sfL "$1" | sh -' bash "${K3S_INSTALL_SCRIPT_URL}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "Ensuring Cluster Exists" "Install Failed" "${C_RED}"
+    die "K3s install failed. See ${BUILD_LOG}."
+  fi
+  log_status "Ensuring Cluster Exists" "Installed" "${C_GREEN}"
+  return 0
+}
+
+ensure_k3s_service_running() {
+  if run_privileged systemctl is-active --quiet "${K3S_SERVICE_NAME}.service"; then
+    log_status "Ensuring Cluster Exists" "Service Running" "${C_GREEN}"
+  else
+    log_status "Ensuring Cluster Exists" "Starting K3s Service" "${C_YELLOW}"
+  fi
+  if ! run_privileged systemctl enable --now "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
+    log_status "Ensuring Cluster Exists" "Service Failed" "${C_RED}"
+    die "Failed to enable/start ${K3S_SERVICE_NAME}.service. See ${BUILD_LOG}."
+  fi
+  if ! run_privileged systemctl is-active --quiet "${K3S_SERVICE_NAME}.service"; then
+    log_status "Ensuring Cluster Exists" "Service Failed" "${C_RED}"
+    die "${K3S_SERVICE_NAME}.service is not active after reconcile."
+  fi
+}
+
+wait_for_k3s_nodes_ready() {
+  log_status "Ensuring Cluster Exists" "Waiting For Node Readiness" "${C_YELLOW}"
+  local attempt
+  local output=""
+  for attempt in {1..90}; do
+    output="$(k3s_kubectl get nodes --no-headers 2>>"${BUILD_LOG}" || true)"
+    if [[ -n "${output}" ]] && awk 'NF < 2 || $2 !~ /(^|,)Ready(,|$)/ {bad=1} END {exit bad}' <<< "${output}"; then
+      return 0
+    fi
+    sleep 2
+  done
+  printf '[%s] K3s node readiness timed out. Last output:\n%s\n' "$(date +%FT%T)" "${output}" >> "${BUILD_LOG}"
+  log_status "Ensuring Cluster Exists" "Node Not Ready" "${C_RED}"
+  die "K3s node readiness timed out. See ${BUILD_LOG}."
+}
+
+verify_k3s_kubeconfig() {
+  if ! run_privileged test -s "${K3S_KUBECONFIG}"; then
+    log_status "Ensuring Cluster Exists" "Kubeconfig Missing" "${C_RED}"
+    die "K3s kubeconfig missing at ${K3S_KUBECONFIG}."
+  fi
+  local mode
+  mode="$(run_privileged stat -c '%a' "${K3S_KUBECONFIG}" 2>/dev/null || true)"
+  [[ -n "${mode}" ]] || die "Unable to read K3s kubeconfig mode at ${K3S_KUBECONFIG}."
+  local group_digit
+  local other_digit
+  group_digit="${mode: -2:1}"
+  other_digit="${mode: -1}"
+  if [[ "${group_digit}" != "0" || "${other_digit}" != "0" ]]; then
+    log_status "Ensuring Cluster Exists" "Kubeconfig Too Open" "${C_RED}"
+    die "K3s kubeconfig ${K3S_KUBECONFIG} must not be group/world readable; current mode is ${mode}."
+  fi
+}
+
+verify_k3s_container_runtime() {
+  local runtimes
+  runtimes="$(k3s_kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.containerRuntimeVersion}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)"
+  if [[ -z "${runtimes}" ]]; then
+    log_status "Ensuring Cluster Exists" "Runtime Unknown" "${C_RED}"
+    die "K3s node container runtime is not reported."
+  fi
+  if ! grep -Eq '^containerd://' <<< "${runtimes}"; then
+    log_status "Ensuring Cluster Exists" "Runtime Unexpected" "${C_RED}"
+    die "K3s node container runtime must be containerd in Stage 1; saw: ${runtimes}"
+  fi
+}
+
+verify_k3s_packaged_ingress_disabled() {
+  log_status "Ensuring Cluster Exists" "Verifying Ingress Disabled" "${C_YELLOW}"
+  local attempt
+  local traefik_deployment
+  local traefik_service
+  for attempt in {1..30}; do
+    traefik_deployment="$(k3s_kubectl -n kube-system get deployment traefik --ignore-not-found --no-headers 2>>"${BUILD_LOG}" || true)"
+    traefik_service="$(k3s_kubectl -n kube-system get service traefik --ignore-not-found --no-headers 2>>"${BUILD_LOG}" || true)"
+    if [[ -z "${traefik_deployment}" && -z "${traefik_service}" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "Ensuring Cluster Exists" "Bundled Ingress Active" "${C_RED}"
+  die "K3s bundled Traefik remains active; Borealis keeps ingress disabled until cutover."
+}
+
+ensure_k3s_namespace() {
+  local config_hash
+  config_hash="$(awk '{print $1; exit}' "${K3S_CONFIG_HASH_FILE}" 2>/dev/null || true)"
+  [[ -n "${config_hash}" ]] || config_hash="unknown"
+
+  log_status "Ensuring Cluster Exists" "Reconciling Namespace" "${C_YELLOW}"
+  if ! k3s_kubectl get namespace "${K3S_NAMESPACE}" >/dev/null 2>&1; then
+    k3s_kubectl create namespace "${K3S_NAMESPACE}" >> "${BUILD_LOG}" 2>&1
+  fi
+  k3s_kubectl label namespace "${K3S_NAMESPACE}" \
+    app.kubernetes.io/name=borealis \
+    app.kubernetes.io/part-of=borealis \
+    app.kubernetes.io/managed-by=Engine.sh \
+    borealis.io/stage=k3s-baseline \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+  k3s_kubectl annotate namespace "${K3S_NAMESPACE}" \
+    borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
+    borealis.io/k3s-config-hash="${config_hash}" \
+    borealis.io/k3s-config-path="${K3S_BOREALIS_CONFIG}" \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+}
+
+label_k3s_nodes() {
+  local config_hash
+  local node_ref
+  local -a k3s_node_refs=()
+  config_hash="$(awk '{print $1; exit}' "${K3S_CONFIG_HASH_FILE}" 2>/dev/null || true)"
+  [[ -n "${config_hash}" ]] || config_hash="unknown"
+
+  mapfile -t k3s_node_refs < <(k3s_kubectl get nodes -o name 2>>"${BUILD_LOG}" || true)
+  ((${#k3s_node_refs[@]} > 0)) || die "K3s reported no nodes after readiness check."
+  for node_ref in "${k3s_node_refs[@]}"; do
+    k3s_kubectl label "${node_ref}" \
+      app.kubernetes.io/part-of=borealis \
+      borealis.io/engine-node=true \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    k3s_kubectl annotate "${node_ref}" \
+      borealis.io/k3s-baseline-version="${K3S_BASELINE_VERSION}" \
+      borealis.io/k3s-config-hash="${config_hash}" \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+  done
+}
+
+ensure_k3s_cluster_baseline() {
+  log_section "k3s Cluster"
+  validate_k3s_baseline_settings
+  ensure_systemctl_for_k3s
+  ensure_k3s_install_dependencies
+
+  local config_changed=0
+  if write_k3s_borealis_config; then
+    config_changed=1
+    log_status "Ensuring Cluster Exists" "Config Updated" "${C_YELLOW}"
+  else
+    log_status "Ensuring Cluster Exists" "Config Up-to-Date" "${C_GREEN}"
+  fi
+
+  ensure_k3s_api_firewall
+
+  local installed_now=0
+  if install_k3s_if_missing; then
+    installed_now=1
+  fi
+
+  if [[ "${installed_now}" -eq 0 && "${config_changed}" -eq 1 ]]; then
+    log_status "Ensuring Cluster Exists" "Restarting For Config" "${C_YELLOW}"
+    if ! run_privileged systemctl restart "${K3S_SERVICE_NAME}.service" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Ensuring Cluster Exists" "Restart Failed" "${C_RED}"
+      die "Failed to restart ${K3S_SERVICE_NAME}.service after config reconcile. See ${BUILD_LOG}."
+    fi
+  fi
+
+  ensure_k3s_service_running
+  verify_k3s_kubeconfig
+  wait_for_k3s_nodes_ready
+  verify_k3s_container_runtime
+  verify_k3s_packaged_ingress_disabled
+  ensure_k3s_namespace
+  label_k3s_nodes
+  log_status "Ensuring Cluster Exists" "Ready" "${C_GREEN}"
+}
+
+systemd_unit_file_exists() {
+  local unit="$1"
+  systemctl list-unit-files "${unit}" --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${unit}"
+}
+
+ensure_longhorn_iscsi_package() {
+  command_exists iscsiadm && return 0
+
+  log_status "k3s-longhorn-storage" "Installing iSCSI Dependency" "${C_YELLOW}"
+  detect_distro
+  case "${DISTRO_ID}" in
+    ubuntu|debian|linuxmint|pop)
+      if ! run_privileged apt-get update -qq >> "${BUILD_LOG}" 2>&1 \
+        || ! run_privileged apt-get install -y open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    rhel|centos|fedora|rocky|almalinux)
+      if command_exists dnf; then
+        if ! run_privileged dnf install -y iscsi-initiator-utils >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+          die "Failed to install iscsi-initiator-utils for Longhorn. See ${BUILD_LOG}."
+        fi
+      elif ! run_privileged yum install -y iscsi-initiator-utils >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install iscsi-initiator-utils for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    arch)
+      if ! run_privileged pacman -Sy --noconfirm open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    opensuse*|sles)
+      if ! run_privileged zypper --non-interactive install open-iscsi >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-longhorn-storage" "iSCSI Install Failed" "${C_RED}"
+        die "Failed to install open-iscsi for Longhorn. See ${BUILD_LOG}."
+      fi
+      ;;
+    *)
+      die "Unsupported distro '${DISTRO_ID}'. Install open-iscsi or iscsi-initiator-utils before Longhorn reconcile."
+      ;;
+  esac
+
+  command_exists iscsiadm || die "Longhorn iSCSI dependency install completed, but iscsiadm is still missing."
+}
+
+ensure_longhorn_iscsi_kernel_module() {
+  if [[ -d /sys/module/iscsi_tcp ]]; then
+    return 0
+  fi
+  if command_exists modprobe; then
+    run_privileged modprobe iscsi_tcp >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if [[ -d /sys/module/iscsi_tcp ]]; then
+    return 0
+  fi
+  log_status "k3s-longhorn-storage" "iSCSI Module Missing" "${C_RED}"
+  die "Longhorn requires the iscsi_tcp kernel module. Install/enable iSCSI kernel support and redeploy."
+}
+
+ensure_longhorn_iscsid_running() {
+  local started_unit=0
+  if systemd_unit_file_exists "iscsid.service"; then
+    started_unit=1
+    if ! run_privileged systemctl enable --now iscsid.service >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "iscsid Start Failed" "${C_RED}"
+      die "Failed to enable/start iscsid.service for Longhorn. See ${BUILD_LOG}."
+    fi
+  fi
+  if systemd_unit_file_exists "iscsid.socket"; then
+    started_unit=1
+    run_privileged systemctl enable --now iscsid.socket >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if systemd_unit_file_exists "open-iscsi.service"; then
+    started_unit=1
+    run_privileged systemctl enable --now open-iscsi.service >> "${BUILD_LOG}" 2>&1 || true
+  fi
+  if run_privileged systemctl is-active --quiet iscsid.service 2>/dev/null; then
+    return 0
+  fi
+  if command_exists pgrep && pgrep -x iscsid >/dev/null 2>&1; then
+    return 0
+  fi
+  log_status "k3s-longhorn-storage" "iscsid Not Running" "${C_RED}"
+  if [[ "${started_unit}" -eq 0 ]]; then
+    die "Longhorn requires iscsid, but no iscsid/open-iscsi systemd unit was found."
+  fi
+  die "Longhorn requires iscsid to be running. See ${BUILD_LOG}."
+}
+
+ensure_longhorn_node_dependencies() {
+  log_status "k3s-longhorn-storage" "Reconciling Dependencies" "${C_YELLOW}"
+  ensure_longhorn_iscsi_package
+  ensure_longhorn_iscsi_kernel_module
+  ensure_longhorn_iscsid_running
+}
+
+wait_for_longhorn_rollouts() {
+  local deployment
+  local daemonset
+  local -a deployments=()
+  local -a daemonsets=()
+
+  mapfile -t deployments < <(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get deployments -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)
+  ((${#deployments[@]} > 0)) || die "Longhorn namespace has no Deployments after manifest apply."
+  for deployment in "${deployments[@]}"; do
+    [[ -n "${deployment}" ]] || continue
+    log_status "k3s-longhorn-storage" "Waiting For ${deployment}" "${C_YELLOW}"
+    if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" rollout status "deployment/${deployment}" --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Rollout Failed" "${C_RED}"
+      die "Longhorn Deployment ${deployment} did not become ready. See ${BUILD_LOG}."
+    fi
+  done
+
+  mapfile -t daemonsets < <(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get daemonsets -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>>"${BUILD_LOG}" || true)
+  for daemonset in "${daemonsets[@]}"; do
+    [[ -n "${daemonset}" ]] || continue
+    log_status "k3s-longhorn-storage" "Waiting For ${daemonset}" "${C_YELLOW}"
+    if ! k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" rollout status "daemonset/${daemonset}" --timeout="${K3S_LONGHORN_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Rollout Failed" "${C_RED}"
+      die "Longhorn DaemonSet ${daemonset} did not become ready. See ${BUILD_LOG}."
+    fi
+  done
+}
+
+wait_for_k3s_storage_class() {
+  local storage_class="$1"
+  local status_key="$2"
+  local attempt
+  for attempt in {1..60}; do
+    if k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "${status_key}" "StorageClass Missing" "${C_RED}"
+  die "K3s StorageClass ${storage_class} was not available after reconcile. See ${BUILD_LOG}."
+}
+
+ensure_k3s_storage_class_explicit_only() {
+  local storage_class="$1"
+  log_status "k3s-longhorn-storage" "Reconciling StorageClass Policy" "${C_YELLOW}"
+  if ! k3s_kubectl annotate storageclass "${storage_class}" \
+    storageclass.kubernetes.io/is-default-class=false \
+    storageclass.beta.kubernetes.io/is-default-class=false \
+    --overwrite >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "StorageClass Policy Failed" "${C_RED}"
+    die "Failed to mark StorageClass ${storage_class} as explicit-use only. See ${BUILD_LOG}."
+  fi
+}
+
+render_borealis_longhorn_storage_class_manifest() {
+  local storage_class="$1"
+  local replica_count="$2"
+  cat <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ${storage_class}
+  labels:
+    app.kubernetes.io/name: ${storage_class}
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: longhorn-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    storageclass.beta.kubernetes.io/is-default-class: "false"
+    borealis.io/longhorn-replica-count: "${replica_count}"
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "${replica_count}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  fsType: ext4
+  dataLocality: disabled
+  unmapMarkSnapChainRemoved: ignored
+  disableRevisionCounter: "true"
+  dataEngine: v1
+  backupTargetName: default
+EOF
+}
+
+ensure_borealis_longhorn_storage_class() {
+  local storage_class="${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}"
+  local replica_count="${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}"
+
+  if [[ "${storage_class}" == "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" ]]; then
+    ensure_k3s_storage_class_explicit_only "${storage_class}"
+    return 0
+  fi
+
+  local provisioner=""
+  local current_replicas=""
+  if k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
+    provisioner="$(k3s_kubectl get storageclass "${storage_class}" -o jsonpath='{.provisioner}' 2>>"${BUILD_LOG}" || true)"
+    current_replicas="$(k3s_kubectl get storageclass "${storage_class}" -o jsonpath='{.parameters.numberOfReplicas}' 2>>"${BUILD_LOG}" || true)"
+    [[ "${provisioner}" == "driver.longhorn.io" ]] \
+      || die "StorageClass ${storage_class} exists but is not a Longhorn StorageClass."
+    [[ "${current_replicas}" == "${replica_count}" ]] \
+      || die "StorageClass ${storage_class} exists with numberOfReplicas=${current_replicas}; StorageClass parameters are immutable. Create a new class name or migrate/delete unused PVCs manually."
+    k3s_kubectl label storageclass "${storage_class}" \
+      app.kubernetes.io/part-of=borealis \
+      app.kubernetes.io/managed-by=Engine.sh \
+      borealis.io/stage=longhorn-storage \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    k3s_kubectl annotate storageclass "${storage_class}" \
+      storageclass.kubernetes.io/is-default-class=false \
+      storageclass.beta.kubernetes.io/is-default-class=false \
+      borealis.io/longhorn-replica-count="${replica_count}" \
+      --overwrite >> "${BUILD_LOG}" 2>&1
+    return 0
+  fi
+
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-longhorn-storage-class.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_borealis_longhorn_storage_class_manifest "${storage_class}" "${replica_count}" > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-longhorn-storage" "StorageClass Failed" "${C_RED}"
+    die "Failed to apply Borealis Longhorn StorageClass ${storage_class}. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+  wait_for_k3s_storage_class "${storage_class}" "k3s-longhorn-storage"
+}
+
+ensure_longhorn_storage_baseline() {
+  validate_k3s_longhorn_settings
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "enabled=$(normalize_enabled_flag "BOREALIS_K3S_LONGHORN_ENABLED" "${K3S_LONGHORN_ENABLED}")" \
+      "namespace=${K3S_LONGHORN_NAMESPACE}" \
+      "version=${K3S_LONGHORN_VERSION}" \
+      "manifest_url=${K3S_LONGHORN_MANIFEST_URL}" \
+      "upstream_storage_class=${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" \
+      "borealis_storage_class=${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" \
+      "borealis_storage_replicas=${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" \
+      "storage_class=${K3S_PVC_STORAGE_CLASS}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  if ! k3s_longhorn_enabled; then
+    printf '%s  k3s-longhorn-storage disabled\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
+    log_status "k3s-longhorn-storage" "Skipped - Disabled" "${C_DIM}"
+    return 0
+  fi
+
+  ensure_longhorn_node_dependencies
+
+  log_status "k3s-longhorn-storage" "Applying Manifests" "${C_YELLOW}"
+  if ! k3s_kubectl apply -f "${K3S_LONGHORN_MANIFEST_URL}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-longhorn-storage" "Apply Failed" "${C_RED}"
+    die "Failed to apply Longhorn manifest ${K3S_LONGHORN_MANIFEST_URL}. See ${BUILD_LOG}."
+  fi
+
+  if ! k3s_kubectl get namespace "${K3S_LONGHORN_NAMESPACE}" >/dev/null 2>&1; then
+    log_status "k3s-longhorn-storage" "Namespace Missing" "${C_RED}"
+    die "Longhorn namespace ${K3S_LONGHORN_NAMESPACE} missing after manifest apply."
+  fi
+  k3s_kubectl label namespace "${K3S_LONGHORN_NAMESPACE}" \
+    app.kubernetes.io/part-of=borealis \
+    app.kubernetes.io/managed-by=Engine.sh \
+    borealis.io/stage=longhorn-storage \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+  k3s_kubectl annotate namespace "${K3S_LONGHORN_NAMESPACE}" \
+    borealis.io/longhorn-config-hash="${config_hash}" \
+    borealis.io/longhorn-version="${K3S_LONGHORN_VERSION}" \
+    borealis.io/longhorn-manifest-url="${K3S_LONGHORN_MANIFEST_URL}" \
+    borealis.io/longhorn-upstream-storage-class="${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" \
+    borealis.io/borealis-longhorn-storage-class="${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" \
+    borealis.io/borealis-longhorn-replica-count="${K3S_BOREALIS_LONGHORN_REPLICA_COUNT}" \
+    borealis.io/pvc-storage-class="${K3S_PVC_STORAGE_CLASS}" \
+    --overwrite >> "${BUILD_LOG}" 2>&1
+
+  wait_for_longhorn_rollouts
+  wait_for_k3s_storage_class "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" "k3s-longhorn-storage"
+  ensure_k3s_storage_class_explicit_only "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}"
+  ensure_borealis_longhorn_storage_class
+  printf '%s  k3s-longhorn-storage\n' "${config_hash}" > "${K3S_LONGHORN_CONFIG_HASH_FILE}"
+  log_status "k3s-longhorn-storage" "Ready - StorageClass" "${C_GREEN}"
+}
+
+k3s_ctr() {
+  local k3s_bin
+  k3s_bin="$(k3s_binary_path)" || die "K3s binary missing after install."
+  run_privileged "${k3s_bin}" ctr -n k8s.io "$@"
+}
+
+k3s_containerd_image_present() {
+  local image="$1"
+  local normalized_image="${image}"
+  if [[ "${image}" != */*/* && "${image}" != localhost/* ]]; then
+    normalized_image="docker.io/${image}"
+  fi
+  k3s_ctr images ls -q 2>/dev/null \
+    | awk -v exact="${image}" -v normalized="${normalized_image}" '$0 == exact || $0 == normalized {found=1} END {exit found ? 0 : 1}'
+}
+
+import_k3s_local_image_into_k3s() {
+  local service="$1"
+  local image="$2"
+  local status_row="${3:-}"
+  if k3s_containerd_image_present "${image}"; then
+    printf '[%s] %s image already available in K3s containerd: %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
+    return 0
+  fi
+  if ! docker image inspect "${image}" >/dev/null 2>&1; then
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Missing" "${C_RED}"
+    fi
+    die "${service} image ${image} is missing from Docker before K3s import."
+  fi
+  if [[ -n "${status_row}" ]]; then
+    log_status "${status_row}" "Importing Image" "${C_YELLOW}"
+  fi
+  local image_archive
+  image_archive="$(mktemp "${DEPLOY_DIR}/${service}-image.XXXXXX.tar")"
+  if ! docker image save "${image}" -o "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${image_archive}"
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Export Failed" "${C_RED}"
+    fi
+    die "Failed to export ${image} before K3s import. See ${BUILD_LOG}."
+  fi
+  if ! k3s_ctr images import "${image_archive}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${image_archive}"
+    if [[ -n "${status_row}" ]]; then
+      log_status "${status_row}" "Image Import Failed" "${C_RED}"
+    fi
+    die "Failed to import ${image} into K3s containerd. See ${BUILD_LOG}."
+  fi
+  rm -f "${image_archive}"
+}
+
+import_borealis_operator_image_into_k3s() {
+  import_k3s_local_image_into_k3s "borealis-operator" "$1" "borealis-operator"
+}
+
+borealis_operator_workload_image_allowlist() {
+  local service=""
+  local image=""
+  local entries=()
+  for service in \
+    "api-backend" \
+    "borealis-operator" \
+    "job-scheduler" \
+    "postgres-db" \
+    "remote-desktop-guacd" \
+    "traefik-edge" \
+    "webui-frontend" \
+    "wireguard-tunnel"; do
+    image="${IMAGE_TAGS[${service}]:-}"
+    [[ -n "${image}" ]] || image="$(previous_image_tag "${service}")"
+    [[ -n "${image}" ]] || continue
+    entries+=("${service}=${image}")
+  done
+  (IFS=,; printf '%s\n' "${entries[*]}")
+}
+
+borealis_operator_site_worker_image_allowlist() {
+  local image="${IMAGE_TAGS[site-worker]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag site-worker)"
+  [[ -n "${image}" ]] || return 0
+  printf '%s\n' "${image}"
+}
+
+base64_inline() {
+  local value="${1-}"
+  printf '%s' "${value}" | base64 -w 0 2>/dev/null || printf '%s' "${value}" | base64 | tr -d '\n'
+}
+
+borealis_runtime_env_secret_data() {
+  local file="${1:-${RUNTIME_ENV}}"
+  local line=""
+  local key=""
+  local value=""
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" && "${line}" != \#* && "${line}" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "${value}")"
+  done < "${file}"
+}
+
+borealis_runtime_env_secret_data_with_override() {
+  local file="${1:-${RUNTIME_ENV}}"
+  local override_key="${2:-}"
+  local override_value="${3:-}"
+  local line=""
+  local key=""
+  local value=""
+  local override_written=0
+  [[ -n "${override_key}" ]] || die "Runtime env Secret override key is required."
+  [[ "${override_key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "Invalid runtime env Secret override key '${override_key}'."
+  [[ -f "${file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" && "${line}" != \#* && "${line}" == *=* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ "${key}" == "${override_key}" ]]; then
+      value="${override_value}"
+      override_written=1
+    fi
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "${value}")"
+  done < "${file}"
+  if ((override_written == 0)); then
+    printf '  %s: "%s"\n' "${override_key}" "$(base64_inline "${override_value}")"
+  fi
+}
+
+borealis_postgres_runtime_secret_data() {
+  local key
+  for key in \
+    POSTGRES_DB \
+    POSTGRES_USER \
+    POSTGRES_PASSWORD \
+    BOREALIS_ENGINE_HOST_TIMEZONE \
+    TZ; do
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done
+}
+
+borealis_traefik_runtime_secret_data() {
+  local key
+  for key in \
+    BOREALIS_PROJECT_ROOT \
+    BOREALIS_PUBLIC_HOSTNAME \
+    BOREALIS_PUBLIC_HOSTNAME_ALIASES \
+    BOREALIS_PUBLIC_BASE_URL \
+    BOREALIS_PUBLIC_HTTP_PORT \
+    BOREALIS_PUBLIC_HTTPS_PORT \
+    BOREALIS_PUBLIC_VNC_PATH \
+    BOREALIS_PUBLIC_WIREGUARD_HOST \
+    BOREALIS_PUBLIC_WIREGUARD_PORT \
+    BOREALIS_ENGINE_NETWORK_MODE \
+    BOREALIS_ENGINE_NETWORK_MODE_LABEL \
+    BOREALIS_ENGINE_DEPLOYMENT_PROFILE \
+    BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL \
+    BOREALIS_ACME_EMAIL \
+    BOREALIS_LOCAL_CA_ENABLED \
+    BOREALIS_LOCAL_CA_CERT_PATH \
+    BOREALIS_LOCAL_TLS_CERT_PATH \
+    BOREALIS_LOCAL_TLS_KEY_PATH \
+    BOREALIS_WEBUI_TRAFFIC_OWNER \
+    BOREALIS_WEBUI_UPSTREAM_HOST \
+    BOREALIS_WEBUI_UPSTREAM_PORT \
+    BOREALIS_API_BACKEND_TRAFFIC_OWNER \
+    BOREALIS_API_BACKEND_UPSTREAM_HOST \
+    BOREALIS_API_BACKEND_UPSTREAM_PORT \
+    BOREALIS_VNC_WS_PORT \
+    BOREALIS_TRAEFIK_HEALTH_PORT \
+    BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS \
+    BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS \
+    BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS \
+    BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR \
+    BOREALIS_TRAEFIK_DYNAMIC_CONFIG_PATH \
+    BOREALIS_ENGINE_RUNTIME_OWNER_UID \
+    BOREALIS_ENGINE_RUNTIME_OWNER_GID \
+    BOREALIS_ENGINE_HOST_TIMEZONE \
+    TZ; do
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done
+}
+
+host_timezone_value() {
+  local timezone
+  timezone="$(read_env_value TZ)"
+  if [[ -z "${timezone}" ]]; then
+    timezone="$(resolve_host_timezone)"
+  fi
+  printf '%s\n' "${timezone}"
+}
+
+k3s_timezone_env_entries() {
+  local timezone
+  timezone="$(host_timezone_value)"
+  cat <<EOF
+            - name: TZ
+              value: "${timezone}"
+            - name: BOREALIS_ENGINE_HOST_TIMEZONE
+              value: "${timezone}"
+EOF
+}
+
+k3s_timezone_volume_mount_entries() {
+  cat <<'EOF'
+            - name: host-localtime
+              mountPath: /etc/localtime
+              readOnly: true
+            - name: host-zoneinfo
+              mountPath: /usr/share/zoneinfo
+              readOnly: true
+EOF
+}
+
+k3s_timezone_volume_entries() {
+  cat <<'EOF'
+        - name: host-localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
+        - name: host-zoneinfo
+          hostPath:
+            path: /usr/share/zoneinfo
+            type: Directory
+EOF
+}
+
+k3s_postgres_database_url() {
+  local db_name=""
+  local db_user=""
+  local db_password=""
+  db_name="$(read_env_value POSTGRES_DB)"
+  db_user="$(read_env_value POSTGRES_USER)"
+  db_password="$(read_env_value POSTGRES_PASSWORD)"
+  [[ -n "${db_name}" && -n "${db_user}" && -n "${db_password}" ]] || die "PostgreSQL runtime credentials unavailable for K3s API backend DB validation."
+  printf 'postgresql://%s:%s@postgres-db.%s.svc:5432/%s\n' "${db_user}" "${db_password}" "${K3S_NAMESPACE}" "${db_name}"
+}
+
+borealis_site_worker_runtime_secret_keys() {
+  cat <<'EOF'
+BOREALIS_PROJECT_ROOT
+BOREALIS_ENGINE_MODE
+BOREALIS_ENGINE_CONTAINERIZED
+BOREALIS_ENGINE_HOST_TIMEZONE
+TZ
+BOREALIS_INTERNAL_API_BASE_URL
+BOREALIS_DATABASE_URL
+BOREALIS_DB_SSLMODE
+BOREALIS_DB_POOL_SIZE
+BOREALIS_DB_MAX_OVERFLOW
+BOREALIS_DB_CONNECT_TIMEOUT
+BOREALIS_DB_IDLE_IN_TXN_TIMEOUT_MS
+BOREALIS_ENGINE_SECRET_PATH
+BOREALIS_ENGINE_CERT_ROOT
+BOREALIS_ENGINE_AUTH_TOKEN_ROOT
+BOREALIS_ANSIBLE_RUNTIME_ROOT
+BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH
+BOREALIS_SITE_WORKER_SETTINGS_PATH
+BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY
+BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT
+BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE
+BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS
+BOREALIS_GUACD_HOST
+BOREALIS_GUACD_PORT
+BOREALIS_GUACAMOLE_VNC_WS_PATH
+EOF
+}
+
+borealis_site_worker_runtime_secret_data() {
+  local key
+  while IFS= read -r key; do
+    [[ -n "${key}" ]] || continue
+    printf '  %s: "%s"\n' "${key}" "$(base64_inline "$(read_env_value "${key}")")"
+  done < <(borealis_site_worker_runtime_secret_keys)
+}
+
+borealis_site_worker_runtime_secret_hash() {
+  local key
+  while IFS= read -r key; do
+    [[ -n "${key}" ]] || continue
+    printf '%s=%s\n' "${key}" "$(read_env_value "${key}")"
+  done < <(borealis_site_worker_runtime_secret_keys) | sha256sum | awk '{print $1}'
+}
+
+render_borealis_operator_manifest() {
+  local image="$1"
+  local secret="$2"
+  local config_hash="$3"
+  local workload_image_allowlist="$4"
+  local site_worker_image_allowlist="$5"
+  local site_worker_runtime_secret_hash="$6"
+  local secret_b64
+  local runtime_uid
+  local runtime_gid
+  secret_b64="$(base64_inline "${secret}")"
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_OPERATOR_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+type: Opaque
+data:
+  BOREALIS_OPERATOR_SECRET: "${secret_b64}"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: site-worker
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: site-worker-migration
+  annotations:
+    borealis.io/site-worker-runtime-config-hash: "${site_worker_runtime_secret_hash}"
+type: Opaque
+data:
+$(borealis_site_worker_runtime_secret_data)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["api-backend", "borealis-operator", "job-scheduler", "remote-desktop-guacd", "traefik-edge", "webui-frontend", "wireguard-tunnel"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    resourceNames: ["postgres-db"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: operator-bridge
+subjects:
+  - kind: ServiceAccount
+    name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+    namespace: ${K3S_NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: operator
+    borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: borealis-operator
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: borealis-operator
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: operator
+        borealis.io/stage: operator-bridge
+      annotations:
+        borealis.io/operator-config-hash: "${config_hash}"
+    spec:
+      serviceAccountName: ${BOREALIS_OPERATOR_SERVICE_NAME}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: borealis-operator
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          args: ["borealis-operator"]
+          ports:
+            - name: http
+              containerPort: ${BOREALIS_OPERATOR_PORT}
+              protocol: TCP
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_PROCESS_ROLE
+              value: "borealis-operator"
+            - name: BOREALIS_OPERATOR_LISTEN_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_OPERATOR_LISTEN_PORT
+              value: "${BOREALIS_OPERATOR_PORT}"
+            - name: BOREALIS_OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BOREALIS_OPERATOR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ${BOREALIS_OPERATOR_SECRET_NAME}
+                  key: BOREALIS_OPERATOR_SECRET
+            - name: BOREALIS_OPERATOR_WORKLOAD_IMAGE_ALLOWLIST
+              value: "${workload_image_allowlist}"
+            - name: BOREALIS_OPERATOR_SITE_WORKER_IMAGE_ALLOWLIST
+              value: "${site_worker_image_allowlist}"
+            - name: BOREALIS_PROJECT_ROOT
+              value: "${SCRIPT_DIR}"
+            - name: BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME
+              value: "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}"
+            - name: BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH
+              value: "${site_worker_runtime_secret_hash}"
+            - name: BOREALIS_ENGINE_RUNTIME_OWNER_UID
+              value: "${runtime_uid}"
+            - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
+              value: "${runtime_gid}"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: 250m
+              memory: 160Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+$(k3s_timezone_volume_mount_entries)
+      volumes:
+$(k3s_timezone_volume_entries)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${BOREALIS_OPERATOR_SERVICE_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: operator
+    borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: borealis-operator
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${BOREALIS_OPERATOR_PORT}
+      targetPort: http
+      protocol: TCP
+EOF
+}
+
+retire_legacy_borealis_operator_readonly_rbac() {
+  local legacy_name="${BOREALIS_OPERATOR_SERVICE_NAME}-readonly"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete rolebinding "${legacy_name}" --ignore-not-found=true >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Legacy RBAC Cleanup Failed" "${C_RED}"
+    die "Failed to remove legacy Borealis operator RoleBinding '${legacy_name}'. See ${BUILD_LOG}."
+  fi
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete role "${legacy_name}" --ignore-not-found=true >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Legacy RBAC Cleanup Failed" "${C_RED}"
+    die "Failed to remove legacy Borealis operator Role '${legacy_name}'. See ${BUILD_LOG}."
+  fi
+}
+
+ensure_borealis_operator_bridge() {
+  local image="${IMAGE_TAGS[borealis-operator]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag borealis-operator)"
+  [[ -n "${image}" ]] || die "Borealis operator image tag unavailable."
+  local secret
+  secret="$(read_env_value BOREALIS_OPERATOR_SECRET)"
+  [[ -n "${secret}" ]] || die "Borealis operator secret unavailable after runtime env render."
+  local workload_image_allowlist
+  local site_worker_image_allowlist
+  local site_worker_runtime_secret_hash
+  workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
+  site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
+  site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
+  local config_hash
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${SCRIPT_DIR}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
+
+  import_borealis_operator_image_into_k3s "${image}"
+  if [[ -n "${site_worker_image_allowlist}" ]]; then
+    import_k3s_local_image_into_k3s "site-worker" "${site_worker_image_allowlist}" ""
+  fi
+  log_status "borealis-operator" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-operator.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_borealis_operator_manifest "${image}" "${secret}" "${config_hash}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${site_worker_runtime_secret_hash}" > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "borealis-operator" "Apply Failed" "${C_RED}"
+    die "Failed to apply Borealis operator manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+  retire_legacy_borealis_operator_readonly_rbac
+
+  log_status "borealis-operator" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${BOREALIS_OPERATOR_SERVICE_NAME}" --timeout=90s >> "${BUILD_LOG}" 2>&1; then
+    log_status "borealis-operator" "Rollout Failed" "${C_RED}"
+    die "Borealis operator rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  borealis-operator\n' "${config_hash}" > "${BOREALIS_OPERATOR_CONFIG_HASH_FILE}"
+  log_status "borealis-operator" "Ready" "${C_GREEN}"
+}
+
+format_k3s_memory_quantity() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  [[ -n "${raw}" ]] || raw="128Mi"
+  local lower
+  lower="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${lower}" =~ ^([0-9]+)m$ ]]; then
+    printf '%sMi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${lower}" =~ ^([0-9]+)g$ ]]; then
+    printf '%sGi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${lower}" =~ ^([0-9]+)k$ ]]; then
+    printf '%sKi\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${raw}" =~ ^[0-9]+([.][0-9]+)?(Ki|Mi|Gi|Ti|K|M|G|T)?$ ]]; then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  die "Unsupported Kubernetes memory quantity '${raw}'. Use values like 256m, 1g, 256Mi, or 1Gi."
+}
+
+format_k3s_cpu_quantity() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  [[ -n "${raw}" ]] || raw="100m"
+  if [[ "${raw}" =~ ^[0-9]+m$ ]]; then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  if [[ "${raw}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    awk -v cpu="${raw}" 'BEGIN { printf "%dm\n", int(cpu * 1000 + 0.5) }'
+    return 0
+  fi
+  die "Unsupported Kubernetes CPU quantity '${raw}'. Use values like 0.50, 1.00, or 500m."
+}
+
+format_k3s_tcp_port() {
+  local raw="${1:-}"
+  raw="${raw//[[:space:]]/}"
+  local port_value=0
+  if [[ "${raw}" =~ ^[0-9]+$ ]]; then
+    port_value=$((10#${raw}))
+  fi
+  if [[ "${raw}" =~ ^[0-9]+$ ]] && ((port_value >= 1 && port_value <= 65535)); then
+    printf '%s\n' "${raw}"
+    return 0
+  fi
+  die "Unsupported TCP port '${raw}'. Use a number from 1 to 65535."
+}
+
+service_image_tag_or_previous() {
+  local service="$1"
+  local fallback="${2:-}"
+  local image="${IMAGE_TAGS[${service}]:-}"
+  [[ -n "${image}" ]] || image="$(previous_image_tag "${service}")"
+  [[ -n "${image}" ]] || image="${fallback}"
+  printf '%s\n' "${image}"
+}
+
+render_k3s_api_backend_bridge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local port="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  local traffic_owner="$8"
+  local service_host
+  service_host="$(api_backend_service_dns_name)"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: api-backend-cutover
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-backend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-cutover
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "cluster-ip"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${port}
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-backend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-cutover
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "cluster-ip"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-backend
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-backend
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: backend
+        borealis.io/service-key: api-backend
+        borealis.io/stage: api-backend-cutover
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/network-mode: "cluster-ip"
+        borealis.io/traffic-owner: "${traffic_owner}"
+        borealis.io/listen-host: "0.0.0.0"
+        borealis.io/listen-port: "${port}"
+        borealis.io/service-host: "${service_host}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api-backend
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: ${port}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_GO_API_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_GO_API_PORT
+              value: "${port}"
+            - name: BOREALIS_API_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_API_HEALTH_PORT
+              value: "${port}"
+            - name: BOREALIS_INTERNAL_API_BASE_URL
+              value: "http://127.0.0.1:${port}"
+            - name: BOREALIS_API_BACKGROUND_LOOPS
+              value: "1"
+            - name: BOREALIS_K3S_API_BACKEND_BRIDGE
+              value: "1"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-api-backend-go
+                - api-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-api-backend-go
+                - api-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-cache
+              mountPath: /opt/Borealis/Engine/Services/api-backend/cache
+            - name: api-config
+              mountPath: /opt/Borealis/Engine/Services/api-backend/config
+            - name: api-logs
+              mountPath: /opt/Borealis/Engine/Services/api-backend/logs
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
+            - name: traefik-edge-config
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
+            - name: traefik-edge-env
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/env
+            - name: traefik-edge-logs
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/logs
+            - name: traefik-edge-state
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/state
+            - name: wireguard-config
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/config
+            - name: wireguard-run
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
+            - name: wireguard-secrets
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: api-cache
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/cache
+            type: Directory
+        - name: api-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/config
+            type: Directory
+        - name: api-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/logs
+            type: Directory
+        - name: api-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
+            type: Directory
+        - name: traefik-edge-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/config
+            type: Directory
+        - name: traefik-edge-env
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/env
+            type: Directory
+        - name: traefik-edge-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/logs
+            type: Directory
+        - name: traefik-edge-state
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/state
+            type: Directory
+        - name: wireguard-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/config
+            type: Directory
+        - name: wireguard-run
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/run
+            type: Directory
+        - name: wireguard-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
+            type: Directory
+EOF
+}
+
+ensure_k3s_api_backend_bridge() {
+  local mode="$1"
+  local image
+  image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
+  [[ -n "${image}" ]] || die "API backend image tag unavailable."
+
+  local runtime_uid
+  local runtime_gid
+  local port
+  local memory_limit
+  local cpu_limit
+  local runtime_env_hash
+  local traffic_owner
+  local service_host
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_API_BACKEND_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  traffic_owner="$(resolve_api_backend_traffic_owner)"
+  service_host="$(api_backend_service_dns_name)"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_API_BACKEND_BRIDGE_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "port=${port}" \
+      "network_mode=cluster-ip" \
+      "service=api-backend" \
+      "service_host=${service_host}" \
+      "listen_host=0.0.0.0" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "traffic_owner=${traffic_owner}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
+      "project_root=${SCRIPT_DIR}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "api-backend" "${image}" "k3s-api-backend"
+
+  log_status "k3s-api-backend" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-api-backend.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_api_backend_bridge_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${traffic_owner}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-api-backend" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s API backend bridge manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-api-backend" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/api-backend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-api-backend" "Rollout Failed" "${C_RED}"
+    die "K3s API backend bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-api-backend\n' "${config_hash}" > "${K3S_API_BACKEND_CONFIG_HASH_FILE}"
+  log_status "k3s-api-backend" "Ready - Traffic Owner" "${C_GREEN}"
+}
+
+render_k3s_api_backend_shadow_db_validator_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  local database_url="$7"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend-shadow-db-validator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: api-backend-shadow-db-validation
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data_with_override "${RUNTIME_ENV}" BOREALIS_DATABASE_URL "${database_url}")
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: api-backend-shadow-db-validator
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: backend
+    borealis.io/service-key: api-backend
+    borealis.io/stage: api-backend-shadow-db-validation
+  annotations:
+    borealis.io/validation-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-backend-shadow-db-validator
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: backend
+        borealis.io/service-key: api-backend
+        borealis.io/stage: api-backend-shadow-db-validation
+      annotations:
+        borealis.io/validation-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "docker-compose"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api-backend-db-healthcheck
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - borealis-api-backend-go
+            - api-db-healthcheck
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_API_BACKGROUND_LOOPS
+              value: "0"
+            - name: BOREALIS_K3S_API_BACKEND_DB_VALIDATION
+              value: "1"
+            - name: HOME
+              value: "/tmp"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: api-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
+            type: Directory
+EOF
+}
+
+validate_k3s_api_backend_shadow_db() {
+  local mode="$1"
+  local image=""
+  local runtime_uid=""
+  local runtime_gid=""
+  local memory_limit=""
+  local cpu_limit=""
+  local runtime_env_hash=""
+  local database_url=""
+  local config_hash=""
+  local manifest_file=""
+
+  validate_k3s_postgres_shadow_import "${mode}"
+  ensure_k3s_postgres_shadow_traffic_owner
+
+  image="$(service_image_tag_or_previous api-backend borealis-engine/api-backend:local)"
+  [[ -n "${image}" ]] || die "API backend image tag unavailable."
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_API_BACKEND_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_API_BACKEND_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  database_url="$(k3s_postgres_database_url)"
+
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_API_BACKEND_DB_VALIDATION_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_API_BACKEND_SHADOW_DB_RUNTIME_SECRET_NAME}" \
+      "job=${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" \
+      "postgres_service=postgres-db.${K3S_NAMESPACE}.svc" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "api-backend" "${image}" "k3s-api-backend"
+
+  log_status "k3s-api-backend" "Preparing Shadow DB Validator" "${C_YELLOW}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
+
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-api-backend-shadow-db-validator.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_api_backend_shadow_db_validator_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${database_url}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-api-backend" "Shadow DB Validator Apply Failed" "${C_RED}"
+    die "Failed to apply K3s API backend shadow DB validator Job. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-api-backend" "Validating Shadow DB" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=complete "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --timeout="${K3S_API_BACKEND_DB_VALIDATION_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    printf '[%s] K3s API backend shadow DB validator pods:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l "job-name=${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" -o wide >> "${BUILD_LOG}" 2>&1 || true
+    printf '[%s] K3s API backend shadow DB validator logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --tail=120 >> "${BUILD_LOG}" 2>&1 || true
+    log_status "k3s-api-backend" "Shadow DB Validation Failed" "${C_RED}"
+    die "K3s API backend shadow DB validation failed. See ${BUILD_LOG}."
+  fi
+
+  printf '[%s] K3s API backend shadow DB validator logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME}" --tail=120 >> "${BUILD_LOG}" 2>&1 || true
+  printf '[%s] K3s API backend shadow DB validation complete; K3s API remains traffic owner and Compose PostgreSQL remains DB traffic owner.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+  log_status "k3s-api-backend" "Ready - Shadow DB Validated" "${C_GREEN}"
+}
+
+render_k3s_job_scheduler_manifest() {
+  local image="$1"
+  local site_worker_image="$2"
+  local config_hash="$3"
+  local runtime_uid="$4"
+  local runtime_gid="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  local internal_api_base="$8"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: job-scheduler
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: scheduler-cutover
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-scheduler
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: job-scheduler
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: scheduler
+    borealis.io/service-key: job-scheduler
+    borealis.io/stage: scheduler-cutover
+  annotations:
+    borealis.io/scheduler-config-hash: "${config_hash}"
+    borealis.io/network-mode: "cluster-ip"
+    borealis.io/runtime-owner: "k3s"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: job-scheduler
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: job-scheduler
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: scheduler
+        borealis.io/service-key: job-scheduler
+        borealis.io/stage: scheduler-cutover
+      annotations:
+        borealis.io/scheduler-config-hash: "${config_hash}"
+        borealis.io/network-mode: "cluster-ip"
+        borealis.io/runtime-owner: "k3s"
+        borealis.io/site-worker-image: "${site_worker_image}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: false
+      dnsPolicy: ClusterFirst
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: job-scheduler
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_PROCESS_ROLE
+              value: "job-scheduler"
+            - name: BOREALIS_INTERNAL_API_BASE_URL
+              value: "${internal_api_base}"
+            - name: BOREALIS_SITE_WORKER_IMAGE
+              value: "${site_worker_image}"
+            - name: BOREALIS_SITE_WORKER_LIFECYCLE_MODE
+              value: "k3s"
+            - name: BOREALIS_JOB_SCHEDULER_CONTAINER_NAME
+              value: "job-scheduler"
+            - name: BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER
+              value: "k3s"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-job-scheduler-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-job-scheduler-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: engine-deploy
+              mountPath: /opt/Borealis/Engine/Deploy
+              readOnly: true
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+            - name: api-cache
+              mountPath: /opt/Borealis/Engine/Services/api-backend/cache
+            - name: api-config
+              mountPath: /opt/Borealis/Engine/Services/api-backend/config
+              readOnly: true
+            - name: api-logs
+              mountPath: /opt/Borealis/Engine/Services/api-backend/logs
+            - name: api-secrets
+              mountPath: /opt/Borealis/Engine/Services/api-backend/secrets
+              readOnly: true
+            - name: wireguard-run
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
+            - name: traefik-config-root
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config
+            - name: traefik-dynamic
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge/config/dynamic
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: traefik-config-root
+          emptyDir:
+            sizeLimit: 16Mi
+        - name: engine-deploy
+          hostPath:
+            path: ${DEPLOY_DIR}
+            type: Directory
+        - name: api-cache
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/cache
+            type: Directory
+        - name: api-config
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/config
+            type: Directory
+        - name: api-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/logs
+            type: Directory
+        - name: api-secrets
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/api-backend/secrets
+            type: Directory
+        - name: wireguard-run
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/run
+            type: Directory
+        - name: traefik-dynamic
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic
+            type: Directory
+EOF
+}
+
+ensure_k3s_job_scheduler() {
+  local mode="$1"
+  local image
+  local site_worker_image
+  image="$(service_image_tag_or_previous job-scheduler borealis-engine/job-scheduler:local)"
+  site_worker_image="$(service_image_tag_or_previous site-worker borealis-engine/site-worker:local)"
+  [[ -n "${image}" ]] || die "Job scheduler image tag unavailable."
+  [[ -n "${site_worker_image}" ]] || die "Site worker image tag unavailable for K3s job scheduler."
+
+  local runtime_uid
+  local runtime_gid
+  local memory_limit
+  local cpu_limit
+  local runtime_env_hash
+  local api_bridge_port
+  local internal_api_base
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
+  internal_api_base="http://$(api_backend_service_dns_name):${api_bridge_port}"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_JOB_SCHEDULER_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "site_worker_image=${site_worker_image}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "network_mode=cluster-ip" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
+      "internal_api_base=${internal_api_base}" \
+      "site_worker_lifecycle=k3s" \
+      "project_root=${SCRIPT_DIR}" \
+      "wireguard_run=${RUNTIME_ROOT}/Services/wireguard-tunnel/run" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "job-scheduler" "${image}" "k3s-job-scheduler"
+
+  log_status "k3s-job-scheduler" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-job-scheduler.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_job_scheduler_manifest \
+    "${image}" \
+    "${site_worker_image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${internal_api_base}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-job-scheduler" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s job scheduler manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-job-scheduler" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/job-scheduler" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-job-scheduler" "Rollout Failed" "${C_RED}"
+    die "K3s job scheduler rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-job-scheduler\n' "${config_hash}" > "${K3S_JOB_SCHEDULER_CONFIG_HASH_FILE}"
+  log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
+}
+
+render_k3s_postgres_statefulset_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local postgres_uid="$3"
+  local postgres_gid="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  local storage_class="$7"
+  local storage_size="$8"
+  local traffic_owner="$9"
+  local runtime_owner
+  runtime_owner="$(postgres_runtime_owner_label "${traffic_owner}")"
+  local postgres_pgdata="/var/lib/postgresql/data/pgdata"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: ${runtime_owner}
+type: Opaque
+data:
+$(borealis_postgres_runtime_secret_data)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-db-headless
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: ${runtime_owner}
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-db
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: ${runtime_owner}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-db
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: database
+    borealis.io/service-key: postgres-db
+    borealis.io/stage: postgres-cutover
+    borealis.io/runtime-owner: ${runtime_owner}
+  annotations:
+    borealis.io/postgres-config-hash: "${config_hash}"
+    borealis.io/storage-class: "${storage_class}"
+    borealis.io/storage-size: "${storage_size}"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  serviceName: postgres-db-headless
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-db
+      app.kubernetes.io/part-of: borealis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-db
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: database
+        borealis.io/service-key: postgres-db
+        borealis.io/stage: postgres-cutover
+        borealis.io/runtime-owner: ${runtime_owner}
+      annotations:
+        borealis.io/postgres-config-hash: "${config_hash}"
+        borealis.io/storage-class: "${storage_class}"
+        borealis.io/storage-size: "${storage_size}"
+        borealis.io/traffic-owner: "${traffic_owner}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_POSTGRES_DB_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        fsGroup: ${postgres_gid}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: postgres-data-permissions
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              install -d -m 0755 -o 0 -g 0 ${postgres_pgdata}
+              chown -R ${postgres_uid}:${postgres_gid} ${postgres_pgdata}
+              chmod 0700 ${postgres_pgdata}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      containers:
+        - name: postgres-db
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          args:
+            - postgres
+            - -c
+            - listen_addresses=*
+            - -c
+            - port=5432
+            - -c
+            - max_connections=$(read_env_value BOREALIS_POSTGRES_MAX_CONNECTIONS)
+            - -c
+            - shared_buffers=$(read_env_value BOREALIS_POSTGRES_SHARED_BUFFERS)
+            - -c
+            - effective_cache_size=$(read_env_value BOREALIS_POSTGRES_EFFECTIVE_CACHE_SIZE)
+            - -c
+            - work_mem=$(read_env_value BOREALIS_POSTGRES_WORK_MEM)
+            - -c
+            - maintenance_work_mem=$(read_env_value BOREALIS_POSTGRES_MAINTENANCE_WORK_MEM)
+            - -c
+            - max_worker_processes=$(read_env_value BOREALIS_POSTGRES_MAX_WORKER_PROCESSES)
+            - -c
+            - max_parallel_workers=$(read_env_value BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS)
+            - -c
+            - max_parallel_workers_per_gather=$(read_env_value BOREALIS_POSTGRES_MAX_PARALLEL_WORKERS_PER_GATHER)
+            - -c
+            - autovacuum_max_workers=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_MAX_WORKERS)
+            - -c
+            - autovacuum_vacuum_cost_limit=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_COST_LIMIT)
+            - -c
+            - autovacuum_naptime=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_NAPTIME)
+            - -c
+            - autovacuum_vacuum_scale_factor=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_VACUUM_SCALE_FACTOR)
+            - -c
+            - autovacuum_analyze_scale_factor=$(read_env_value BOREALIS_POSTGRES_AUTOVACUUM_ANALYZE_SCALE_FACTOR)
+            - -c
+            - max_wal_size=$(read_env_value BOREALIS_POSTGRES_MAX_WAL_SIZE)
+            - -c
+            - min_wal_size=$(read_env_value BOREALIS_POSTGRES_MIN_WAL_SIZE)
+            - -c
+            - effective_io_concurrency=$(read_env_value BOREALIS_POSTGRES_EFFECTIVE_IO_CONCURRENCY)
+            - -c
+            - wal_compression=$(read_env_value BOREALIS_POSTGRES_WAL_COMPRESSION)
+            - -c
+            - checkpoint_timeout=$(read_env_value BOREALIS_POSTGRES_CHECKPOINT_TIMEOUT)
+            - -c
+            - checkpoint_completion_target=$(read_env_value BOREALIS_POSTGRES_CHECKPOINT_COMPLETION_TARGET)
+            - -c
+            - random_page_cost=$(read_env_value BOREALIS_POSTGRES_RANDOM_PAGE_COST)
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: PGDATA
+              value: ${postgres_pgdata}
+            - name: HOME
+              value: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U "\${POSTGRES_USER}" -d "\${POSTGRES_DB}"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -h 127.0.0.1 -p 5432 -U "\${POSTGRES_USER}" -d "\${POSTGRES_DB}"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: ${postgres_uid}
+            runAsGroup: ${postgres_gid}
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+$(k3s_timezone_volume_mount_entries)
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: postgres-run
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+        labels:
+          app.kubernetes.io/name: postgres-db
+          app.kubernetes.io/part-of: borealis
+          app.kubernetes.io/managed-by: Engine.sh
+          borealis.io/stage: postgres-cutover
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: ${storage_class}
+        resources:
+          requests:
+            storage: ${storage_size}
+EOF
+}
+
+wait_for_k3s_postgres_pvc() {
+  local pvc_name="postgres-data-postgres-db-0"
+  local attempt
+  local phase=""
+  for attempt in {1..90}; do
+    phase="$(k3s_kubectl -n "${K3S_NAMESPACE}" get pvc "${pvc_name}" -o jsonpath='{.status.phase}' 2>>"${BUILD_LOG}" || true)"
+    if [[ "${phase}" == "Bound" ]]; then
+      return 0
+    fi
+    sleep 2
+  done
+  log_status "k3s-postgres-db" "PVC Not Bound" "${C_RED}"
+  die "K3s PostgreSQL PVC ${pvc_name} did not become Bound. See ${BUILD_LOG}."
+}
+
+ensure_k3s_postgres_statefulset() {
+  local mode="$1"
+  local traffic_owner="${2:-}"
+  traffic_owner="$(normalize_postgres_traffic_owner "${traffic_owner:-$(resolve_postgres_traffic_owner)}")"
+  validate_k3s_postgres_settings
+
+  local storage_class
+  storage_class="$(resolve_k3s_postgres_storage_class)"
+  [[ "${storage_class}" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || die "Resolved K3s PostgreSQL StorageClass ${storage_class} is not a valid Kubernetes StorageClass name."
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "enabled=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")" \
+      "traffic_owner=${traffic_owner}" \
+      "mode=${mode}" \
+      "storage_class=${storage_class}" \
+      "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
+      "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
+      "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  if ! k3s_postgres_enabled; then
+    printf '%s  k3s-postgres-db disabled\n' "${config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
+    if k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db >/dev/null 2>&1; then
+      log_status "k3s-postgres-db" "Skipped - Preserved" "${C_DIM}"
+    else
+      log_status "k3s-postgres-db" "Skipped - Compose Owner" "${C_DIM}"
+    fi
+    return 0
+  fi
+
+  if ! k3s_kubectl get storageclass "${storage_class}" >/dev/null 2>>"${BUILD_LOG}"; then
+    log_status "k3s-postgres-db" "StorageClass Missing" "${C_RED}"
+    die "K3s PostgreSQL requires StorageClass ${storage_class}. See ${BUILD_LOG}."
+  fi
+
+  local image
+  local postgres_uid
+  local postgres_gid
+  local memory_limit
+  local cpu_limit
+  image="$(service_image_tag_or_previous postgres-db borealis-engine/postgres-db:local)"
+  [[ -n "${image}" ]] || die "PostgreSQL image tag unavailable."
+  postgres_uid="$(resolve_postgres_runtime_uid)"
+  postgres_gid="$(resolve_postgres_runtime_gid)"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_POSTGRES_DB_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_POSTGRES_DB_CPU_LIMIT)")"
+
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "enabled=1" \
+      "traffic_owner=${traffic_owner}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "postgres_uid=${postgres_uid}" \
+      "postgres_gid=${postgres_gid}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "storage_class=${storage_class}" \
+      "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
+      "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
+      "runtime_secret=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "postgres-db" "${image}" "k3s-postgres-db"
+
+  log_status "k3s-postgres-db" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-postgres-db.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_postgres_statefulset_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${postgres_uid}" \
+    "${postgres_gid}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${storage_class}" \
+    "${K3S_POSTGRES_STORAGE_SIZE}" \
+    "${traffic_owner}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-postgres-db" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s PostgreSQL manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-postgres-db" "Waiting For PVC" "${C_YELLOW}"
+  wait_for_k3s_postgres_pvc
+
+  log_status "k3s-postgres-db" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "statefulset/postgres-db" --timeout="${K3S_POSTGRES_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Rollout Failed" "${C_RED}"
+    die "K3s PostgreSQL rollout failed. See ${BUILD_LOG}."
+  fi
+  printf '%s  k3s-postgres-db\n' "${config_hash}" > "${K3S_POSTGRES_CONFIG_HASH_FILE}"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    log_status "k3s-postgres-db" "Ready - Traffic Owner" "${C_GREEN}"
+  else
+    log_status "k3s-postgres-db" "Ready - Shadow" "${C_GREEN}"
+  fi
+}
+
+postgres_shadow_import_summary_sql() {
+  cat <<'SQL'
+SELECT 'assemblies.tables=' || COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = 'assemblies' AND table_type = 'BASE TABLE'
+UNION ALL
+SELECT 'engine.tables=' || COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = 'engine' AND table_type = 'BASE TABLE'
+UNION ALL
+SELECT 'engine.sites=' || COUNT(*) FROM engine.sites
+UNION ALL
+SELECT 'engine.devices=' || COUNT(*) FROM engine.devices
+UNION ALL
+SELECT 'engine.users=' || COUNT(*) FROM engine.users
+ORDER BY 1;
+SQL
+}
+
+compose_postgres_psql() {
+  local sql="$1"
+  docker exec borealis-engine-postgres-db sh -lc \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$1"' \
+    sh "${sql}"
+}
+
+k3s_postgres_psql() {
+  local sql="$1"
+  k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$1"' \
+    sh "${sql}"
+}
+
+postgres_shadow_import_summary() {
+  local target="$1"
+  local sql
+  sql="$(postgres_shadow_import_summary_sql)"
+  case "${target}" in
+    compose)
+      compose_postgres_psql "${sql}"
+      ;;
+    k3s)
+      k3s_postgres_psql "${sql}"
+      ;;
+    *)
+      die "Unknown PostgreSQL summary target '${target}'."
+      ;;
+  esac
+}
+
+current_k3s_postgres_traffic_owner() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get statefulset postgres-db \
+    -o jsonpath='{.metadata.annotations.borealis\.io/traffic-owner}' 2>/dev/null || true
+}
+
+ensure_k3s_postgres_shadow_traffic_owner() {
+  local owner=""
+  owner="$(current_k3s_postgres_traffic_owner)"
+  if [[ "${owner}" != "docker-compose" ]]; then
+    die "Refusing K3s PostgreSQL shadow import because StatefulSet traffic owner is '${owner:-unknown}', not docker-compose."
+  fi
+}
+
+ensure_compose_postgres_container_for_cutover() {
+  local container="borealis-engine-postgres-db"
+  local state_dir="${RUNTIME_ROOT}/Services/postgres-db/state"
+  if ! docker inspect "${container}" >/dev/null 2>&1; then
+    if [[ -e "${state_dir}/PG_VERSION" ]]; then
+      die "Compose PostgreSQL state exists at ${state_dir}, but ${container} is missing. Start the previous Compose PostgreSQL container or restore from backup before DB cutover."
+    fi
+    printf '[%s] No Compose PostgreSQL container/state found; treating K3s PostgreSQL as fresh install.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    return 1
+  fi
+  if ! container_running "${container}"; then
+    log_status "postgres-db" "Starting Compose Snapshot Source" "${C_YELLOW}"
+    docker start "${container}" >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to start ${container} for PostgreSQL cutover snapshot. See ${BUILD_LOG}."
+  fi
+  if ! wait_for_postgres_container 150; then
+    log_status "postgres-db" "Failed" "${C_RED}"
+    die "Compose PostgreSQL did not become healthy for cutover snapshot. See ${BUILD_LOG}."
+  fi
+  refresh_legacy_postgres_container_status
+  return 0
+}
+
+quiesce_k3s_postgres_cutover_writers() {
+  K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT="$(k3s_site_worker_pod_count)"
+  log_status "k3s-postgres-db" "Quiescing DB Writers" "${C_YELLOW}"
+  printf '[%s] Quiescing K3s API backend, job scheduler, and %s site-worker pod(s) for PostgreSQL cutover snapshot.\n' "$(date +%FT%T)" "${K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT}" >> "${BUILD_LOG}"
+
+  if k3s_kubectl -n "${K3S_NAMESPACE}" get deployment api-backend >/dev/null 2>&1; then
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/api-backend --replicas=0 >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to scale K3s API backend down for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+  if k3s_kubectl -n "${K3S_NAMESPACE}" get deployment job-scheduler >/dev/null 2>&1; then
+    k3s_kubectl -n "${K3S_NAMESPACE}" scale deployment/job-scheduler --replicas=0 >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to scale K3s job scheduler down for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=delete pod \
+    -l 'app.kubernetes.io/name in (api-backend,job-scheduler)' \
+    --timeout=120s >> "${BUILD_LOG}" 2>&1 || true
+
+  if ((K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT > 0)); then
+    k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+      -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+      --wait=true --timeout=120s >> "${BUILD_LOG}" 2>&1 \
+      || die "Failed to quiesce K3s site workers for PostgreSQL cutover. See ${BUILD_LOG}."
+  fi
+}
+
+wait_for_k3s_postgres_cutover_workers() {
+  ((K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT > 0)) || return 0
+  log_status "site-worker" "Waiting For K3s Workers" "${C_YELLOW}"
+  wait_for_k3s_site_worker_ready_count "${K3S_POSTGRES_CUTOVER_SITE_WORKER_COUNT}" 300
+  log_status "site-worker" "Ready - K3s DB" "${C_GREEN}"
+}
+
+import_compose_postgres_into_k3s_for_cutover() {
+  local source_summary=""
+  local target_summary=""
+
+  ensure_compose_postgres_container_for_cutover || return 0
+  quiesce_k3s_postgres_cutover_writers
+
+  log_status "k3s-postgres-db" "Snapshotting Compose DB" "${C_YELLOW}"
+  source_summary="$(postgres_shadow_import_summary compose)"
+  printf '[%s] K3s PostgreSQL cutover source summary:\n%s\n' "$(date +%FT%T)" "${source_summary}" >> "${BUILD_LOG}"
+
+  log_status "k3s-postgres-db" "Resetting K3s Schemas" "${C_YELLOW}"
+  k3s_postgres_psql 'DROP SCHEMA IF EXISTS engine CASCADE; DROP SCHEMA IF EXISTS assemblies CASCADE;' >> "${BUILD_LOG}" 2>&1
+
+  log_status "k3s-postgres-db" "Importing Cutover Data" "${C_YELLOW}"
+  if ! {
+    docker exec borealis-engine-postgres-db sh -lc \
+      'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-acl --schema=engine --schema=assemblies' \
+      | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+        'pg_restore --exit-on-error --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  } >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Cutover Import Failed" "${C_RED}"
+    die "K3s PostgreSQL cutover import failed. K3s API/scheduler remain quiesced so rerunning deploy can retry safely. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Verifying Cutover Data" "${C_YELLOW}"
+  target_summary="$(postgres_shadow_import_summary k3s)"
+  printf '[%s] K3s PostgreSQL cutover target summary:\n%s\n' "$(date +%FT%T)" "${target_summary}" >> "${BUILD_LOG}"
+  if [[ "${source_summary}" != "${target_summary}" ]]; then
+    printf '[%s] K3s PostgreSQL cutover summary mismatch. Source:\n%s\nTarget:\n%s\n' "$(date +%FT%T)" "${source_summary}" "${target_summary}" >> "${BUILD_LOG}"
+    log_status "k3s-postgres-db" "Cutover Import Mismatch" "${C_RED}"
+    die "K3s PostgreSQL cutover import completed but row summaries differ. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Cutover Data Imported" "${C_GREEN}"
+  printf '[%s] K3s PostgreSQL cutover import complete; API and scheduler will restart against K3s PostgreSQL.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+}
+
+render_k3s_postgres_schema_job_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  cat <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${K3S_POSTGRES_SCHEMA_JOB_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: postgres-db-schema
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: database
+    borealis.io/service-key: postgres-db
+    borealis.io/stage: postgres-cutover
+  annotations:
+    borealis.io/schema-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "k3s"
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-db-schema
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: database
+        borealis.io/service-key: postgres-db
+        borealis.io/stage: postgres-cutover
+      annotations:
+        borealis.io/schema-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "k3s"
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres-db-schema
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -u
+            - -c
+            - |
+              import os
+              from Data.Engine.database import initialise_engine_database
+              initialise_engine_database(os.environ["BOREALIS_DATABASE_URL"], progress_callback=lambda table_name: print("BOREALIS_SCHEMA_PROGRESS\t" + str(table_name), flush=True))
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: PYTHONPATH
+              value: "/opt/Borealis:/opt/Borealis/Data/Engine:/opt/Borealis/Data/Agent"
+            - name: HOME
+              value: "/tmp"
+          resources:
+            requests:
+              cpu: 75m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: api-backend-root
+              mountPath: /opt/Borealis/Engine/Services/api-backend
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+        - name: api-backend-root
+          emptyDir:
+            sizeLimit: 16Mi
+EOF
+}
+
+ensure_k3s_engine_database_schema() {
+  local mode="$1"
+  local image=""
+  local runtime_uid=""
+  local runtime_gid=""
+  local config_hash=""
+  local manifest_file=""
+
+  image="$(service_image_tag_or_previous site-worker borealis-engine/site-worker:local)"
+  [[ -n "${image}" ]] || die "Site worker image tag unavailable for K3s database schema initialization."
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_POSTGRES_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "runtime_secret=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" \
+      "runtime_env_hash=$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')" \
+      "job=${K3S_POSTGRES_SCHEMA_JOB_NAME}" \
+      "postgres_service=postgres-db.${K3S_NAMESPACE}.svc" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "site-worker" "${image}" "site-worker"
+  log_status "Database schema" "Preparing K3s Engine Tables" "${C_YELLOW}"
+  k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
+
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-postgres-schema.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_postgres_schema_job_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "Database schema" "K3s Job Apply Failed" "${C_RED}"
+    die "Failed to apply K3s PostgreSQL schema initializer Job. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "Database schema" "Ensuring K3s Engine Tables" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" wait --for=condition=complete "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --timeout="${K3S_POSTGRES_SCHEMA_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+    printf '[%s] K3s PostgreSQL schema initializer pods:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods -l "job-name=${K3S_POSTGRES_SCHEMA_JOB_NAME}" -o wide >> "${BUILD_LOG}" 2>&1 || true
+    printf '[%s] K3s PostgreSQL schema initializer logs:\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+    k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --tail=200 >> "${BUILD_LOG}" 2>&1 || true
+    log_status "Database schema" "K3s Job Failed" "${C_RED}"
+    die "K3s PostgreSQL schema initialization failed. See ${BUILD_LOG}."
+  fi
+  k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --tail=240 2>/dev/null | stream_database_schema_output || true
+  log_status "Database schema" "Ready - K3s DB" "${C_GREEN}"
+}
+
+validate_k3s_postgres_shadow_import() {
+  local mode="$1"
+  local source_summary=""
+  local target_summary=""
+  local current_owner=""
+
+  ensure_k3s_cluster_baseline
+  ensure_longhorn_storage_baseline
+  current_owner="$(current_k3s_postgres_traffic_owner)"
+  if [[ -n "${current_owner}" && "${current_owner}" != "docker-compose" ]]; then
+    die "Refusing K3s PostgreSQL shadow import because StatefulSet traffic owner is '${current_owner}', not docker-compose."
+  fi
+  ensure_k3s_postgres_statefulset "${mode}" "docker-compose"
+  ensure_k3s_postgres_shadow_traffic_owner
+
+  ensure_compose_postgres_container_for_cutover \
+    || die "Compose PostgreSQL source is unavailable for K3s shadow import validation."
+
+  log_status "k3s-postgres-db" "Snapshotting Compose DB" "${C_YELLOW}"
+  source_summary="$(postgres_shadow_import_summary compose)"
+  printf '[%s] K3s PostgreSQL shadow import source summary:\n%s\n' "$(date +%FT%T)" "${source_summary}" >> "${BUILD_LOG}"
+
+  log_status "k3s-postgres-db" "Resetting Shadow Schemas" "${C_YELLOW}"
+  k3s_postgres_psql 'DROP SCHEMA IF EXISTS engine CASCADE; DROP SCHEMA IF EXISTS assemblies CASCADE;' >> "${BUILD_LOG}" 2>&1
+
+  log_status "k3s-postgres-db" "Importing Shadow Data" "${C_YELLOW}"
+  if ! {
+    docker exec borealis-engine-postgres-db sh -lc \
+      'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --no-owner --no-acl --schema=engine --schema=assemblies' \
+      | k3s_kubectl -n "${K3S_NAMESPACE}" exec -i postgres-db-0 -c postgres-db -- sh -lc \
+        'pg_restore --exit-on-error --no-owner --no-acl -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  } >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-postgres-db" "Shadow Import Failed" "${C_RED}"
+    die "K3s PostgreSQL shadow import failed. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Verifying Shadow Import" "${C_YELLOW}"
+  target_summary="$(postgres_shadow_import_summary k3s)"
+  printf '[%s] K3s PostgreSQL shadow import target summary:\n%s\n' "$(date +%FT%T)" "${target_summary}" >> "${BUILD_LOG}"
+  if [[ "${source_summary}" != "${target_summary}" ]]; then
+    printf '[%s] K3s PostgreSQL shadow import summary mismatch. Source:\n%s\nTarget:\n%s\n' "$(date +%FT%T)" "${source_summary}" "${target_summary}" >> "${BUILD_LOG}"
+    log_status "k3s-postgres-db" "Shadow Import Mismatch" "${C_RED}"
+    die "K3s PostgreSQL shadow import completed but row summaries differ. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-postgres-db" "Ready - Shadow Import Validated" "${C_GREEN}"
+  printf '[%s] K3s PostgreSQL shadow import validation complete; Compose PostgreSQL remains traffic owner.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+}
+
+render_k3s_webui_frontend_bridge_manifest() {
+  local image="$1"
+  local mode="$2"
+  local config_hash="$3"
+  local runtime_uid="$4"
+  local runtime_gid="$5"
+  local port="$6"
+  local memory_limit="$7"
+  local cpu_limit="$8"
+  local traffic_owner="$9"
+  local workload_stage="workload-bridge"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    workload_stage="workload-cutover"
+  fi
+  cat <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webui-frontend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: frontend
+    borealis.io/service-key: webui-frontend
+    borealis.io/stage: ${workload_stage}
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: webui-frontend
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: webui-frontend
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: frontend
+        borealis.io/service-key: webui-frontend
+        borealis.io/stage: ${workload_stage}
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "${traffic_owner}"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webui-frontend
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: ${port}
+              protocol: TCP
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_WEBUI_MODE
+              value: "${mode}"
+            - name: BOREALIS_WEBUI_UPSTREAM_PORT
+              value: "${port}"
+            - name: BOREALIS_WEBUI_BIND_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_WEBUI_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_WEBUI_VITE_CACHE_DIR
+              value: "/opt/Borealis/Data/Engine/web-interface/node_modules/.vite"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-webui-healthcheck
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-webui-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+EOF
+  if [[ "${mode}" == "dev" ]]; then
+    cat <<EOF
+            - name: webui-vite-cache
+              mountPath: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite
+            - name: webui-vite-temp
+              mountPath: /opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp
+            - name: webui-src
+              mountPath: /opt/Borealis/Data/Engine/web-interface/src
+              readOnly: true
+            - name: webui-public
+              mountPath: /opt/Borealis/Data/Engine/web-interface/public
+              readOnly: true
+            - name: webui-unit-tests
+              mountPath: /opt/Borealis/Data/Engine/web-interface/Unit_Tests
+              readOnly: true
+            - name: webui-index
+              mountPath: /opt/Borealis/Data/Engine/web-interface/index.html
+              readOnly: true
+            - name: webui-package
+              mountPath: /opt/Borealis/Data/Engine/web-interface/package.json
+              readOnly: true
+            - name: webui-tsconfig
+              mountPath: /opt/Borealis/Data/Engine/web-interface/tsconfig.json
+              readOnly: true
+            - name: webui-vite-config
+              mountPath: /opt/Borealis/Data/Engine/web-interface/vite.config.mts
+              readOnly: true
+EOF
+  fi
+  cat <<EOF
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+$(k3s_timezone_volume_entries)
+EOF
+  if [[ "${mode}" == "dev" ]]; then
+    cat <<EOF
+        - name: webui-vite-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 256Mi
+        - name: webui-vite-temp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+        - name: webui-src
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/src
+            type: Directory
+        - name: webui-public
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/public
+            type: Directory
+        - name: webui-unit-tests
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/Unit_Tests
+            type: Directory
+        - name: webui-index
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/index.html
+            type: File
+        - name: webui-package
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/package.json
+            type: File
+        - name: webui-tsconfig
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/tsconfig.json
+            type: File
+        - name: webui-vite-config
+          hostPath:
+            path: ${WEBUI_RUNTIME_SOURCE_DIR}/vite.config.mts
+            type: File
+EOF
+  fi
+  cat <<EOF
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webui-frontend
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: frontend
+    borealis.io/service-key: webui-frontend
+    borealis.io/stage: ${workload_stage}
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "${traffic_owner}"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: webui-frontend
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: http
+      port: ${port}
+      targetPort: http
+      protocol: TCP
+EOF
+}
+
+render_k3s_remote_desktop_guacd_bridge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_uid="$3"
+  local runtime_gid="$4"
+  local port="$5"
+  local memory_limit="$6"
+  local cpu_limit="$7"
+  cat <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: remote-desktop-guacd
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: remote-desktop
+    borealis.io/service-key: remote-desktop-guacd
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: remote-desktop-guacd
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: remote-desktop-guacd
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: remote-desktop
+        borealis.io/service-key: remote-desktop-guacd
+        borealis.io/stage: workload-bridge
+      annotations:
+        borealis.io/bridge-config-hash: "${config_hash}"
+        borealis.io/traffic-owner: "docker-compose"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: ${runtime_uid}
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: remote-desktop-guacd
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: guacd
+              containerPort: ${port}
+              protocol: TCP
+          env:
+$(k3s_timezone_env_entries)
+            - name: BOREALIS_GUACD_BIND_HOST
+              value: "0.0.0.0"
+            - name: BOREALIS_GUACD_HEALTH_HOST
+              value: "127.0.0.1"
+            - name: BOREALIS_GUACD_PORT
+              value: "${port}"
+            - name: BOREALIS_GUACD_LOG_DIR
+              value: "/tmp/borealis-guacd-logs"
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-guacd-healthcheck
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-guacd-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 128Mi
+$(k3s_timezone_volume_entries)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: remote-desktop-guacd
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: remote-desktop
+    borealis.io/service-key: remote-desktop-guacd
+    borealis.io/stage: workload-bridge
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
+    borealis.io/traffic-owner: "docker-compose"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: remote-desktop-guacd
+    app.kubernetes.io/part-of: borealis
+  ports:
+    - name: guacd
+      port: ${port}
+      targetPort: guacd
+      protocol: TCP
+EOF
+}
+
+render_k3s_bridge_workloads_manifest() {
+  local webui_image="$1"
+  local guacd_image="$2"
+  local mode="$3"
+  local config_hash="$4"
+  local runtime_uid="$5"
+  local runtime_gid="$6"
+  local webui_port="$7"
+  local guacd_port="$8"
+  local webui_memory_limit="$9"
+  local webui_cpu_limit="${10}"
+  local guacd_memory_limit="${11}"
+  local guacd_cpu_limit="${12}"
+  local webui_traffic_owner="${13}"
+  render_k3s_webui_frontend_bridge_manifest "${webui_image}" "${mode}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${webui_port}" "${webui_memory_limit}" "${webui_cpu_limit}" "${webui_traffic_owner}"
+  printf '%s\n' "---"
+  render_k3s_remote_desktop_guacd_bridge_manifest "${guacd_image}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${guacd_port}" "${guacd_memory_limit}" "${guacd_cpu_limit}"
+}
+
+ensure_k3s_bridge_workloads() {
+  local mode="$1"
+  local webui_image
+  local guacd_image
+  webui_image="$(service_image_tag_or_previous webui-frontend borealis-engine/webui-frontend:local)"
+  guacd_image="$(service_image_tag_or_previous remote-desktop-guacd borealis-engine/remote-desktop-guacd:local)"
+  [[ -n "${webui_image}" ]] || die "WebUI frontend image tag unavailable."
+  [[ -n "${guacd_image}" ]] || die "Remote desktop guacd image tag unavailable."
+
+  local runtime_uid
+  local runtime_gid
+  local webui_port
+  local guacd_port
+  local webui_memory_limit
+  local webui_cpu_limit
+  local webui_traffic_owner
+  local guacd_memory_limit
+  local guacd_cpu_limit
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  webui_port="$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)"
+  webui_port="${webui_port:-8000}"
+  guacd_port="$(read_env_value BOREALIS_GUACD_PORT)"
+  guacd_port="${guacd_port:-4822}"
+  webui_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT)")"
+  webui_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_CPU_LIMIT)")"
+  webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
+  guacd_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT)")"
+  guacd_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT)")"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_BRIDGE_WORKLOADS_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "webui_image=${webui_image}" \
+      "webui_port=${webui_port}" \
+      "webui_memory_limit=${webui_memory_limit}" \
+      "webui_cpu_limit=${webui_cpu_limit}" \
+      "webui_traffic_owner=${webui_traffic_owner}" \
+      "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
+      "webui_vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
+      "webui_vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
+      "guacd_image=${guacd_image}" \
+      "guacd_port=${guacd_port}" \
+      "guacd_memory_limit=${guacd_memory_limit}" \
+      "guacd_cpu_limit=${guacd_cpu_limit}" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "webui-frontend" "${webui_image}" "k3s-webui-frontend"
+  import_k3s_local_image_into_k3s "remote-desktop-guacd" "${guacd_image}" "k3s-remote-desktop-guacd"
+
+  log_status "k3s-webui-frontend" "Applying Manifests" "${C_YELLOW}"
+  log_status "k3s-remote-desktop-guacd" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-bridge-workloads.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_bridge_workloads_manifest \
+    "${webui_image}" \
+    "${guacd_image}" \
+    "${mode}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${webui_port}" \
+    "${guacd_port}" \
+    "${webui_memory_limit}" \
+    "${webui_cpu_limit}" \
+    "${guacd_memory_limit}" \
+    "${guacd_cpu_limit}" \
+    "${webui_traffic_owner}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-webui-frontend" "Apply Failed" "${C_RED}"
+    log_status "k3s-remote-desktop-guacd" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s bridge workload manifests. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-webui-frontend" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/webui-frontend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
+    die "K3s WebUI bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  if [[ "${webui_traffic_owner}" == "k3s" ]]; then
+    log_status "k3s-webui-frontend" "Ready - Traffic Owner" "${C_GREEN}"
+  else
+    log_status "k3s-webui-frontend" "Ready - Bridge" "${C_GREEN}"
+  fi
+
+  log_status "k3s-remote-desktop-guacd" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/remote-desktop-guacd" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-remote-desktop-guacd" "Rollout Failed" "${C_RED}"
+    die "K3s guacd bridge rollout failed. See ${BUILD_LOG}."
+  fi
+  log_status "k3s-remote-desktop-guacd" "Ready" "${C_GREEN}"
+
+  printf '%s  k3s-bridge-workloads\n' "${config_hash}" > "${K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE}"
+}
+
+k3s_wireguard_tunnel_pod_name() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=wireguard-tunnel,app.kubernetes.io/part-of=borealis' \
+    -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+    | awk 'NF {print; exit}'
+}
+
+k3s_wireguard_control_client() {
+  local command="$1"
+  local pod_name
+  pod_name="$(k3s_wireguard_tunnel_pod_name)"
+  [[ -n "${pod_name}" ]] || return 1
+  k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod_name}" -c wireguard-tunnel -- borealis-wireguard-control-client "${command}"
+}
+
+render_k3s_wireguard_tunnel_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_gid="$3"
+  local port="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: wireguard-tunnel
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: wireguard-cutover
+type: Opaque
+data:
+$(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard-tunnel
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: wireguard-tunnel
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: networking
+    borealis.io/service-key: wireguard-tunnel
+    borealis.io/stage: wireguard-cutover
+  annotations:
+    borealis.io/wireguard-config-hash: "${config_hash}"
+    borealis.io/network-mode: "host-network"
+    borealis.io/runtime-owner: "k3s"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wireguard-tunnel
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wireguard-tunnel
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: networking
+        borealis.io/service-key: wireguard-tunnel
+        borealis.io/stage: wireguard-cutover
+      annotations:
+        borealis.io/wireguard-config-hash: "${config_hash}"
+        borealis.io/network-mode: "host-network"
+        borealis.io/runtime-owner: "k3s"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        borealis.io/engine-node: "true"
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: wireguard-tunnel
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: wireguard
+              containerPort: ${port}
+              protocol: UDP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}
+          env:
+$(k3s_timezone_env_entries)
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - borealis-wireguard-healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - borealis-wireguard-healthcheck
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 25m
+              memory: 48Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: run-scratch
+              mountPath: /run
+$(k3s_timezone_volume_mount_entries)
+            - name: wireguard-runtime
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel
+            - name: dev-net-tun
+              mountPath: /dev/net/tun
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: run-scratch
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+$(k3s_timezone_volume_entries)
+        - name: wireguard-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel
+            type: Directory
+        - name: dev-net-tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
+EOF
+}
+
+ensure_k3s_wireguard_tunnel() {
+  local mode="$1"
+  local image
+  image="$(service_image_tag_or_previous wireguard-tunnel borealis-engine/wireguard-tunnel:local)"
+  [[ -n "${image}" ]] || die "WireGuard tunnel image tag unavailable."
+  [[ -c /dev/net/tun ]] || die "/dev/net/tun is missing; K3s WireGuard tunnel cannot start."
+
+  local runtime_gid
+  local port
+  local memory_limit
+  local cpu_limit
+  local runtime_env_hash
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  port="$(read_env_value BOREALIS_WIREGUARD_PORT)"
+  port="$(format_k3s_tcp_port "${port:-30000}")"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT)")"
+  runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_WIREGUARD_TUNNEL_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "runtime_gid=${runtime_gid}" \
+      "port=${port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime_env_hash=${runtime_env_hash}" \
+      "runtime_secret=${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
+      "wireguard_runtime=${RUNTIME_ROOT}/Services/wireguard-tunnel" \
+      "dev_net_tun=/dev/net/tun" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
+      "security=hostnetwork-root-netadmin-netraw-readonlyroot-v1" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "wireguard-tunnel" "${image}" "k3s-wireguard-tunnel"
+  retire_compose_wireguard_tunnel_container
+
+  log_status "k3s-wireguard-tunnel" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-wireguard-tunnel.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_wireguard_tunnel_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_gid}" \
+    "${port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-wireguard-tunnel" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s WireGuard tunnel manifest. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-wireguard-tunnel" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/wireguard-tunnel" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-wireguard-tunnel" "Rollout Failed" "${C_RED}"
+    die "K3s WireGuard tunnel rollout failed. See ${BUILD_LOG}."
+  fi
+
+  log_status "k3s-wireguard-tunnel" "Verifying Control Socket" "${C_YELLOW}"
+  if ! k3s_wireguard_control_client ping >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-wireguard-tunnel" "Control Socket Failed" "${C_RED}"
+    die "K3s WireGuard control socket check failed. See ${BUILD_LOG}."
+  fi
+
+  printf '%s  k3s-wireguard-tunnel\n' "${config_hash}" > "${K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE}"
+  log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
+}
+
+k3s_traefik_edge_healthcheck() {
+  local health_port
+  health_port="$(read_env_value BOREALIS_TRAEFIK_HEALTH_PORT)"
+  health_port="${health_port:-8082}"
+  curl -fsS "http://127.0.0.1:${health_port}/ping" >/dev/null
+}
+
+render_k3s_traefik_edge_manifest() {
+  local image="$1"
+  local config_hash="$2"
+  local runtime_gid="$3"
+  local health_port="$4"
+  local memory_limit="$5"
+  local cpu_limit="$6"
+  cat <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: traefik-edge
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    borealis.io/stage: edge-cutover
+type: Opaque
+data:
+$(borealis_traefik_runtime_secret_data)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik-edge
+  namespace: ${K3S_NAMESPACE}
+  labels:
+    app.kubernetes.io/name: traefik-edge
+    app.kubernetes.io/part-of: borealis
+    app.kubernetes.io/managed-by: Engine.sh
+    app.kubernetes.io/component: edge
+    borealis.io/service-key: traefik-edge
+    borealis.io/stage: edge-cutover
+  annotations:
+    borealis.io/edge-config-hash: "${config_hash}"
+    borealis.io/network-mode: "host-network"
+    borealis.io/traffic-owner: "k3s"
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: traefik-edge
+      app.kubernetes.io/part-of: borealis
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: traefik-edge
+        app.kubernetes.io/part-of: borealis
+        app.kubernetes.io/managed-by: Engine.sh
+        app.kubernetes.io/component: edge
+        borealis.io/service-key: traefik-edge
+        borealis.io/stage: edge-cutover
+      annotations:
+        borealis.io/edge-config-hash: "${config_hash}"
+        borealis.io/network-mode: "host-network"
+        borealis.io/traffic-owner: "k3s"
+        borealis.io/pids-limit: "$(read_env_value BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT)"
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsUser: 0
+        runAsGroup: ${runtime_gid}
+        fsGroup: ${runtime_gid}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: traefik-edge
+          image: ${image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: web
+              containerPort: 80
+              protocol: TCP
+            - name: websecure
+              containerPort: 443
+              protocol: TCP
+            - name: health
+              containerPort: ${health_port}
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: ${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}
+          env:
+            - name: HOME
+              value: "/tmp"
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "traefik healthcheck --ping=true --ping.entryPoint=borealis-health --entryPoints.borealis-health.address=127.0.0.1:${health_port}"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 25m
+              memory: 96Mi
+            limits:
+              cpu: ${cpu_limit}
+              memory: ${memory_limit}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["DAC_OVERRIDE", "NET_BIND_SERVICE"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+$(k3s_timezone_volume_mount_entries)
+            - name: traefik-runtime
+              mountPath: /opt/Borealis/Engine/Services/traefik-edge
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+$(k3s_timezone_volume_entries)
+        - name: traefik-runtime
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/traefik-edge
+            type: Directory
+EOF
+}
+
+ensure_k3s_traefik_edge() {
+  local mode="$1"
+  local image
+  image="$(service_image_tag_or_previous traefik-edge borealis-engine/traefik-edge:local)"
+  [[ -n "${image}" ]] || die "Traefik edge image tag unavailable."
+
+  local runtime_gid
+  local health_port
+  local memory_limit
+  local cpu_limit
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  health_port="$(read_env_value BOREALIS_TRAEFIK_HEALTH_PORT)"
+  health_port="${health_port:-8082}"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_CPU_LIMIT)")"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_TRAEFIK_EDGE_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "mode=${mode}" \
+      "image=${image}" \
+      "runtime_gid=${runtime_gid}" \
+      "health_port=${health_port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "runtime=${RUNTIME_ROOT}/Services/traefik-edge" \
+      "hostname=$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" \
+      "aliases=$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)" \
+      "profile=$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" \
+      "acme_email=$(read_env_value BOREALIS_ACME_EMAIL)" \
+      "local_ca=$(read_env_value BOREALIS_LOCAL_CA_ENABLED)" \
+      "api_owner=$(read_env_value BOREALIS_API_BACKEND_TRAFFIC_OWNER)" \
+      "api_upstream=$(read_env_value BOREALIS_API_BACKEND_UPSTREAM_HOST):$(read_env_value BOREALIS_API_BACKEND_UPSTREAM_PORT)" \
+      "webui_owner=$(read_env_value BOREALIS_WEBUI_TRAFFIC_OWNER)" \
+      "webui_upstream=$(read_env_value BOREALIS_WEBUI_UPSTREAM_HOST):$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)" \
+      "trusted_proxy_ips=$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" \
+      "forwarded_headers=$(read_env_value BOREALIS_TRAEFIK_FORWARDED_HEADERS_TRUSTED_IPS)" \
+      "proxy_protocol=$(read_env_value BOREALIS_TRAEFIK_PROXY_PROTOCOL_TRUSTED_IPS)" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
+      | sha256sum | awk '{print $1}'
+  )"
+
+  import_k3s_local_image_into_k3s "traefik-edge" "${image}" "k3s-traefik-edge"
+
+  log_status "k3s-traefik-edge" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-traefik-edge.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_traefik_edge_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_gid}" \
+    "${health_port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply --dry-run=server -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
+    die "K3s Traefik edge manifest validation failed. See ${BUILD_LOG}."
+  fi
+  retire_compose_traefik_edge_container
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s Traefik edge manifest. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
+
+  log_status "k3s-traefik-edge" "Waiting For Rollout" "${C_YELLOW}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+    die "K3s Traefik edge rollout failed. See ${BUILD_LOG}."
+  fi
+  log_status "k3s-traefik-edge" "Verifying Ping" "${C_YELLOW}"
+  if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+    log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+    die "K3s Traefik edge healthcheck failed. See ${BUILD_LOG}."
+  fi
+
+  printf '%s  k3s-traefik-edge\n' "${config_hash}" > "${K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE}"
+  log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
+}
+
+service_has_k3s_bridge_workload() {
+  case "$1" in
+    api-backend|job-scheduler|postgres-db|webui-frontend|remote-desktop-guacd|wireguard-tunnel|traefik-edge)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+reconcile_k3s_bridge_for_scoped_rebuild() {
+  local service="$1"
+  local mode="$2"
+  service_has_k3s_bridge_workload "${service}" || return 0
+
+  printf '[%s] Reconciling K3s bridge workloads after scoped %s rebuild\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+  ensure_k3s_cluster_baseline
+  BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
+  ensure_borealis_operator_bridge
+  if [[ "${service}" == "api-backend" ]]; then
+    ensure_k3s_api_backend_bridge "${mode}"
+    ensure_k3s_traefik_edge "${mode}"
+    retire_compose_api_backend_container
+  elif [[ "${service}" == "job-scheduler" ]]; then
+    retire_compose_job_scheduler_container
+    ensure_k3s_job_scheduler "${mode}"
+    recycle_k3s_site_workers_for_timezone
+  elif [[ "${service}" == "postgres-db" ]]; then
+    ensure_longhorn_storage_baseline
+    ensure_k3s_postgres_statefulset "${mode}"
+  elif [[ "${service}" == "wireguard-tunnel" ]]; then
+    ensure_k3s_wireguard_tunnel "${mode}"
+  elif [[ "${service}" == "traefik-edge" ]]; then
+    ensure_k3s_traefik_edge "${mode}"
+  elif [[ "${service}" == "remote-desktop-guacd" ]]; then
+    ensure_k3s_bridge_workloads "${mode}"
+    retire_compose_remote_desktop_guacd_container
+  else
+    ensure_k3s_bridge_workloads "${mode}"
+  fi
 }
 
 normalize_mode() {
@@ -1298,6 +6236,339 @@ read_env_value() {
   local file="${2:-${COMPOSE_ENV}}"
   [[ -f "${file}" ]] || return 0
   awk -F= -v key="${key}" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "${file}"
+}
+
+k3s_service_cluster_ip() {
+  local service_name="$1"
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+  k3s_kubectl -n "${K3S_NAMESPACE}" get service "${service_name}" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true
+}
+
+borealis_operator_service_cluster_ip() {
+  k3s_service_cluster_ip "${BOREALIS_OPERATOR_SERVICE_NAME}"
+}
+
+resolve_borealis_operator_base_url() {
+  local override="${BOREALIS_OPERATOR_BASE_URL:-}"
+  if [[ -n "${override}" ]]; then
+    printf '%s\n' "${override}"
+    return 0
+  fi
+  local cluster_ip
+  cluster_ip="$(borealis_operator_service_cluster_ip)"
+  if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
+    printf 'http://%s:%s\n' "${cluster_ip}" "${BOREALIS_OPERATOR_PORT}"
+    return 0
+  fi
+  read_env_value BOREALIS_OPERATOR_BASE_URL
+}
+
+normalize_webui_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto|k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      die "Compose WebUI runtime has been retired. Use K3s-owned WebUI."
+      ;;
+    *)
+      die "Unsupported BOREALIS_WEBUI_TRAFFIC_OWNER '${1}'. Use k3s."
+      ;;
+  esac
+}
+
+resolve_webui_traffic_owner() {
+  normalize_webui_traffic_owner "${BOREALIS_WEBUI_TRAFFIC_OWNER:-auto}"
+}
+
+normalize_api_backend_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto|k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      die "Compose API backend runtime has been retired. Use K3s-owned API backend."
+      ;;
+    *)
+      die "Unsupported BOREALIS_API_BACKEND_TRAFFIC_OWNER '${1}'. Use k3s."
+      ;;
+  esac
+}
+
+resolve_api_backend_traffic_owner() {
+  normalize_api_backend_traffic_owner "${BOREALIS_API_BACKEND_TRAFFIC_OWNER:-auto}"
+}
+
+normalize_postgres_traffic_owner() {
+  local raw="${1:-auto}"
+  raw="$(printf '%s' "${raw}" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+  case "${raw}" in
+    ""|auto|k3s|kubernetes)
+      printf '%s\n' "k3s"
+      ;;
+    docker-compose|compose|docker)
+      printf '%s\n' "docker-compose"
+      ;;
+    *)
+      die "Unsupported BOREALIS_POSTGRES_TRAFFIC_OWNER '${1}'. Use k3s."
+      ;;
+  esac
+}
+
+resolve_postgres_traffic_owner() {
+  local owner
+  owner="$(normalize_postgres_traffic_owner "${BOREALIS_POSTGRES_TRAFFIC_OWNER:-auto}")"
+  if [[ "${owner}" != "k3s" ]]; then
+    die "Compose PostgreSQL runtime has been retired. Use K3s-owned PostgreSQL."
+  fi
+  printf '%s\n' "${owner}"
+}
+
+postgres_runtime_owner_label() {
+  case "$(normalize_postgres_traffic_owner "${1:-k3s}")" in
+    k3s)
+      printf '%s\n' "k3s"
+      ;;
+    *)
+      printf '%s\n' "k3s-shadow"
+      ;;
+  esac
+}
+
+postgres_database_url_for_owner() {
+  local owner="$1"
+  local db_user="$2"
+  local db_password="$3"
+  local db_name="$4"
+  case "$(normalize_postgres_traffic_owner "${owner}")" in
+    k3s)
+      printf 'postgresql://%s:%s@postgres-db.%s.svc:5432/%s\n' "${db_user}" "${db_password}" "${K3S_NAMESPACE}" "${db_name}"
+      ;;
+    docker-compose)
+      printf 'postgresql://%s:%s@127.0.0.1:5432/%s\n' "${db_user}" "${db_password}" "${db_name}"
+      ;;
+  esac
+}
+
+k3s_service_dns_name() {
+  local service_name="$1"
+  printf '%s.%s.svc.cluster.local\n' "${service_name}" "${K3S_NAMESPACE}"
+}
+
+api_backend_service_dns_name() {
+  k3s_service_dns_name "api-backend"
+}
+
+resolve_api_backend_upstream_host() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    api_backend_service_dns_name
+    return 0
+  fi
+  printf '%s\n' "127.0.0.1"
+}
+
+resolve_api_backend_upstream_port() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}"
+    return 0
+  fi
+  printf '%s\n' "5000"
+}
+
+resolve_webui_upstream_host() {
+  local traffic_owner="$1"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
+    local cluster_ip
+    cluster_ip="$(k3s_service_cluster_ip "webui-frontend")"
+    if [[ -n "${cluster_ip}" && "${cluster_ip}" != "None" ]]; then
+      printf '%s\n' "${cluster_ip}"
+      return 0
+    fi
+  fi
+  printf '%s\n' "127.0.0.1"
+}
+
+retire_compose_container() {
+  local service="$1"
+  local container="$2"
+  local display_name="$3"
+  local retired_reason="$4"
+  if docker inspect "${container}" >/dev/null 2>&1; then
+    printf '[%s] %s Compose container retirement started\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
+    if ! docker rm -f "${container}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "Docker Compose" "Retirement Failed" "${C_RED}"
+      die "Failed to remove retired Compose ${display_name} container '${container}'. See ${BUILD_LOG}."
+    fi
+  fi
+  printf '[%s] %s Compose container retired; %s\n' "$(date +%FT%T)" "${service}" "${retired_reason}" >> "${BUILD_LOG}"
+}
+
+retire_compose_webui_container() {
+  retire_compose_container "webui-frontend" "borealis-engine-webui-frontend" "WebUI" "K3s owns WebUI traffic and lifecycle"
+}
+
+retire_compose_docker_proxy_container() {
+  retire_compose_container "docker-proxy" "borealis-engine-docker-proxy" "Docker proxy" "Server Info no longer uses Docker proxy for K3s worker metrics or bridge service status"
+}
+
+retire_compose_job_scheduler_container() {
+  retire_compose_container "job-scheduler" "borealis-engine-job-scheduler" "job scheduler" "K3s owns job-scheduler lifecycle"
+}
+
+retire_compose_api_backend_container() {
+  retire_compose_container "api-backend" "borealis-engine-api-backend" "API backend" "K3s owns api-backend traffic and lifecycle"
+}
+
+retire_compose_postgres_container() {
+  retire_compose_container "postgres-db" "borealis-engine-postgres-db" "PostgreSQL" "K3s owns PostgreSQL traffic and lifecycle"
+}
+
+retire_compose_wireguard_tunnel_container() {
+  retire_compose_container "wireguard-tunnel" "borealis-engine-wireguard-tunnel" "WireGuard tunnel" "K3s owns WireGuard tunnel lifecycle"
+}
+
+retire_compose_remote_desktop_guacd_container() {
+  retire_compose_container "remote-desktop-guacd" "borealis-engine-remote-desktop-guacd" "guacd" "K3s owns guacd lifecycle"
+}
+
+retire_compose_traefik_edge_container() {
+  retire_compose_container "traefik-edge" "borealis-engine-traefik-edge" "Traefik edge" "K3s owns public edge lifecycle"
+}
+
+retire_compose_site_worker_orchestrator_container() {
+  retire_compose_container "site-worker-orchestrator" "borealis-engine-site-worker-orchestrator" "site worker orchestrator" "K3s operator owns site-worker lifecycle and Traefik reload no longer uses Docker helper"
+}
+
+k3s_site_worker_pod_count() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --no-headers 2>/dev/null | awk 'END {print NR+0}'
+}
+
+k3s_site_worker_ready_count() {
+  k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    -o jsonpath='{range .items[*]}{.status.phase}{"\t"}{range .status.containerStatuses[*]}{.ready}{" "}{end}{"\n"}{end}' 2>/dev/null \
+    | awk '$1 == "Running" && $2 ~ /true/ {count++} END {print count+0}'
+}
+
+wait_for_k3s_site_worker_ready_count() {
+  local expected="$1"
+  local timeout="${2:-300}"
+  local deadline=$((SECONDS + timeout))
+  local ready=0
+  while ((SECONDS < deadline)); do
+    ready="$(k3s_site_worker_ready_count)"
+    if ((ready >= expected)); then
+      return 0
+    fi
+    sleep 5
+  done
+  log_status "site-worker" "K3s Worker Recycle Timed Out" "${C_RED}"
+  die "K3s site worker recycle did not restore ${expected} ready pod(s). See ${BUILD_LOG}."
+}
+
+recycle_k3s_site_workers_for_api_cutover() {
+  local previous_base="${1:-}"
+  local current_base="${2:-}"
+  [[ -n "${previous_base}" && -n "${current_base}" && "${previous_base}" != "${current_base}" ]] || return 0
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+
+  local count
+  count="$(k3s_site_worker_pod_count)"
+  ((count > 0)) || return 0
+
+  log_status "site-worker" "Recycling K3s Workers For API Cutover" "${C_YELLOW}"
+  printf '[%s] Recycling %s K3s site worker pod(s) because BOREALIS_INTERNAL_API_BASE_URL changed from %s to %s\n' "$(date +%FT%T)" "${count}" "${previous_base}" "${current_base}" >> "${BUILD_LOG}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --wait=false >> "${BUILD_LOG}" 2>&1; then
+    log_status "site-worker" "Recycle Failed" "${C_RED}"
+    die "Failed to recycle K3s site worker pods for API cutover. See ${BUILD_LOG}."
+  fi
+  wait_for_k3s_site_worker_ready_count "${count}" 300
+  log_status "site-worker" "Recycled - API Cutover" "${C_GREEN}"
+}
+
+recycle_k3s_site_workers_for_runtime_secret_change() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+
+  local current_hash
+  local previous_hash
+  current_hash="$(borealis_site_worker_runtime_secret_hash)"
+  previous_hash="$(awk '{print $1; exit}' "${K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE}" 2>/dev/null || true)"
+  if [[ -n "${previous_hash}" && "${previous_hash}" == "${current_hash}" ]]; then
+    return 0
+  fi
+
+  local count
+  count="$(k3s_site_worker_pod_count)"
+  if ((count == 0)); then
+    printf '%s  k3s-site-worker-runtime-env\n' "${current_hash}" > "${K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE}"
+    return 0
+  fi
+
+  log_status "site-worker" "Recycling K3s Workers For Runtime Env" "${C_YELLOW}"
+  printf '[%s] Recycling %s K3s site worker pod(s) because site-worker runtime env hash changed from %s to %s\n' "$(date +%FT%T)" "${count}" "${previous_hash:-missing}" "${current_hash}" >> "${BUILD_LOG}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --wait=false >> "${BUILD_LOG}" 2>&1; then
+    log_status "site-worker" "Recycle Failed" "${C_RED}"
+    die "Failed to recycle K3s site worker pods for runtime env propagation. See ${BUILD_LOG}."
+  fi
+  wait_for_k3s_site_worker_ready_count "${count}" 300
+  printf '%s  k3s-site-worker-runtime-env\n' "${current_hash}" > "${K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE}"
+  log_status "site-worker" "Recycled - Runtime Env" "${C_GREEN}"
+}
+
+recycle_k3s_site_workers_for_timezone() {
+  k3s_cluster_installed || return 0
+  [[ -s "${K3S_KUBECONFIG}" ]] || return 0
+
+  local expected_timezone
+  expected_timezone="$(host_timezone_value)"
+  [[ -n "${expected_timezone}" ]] || return 0
+
+  local pod_names=()
+  mapfile -t pod_names < <(
+    k3s_kubectl -n "${K3S_NAMESPACE}" get pods \
+      -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true
+  )
+  ((${#pod_names[@]} > 0)) || return 0
+
+  local pod
+  local timezone
+  local mismatch_count=0
+  for pod in "${pod_names[@]}"; do
+    [[ -n "${pod}" ]] || continue
+    timezone="$(k3s_kubectl -n "${K3S_NAMESPACE}" exec "${pod}" -c site-worker -- sh -c 'printf "%s" "${TZ:-}"' 2>>"${BUILD_LOG}" || true)"
+    if [[ "${timezone}" != "${expected_timezone}" ]]; then
+      mismatch_count=$((mismatch_count + 1))
+      printf '[%s] K3s site worker pod %s has timezone %s; expected %s\n' "$(date +%FT%T)" "${pod}" "${timezone:-unset}" "${expected_timezone}" >> "${BUILD_LOG}"
+    fi
+  done
+  ((mismatch_count > 0)) || return 0
+
+  log_status "site-worker" "Recycling K3s Workers For Timezone" "${C_YELLOW}"
+  printf '[%s] Recycling %s K3s site worker pod(s) because %s pod(s) do not inherit host timezone %s\n' "$(date +%FT%T)" "${#pod_names[@]}" "${mismatch_count}" "${expected_timezone}" >> "${BUILD_LOG}"
+  if ! k3s_kubectl -n "${K3S_NAMESPACE}" delete pods \
+    -l 'app.kubernetes.io/name=site-worker,app.kubernetes.io/managed-by=borealis-operator' \
+    --wait=false >> "${BUILD_LOG}" 2>&1; then
+    log_status "site-worker" "Recycle Failed" "${C_RED}"
+    die "Failed to recycle K3s site worker pods for host timezone propagation. See ${BUILD_LOG}."
+  fi
+  wait_for_k3s_site_worker_ready_count "${#pod_names[@]}" 300
+  log_status "site-worker" "Recycled - Timezone" "${C_GREEN}"
 }
 
 env_key_exists() {
@@ -1386,7 +6657,6 @@ apply_runtime_service_ownership() {
     "${RUNTIME_ROOT}/Services/traefik-edge" \
     "${RUNTIME_ROOT}/Services/webui-frontend" \
     "${RUNTIME_ROOT}/Services/remote-desktop-guacd" \
-    "${RUNTIME_ROOT}/Services/site-worker-orchestrator" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel"; do
     [[ -e "${path}" ]] || continue
     chown -R "${owner_uid}:${owner_gid}" "${path}" 2>/dev/null || true
@@ -1423,7 +6693,6 @@ apply_runtime_service_ownership() {
   chmod 0775 "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/api-backend/logs/site-workers" 2>/dev/null || true
-  chmod 0775 "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic" 2>/dev/null || true
   chmod 0775 "${RUNTIME_ROOT}/Services/traefik-edge/logs" 2>/dev/null || true
@@ -1433,7 +6702,8 @@ apply_runtime_service_ownership() {
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/traefik-edge/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
   if [[ -e "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" ]]; then
-    chown "0:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
+    # Keep Traefik ACME storage 0600 while allowing api-backend backup export to read it.
+    chown "${owner_uid}:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
     chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
   fi
 }
@@ -1477,7 +6747,6 @@ ensure_service_tree() {
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-ca" \
     "${RUNTIME_ROOT}/Services/traefik-edge/state/local-certs" \
     "${RUNTIME_ROOT}/Services/webui-frontend/data" \
-    "${RUNTIME_ROOT}/Services/site-worker-orchestrator/run" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/config" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/logs" \
     "${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets" \
@@ -1487,11 +6756,17 @@ ensure_service_tree() {
 }
 
 seed_webui_runtime_source() {
+  local mode="${1:-prod}"
   [[ -d "${WEBUI_STAGED_SOURCE_DIR}" ]] || die "WebUI staged source missing: ${WEBUI_STAGED_SOURCE_DIR}"
-  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" != "1" ]]; then
+  local refresh_source="${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}"
+  local sync_existing=0
+  if [[ "${mode}" == "dev" || "${refresh_source}" == "1" ]]; then
+    sync_existing=1
+  fi
+  if [[ -f "${WEBUI_RUNTIME_SOURCE_DIR}/package.json" && "${sync_existing}" != "1" ]]; then
     return 0
   fi
-  if [[ "${BOREALIS_REFRESH_WEBUI_RUNTIME_SOURCE:-0}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
+  if [[ "${refresh_source}" == "1" && -d "${WEBUI_RUNTIME_SOURCE_DIR}" ]]; then
     rm -rf "${WEBUI_RUNTIME_SOURCE_DIR}"
   fi
   mkdir -p "${WEBUI_RUNTIME_SOURCE_DIR}"
@@ -1505,7 +6780,18 @@ seed_webui_runtime_source() {
       --exclude .eslintcache \
       "${WEBUI_STAGED_SOURCE_DIR}/" \
       "${WEBUI_RUNTIME_SOURCE_DIR}/"
+    printf '[%s] WebUI runtime source synced mode=%s staged=%s runtime=%s\n' "$(date +%FT%T)" "${mode}" "${WEBUI_STAGED_SOURCE_DIR}" "${WEBUI_RUNTIME_SOURCE_DIR}" >> "${BUILD_LOG}"
     return 0
+  fi
+  if [[ "${sync_existing}" == "1" ]]; then
+    find "${WEBUI_RUNTIME_SOURCE_DIR}" -mindepth 1 -maxdepth 1 \
+      ! -name node_modules \
+      ! -name build \
+      ! -name dist \
+      ! -name .vite \
+      ! -name coverage \
+      ! -name .eslintcache \
+      -exec rm -rf {} + 2>/dev/null || true
   fi
   (
     cd "${WEBUI_STAGED_SOURCE_DIR}"
@@ -1521,6 +6807,7 @@ seed_webui_runtime_source() {
     cd "${WEBUI_RUNTIME_SOURCE_DIR}"
     tar -xf -
   )
+  printf '[%s] WebUI runtime source seeded mode=%s staged=%s runtime=%s\n' "$(date +%FT%T)" "${mode}" "${WEBUI_STAGED_SOURCE_DIR}" "${WEBUI_RUNTIME_SOURCE_DIR}" >> "${BUILD_LOG}"
 }
 
 prune_empty_legacy_runtime_paths() {
@@ -2273,24 +7560,15 @@ load_profile_tuning() {
   case "${profile_rank}" in
     3)
       postgres_extra_mib=8192
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="256m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="1.00"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=128
       PROFILE_API_BACKEND_MEMORY_LIMIT="3g"
       PROFILE_API_BACKEND_CPU_LIMIT="6.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=512
       PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="2g"
       PROFILE_JOB_SCHEDULER_CPU_LIMIT="3.00"
       PROFILE_JOB_SCHEDULER_PIDS_LIMIT=512
-      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="2g"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="3.00"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=512
       PROFILE_SITE_WORKER_MEMORY_LIMIT="512m"
       PROFILE_SITE_WORKER_CPU_LIMIT="2.00"
       PROFILE_SITE_WORKER_PIDS_LIMIT=128
-      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="3g"
-      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="6.00"
-      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=512
       PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="1g"
       PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.50"
       PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="3g"
@@ -2310,24 +7588,15 @@ load_profile_tuning() {
       ;;
     2)
       postgres_extra_mib=4096
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="192m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.75"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
       PROFILE_API_BACKEND_MEMORY_LIMIT="2g"
       PROFILE_API_BACKEND_CPU_LIMIT="4.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=384
       PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="1g"
       PROFILE_JOB_SCHEDULER_CPU_LIMIT="2.00"
       PROFILE_JOB_SCHEDULER_PIDS_LIMIT=384
-      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="1g"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="2.00"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=384
       PROFILE_SITE_WORKER_MEMORY_LIMIT="512m"
       PROFILE_SITE_WORKER_CPU_LIMIT="1.50"
       PROFILE_SITE_WORKER_PIDS_LIMIT=128
-      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="2g"
-      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="4.00"
-      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=384
       PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="768m"
       PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.00"
       PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="2g"
@@ -2347,24 +7616,15 @@ load_profile_tuning() {
       ;;
     1)
       postgres_extra_mib=2048
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=96
       PROFILE_API_BACKEND_MEMORY_LIMIT="1g"
       PROFILE_API_BACKEND_CPU_LIMIT="2.00"
       PROFILE_API_BACKEND_PIDS_LIMIT=256
       PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="512m"
       PROFILE_JOB_SCHEDULER_CPU_LIMIT="1.50"
       PROFILE_JOB_SCHEDULER_PIDS_LIMIT=256
-      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="512m"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="1.50"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=256
       PROFILE_SITE_WORKER_MEMORY_LIMIT="384m"
       PROFILE_SITE_WORKER_CPU_LIMIT="1.00"
       PROFILE_SITE_WORKER_PIDS_LIMIT=128
-      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="1g"
-      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="2.00"
-      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=256
       PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="512m"
       PROFILE_WEBUI_FRONTEND_CPU_LIMIT="1.00"
       PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="1536m"
@@ -2384,24 +7644,15 @@ load_profile_tuning() {
       ;;
     *)
       postgres_extra_mib=512
-      PROFILE_DOCKER_PROXY_MEMORY_LIMIT="128m"
-      PROFILE_DOCKER_PROXY_CPU_LIMIT="0.50"
-      PROFILE_DOCKER_PROXY_PIDS_LIMIT=64
       PROFILE_API_BACKEND_MEMORY_LIMIT="512m"
       PROFILE_API_BACKEND_CPU_LIMIT="1.50"
       PROFILE_API_BACKEND_PIDS_LIMIT=160
       PROFILE_JOB_SCHEDULER_MEMORY_LIMIT="256m"
       PROFILE_JOB_SCHEDULER_CPU_LIMIT="1.00"
       PROFILE_JOB_SCHEDULER_PIDS_LIMIT=160
-      PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT="256m"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT="1.00"
-      PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=160
       PROFILE_SITE_WORKER_MEMORY_LIMIT="256m"
       PROFILE_SITE_WORKER_CPU_LIMIT="1.00"
       PROFILE_SITE_WORKER_PIDS_LIMIT=128
-      PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT="512m"
-      PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT="1.00"
-      PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT=160
       PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT="256m"
       PROFILE_WEBUI_FRONTEND_CPU_LIMIT="0.50"
       PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT="1g"
@@ -2449,6 +7700,11 @@ write_compose_env() {
   local postgres_password
   postgres_password="$(read_env_value POSTGRES_PASSWORD)"
   [[ -n "${postgres_password}" && "${postgres_password}" != "change-me" ]] || postgres_password="$(generate_secret)"
+  local operator_secret
+  operator_secret="$(read_env_value BOREALIS_OPERATOR_SECRET)"
+  [[ -n "${operator_secret}" ]] || operator_secret="$(generate_secret)"
+  local operator_base_url
+  operator_base_url="$(resolve_borealis_operator_base_url)"
 
   local db_name
   local db_user
@@ -2468,10 +7724,18 @@ write_compose_env() {
   local runtime_owner_gid
   local postgres_runtime_uid
   local postgres_runtime_gid
-  local docker_socket_gid
   local host_timezone
   local webui_memory_limit
   local webui_cpu_limit
+  local webui_traffic_owner
+  local webui_upstream_host
+  local api_backend_traffic_owner
+  local api_backend_upstream_host
+  local api_backend_upstream_port
+  local postgres_traffic_owner
+  local postgres_storage_class
+  local postgres_database_url
+  local internal_api_base_url
   local engine_ip_fallback=""
   local local_ca_enabled=0
   local local_ca_cert=""
@@ -2504,7 +7768,6 @@ write_compose_env() {
   postgres_runtime_gid="$(resolve_postgres_runtime_gid)"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_UID" "${postgres_runtime_uid}"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_GID" "${postgres_runtime_gid}"
-  docker_socket_gid="$(resolve_docker_socket_gid)"
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
   webui_memory_limit="${PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT}"
   webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_CPU_LIMIT}"
@@ -2512,6 +7775,15 @@ write_compose_env() {
     webui_memory_limit="${PROFILE_WEBUI_FRONTEND_DEV_MEMORY_LIMIT}"
     webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_DEV_CPU_LIMIT}"
   fi
+  webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
+  webui_upstream_host="$(resolve_webui_upstream_host "${webui_traffic_owner}")"
+  api_backend_traffic_owner="$(resolve_api_backend_traffic_owner)"
+  api_backend_upstream_host="$(resolve_api_backend_upstream_host "${api_backend_traffic_owner}")"
+  api_backend_upstream_port="$(resolve_api_backend_upstream_port "${api_backend_traffic_owner}")"
+  postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
+  postgres_storage_class="$(resolve_k3s_postgres_storage_class)"
+  postgres_database_url="$(postgres_database_url_for_owner "${postgres_traffic_owner}" "${db_user}" "${postgres_password}" "${db_name}")"
+  internal_api_base_url="http://${api_backend_upstream_host}:${api_backend_upstream_port}"
   if [[ "${BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG:-0}" != "1" ]]; then
     log_status "Profile" "${PROFILE_NAME} (${PROFILE_HOST_VCPU} vCPU, ${PROFILE_HOST_MEMORY_GIB} GiB RAM, ${PROFILE_SITE_WORKER_CONCURRENCY} site-worker tasks)" "${C_BLUE}"
   fi
@@ -2527,12 +7799,13 @@ BOREALIS_ENGINE_RUNTIME_OWNER_UID=${runtime_owner_uid}
 BOREALIS_ENGINE_RUNTIME_OWNER_GID=${runtime_owner_gid}
 BOREALIS_POSTGRES_RUNTIME_UID=${postgres_runtime_uid}
 BOREALIS_POSTGRES_RUNTIME_GID=${postgres_runtime_gid}
-BOREALIS_DOCKER_SOCKET_PATH=${BOREALIS_DOCKER_SOCKET_PATH:-/var/run/docker.sock}
-BOREALIS_DOCKER_SOCKET_GID=${docker_socket_gid}
 BOREALIS_ENGINE_MODE=production
 BOREALIS_WEBUI_MODE=prod
 BOREALIS_ENGINE_HOST_TIMEZONE=${host_timezone}
 TZ=${host_timezone}
+BOREALIS_WEBUI_TRAFFIC_OWNER=${webui_traffic_owner}
+BOREALIS_WEBUI_RUNTIME_OWNER=k3s
+BOREALIS_WEBUI_UPSTREAM_HOST=${webui_upstream_host}
 BOREALIS_WEBUI_UPSTREAM_PORT=${BOREALIS_WEBUI_UPSTREAM_PORT:-8000}
 BOREALIS_WEBUI_RUNTIME_SOURCE_DIR=${WEBUI_RUNTIME_SOURCE_DIR}
 BOREALIS_PUBLIC_HOSTNAME=${public_host}
@@ -2549,6 +7822,18 @@ BOREALIS_ENGINE_NETWORK_MODE=${engine_network_mode}
 BOREALIS_ENGINE_NETWORK_MODE_LABEL=${engine_network_mode_label}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE=${engine_profile}
 BOREALIS_ENGINE_DEPLOYMENT_PROFILE_LABEL=${engine_profile_label}
+BOREALIS_OPERATOR_NAMESPACE=${K3S_NAMESPACE}
+BOREALIS_OPERATOR_SERVICE_NAME=${BOREALIS_OPERATOR_SERVICE_NAME}
+BOREALIS_OPERATOR_PORT=${BOREALIS_OPERATOR_PORT}
+BOREALIS_OPERATOR_BASE_URL=${operator_base_url}
+BOREALIS_OPERATOR_SECRET=${operator_secret}
+BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME=${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}
+BOREALIS_POSTGRES_RUNTIME_SECRET_NAME=${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}
+BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME=${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}
+BOREALIS_K3S_PVC_STORAGE_CLASS=${postgres_storage_class}
+BOREALIS_K3S_POSTGRES_ENABLED=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")
+BOREALIS_K3S_POSTGRES_STORAGE_SIZE=${K3S_POSTGRES_STORAGE_SIZE}
+BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT=${K3S_POSTGRES_ROLLOUT_TIMEOUT}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -2575,44 +7860,46 @@ BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
 
-BOREALIS_DOCKER_PROXY_MEMORY_LIMIT=${BOREALIS_DOCKER_PROXY_MEMORY_LIMIT:-${PROFILE_DOCKER_PROXY_MEMORY_LIMIT}}
-BOREALIS_DOCKER_PROXY_CPU_LIMIT=${BOREALIS_DOCKER_PROXY_CPU_LIMIT:-${PROFILE_DOCKER_PROXY_CPU_LIMIT}}
-BOREALIS_DOCKER_PROXY_PIDS_LIMIT=${BOREALIS_DOCKER_PROXY_PIDS_LIMIT:-${PROFILE_DOCKER_PROXY_PIDS_LIMIT}}
 BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
 BOREALIS_API_BACKEND_PIDS_LIMIT=${BOREALIS_API_BACKEND_PIDS_LIMIT:-${PROFILE_API_BACKEND_PIDS_LIMIT}}
+BOREALIS_API_BACKEND_K3S_BRIDGE_PORT=${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}
+BOREALIS_API_BACKEND_TRAFFIC_OWNER=${api_backend_traffic_owner}
+BOREALIS_API_BACKEND_RUNTIME_OWNER=k3s
+BOREALIS_API_BACKEND_UPSTREAM_HOST=${api_backend_upstream_host}
+BOREALIS_API_BACKEND_UPSTREAM_PORT=${api_backend_upstream_port}
 BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT=${BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT:-${PROFILE_JOB_SCHEDULER_MEMORY_LIMIT}}
 BOREALIS_JOB_SCHEDULER_CPU_LIMIT=${BOREALIS_JOB_SCHEDULER_CPU_LIMIT:-${PROFILE_JOB_SCHEDULER_CPU_LIMIT}}
 BOREALIS_JOB_SCHEDULER_PIDS_LIMIT=${BOREALIS_JOB_SCHEDULER_PIDS_LIMIT:-${PROFILE_JOB_SCHEDULER_PIDS_LIMIT}}
-BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_MEMORY_LIMIT}}
-BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_CPU_LIMIT}}
-BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT=${BOREALIS_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT:-${PROFILE_SITE_WORKER_ORCHESTRATOR_PIDS_LIMIT}}
+BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER=k3s
 BOREALIS_SITE_WORKER_MEMORY_LIMIT=${BOREALIS_SITE_WORKER_MEMORY_LIMIT:-${PROFILE_SITE_WORKER_MEMORY_LIMIT}}
 BOREALIS_SITE_WORKER_CPU_LIMIT=${BOREALIS_SITE_WORKER_CPU_LIMIT:-${PROFILE_SITE_WORKER_CPU_LIMIT}}
 BOREALIS_SITE_WORKER_PIDS_LIMIT=${BOREALIS_SITE_WORKER_PIDS_LIMIT:-${PROFILE_SITE_WORKER_PIDS_LIMIT}}
-BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_MEMORY_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_MEMORY_LIMIT}}
-BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_CPU_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_CPU_LIMIT}}
-BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT=${BOREALIS_SERVICE_ACTION_HELPER_PIDS_LIMIT:-${PROFILE_SERVICE_ACTION_HELPER_PIDS_LIMIT}}
 BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT=${BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT:-${webui_memory_limit}}
 BOREALIS_WEBUI_FRONTEND_CPU_LIMIT=${BOREALIS_WEBUI_FRONTEND_CPU_LIMIT:-${webui_cpu_limit}}
 BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT=${BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT:-${PROFILE_WEBUI_FRONTEND_PIDS_LIMIT}}
 BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT=${BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT:-${PROFILE_TRAEFIK_EDGE_MEMORY_LIMIT}}
 BOREALIS_TRAEFIK_EDGE_CPU_LIMIT=${BOREALIS_TRAEFIK_EDGE_CPU_LIMIT:-${PROFILE_TRAEFIK_EDGE_CPU_LIMIT}}
 BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT=${BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT:-${PROFILE_TRAEFIK_EDGE_PIDS_LIMIT}}
+BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER=k3s
 BOREALIS_POSTGRES_DB_MEMORY_LIMIT=${BOREALIS_POSTGRES_DB_MEMORY_LIMIT:-${PROFILE_POSTGRES_DB_MEMORY_LIMIT}}
 BOREALIS_POSTGRES_DB_CPU_LIMIT=${BOREALIS_POSTGRES_DB_CPU_LIMIT:-${PROFILE_POSTGRES_DB_CPU_LIMIT}}
 BOREALIS_POSTGRES_DB_PIDS_LIMIT=${BOREALIS_POSTGRES_DB_PIDS_LIMIT:-${PROFILE_POSTGRES_DB_PIDS_LIMIT}}
+BOREALIS_POSTGRES_TRAFFIC_OWNER=${postgres_traffic_owner}
+BOREALIS_POSTGRES_RUNTIME_OWNER=k3s
 BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_CPU_LIMIT}}
 BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT=${BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT:-${PROFILE_REMOTE_DESKTOP_GUACD_PIDS_LIMIT}}
+BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER=k3s
 BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_MEMORY_LIMIT}}
 BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_CPU_LIMIT}}
 BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT=${BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT:-${PROFILE_WIREGUARD_TUNNEL_PIDS_LIMIT}}
+BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER=k3s
 
 POSTGRES_DB=${db_name}
 POSTGRES_USER=${db_user}
 POSTGRES_PASSWORD=${postgres_password}
-BOREALIS_DATABASE_URL=postgresql://${db_user}:${postgres_password}@127.0.0.1:5432/${db_name}
+BOREALIS_DATABASE_URL=${postgres_database_url}
 BOREALIS_DB_SSLMODE=disable
 BOREALIS_DB_POOL_SIZE=${PROFILE_DB_POOL_SIZE}
 BOREALIS_DB_MAX_OVERFLOW=${PROFILE_DB_MAX_OVERFLOW}
@@ -2642,10 +7929,10 @@ BOREALIS_POSTGRES_RANDOM_PAGE_COST=${PROFILE_POSTGRES_RANDOM_PAGE_COST}
 BOREALIS_WEBUI_EXTERNAL=1
 BOREALIS_ENGINE_CONTAINERIZED=1
 BOREALIS_SCHEDULED_JOBS_START_LOOP=0
-BOREALIS_INTERNAL_API_BASE_URL=http://127.0.0.1:5000
+BOREALIS_INTERNAL_API_BASE_URL=${internal_api_base_url}
 BOREALIS_COOKIE_SECURE=1
 BOREALIS_GUACAMOLE_ENABLED=1
-BOREALIS_GUACD_HOST=127.0.0.1
+BOREALIS_GUACD_HOST=remote-desktop-guacd.${K3S_NAMESPACE}.svc.cluster.local
 BOREALIS_GUACD_PORT=4822
 BOREALIS_GUACAMOLE_VNC_WS_PATH=/remote-desktop/vnc/guacamole
 BOREALIS_VNC_AUTH_PROBE=0
@@ -2658,8 +7945,7 @@ BOREALIS_WIREGUARD_PORT_ALLOWLIST=47002,5900,22
 BOREALIS_WIREGUARD_CONFIG_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/config
 BOREALIS_WIREGUARD_KEY_ROOT=${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
 BOREALIS_WIREGUARD_CONTROL_SOCKET=${RUNTIME_ROOT}/Services/wireguard-tunnel/run/control.sock
-BOREALIS_DOCKER_PROXY_URL=http://127.0.0.1:2375
-BOREALIS_SITE_WORKER_ORCHESTRATOR_SOCKET=${RUNTIME_ROOT}/Services/site-worker-orchestrator/run/orchestrator.sock
+BOREALIS_SITE_WORKER_LIFECYCLE_MODE=${BOREALIS_SITE_WORKER_LIFECYCLE_MODE:-auto}
 BOREALIS_ENGINE_SECRET_PATH=${RUNTIME_ROOT}/Services/api-backend/secrets/engine_secret.txt
 BOREALIS_ENGINE_CERT_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Certificates
 BOREALIS_ENGINE_AUTH_TOKEN_ROOT=${RUNTIME_ROOT}/Services/api-backend/secrets/Auth_Tokens
@@ -2667,6 +7953,8 @@ BOREALIS_ANSIBLE_RUNTIME_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache/Ansible
 BOREALIS_ANSIBLE_RUNNER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/ansible_runner_settings.json
 BOREALIS_SITE_WORKER_SETTINGS_PATH=${RUNTIME_ROOT}/Services/api-backend/config/site_worker_settings.json
 BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}
+BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE=${BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE:-eventlet}
+BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=${BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS:-300}
 BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
@@ -2679,6 +7967,7 @@ EOF
 
   cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
   cat >> "${COMPOSE_ENV}" <<EOF
+BOREALIS_OPERATOR_IMAGE=${IMAGE_TAGS[borealis-operator]:-borealis-engine/borealis-operator:local}
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
 BOREALIS_JOB_SCHEDULER_IMAGE=${IMAGE_TAGS[job-scheduler]:-borealis-engine/job-scheduler:local}
 BOREALIS_SITE_WORKER_IMAGE=${IMAGE_TAGS[site-worker]:-borealis-engine/site-worker:local}
@@ -2687,7 +7976,6 @@ BOREALIS_TRAEFIK_EDGE_IMAGE=${IMAGE_TAGS[traefik-edge]:-borealis-engine/traefik-
 BOREALIS_POSTGRES_DB_IMAGE=${IMAGE_TAGS[postgres-db]:-borealis-engine/postgres-db:local}
 BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE=${IMAGE_TAGS[remote-desktop-guacd]:-borealis-engine/remote-desktop-guacd:local}
 BOREALIS_WIREGUARD_TUNNEL_IMAGE=${IMAGE_TAGS[wireguard-tunnel]:-borealis-engine/wireguard-tunnel:local}
-BOREALIS_DOCKER_PROXY_IMAGE=${BOREALIS_DOCKER_PROXY_IMAGE:-ghcr.io/tecnativa/docker-socket-proxy:v0.4.2}
 EOF
   chmod 600 "${COMPOSE_ENV}" "${RUNTIME_ENV}" "${WEBUI_ENV}"
   apply_deploy_env_file_permissions
@@ -2852,7 +8140,7 @@ collect_build_cache_exports() {
 prepare_service_build_artifacts() {
   local service="$1"
   case "${service}" in
-    api-backend|job-scheduler)
+    api-backend|job-scheduler|borealis-operator)
       if [[ "${GO_API_BACKEND_BINARY_PREPARED}" == "1" ]]; then
         printf '[%s] %s reusing prepared Go api-backend binary\n' "$(date +%FT%T)" "${service}" >> "${BUILD_LOG}"
         return 0
@@ -2863,6 +8151,21 @@ prepare_service_build_artifacts() {
       GO_API_BACKEND_BINARY_PREPARED=1
       ;;
   esac
+}
+
+docker_build_with_cache_repair() {
+  local service="$1"
+  shift
+  local -a docker_build_args=("$@")
+  if DOCKER_BUILDKIT=1 docker build "${docker_build_args[@]}"; then
+    return 0
+  fi
+
+  printf '[%s] Docker cached build failed for %s; pruning builder cache and retrying without cache\n' "$(date +%FT%T)" "${service}"
+  if ! docker builder prune --all --force; then
+    printf '[%s] Docker builder cache prune failed for %s; retrying without cache anyway\n' "$(date +%FT%T)" "${service}"
+  fi
+  DOCKER_BUILDKIT=1 docker build --no-cache "${docker_build_args[@]}"
 }
 
 build_service_image() {
@@ -2965,10 +8268,10 @@ build_service_image() {
       else
         rm -rf "${cache_next}"
         printf '[%s] Buildx cache build failed for %s; falling back to docker build\n' "$(date +%FT%T)" "${service}"
-        DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+        docker_build_with_cache_repair "${service}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
       fi
     else
-      DOCKER_BUILDKIT=1 docker build "${build_args[@]}" "${SCRIPT_DIR}/${context}"
+      docker_build_with_cache_repair "${service}" "${build_args[@]}" "${SCRIPT_DIR}/${context}"
     fi
   } >> "${BUILD_LOG}" 2>&1
   BUILD_STATUSES["${service}"]="built"
@@ -2989,6 +8292,7 @@ build_images() {
     validate_build_role "${service}"
   done
   CURRENT_BUILD_SELECTION=("${selected[@]}")
+  build_section_images "${mode}" "K3s Cluster Services" "${BUILD_SECTION_K3S_CLUSTER[@]}"
   build_section_images "${mode}" "Frontend Services" "${BUILD_SECTION_FRONTEND[@]}"
   build_section_images "${mode}" "Backend Services" "${BUILD_SECTION_BACKEND[@]}"
   build_section_images "${mode}" "Networking Services" "${BUILD_SECTION_NETWORKING[@]}"
@@ -3031,6 +8335,26 @@ prune_stale_site_worker_images() {
     fi
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
       printf '[%s] Failed to remove stale site-worker image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
+    fi
+  done
+}
+
+prune_stale_borealis_operator_images() {
+  local active_tag="${IMAGE_TAGS[borealis-operator]:-}"
+  [[ -n "${active_tag}" ]] || return 0
+  local stale_images=()
+  mapfile -t stale_images < <(
+    docker image ls \
+      --filter "label=io.borealis.service=borealis-operator" \
+      --format '{{.Repository}}:{{.Tag}}' \
+      | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
+  )
+  ((${#stale_images[@]} > 0)) || return 0
+  log_status "Docker Cleanup" "Pruning Stale Operator Images" "${C_YELLOW}"
+  local image=""
+  for image in "${stale_images[@]}"; do
+    if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
+      printf '[%s] Failed to remove stale borealis-operator image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
     fi
   done
 }
@@ -3146,12 +8470,13 @@ prune_engine_docker_storage() {
 
   local cleanup_failed=0
   log_status "Docker Cleanup" "Pruning Inactive Container Images" "${C_YELLOW}"
-  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" >> "${BUILD_LOG}" 2>&1; then
+  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" --filter "label!=io.borealis.service=borealis-operator" >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
     log_status "Docker Cleanup" "Image Prune Failed" "${C_RED}"
   fi
 
   prune_stale_site_worker_images
+  prune_stale_borealis_operator_images
   restore_required_engine_images "${mode}"
 
   if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then
@@ -3260,12 +8585,17 @@ changed_build_services() {
       printf '%s\n' "${service}"
     fi
   done
+  if [[ "${BUILD_STATUSES[api-backend]:-}" == "built" ]]; then
+    printf '%s\n' api-backend
+  fi
+  if [[ "${BUILD_STATUSES[webui-frontend]:-}" == "built" ]]; then
+    printf '%s\n' webui-frontend
+  fi
   if [[ "${BUILD_STATUSES[job-scheduler]:-}" == "built" ]]; then
-    printf '%s\n' site-worker-orchestrator
+    printf '%s\n' job-scheduler
   fi
   if [[ "${BUILD_STATUSES[site-worker]:-}" == "built" ]]; then
     printf '%s\n' job-scheduler
-    printf '%s\n' site-worker-orchestrator
   fi
 }
 
@@ -3281,159 +8611,6 @@ try:
 except Exception:
     raise SystemExit(0)
 print(str(data.get("mode") or ""))
-PY
-}
-
-all_engine_containers_running() {
-  local service=""
-  for service in "${SERVICE_ROLES[@]}"; do
-    container_running "borealis-engine-${service}" || return 1
-  done
-}
-
-deploy_state_matches() {
-  local mode="$1"
-  python3 - "${DEPLOY_MANIFEST}" "${IMAGE_MANIFEST}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${mode}" "${PROJECT_NAME}" "${SERVICE_ROLES[@]}" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-deploy_path = pathlib.Path(sys.argv[1])
-image_path = pathlib.Path(sys.argv[2])
-compose_path = pathlib.Path(sys.argv[3])
-env_path = pathlib.Path(sys.argv[4])
-mode = sys.argv[5]
-project = sys.argv[6]
-services = sys.argv[7:]
-
-def file_hash(path: pathlib.Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool = False) -> str:
-    lines = []
-    image_keys = {
-        "BOREALIS_API_BACKEND_IMAGE",
-        "BOREALIS_JOB_SCHEDULER_IMAGE",
-        "BOREALIS_SITE_WORKER_IMAGE",
-        "BOREALIS_WEBUI_FRONTEND_IMAGE",
-        "BOREALIS_TRAEFIK_EDGE_IMAGE",
-        "BOREALIS_POSTGRES_DB_IMAGE",
-        "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
-        "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
-        "BOREALIS_ENGINE_MODE",
-        "BOREALIS_WEBUI_MODE",
-    }
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        key = raw.split("=", 1)[0]
-        if key in image_keys and not (
-            legacy_scheduler_worker_images
-            and key in {"BOREALIS_JOB_SCHEDULER_IMAGE", "BOREALIS_SITE_WORKER_IMAGE"}
-        ):
-            continue
-        lines.append(raw)
-    return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
-
-def image_records() -> dict[str, dict[str, str]]:
-    data = json.loads(image_path.read_text(encoding="utf-8"))
-    records = {}
-    for service in services:
-        manifest_service = "job-scheduler" if service == "site-worker-orchestrator" else service
-        record = (data.get("services") or {}).get(manifest_service) or {}
-        records[service] = {
-            "image": record.get("image") or "",
-            "hash": record.get("hash") or "",
-        }
-    return records
-
-if not deploy_path.is_file() or not image_path.is_file() or not compose_path.is_file() or not env_path.is_file():
-    raise SystemExit(1)
-try:
-    existing = json.loads(deploy_path.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-
-expected = {
-    "schema_version": 2,
-    "project": project,
-    "mode": mode,
-    "compose_file_hash": file_hash(compose_path),
-    "env_file_hash": file_hash(env_path),
-    "env_settings_hash": env_settings_hash(env_path),
-    "service_images": image_records(),
-}
-for key, value in expected.items():
-    if key == "env_settings_hash":
-        acceptable = {value, env_settings_hash(env_path, legacy_scheduler_worker_images=True)}
-        if existing.get(key) not in acceptable:
-            raise SystemExit(1)
-        continue
-    if existing.get(key) != value:
-        raise SystemExit(1)
-PY
-}
-
-deploy_non_image_state_matches() {
-  local mode="$1"
-  python3 - "${DEPLOY_MANIFEST}" "${COMPOSE_FILE}" "${COMPOSE_ENV}" "${mode}" "${PROJECT_NAME}" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-deploy_path = pathlib.Path(sys.argv[1])
-compose_path = pathlib.Path(sys.argv[2])
-env_path = pathlib.Path(sys.argv[3])
-project = sys.argv[5]
-
-def file_hash(path: pathlib.Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-def env_settings_hash(path: pathlib.Path, legacy_scheduler_worker_images: bool = False) -> str:
-    lines = []
-    image_keys = {
-        "BOREALIS_API_BACKEND_IMAGE",
-        "BOREALIS_JOB_SCHEDULER_IMAGE",
-        "BOREALIS_SITE_WORKER_IMAGE",
-        "BOREALIS_WEBUI_FRONTEND_IMAGE",
-        "BOREALIS_TRAEFIK_EDGE_IMAGE",
-        "BOREALIS_POSTGRES_DB_IMAGE",
-        "BOREALIS_REMOTE_DESKTOP_GUACD_IMAGE",
-        "BOREALIS_WIREGUARD_TUNNEL_IMAGE",
-        "BOREALIS_ENGINE_MODE",
-        "BOREALIS_WEBUI_MODE",
-    }
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        key = raw.split("=", 1)[0]
-        if key in image_keys and not (
-            legacy_scheduler_worker_images
-            and key in {"BOREALIS_JOB_SCHEDULER_IMAGE", "BOREALIS_SITE_WORKER_IMAGE"}
-        ):
-            continue
-        lines.append(raw)
-    return hashlib.sha256(("\n".join(lines) + "\n").encode("utf-8")).hexdigest()
-
-if not deploy_path.is_file() or not compose_path.is_file() or not env_path.is_file():
-    raise SystemExit(1)
-try:
-    existing = json.loads(deploy_path.read_text(encoding="utf-8"))
-except Exception:
-    raise SystemExit(1)
-if existing.get("schema_version") != 2:
-    raise SystemExit(1)
-expected = {
-    "project": project,
-    "compose_file_hash": file_hash(compose_path),
-    "env_settings_hash": env_settings_hash(env_path),
-}
-for key, value in expected.items():
-    if key == "env_settings_hash":
-        acceptable = {value, env_settings_hash(env_path, legacy_scheduler_worker_images=True)}
-        if existing.get(key) not in acceptable:
-            raise SystemExit(1)
-        continue
-    if existing.get(key) != value:
-        raise SystemExit(1)
 PY
 }
 
@@ -3468,6 +8645,7 @@ def env_settings_hash(path: pathlib.Path) -> str:
     lines = []
     image_keys = {
         "BOREALIS_API_BACKEND_IMAGE",
+        "BOREALIS_OPERATOR_IMAGE",
         "BOREALIS_JOB_SCHEDULER_IMAGE",
         "BOREALIS_SITE_WORKER_IMAGE",
         "BOREALIS_WEBUI_FRONTEND_IMAGE",
@@ -3500,37 +8678,8 @@ def env_int(values: dict[str, str], key: str, default: int = 0) -> int:
     except Exception:
         return default
 
-services = [
-    "docker-proxy",
-    "api-backend",
-    "site-worker-orchestrator",
-    "job-scheduler",
-    "webui-frontend",
-    "traefik-edge",
-    "postgres-db",
-    "remote-desktop-guacd",
-    "wireguard-tunnel",
-]
-allowed_services = set(services)
-service_images = {service: {"image": "", "hash": ""} for service in services}
-if image_path.is_file():
-    try:
-        image_data = json.loads(image_path.read_text(encoding="utf-8"))
-    except Exception:
-        image_data = {}
-    for service, record in sorted((image_data.get("services") or {}).items()):
-        if service not in allowed_services:
-            continue
-        service_images[service] = {
-            "image": record.get("image") or "",
-            "hash": record.get("hash") or "",
-        }
-    if "site-worker-orchestrator" in allowed_services:
-        scheduler_record = (image_data.get("services") or {}).get("job-scheduler") or {}
-        service_images["site-worker-orchestrator"] = {
-            "image": scheduler_record.get("image") or "",
-            "hash": scheduler_record.get("hash") or "",
-        }
+services = []
+service_images = {}
 
 env = env_values(env_file)
 payload = {
@@ -3599,7 +8748,7 @@ PY
 validate_service() {
   local service="$1"
   local candidate=""
-  for candidate in "${SERVICE_ROLES[@]}"; do
+  for candidate in "${SERVICE_ACTION_ROLES[@]}"; do
     [[ "${candidate}" == "${service}" ]] && return 0
   done
   die "Unknown Engine service '${service}'."
@@ -3618,7 +8767,7 @@ prepare_runtime() {
   local mode="$1"
   ensure_engine_runtime_identity
   ensure_service_tree
-  seed_webui_runtime_source
+  seed_webui_runtime_source "${mode}"
   prune_empty_legacy_runtime_paths
   load_existing_image_tags
   local public_host
@@ -3653,13 +8802,46 @@ deploy_engine() {
   network_mode="$(resolve_engine_network_mode)"
   log_deploy_header "${mode}" "${network_mode}"
   ensure_engine_dependencies
+  ensure_k3s_cluster_baseline
+  ensure_longhorn_storage_baseline
   ensure_no_host_postgres_conflict
+  local previous_internal_api_base_url=""
+  previous_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   prepare_runtime "${mode}"
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
+  local desired_postgres_traffic_owner=""
+  local previous_postgres_traffic_owner=""
+  local postgres_cutover_pending=0
+  desired_postgres_traffic_owner="$(resolve_postgres_traffic_owner)"
+  if [[ "${desired_postgres_traffic_owner}" == "k3s" ]] && ! k3s_postgres_enabled; then
+    die "K3s PostgreSQL is the only supported PostgreSQL traffic owner. Do not disable BOREALIS_K3S_POSTGRES_ENABLED after Stage 9 cutover."
+  fi
+  previous_postgres_traffic_owner="$(current_k3s_postgres_traffic_owner)"
+  if [[ "${desired_postgres_traffic_owner}" == "k3s" && "${previous_postgres_traffic_owner}" != "k3s" ]]; then
+    postgres_cutover_pending=1
+    ensure_k3s_postgres_statefulset "${mode}" "docker-compose"
+    import_compose_postgres_into_k3s_for_cutover
+  fi
+  ensure_borealis_operator_bridge
+  ensure_k3s_bridge_workloads "${mode}"
   BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-  ensure_engine_database_schema
+  ensure_borealis_operator_bridge
+  ensure_k3s_wireguard_tunnel "${mode}"
+  if ((postgres_cutover_pending == 1)); then
+    ensure_k3s_postgres_statefulset "${mode}" "k3s"
+  else
+    ensure_k3s_postgres_statefulset "${mode}" "${desired_postgres_traffic_owner}"
+  fi
+  ensure_k3s_engine_database_schema "${mode}"
+  ensure_k3s_api_backend_bridge "${mode}"
+  ensure_k3s_traefik_edge "${mode}"
+  retire_compose_job_scheduler_container
+  ensure_k3s_job_scheduler "${mode}"
+  wait_for_k3s_postgres_cutover_workers
+  local current_internal_api_base_url=""
+  current_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   log_section "Service Reconciliation"
   local changed_services=()
   mapfile -t changed_services < <(changed_build_services)
@@ -3678,87 +8860,223 @@ deploy_engine() {
   if [[ -n "${target_service_lines}" ]]; then
     mapfile -t target_services <<< "${target_service_lines}"
   fi
-  if deploy_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Docker Compose" "Up-to-Date" "${C_GREEN}"
-    refresh_compose_service_statuses
-    write_deploy_manifest "${mode}" "skipped"
+  local requested_target_services=("${target_services[@]}")
+  if ((${#SERVICE_ROLES[@]} == 0)); then
+    log_status "Docker Compose" "Retired" "${C_DIM}"
+    retire_compose_webui_container
+    recycle_k3s_site_workers_for_api_cutover "${previous_internal_api_base_url}" "${current_internal_api_base_url}"
+    recycle_k3s_site_workers_for_runtime_secret_change
+    recycle_k3s_site_workers_for_timezone
+    retire_compose_api_backend_container
+    retire_compose_postgres_container
+    retire_compose_wireguard_tunnel_container
+    retire_compose_remote_desktop_guacd_container
+    retire_compose_traefik_edge_container
+    retire_compose_site_worker_orchestrator_container
+    retire_compose_docker_proxy_container
+    write_deploy_manifest "${mode}" "retired" "${requested_target_services[@]}"
     log_section "Docker Housekeeping"
     prune_engine_docker_storage "${mode}"
     log_section "Engine Deployment Complete"
     log_webui_url
     return 0
   fi
-  if ((${#target_services[@]} > 0)) && deploy_non_image_state_matches "${mode}" && all_engine_containers_running; then
-    log_status "Docker Compose" "Reconciling ${target_services[*]}" "${C_YELLOW}"
-    if ! compose_base up -d --no-deps --no-build "${target_services[@]}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "Docker Compose" "Failed" "${C_RED}"
-      die "Docker Compose scoped reconciliation failed. See ${BUILD_LOG}."
-    fi
-    wait_for_compose_services_to_settle 90 "${target_services[@]}" || true
-    log_status "Docker Compose" "Reconciled ${target_services[*]}" "${C_GREEN}"
-    write_deploy_manifest "${mode}" "up-scoped" "${target_services[@]}"
-    log_section "Docker Housekeeping"
-    prune_engine_docker_storage "${mode}"
-    log_section "Engine Deployment Complete"
-    log_webui_url
-    return 0
-  fi
-  log_status "Docker Compose" "Reconciling Stack" "${C_YELLOW}"
-  if ! compose_base up -d --no-build >> "${BUILD_LOG}" 2>&1; then
-    log_status "Docker Compose" "Failed" "${C_RED}"
-    die "Docker Compose stack reconciliation failed. See ${BUILD_LOG}."
-  fi
-  wait_for_compose_services_to_settle 90 "${SERVICE_ROLES[@]}" || true
-  log_status "Docker Compose" "Stack Reconciled" "${C_GREEN}"
-  write_deploy_manifest "${mode}" "up" "${changed_services[@]}"
-  log_section "Docker Housekeeping"
-  prune_engine_docker_storage "${mode}"
-  log_section "Engine Deployment Complete"
-  log_webui_url
-}
-
-service_compose_name() {
-  local service="$1"
-  validate_service "${service}"
-  printf '%s\n' "${service}"
+  die "Docker Compose service reconciliation is retired. SERVICE_ROLES must remain empty."
 }
 
 service_action() {
   local service="${1:-}"
   local action="${2:-}"
   local mode="${3:-prod}"
-  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile> [dev|prod]"
+  [[ -n "${service}" && -n "${action}" ]] || die "Usage: Engine.sh --service <service> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [dev|prod]"
   validate_service "${service}"
   mode="$(normalize_mode "${mode}")"
   ensure_engine_dependencies
   ensure_no_host_postgres_conflict
   prepare_runtime "${mode}"
   case "${action}" in
+    shadow-import|validate-shadow-import)
+      [[ "${service}" == "postgres-db" ]] || die "shadow-import supported for postgres-db only."
+      validate_k3s_postgres_shadow_import "${mode}"
+      ;;
+    shadow-db-validate|validate-shadow-db)
+      [[ "${service}" == "api-backend" ]] || die "shadow-db-validate supported for api-backend only."
+      validate_k3s_api_backend_shadow_db "${mode}"
+      ;;
     restart)
-      compose_base restart "$(service_compose_name "${service}")"
+      if [[ "${service}" == "webui-frontend" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        ensure_k3s_bridge_workloads "${mode}"
+        retire_compose_webui_container
+        log_status "k3s-webui-frontend" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/webui-frontend" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-webui-frontend" "Restart Failed" "${C_RED}"
+          die "K3s WebUI frontend restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/webui-frontend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
+          die "K3s WebUI frontend rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-webui-frontend" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "api-backend" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        ensure_k3s_api_backend_bridge "${mode}"
+        ensure_k3s_traefik_edge "${mode}"
+        log_status "k3s-api-backend" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/api-backend" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-api-backend" "Restart Failed" "${C_RED}"
+          die "K3s API backend restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/api-backend" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-api-backend" "Rollout Failed" "${C_RED}"
+          die "K3s API backend rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        retire_compose_api_backend_container
+        log_status "k3s-api-backend" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "job-scheduler" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        retire_compose_job_scheduler_container
+        log_status "k3s-job-scheduler" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/job-scheduler" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-job-scheduler" "Restart Failed" "${C_RED}"
+          die "K3s job scheduler restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/job-scheduler" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-job-scheduler" "Rollout Failed" "${C_RED}"
+          die "K3s job scheduler rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-job-scheduler" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "postgres-db" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_longhorn_storage_baseline
+        ensure_k3s_postgres_statefulset "${mode}" "k3s"
+        log_status "k3s-postgres-db" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "statefulset/postgres-db" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-postgres-db" "Restart Failed" "${C_RED}"
+          die "K3s PostgreSQL restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "statefulset/postgres-db" --timeout="${K3S_POSTGRES_ROLLOUT_TIMEOUT}" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-postgres-db" "Rollout Failed" "${C_RED}"
+          die "K3s PostgreSQL rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-postgres-db" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "wireguard-tunnel" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_k3s_wireguard_tunnel "${mode}"
+        log_status "k3s-wireguard-tunnel" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/wireguard-tunnel" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-wireguard-tunnel" "Restart Failed" "${C_RED}"
+          die "K3s WireGuard tunnel restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/wireguard-tunnel" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-wireguard-tunnel" "Rollout Failed" "${C_RED}"
+          die "K3s WireGuard tunnel rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        if ! k3s_wireguard_control_client ping >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-wireguard-tunnel" "Control Socket Failed" "${C_RED}"
+          die "K3s WireGuard control socket check failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "remote-desktop-guacd" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_borealis_operator_bridge
+        ensure_k3s_bridge_workloads "${mode}"
+        retire_compose_remote_desktop_guacd_container
+        log_status "k3s-remote-desktop-guacd" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/remote-desktop-guacd" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-remote-desktop-guacd" "Restart Failed" "${C_RED}"
+          die "K3s guacd restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/remote-desktop-guacd" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-remote-desktop-guacd" "Rollout Failed" "${C_RED}"
+          die "K3s guacd rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-remote-desktop-guacd" "Ready" "${C_GREEN}"
+        return 0
+      fi
+      if [[ "${service}" == "traefik-edge" ]]; then
+        ensure_k3s_cluster_baseline
+        ensure_k3s_traefik_edge "${mode}"
+        log_status "k3s-traefik-edge" "Restarting" "${C_YELLOW}"
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/traefik-edge" >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Restart Failed" "${C_RED}"
+          die "K3s Traefik edge restart failed. See ${BUILD_LOG}."
+        fi
+        if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+          die "K3s Traefik edge rollout failed after restart. See ${BUILD_LOG}."
+        fi
+        if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+          log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+          die "K3s Traefik edge healthcheck failed after restart. See ${BUILD_LOG}."
+        fi
+        log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
+        return 0
+      fi
+      die "restart for '${service}' has no retired Docker Compose fallback. Add an explicit K3s handler before enabling this service action."
       ;;
     rebuild)
       local build_service="${service}"
-      if [[ "${service}" == "site-worker-orchestrator" ]]; then
-        build_service="job-scheduler"
-      fi
       build_images "${mode}" "${build_service}"
       export_image_manifest_env
       write_image_manifest "${mode}"
       BOREALIS_SUPPRESS_DEPLOYMENT_PROFILE_LOG=1 write_compose_env "${mode}" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" "$(read_env_value BOREALIS_ACME_EMAIL)" "$(read_env_value BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS)" "$(read_env_value BOREALIS_ENGINE_DEPLOYMENT_PROFILE)" "$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)"
-      log_status "${service}" "Recreating Container" "${C_YELLOW}"
-      compose_base up -d --no-deps --no-build "$(service_compose_name "${service}")"
+      log_status "${service}" "Skipping Compose - Retired" "${C_DIM}"
+      reconcile_k3s_bridge_for_scoped_rebuild "${service}" "${mode}"
+      retire_compose_webui_container
+      retire_compose_api_backend_container
+      retire_compose_job_scheduler_container
+      retire_compose_postgres_container
+      retire_compose_wireguard_tunnel_container
+      retire_compose_remote_desktop_guacd_container
+      retire_compose_traefik_edge_container
+      retire_compose_site_worker_orchestrator_container
+      retire_compose_docker_proxy_container
       write_deploy_manifest "${mode}" "up-scoped" "${service}"
       prune_engine_docker_storage "${mode}"
       log_webui_url
       ;;
     reload)
       [[ "${service}" == "traefik-edge" ]] || die "reload supported for traefik-edge only."
-      compose_base restart traefik-edge
+      ensure_k3s_cluster_baseline
+      ensure_k3s_traefik_edge "${mode}"
+      log_status "k3s-traefik-edge" "Reloading" "${C_YELLOW}"
+      if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout restart "deployment/traefik-edge" >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Reload Failed" "${C_RED}"
+        die "K3s Traefik edge reload failed. See ${BUILD_LOG}."
+      fi
+      if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/traefik-edge" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Rollout Failed" "${C_RED}"
+        die "K3s Traefik edge rollout failed after reload. See ${BUILD_LOG}."
+      fi
+      if ! k3s_traefik_edge_healthcheck >> "${BUILD_LOG}" 2>&1; then
+        log_status "k3s-traefik-edge" "Healthcheck Failed" "${C_RED}"
+        die "K3s Traefik edge healthcheck failed after reload. See ${BUILD_LOG}."
+      fi
+      log_status "k3s-traefik-edge" "Ready - Traffic Owner" "${C_GREEN}"
       ;;
     reconcile)
       [[ "${service}" == "wireguard-tunnel" ]] || die "reconcile supported for wireguard-tunnel only."
-      compose_base exec -T wireguard-tunnel borealis-wireguard-control-client reconcile || true
+      ensure_k3s_cluster_baseline
+      ensure_k3s_wireguard_tunnel "${mode}"
+      log_status "k3s-wireguard-tunnel" "Reconciling Control Socket" "${C_YELLOW}"
+      if ! k3s_wireguard_control_client reconcile >> "${BUILD_LOG}" 2>&1; then
+        printf '[%s] WireGuard reconcile returned nonzero; keeping K3s tunnel pod running for API-driven peer repair.\n' "$(date +%FT%T)" >> "${BUILD_LOG}"
+      fi
+      log_status "k3s-wireguard-tunnel" "Ready" "${C_GREEN}"
       ;;
     *)
       die "Unsupported service action '${action}'."
@@ -3770,7 +9088,7 @@ usage() {
   cat <<'EOF'
 Usage:
   Engine.sh --network-mode <public|local> deploy [prod|dev]
-  Engine.sh --network-mode <public|local> --service <docker-proxy|api-backend|site-worker-orchestrator|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile> [prod|dev]
+  Engine.sh --network-mode <public|local> --service <api-backend|job-scheduler|webui-frontend|traefik-edge|postgres-db|remote-desktop-guacd|wireguard-tunnel> <restart|rebuild|reload|reconcile|shadow-import|shadow-db-validate> [prod|dev]
   Engine.sh --network-mode <public|local> [--install-dir PATH] [--repo-url URL] [--release-channel stable|unstable] [--repo-branch REF] deploy [prod|dev]
 EOF
 }
@@ -3778,6 +9096,14 @@ EOF
 main() {
   parse_launch_options "$@"
   local pending_command="${LAUNCH_ARGS[0]:-deploy}"
+  case "${pending_command}" in
+    -h|--help|help)
+      ;;
+    *)
+      printf 'Starting Borealis Engine Bootstrap\n'
+      ensure_gum_bootstrap
+      ;;
+  esac
   if launch_requires_engine_network_mode "${pending_command}"; then
     require_explicit_engine_network_mode || exit $?
   fi

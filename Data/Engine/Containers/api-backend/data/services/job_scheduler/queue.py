@@ -6,8 +6,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import threading
 import time
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 from Data.Engine.db import dbapi as sqlite3
 
@@ -61,6 +62,9 @@ WORK_KIND_SCHEDULED_RUN = "scheduled_run"
 WORK_KIND_SCHEDULED_WORKFLOW_RUN = "scheduled_workflow_run"
 WORK_KIND_AGENT_MAINTENANCE_RUN = "agent_maintenance_run"
 
+_TABLE_ENSURE_LOCK = threading.Lock()
+_TABLES_ENSURED_TARGETS: Set[Tuple[str, str]] = set()
+
 
 def _now_ts() -> int:
     return int(time.time())
@@ -79,6 +83,47 @@ def _json_loads(value: Any, default: Any) -> Any:
     except Exception:
         return default
     return parsed if parsed is not None else default
+
+
+def _table_ensure_cache_key(conn: sqlite3.Connection) -> Tuple[str, str]:
+    dialect = str(getattr(conn, "_dialect", "") or "sqlite")
+    if dialect != "sqlite":
+        return (dialect, "engine")
+    try:
+        cur = conn.execute("PRAGMA database_list")
+        rows = cur.fetchall() or []
+        for row in rows:
+            if len(row) >= 3 and str(row[1]) == "main":
+                path = str(row[2] or "").strip()
+                if path:
+                    return (dialect, path)
+    except Exception:
+        pass
+    return (dialect, str(id(getattr(conn, "_raw_connection", conn))))
+
+
+def _postgres_scheduler_tables_ready(conn: sqlite3.Connection) -> bool:
+    if str(getattr(conn, "_dialect", "") or "") == "sqlite":
+        return False
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT COUNT(*)
+          FROM information_schema.tables
+         WHERE table_schema='engine'
+           AND table_name IN (
+               'job_scheduler_work_items',
+               'job_scheduler_workers',
+               'job_scheduler_worker_routes',
+               'job_scheduler_service_snapshots'
+           )
+        """
+    )
+    row = cur.fetchone()
+    try:
+        return int(row[0] if row is not None else 0) == 4
+    except Exception:
+        return False
 
 
 def _positive_ints(values: Sequence[Any]) -> List[int]:
@@ -381,6 +426,18 @@ def _remove_worker_route_files(routes: Sequence[Mapping[str, Any]]) -> None:
 
 
 def ensure_job_scheduler_tables(conn: sqlite3.Connection) -> None:
+    cache_key = _table_ensure_cache_key(conn)
+    with _TABLE_ENSURE_LOCK:
+        if cache_key in _TABLES_ENSURED_TARGETS:
+            return
+        if _postgres_scheduler_tables_ready(conn):
+            _TABLES_ENSURED_TARGETS.add(cache_key)
+            return
+        _ensure_job_scheduler_tables_uncached(conn)
+        _TABLES_ENSURED_TARGETS.add(cache_key)
+
+
+def _ensure_job_scheduler_tables_uncached(conn: sqlite3.Connection) -> None:
     cur = conn.cursor()
     cur.execute(
         """

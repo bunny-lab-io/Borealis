@@ -1001,6 +1001,23 @@ func TestEnvDurationSecondsRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestAPIBackgroundLoopsEnabledDefaultsOnAndAllowsExplicitOff(t *testing.T) {
+	t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", "")
+	if !apiBackgroundLoopsEnabled() {
+		t.Fatalf("expected API background loops enabled by default")
+	}
+	for _, value := range []string{"0", "false", "no", "off"} {
+		t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", value)
+		if apiBackgroundLoopsEnabled() {
+			t.Fatalf("expected API background loops disabled for %q", value)
+		}
+	}
+	t.Setenv("BOREALIS_API_BACKGROUND_LOOPS", "unexpected")
+	if !apiBackgroundLoopsEnabled() {
+		t.Fatalf("expected invalid API background loop value to fall back enabled")
+	}
+}
+
 func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 	originalArgs := os.Args
 	t.Cleanup(func() { os.Args = originalArgs })
@@ -1030,26 +1047,44 @@ func TestProcessModeDetectionSeparatesRoles(t *testing.T) {
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator")
 	os.Args = []string{"api-backend", "job-scheduler"}
-	if !siteWorkerOrchestratorMode() || schedulerManagerMode() || schedulerHealthcheckMode() || siteWorkerOrchestratorHealthcheckMode() {
-		t.Fatalf("expected site-worker-orchestrator role to select orchestrator mode")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() || schedulerHealthcheckMode() {
+		t.Fatalf("expected site-worker-orchestrator role to select retired-role guard")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator")
 	os.Args = []string{"api-backend", "site-worker-orchestrator-healthcheck"}
-	if siteWorkerOrchestratorMode() || !siteWorkerOrchestratorHealthcheckMode() || schedulerManagerMode() {
-		t.Fatalf("expected site-worker-orchestrator-healthcheck arg to override inherited orchestrator role")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() {
+		t.Fatalf("expected site-worker-orchestrator-healthcheck arg to select retired-role guard")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "site-worker-orchestrator-healthcheck")
 	os.Args = []string{"api-backend"}
-	if siteWorkerOrchestratorMode() || !siteWorkerOrchestratorHealthcheckMode() || schedulerManagerMode() {
-		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select orchestrator healthcheck only")
+	if !retiredSiteWorkerOrchestratorMode() || schedulerManagerMode() {
+		t.Fatalf("expected site-worker-orchestrator-healthcheck role to select retired-role guard")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
+	os.Args = []string{"api-backend"}
+	if !borealisOperatorMode() || borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || retiredSiteWorkerOrchestratorMode() {
+		t.Fatalf("expected borealis-operator role to select operator mode")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "borealis-operator")
+	os.Args = []string{"api-backend", "borealis-operator-healthcheck"}
+	if borealisOperatorMode() || !borealisOperatorClientHealthcheckMode() || schedulerManagerMode() || retiredSiteWorkerOrchestratorMode() {
+		t.Fatalf("expected borealis-operator-healthcheck arg to override inherited operator role")
 	}
 
 	t.Setenv("BOREALIS_PROCESS_ROLE", "")
 	os.Args = []string{"api-backend", "api-healthcheck"}
-	if schedulerManagerMode() || schedulerHealthcheckMode() || !apiHealthcheckMode() {
+	if schedulerManagerMode() || schedulerHealthcheckMode() || borealisOperatorClientHealthcheckMode() || apiDBHealthcheckMode() || !apiHealthcheckMode() {
 		t.Fatalf("expected api-healthcheck arg to select API healthcheck only")
+	}
+
+	t.Setenv("BOREALIS_PROCESS_ROLE", "job-scheduler")
+	os.Args = []string{"api-backend", "api-db-healthcheck"}
+	if schedulerManagerMode() || schedulerHealthcheckMode() || apiHealthcheckMode() || borealisOperatorClientHealthcheckMode() || !apiDBHealthcheckMode() {
+		t.Fatalf("expected api-db-healthcheck arg to override inherited scheduler role")
 	}
 }
 
@@ -3564,6 +3599,53 @@ func TestServerTimeHandlerReturnsNativePayload(t *testing.T) {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("expected payload key %q in %+v", key, payload)
 		}
+	}
+}
+
+func TestServerTimezonesHandlerRequiresAuthentication(t *testing.T) {
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
+	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "Authentication required") {
+		t.Fatalf("expected normalized auth message, got %s", recorder.Body.String())
+	}
+}
+
+func TestServerTimezonesHandlerReturnsMetadata(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_HOST_TIMEZONE", "America/Denver")
+	t.Setenv("TZ", "Etc/UTC")
+	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/server/timezones", nil)
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	serverTimezonesHandler(auth).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := payload["current_timezone"]; got != "America/Denver" {
+		t.Fatalf("unexpected current_timezone %q", got)
+	}
+	if got := payload["timezone_id"]; got != "America/Denver" {
+		t.Fatalf("unexpected timezone_id %q", got)
+	}
+	if got := payload["change_supported"]; got != false {
+		t.Fatalf("expected change_supported false, got %v", got)
+	}
+	timezones, ok := payload["timezones"].([]any)
+	if !ok || len(timezones) != 1 || timezones[0] != "America/Denver" {
+		t.Fatalf("unexpected timezones %+v", payload["timezones"])
 	}
 }
 

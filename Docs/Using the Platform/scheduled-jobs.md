@@ -82,7 +82,7 @@ Sites can launch local-network onboarding jobs that appear in Scheduled Jobs. Th
 
     ### Runtime behavior
 
-    - `job-scheduler` owns scheduled ticks, queue leases, and service-action queueing. `site-worker-orchestrator` owns Docker-backed site-worker lifecycle and allowlisted Engine service-action execution.
+    - `job-scheduler` owns scheduled ticks, queue leases, service-action queueing, and K3s site-worker reconciliation. K3s workload/site-worker lifecycle goes through `borealis-operator`; WireGuard reconcile goes through the mounted tunnel control socket. Docker/Compose helper execution is retired after Stage 11.
     - `job_kind=patch_install` stores a single `patch_install` component, uses system execution context, and bypasses assembly credential selection.
     - New Patch Management drafts expose only the `Schedule` tab in `Create_Job.jsx`; Patch Management supplies job name, patch component, target list, and system execution context.
     - New Patch Management drafts include an internal `return_to` route so successful creation returns to the originating fleet or device Patch Management page.

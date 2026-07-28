@@ -254,17 +254,56 @@ func engineBackupRestoreHandler(auth *authService, bootstrapOnly bool) http.Hand
 		if nextState, err := currentBootstrapState(ctx, auth); err == nil {
 			bootstrapPayload = publicBootstrapState(nextState)
 		}
+		runtimeRefresh := scheduleEngineBackupPostRestoreRefresh()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":           "ok",
-			"restart_required": true,
+			"restart_required": boolFromAny(runtimeRefresh["manual_restart_required"]),
 			"unlock_required":  true,
 			"confirmation":     req.Confirmation,
 			"tables_restored":  result.TablesRestored,
 			"rows_restored":    result.RowsRestored,
 			"files_restored":   result.FilesRestored,
 			"logs_cleared":     result.LogsCleared,
+			"runtime_refresh":  runtimeRefresh,
 			"bootstrap_state":  bootstrapPayload,
 		})
+	}
+}
+
+func scheduleEngineBackupPostRestoreRefresh() map[string]any {
+	result := map[string]any{
+		"scheduled":               false,
+		"manual_restart_required": true,
+		"method":                  "manual",
+		"message":                 "Restart Engine services so restored trust and runtime state are loaded.",
+	}
+	if !containerizedEngineEnabled() {
+		result["reason"] = "non_containerized_engine"
+		return result
+	}
+	client, configured := newBorealisOperatorClientFromEnv()
+	if !configured {
+		result["reason"] = "borealis_operator_unavailable"
+		return result
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	payload, err := client.startPostRestoreRefresh(ctx)
+	if err != nil {
+		result["reason"] = "borealis_operator_request_failed"
+		result["message"] = err.Error()
+		return result
+	}
+	operatorResult := schedulerAnyMap(payload["result"])
+	if len(operatorResult) == 0 {
+		operatorResult = payload
+	}
+	return map[string]any{
+		"scheduled":               true,
+		"manual_restart_required": false,
+		"method":                  "borealis-operator",
+		"message":                 "Engine runtime refresh was scheduled automatically.",
+		"operator_result":         operatorResult,
 	}
 }
 

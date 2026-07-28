@@ -3,6 +3,14 @@ set -eu
 
 PROJECT_ROOT="${BOREALIS_PROJECT_ROOT:-/opt/Borealis}"
 API_ROOT="${PROJECT_ROOT}/Engine/Services/api-backend"
+ROLE="${BOREALIS_PROCESS_ROLE:-api-backend}"
+
+case "${ROLE}" in
+  site-worker-orchestrator|worker-orchestrator|site-worker-orchestrator-healthcheck|worker-orchestrator-healthcheck)
+    echo "site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle" >&2
+    exit 64
+    ;;
+esac
 
 mkdir -p \
   "${API_ROOT}/config" \

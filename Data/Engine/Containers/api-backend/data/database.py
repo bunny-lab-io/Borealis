@@ -1106,26 +1106,28 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
             """
             CREATE TABLE IF NOT EXISTS patch_policies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
                 description TEXT,
-                policy_type TEXT NOT NULL,
+                policy_type TEXT NOT NULL DEFAULT 'site',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 locked INTEGER NOT NULL DEFAULT 0,
                 role_scope TEXT NOT NULL DEFAULT 'Both',
                 approval_mode TEXT NOT NULL DEFAULT 'conservative_msp',
                 deferral_days INTEGER NOT NULL DEFAULT 14,
                 managed_update_mode INTEGER NOT NULL DEFAULT 1,
+                class_toggles_json TEXT NOT NULL DEFAULT '{}',
                 install_schedule_type TEXT NOT NULL DEFAULT 'weekly',
                 install_start_ts INTEGER,
                 reboot_after_install INTEGER NOT NULL DEFAULT 0,
+                reboot_policy_json TEXT NOT NULL DEFAULT '{}',
                 reboot_schedule_enabled INTEGER NOT NULL DEFAULT 0,
                 reboot_schedule_type TEXT NOT NULL DEFAULT 'weekly',
                 reboot_start_ts INTEGER,
                 force_reboot_logged_in INTEGER NOT NULL DEFAULT 0,
                 created_by TEXT,
                 updated_by TEXT,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -1141,9 +1143,11 @@ def _ensure_patch_policy_tables(conn: sqlite3.Connection, *, logger: Optional[lo
             ("approval_mode", "ALTER TABLE patch_policies ADD COLUMN approval_mode TEXT NOT NULL DEFAULT 'conservative_msp'"),
             ("deferral_days", "ALTER TABLE patch_policies ADD COLUMN deferral_days INTEGER NOT NULL DEFAULT 14"),
             ("managed_update_mode", "ALTER TABLE patch_policies ADD COLUMN managed_update_mode INTEGER NOT NULL DEFAULT 1"),
+            ("class_toggles_json", "ALTER TABLE patch_policies ADD COLUMN class_toggles_json TEXT NOT NULL DEFAULT '{}'"),
             ("install_schedule_type", "ALTER TABLE patch_policies ADD COLUMN install_schedule_type TEXT NOT NULL DEFAULT 'weekly'"),
             ("install_start_ts", "ALTER TABLE patch_policies ADD COLUMN install_start_ts INTEGER"),
             ("reboot_after_install", "ALTER TABLE patch_policies ADD COLUMN reboot_after_install INTEGER NOT NULL DEFAULT 0"),
+            ("reboot_policy_json", "ALTER TABLE patch_policies ADD COLUMN reboot_policy_json TEXT NOT NULL DEFAULT '{}'"),
             ("reboot_schedule_enabled", "ALTER TABLE patch_policies ADD COLUMN reboot_schedule_enabled INTEGER NOT NULL DEFAULT 0"),
             ("reboot_schedule_type", "ALTER TABLE patch_policies ADD COLUMN reboot_schedule_type TEXT NOT NULL DEFAULT 'weekly'"),
             ("reboot_start_ts", "ALTER TABLE patch_policies ADD COLUMN reboot_start_ts INTEGER"),

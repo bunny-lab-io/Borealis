@@ -32,7 +32,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
     `git pull --ff-only` stops if local files changed. Review those changes before updating so Engine deployment does not mix local edits with upstream changes.
 
 ??? note "Optional: Development Redeploy"
-    Use development mode only when testing WebUI or Engine changes interactively.
+    Use development mode only when testing WebUI or Engine changes interactively. Development deploys refresh the HMR runtime source from staged WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 
     === "Public"
 
@@ -61,6 +61,6 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
 
     ### Runtime behavior
 
-    - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, and runs Docker Compose under the Borealis project name.
-    - Production mode serves the static WebUI from the WebUI frontend container and routes public traffic through Traefik.
-    - Development mode keeps the same stack shape but runs the WebUI through Vite/HMR behind Traefik.
+    - `Engine.sh --network-mode public|local deploy prod` stages source, checks dependencies, builds changed images, writes deploy manifests, reconciles K3s-owned workloads, and keeps Docker Compose retired through the empty manifest/policy check.
+    - Production mode serves the static WebUI from the K3s `webui-frontend` workload through the existing Traefik edge. The retired Compose WebUI container is removed during deploy.
+    - Development mode keeps the same stack shape, syncs staged WebUI source into `Engine/Services/webui-frontend/data/web-interface/`, and runs the WebUI through Vite/HMR behind Traefik.

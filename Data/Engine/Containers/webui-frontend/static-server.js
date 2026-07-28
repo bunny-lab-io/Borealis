@@ -5,7 +5,7 @@ const http = require("http");
 const path = require("path");
 const { pipeline } = require("stream");
 
-const host = "127.0.0.1";
+const host = process.env.BOREALIS_WEBUI_BIND_HOST || "127.0.0.1";
 const port = Number.parseInt(process.env.BOREALIS_WEBUI_UPSTREAM_PORT || "8000", 10);
 const root = path.resolve(
   process.env.BOREALIS_WEBUI_STATIC_ROOT || "/opt/Borealis/Data/Engine/web-interface/build",

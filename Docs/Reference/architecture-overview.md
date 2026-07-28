@@ -56,10 +56,10 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
 
     - `Data/Engine/` - Engine package shim, unit tests, and container source roots.
     - `Data/Engine/Containers/api-backend/data/` - Engine API/backend source (authoritative).
-    - `Data/Engine/Containers/` - Engine container and Compose source (authoritative).
+    - `Data/Engine/Containers/` - Engine container, K3s workload, and retired Compose source (authoritative).
     - `Data/Agent/` - Agent source (authoritative).
     - `Engine/` - Engine generated runtime state (regenerated/deployed by `Engine.sh`).
-    - `Engine/Deploy/` - Compose env, image manifest, deploy manifest, and build log.
+    - `Engine/Deploy/` - runtime env, image manifest, deploy manifest, K3s hash files, and build log.
     - `Engine/Services/<role>/` - container role config/env/logs/state/secrets/cache/run directories.
     - `Agent/` - Agent runtime copy (regenerated each launch).
     - `Data/Engine/Containers/webui-frontend/data/web-interface/src/` - WebUI source.
@@ -108,9 +108,9 @@ Borealis has two main runtime sides: the Engine server and the Agent clients. Th
     - WireGuard for remote protocol transport (shell, VNC, future protocols).
 
     ### Container service map
-    - `api-backend`: `127.0.0.1:5000`, Python Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
-    - `webui-frontend`: `127.0.0.1:8000` in production and dev.
+    - `api-backend`: K3s ClusterIP `api-backend.borealis.svc:5001`, Engine API, Socket.IO, scheduler/workflows, VNC WebSocket proxy, Ansible execution.
+    - `webui-frontend`: K3s ClusterIP `:8000` for production WebUI and dev/HMR after WebUI cutover.
     - `traefik-edge`: host `80/443`, same-origin routing, ACME, public edge logs.
-    - `postgres-db`: `127.0.0.1:5432`, persistent database state.
-    - `remote-desktop-guacd`: `127.0.0.1:4822`, VNC-only Guacamole daemon.
-    - `wireguard-tunnel`: UDP `30000`, `borealis-wg`, WireGuard command control socket.
+    - `postgres-db`: K3s ClusterIP `postgres-db.borealis.svc:5432`, Longhorn-backed persistent database state.
+    - `remote-desktop-guacd`: K3s ClusterIP `remote-desktop-guacd.borealis.svc:4822`, VNC-only Guacamole daemon.
+    - `wireguard-tunnel`: K3s host-network UDP `30000`, `borealis-wg`, WireGuard command control socket.

@@ -7,8 +7,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -89,6 +92,39 @@ func TestSchedulerManagerMonthlyNextRunPreservesLocalWallClockAcrossDST(t *testi
 	}
 }
 
+func TestSchedulerSiteWorkerLifecycleModeDefaultsToK3sAfterComposeRetirement(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", "")
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "")
+
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected empty lifecycle mode to default to k3s, got %q", got)
+	}
+
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "surprise")
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected unknown lifecycle mode to fail closed to k3s, got %q", got)
+	}
+}
+
+func TestSchedulerSiteWorkerLifecycleModeRejectsLegacyDockerModes(t *testing.T) {
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "compose")
+
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected legacy compose mode to stay k3s, got %q", got)
+	}
+
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "docker")
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected legacy docker mode to stay k3s, got %q", got)
+	}
+
+	t.Setenv("BOREALIS_SITE_WORKER_LIFECYCLE_MODE", "site-worker-orchestrator")
+	if got := schedulerSiteWorkerLifecycleMode(); got != "k3s" {
+		t.Fatalf("expected legacy orchestrator mode to stay k3s, got %q", got)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},
@@ -163,7 +199,7 @@ func TestDurationForOperator(t *testing.T) {
 }
 
 func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
-	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
+	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadataForHost("worker-1", "127.0.0.1", 56001, 61001, "borealis-operator"))
 	content := schedulerRouteYAML(route)
 	for _, expected := range []string{
 		"borealis-site-worker-worker-1-remote-desktop",
@@ -179,7 +215,7 @@ func TestSchedulerManagerRouteYAMLIncludesRemoteDesktop(t *testing.T) {
 func TestSchedulerManagerRouteYAMLIncludesHostnameAliases(t *testing.T) {
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "engine.example.test")
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME_ALIASES", "engine.example.test,alias.example.test")
-	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadata("worker-1", 56001, 61001))
+	route := schedulerBuildRoute("worker-1", "site-worker-worker-1", 7, 56001, schedulerWorkerRouteMetadataForHost("worker-1", "127.0.0.1", 56001, 61001, "borealis-operator"))
 
 	content := schedulerRouteYAML(route)
 
@@ -202,6 +238,88 @@ func TestSchedulerManagerSiteWorkerImageMatch(t *testing.T) {
 	}
 }
 
+func TestSchedulerK3sSiteWorkerTerminalPhase(t *testing.T) {
+	for _, phase := range []string{"Failed", "failed", "Succeeded", "succeeded"} {
+		if !schedulerK3sSiteWorkerTerminal(map[string]any{"kubernetes_phase": phase}) {
+			t.Fatalf("phase %s should be terminal", phase)
+		}
+	}
+	for _, phase := range []string{"Running", "Pending", ""} {
+		if schedulerK3sSiteWorkerTerminal(map[string]any{"kubernetes_phase": phase}) {
+			t.Fatalf("phase %s should not be terminal", phase)
+		}
+	}
+}
+
+func TestSchedulerK3sSiteWorkerServiceHostRequiresClusterIPRoute(t *testing.T) {
+	host, reason := schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode":    "host-loopback",
+		"remote_ops_host": "127.0.0.1",
+	})
+	if host != "127.0.0.1" || reason != "cluster_ip_route_migration" {
+		t.Fatalf("expected host-loopback migration, host=%q reason=%q", host, reason)
+	}
+
+	host, reason = schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode": "cluster-ip",
+	})
+	if host != "" || reason != "cluster_ip_service_missing" {
+		t.Fatalf("expected missing service migration, host=%q reason=%q", host, reason)
+	}
+
+	host, reason = schedulerK3sSiteWorkerServiceHost(map[string]any{
+		"network_mode":       "cluster-ip",
+		"service_cluster_ip": "10.43.10.9",
+		"remote_ops_host":    "site-worker-test.borealis.svc.cluster.local",
+	})
+	if host != "10.43.10.9" || reason != "" {
+		t.Fatalf("expected ClusterIP route host, host=%q reason=%q", host, reason)
+	}
+}
+
+func TestSchedulerK3sSiteWorkerGUIDStableBySite(t *testing.T) {
+	first := schedulerK3sSiteWorkerGUID(7)
+	second := schedulerK3sSiteWorkerGUID(7)
+	other := schedulerK3sSiteWorkerGUID(8)
+	if first == "" {
+		t.Fatal("expected stable worker guid")
+	}
+	if first != second {
+		t.Fatalf("site worker guid changed for same site: %q != %q", first, second)
+	}
+	if first == other {
+		t.Fatalf("site worker guid should differ per site: %q", first)
+	}
+	if !borealisOperatorKubernetesNameAllowed(first) {
+		t.Fatalf("site worker guid must remain Kubernetes label-safe: %q", first)
+	}
+}
+
+func TestSchedulerRemoveOrphanRouteFiles(t *testing.T) {
+	routeDir := t.TempDir()
+	t.Setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", routeDir)
+	active := filepath.Join(routeDir, "site-worker-active.yml")
+	orphan := filepath.Join(routeDir, "site-worker-orphan.yml")
+	other := filepath.Join(routeDir, "core.yml")
+	for _, path := range []string{active, orphan, other} {
+		if err := os.WriteFile(path, []byte("http: {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	schedulerRemoveOrphanRouteFiles([]string{active})
+
+	if _, err := os.Stat(active); err != nil {
+		t.Fatalf("active route removed: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("orphan route still present or unexpected error: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("non-site-worker route removed: %v", err)
+	}
+}
+
 func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	t.Setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "")
 	if got := schedulerSiteWorkerSocketIOAsyncMode(); got != "eventlet" {
@@ -213,27 +331,66 @@ func TestSchedulerSiteWorkerSocketIOAsyncModeDefaultsToEventlet(t *testing.T) {
 	}
 }
 
-func TestSchedulerManagerServiceActionUsesOrchestrator(t *testing.T) {
-	var received orchestratorServiceActionRequest
+func TestSchedulerManagerTraefikReloadUsesOperator(t *testing.T) {
+	t.Setenv("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER", "k3s")
+	var received borealisOperatorCommandRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/services/action" {
+		if r.URL.Path != "/v1/command" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		if got := r.Header.Get(internalTokenHeader); got != goInternalToken([]byte("test-secret")) {
-			t.Fatalf("unexpected internal token %q", got)
 		}
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"queued": true})
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"verb":   received.Verb,
+			"result": map[string]any{"ok": true, "service_key": "traefik-edge"},
+		})
 	}))
 	defer server.Close()
 
 	manager := &goSchedulerManager{
 		secret: []byte("test-secret"),
-		orchestrator: &siteWorkerOrchestratorClient{
+		operator: &borealisOperatorClient{
 			baseURL:    server.URL,
-			token:      goInternalToken([]byte("test-secret")),
+			token:      "test-token",
+			httpClient: server.Client(),
+		},
+	}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "traefik-edge",
+		"action":      map[string]any{"action": "reload"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	if received.Verb != "RestartKnownWorkload" || cleanText(received.Params["service_key"]) != "traefik-edge" {
+		t.Fatalf("unexpected operator payload %+v", received)
+	}
+}
+
+func TestSchedulerManagerK3sServiceActionUsesOperator(t *testing.T) {
+	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
+	var received borealisOperatorCommandRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/command" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"verb":   received.Verb,
+			"result": map[string]any{"ok": true, "service_key": "webui-frontend"},
+		})
+	}))
+	defer server.Close()
+
+	manager := &goSchedulerManager{
+		operator: &borealisOperatorClient{
+			baseURL:    server.URL,
+			token:      "operator-token",
 			httpClient: server.Client(),
 		},
 	}
@@ -244,8 +401,167 @@ func TestSchedulerManagerServiceActionUsesOrchestrator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run service action: %v", err)
 	}
-	if received.ServiceKey != "webui-frontend" || received.Action != "restart" {
-		t.Fatalf("unexpected orchestrator payload %+v", received)
+	if received.Verb != "RestartKnownWorkload" {
+		t.Fatalf("unexpected operator verb %q", received.Verb)
+	}
+	params := schedulerAnyMap(received.Params)
+	if params["service_key"] != "webui-frontend" {
+		t.Fatalf("unexpected operator params %#v", received.Params)
+	}
+}
+
+func TestSchedulerManagerRejectsWebUIRebuildHelper(t *testing.T) {
+	manager := &goSchedulerManager{}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "webui-frontend",
+		"action":      map[string]any{"action": "rebuild", "mode": "prod"},
+	})
+	if err == nil {
+		t.Fatal("expected webui rebuild helper rejection")
+	}
+	if !strings.Contains(err.Error(), "unsupported service action") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSchedulerManagerK3sPostgresRestartUsesOperator(t *testing.T) {
+	t.Setenv("BOREALIS_POSTGRES_TRAFFIC_OWNER", "k3s")
+	var received borealisOperatorCommandRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/command" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":     true,
+			"verb":   received.Verb,
+			"result": map[string]any{"ok": true, "service_key": "postgres-db"},
+		})
+	}))
+	defer server.Close()
+
+	manager := &goSchedulerManager{
+		operator: &borealisOperatorClient{
+			baseURL:    server.URL,
+			token:      "operator-token",
+			httpClient: server.Client(),
+		},
+	}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "postgres-db",
+		"action":      map[string]any{"action": "restart"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	if received.Verb != "RestartKnownWorkload" {
+		t.Fatalf("unexpected operator verb %q", received.Verb)
+	}
+	params := schedulerAnyMap(received.Params)
+	if params["service_key"] != "postgres-db" {
+		t.Fatalf("unexpected operator params %#v", received.Params)
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileUsesControlSocket(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", socketPath)
+
+	received := make(chan map[string]any, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(conn).Decode(&payload); err != nil {
+			return
+		}
+		received <- payload
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"returncode": 0,
+			"stdout":     "ok",
+			"stderr":     "",
+		})
+	}()
+
+	manager := &goSchedulerManager{}
+	err = manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
+	}
+	select {
+	case payload := <-received:
+		if payload["command"] != "reconcile" {
+			t.Fatalf("unexpected wireguard payload %#v", payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wireguard control socket did not receive command")
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileFailsWhenSocketMissing(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", filepath.Join(t.TempDir(), "missing.sock"))
+	manager := &goSchedulerManager{}
+	err := manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err == nil {
+		t.Fatal("expected missing wireguard control socket error")
+	}
+	if !strings.Contains(err.Error(), "wireguard control socket action failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSchedulerManagerK3sWireGuardReconcileNonzeroCompletes(t *testing.T) {
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	socketPath := filepath.Join(t.TempDir(), "control.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen unix socket: %v", err)
+	}
+	defer listener.Close()
+	t.Setenv("BOREALIS_WIREGUARD_CONTROL_SOCKET", socketPath)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(conn).Decode(&payload); err != nil {
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(map[string]any{
+			"returncode": 1,
+			"stdout":     "",
+			"stderr":     "wg interface unavailable",
+		})
+	}()
+
+	manager := &goSchedulerManager{}
+	err = manager.runServiceAction(context.Background(), map[string]any{
+		"service_key": "wireguard-tunnel",
+		"action":      map[string]any{"action": "reconcile"},
+	})
+	if err != nil {
+		t.Fatalf("run service action: %v", err)
 	}
 }
 

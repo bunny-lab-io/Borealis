@@ -5,13 +5,16 @@ Use service-scoped commands when troubleshooting one Engine component without re
     These commands are useful after config edits, WebUI rebuilds, Traefik routing changes, or WireGuard tunnel issues. Use the same `--network-mode` value used during install. Use the normal Engine update path when you want to pull and redeploy the entire platform.
 
 ```sh
-# Restart the API backend container.
+# Restart the API backend workload.
 ./Engine.sh --network-mode local --service api-backend restart
 
-# Rebuild the WebUI frontend container in production mode.
+# Restart the WebUI frontend workload without rebuilding its image.
+./Engine.sh --network-mode local --service webui-frontend restart
+
+# Rebuild the WebUI frontend workload in production mode.
 ./Engine.sh --network-mode local --service webui-frontend rebuild prod
 
-# Rebuild the WebUI frontend container in development mode.
+# Rebuild the WebUI frontend workload in development mode.
 ./Engine.sh --network-mode local --service webui-frontend rebuild dev
 
 # Reload Traefik edge configuration.
@@ -34,8 +37,9 @@ Use service-scoped commands when troubleshooting one Engine component without re
 
     ### Runtime behavior
 
-    - Service-scoped commands go through `Engine.sh` so Compose project naming, env loading, and service role detection remain consistent.
+    - Service-scoped commands go through `Engine.sh` so K3s reconciliation, retired Compose manifest state, env loading, and service role detection remain consistent.
     - `api-backend restart` is enough for most backend-only config and code reload checks after a container image already exists.
-    - `webui-frontend rebuild prod` recreates the static WebUI service for production.
-    - `webui-frontend rebuild dev` keeps Vite/HMR behavior available for development deployments.
-    - `wireguard-tunnel reconcile` repairs Engine-side tunnel state without requiring a full stack redeploy.
+    - `webui-frontend restart` restarts the K3s WebUI Deployment without rebuilding image layers.
+    - `webui-frontend rebuild prod` rebuilds the production WebUI image and reconciles the K3s WebUI workload.
+    - `webui-frontend rebuild dev` syncs staged WebUI source, rebuilds the development image, and keeps Vite/HMR behavior available in the K3s WebUI workload.
+    - `wireguard-tunnel reconcile` runs through the K3s tunnel pod and repairs Engine-side tunnel state without requiring a full stack redeploy.

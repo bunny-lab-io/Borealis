@@ -25,16 +25,28 @@ const wireguardInterfaceName = "borealis-wg"
 var composeServiceSpecs = []struct {
 	key   string
 	label string
+}{}
+
+var k3sWorkloadServiceSpecs = []struct {
+	key   string
+	label string
 }{
-	{"docker-proxy", "Docker Proxy"},
 	{"api-backend", "API Backend"},
-	{"site-worker-orchestrator", "Site Worker Orchestrator"},
 	{"job-scheduler", "Job Scheduler"},
-	{"webui-frontend", "WebUI Frontend"},
-	{"traefik-edge", "Traefik Edge"},
 	{"postgres-db", "PostgreSQL"},
 	{"remote-desktop-guacd", "Guacamole"},
+	{"traefik-edge", "Traefik Edge"},
+	{"webui-frontend", "WebUI Frontend"},
 	{"wireguard-tunnel", "WireGuard Tunnel"},
+}
+
+type overviewServiceSnapshotStore interface {
+	overviewServiceSnapshots(ctx context.Context) (map[string]overviewServiceSnapshot, error)
+}
+
+type overviewServiceSnapshot struct {
+	payload   map[string]any
+	updatedAt int64
 }
 
 func registerServerOverviewRoutes(mux *http.ServeMux, auth *authService, realtime *operatorRealtimeHub, _ http.Handler) {
@@ -96,7 +108,7 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore, real
 		"collected_at":           time.Now().UTC().Format(time.RFC3339Nano),
 		"host":                   collectOverviewHostPayload(),
 		"resources":              collectOverviewResourcePayload(),
-		"services":               collectOverviewServiceRows(),
+		"services":               collectOverviewServiceRows(ctx, store),
 		"wireguard":              collectOverviewWireGuardPayload(ctx, store),
 		"public_edge":            collectOverviewPublicEdgePayload(),
 		"security":               collectOverviewSecurityPayload(),
@@ -114,20 +126,24 @@ func collectOverviewHostPayload() map[string]any {
 	nowLocal := nowUTC.Local()
 	timezoneID := currentTimezoneID()
 	hostname, _ := os.Hostname()
+	webuiUpstreamHost := firstText(strings.TrimSpace(os.Getenv("BOREALIS_WEBUI_UPSTREAM_HOST")), "127.0.0.1")
+	webuiUpstreamPort := parseIntDefault(os.Getenv("BOREALIS_WEBUI_UPSTREAM_PORT"), 8000)
 	return map[string]any{
-		"hostname":           hostname,
-		"kernel":             runtime.GOOS,
-		"architecture":       runtime.GOARCH,
-		"engine_mode":        firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
-		"webui_mode":         normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
-		"server_time":        serializeServerTime(nowLocal, nowUTC, timezoneID),
-		"timezone":           nowLocal.Format("MST"),
-		"timezone_id":        timezoneID,
-		"uptime_seconds":     readProcUptimeSeconds(),
-		"public_base_url":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
-		"public_hostname":    strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
-		"public_https_port":  parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
-		"deployment_profile": deploymentProfilePayload(),
+		"hostname":            hostname,
+		"kernel":              runtime.GOOS,
+		"architecture":        runtime.GOARCH,
+		"engine_mode":         firstText(strings.TrimSpace(os.Getenv("BOREALIS_ENGINE_MODE")), "unknown"),
+		"webui_mode":          normalizeOverviewWebUIMode(os.Getenv("BOREALIS_WEBUI_MODE")),
+		"webui_traffic_owner": normalizeOverviewWebUITrafficOwner(os.Getenv("BOREALIS_WEBUI_TRAFFIC_OWNER")),
+		"webui_upstream":      map[string]any{"host": webuiUpstreamHost, "port": webuiUpstreamPort, "display": endpointDisplay(webuiUpstreamHost, webuiUpstreamPort)},
+		"server_time":         serializeServerTime(nowLocal, nowUTC, timezoneID),
+		"timezone":            nowLocal.Format("MST"),
+		"timezone_id":         timezoneID,
+		"uptime_seconds":      readProcUptimeSeconds(),
+		"public_base_url":     strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_BASE_URL")),
+		"public_hostname":     strings.TrimSpace(os.Getenv("BOREALIS_PUBLIC_HOSTNAME")),
+		"public_https_port":   parseIntDefault(os.Getenv("BOREALIS_PUBLIC_HTTPS_PORT"), 443),
+		"deployment_profile":  deploymentProfilePayload(),
 	}
 }
 
@@ -157,54 +173,283 @@ func collectOverviewResourcePayload() map[string]any {
 	}
 }
 
-func collectOverviewServiceRows() []map[string]any {
+func collectOverviewServiceRows(ctx context.Context, store operatorStore) []map[string]any {
 	if !containerizedEngineEnabled() {
 		return collectSystemdServiceRows()
 	}
+	snapshots := collectOverviewComposeServiceSnapshots(ctx, store)
 	rows := make([]map[string]any, 0, len(composeServiceSpecs))
 	for _, spec := range composeServiceSpecs {
-		containerName := "borealis-engine-" + spec.key
-		if spec.key == "docker-proxy" {
-			containerName = "borealis-engine-docker-proxy"
+		if snapshot, ok := snapshots[spec.key]; ok && overviewServiceSnapshotFresh(snapshot.updatedAt) {
+			rows = append(rows, overviewComposeServiceRowFromSnapshot(spec.key, spec.label, snapshot))
+			continue
 		}
-		inspected := dockerInspectContainer(containerName)
-		statePayload, _ := inspected["State"].(map[string]any)
-		configPayload, _ := inspected["Config"].(map[string]any)
-		state := strings.ToLower(cleanText(statePayload["Status"]))
-		if state == "" {
-			state = "unknown"
+		rows = append(rows, overviewComposeServiceRowFromDocker(spec.key, spec.label))
+	}
+	rows = append(rows, collectOverviewK3sWorkloadRows(ctx)...)
+	return rows
+}
+
+func collectOverviewComposeServiceSnapshots(ctx context.Context, store operatorStore) map[string]overviewServiceSnapshot {
+	if store == nil {
+		return map[string]overviewServiceSnapshot{}
+	}
+	snapshotStore, ok := store.(overviewServiceSnapshotStore)
+	if !ok {
+		return map[string]overviewServiceSnapshot{}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	snapshots, err := snapshotStore.overviewServiceSnapshots(requestCtx)
+	if err != nil {
+		return map[string]overviewServiceSnapshot{}
+	}
+	return snapshots
+}
+
+func (s *postgresOperatorStore) overviewServiceSnapshots(ctx context.Context) (map[string]overviewServiceSnapshot, error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(ctx, `
+		SELECT service_key, payload_json, updated_at
+		  FROM engine.job_scheduler_service_snapshots
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	snapshots := map[string]overviewServiceSnapshot{}
+	for rows.Next() {
+		var serviceKey string
+		var rawPayload string
+		var updatedAt int64
+		if err := rows.Scan(&serviceKey, &rawPayload, &updatedAt); err != nil {
+			return nil, err
 		}
-		health := ""
-		if healthPayload, ok := statePayload["Health"].(map[string]any); ok {
-			health = strings.ToLower(cleanText(healthPayload["Status"]))
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(rawPayload), &payload); err != nil || payload == nil {
+			continue
 		}
-		displayStatus := overviewDisplayStatus(state, health)
-		rows = append(rows, map[string]any{
-			"key":                spec.key,
-			"label":              spec.label,
-			"instance":           nil,
-			"unit_name":          containerName,
-			"compose_service":    spec.key,
-			"runtime":            "compose",
-			"docker_state":       state,
-			"docker_health":      nullableStringValue(health),
-			"docker_status":      displayStatus,
-			"docker_status_text": cleanText(statePayload["Status"]),
-			"display_status":     displayStatus,
-			"active_state":       state,
-			"sub_state":          firstText(health, state),
-			"enabled_state":      "compose",
-			"main_pid":           coerceInt64(statePayload["Pid"]),
-			"started_at":         nullableStringValue(normalizeStartedAt(cleanText(statePayload["StartedAt"]))),
-			"fragment_path":      nil,
-			"restart_supported":  overviewServiceRestartSupported(spec.key),
-			"actions":            overviewServiceActions(spec.key),
-			"pending_action":     nil,
-			"status":             overviewComposeStatus(state, health),
-			"container_image":    cleanText(configPayload["Image"]),
-		})
+		key := normalizeOverviewSnapshotServiceKey(serviceKey, payload)
+		if key == "" {
+			continue
+		}
+		snapshots[key] = overviewServiceSnapshot{payload: payload, updatedAt: updatedAt}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
+func normalizeOverviewSnapshotServiceKey(serviceKey string, payload map[string]any) string {
+	candidates := []string{
+		serviceKey,
+		cleanText(payload["Service"]),
+		cleanText(payload["service"]),
+		cleanText(payload["Name"]),
+		cleanText(payload["name"]),
+	}
+	for _, candidate := range candidates {
+		normalized := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(candidate), "borealis-engine-"))
+		for _, spec := range composeServiceSpecs {
+			if normalized == spec.key {
+				return spec.key
+			}
+		}
+	}
+	return ""
+}
+
+func overviewServiceSnapshotFresh(updatedAt int64) bool {
+	return updatedAt > 0 && time.Now().Unix()-updatedAt <= 120
+}
+
+func overviewComposeServiceRowFromDocker(serviceKey string, label string) map[string]any {
+	containerName := "borealis-engine-" + serviceKey
+	inspected := dockerInspectContainer(containerName)
+	statePayload, _ := inspected["State"].(map[string]any)
+	configPayload, _ := inspected["Config"].(map[string]any)
+	state := strings.ToLower(cleanText(statePayload["Status"]))
+	if state == "" {
+		state = "unknown"
+	}
+	health := ""
+	if healthPayload, ok := statePayload["Health"].(map[string]any); ok {
+		health = strings.ToLower(cleanText(healthPayload["Status"]))
+	}
+	displayStatus := overviewDisplayStatus(state, health)
+	return map[string]any{
+		"key":                serviceKey,
+		"label":              label,
+		"instance":           nil,
+		"unit_name":          containerName,
+		"compose_service":    serviceKey,
+		"runtime":            "compose",
+		"docker_state":       state,
+		"docker_health":      nullableStringValue(health),
+		"docker_status":      displayStatus,
+		"docker_status_text": cleanText(statePayload["Status"]),
+		"display_status":     displayStatus,
+		"active_state":       state,
+		"sub_state":          firstText(health, state),
+		"enabled_state":      "compose",
+		"main_pid":           coerceInt64(statePayload["Pid"]),
+		"started_at":         nullableStringValue(normalizeStartedAt(cleanText(statePayload["StartedAt"]))),
+		"fragment_path":      nil,
+		"restart_supported":  overviewServiceRestartSupported(serviceKey),
+		"actions":            overviewServiceActions(serviceKey),
+		"pending_action":     nil,
+		"status":             overviewComposeStatus(state, health),
+		"container_image":    cleanText(configPayload["Image"]),
+	}
+}
+
+func overviewComposeServiceRowFromSnapshot(serviceKey string, label string, snapshot overviewServiceSnapshot) map[string]any {
+	payload := snapshot.payload
+	containerName := firstText(cleanText(payload["Name"]), cleanText(payload["Names"]), "borealis-engine-"+serviceKey)
+	state := strings.ToLower(firstText(cleanText(payload["State"]), cleanText(payload["state"])))
+	if state == "" {
+		state = "unknown"
+	}
+	health := strings.ToLower(firstText(cleanText(payload["Health"]), cleanText(payload["health"])))
+	statusText := firstText(cleanText(payload["Status"]), cleanText(payload["status"]), state)
+	displayStatus := overviewDisplayStatus(state, health)
+	startedAt := firstText(cleanText(payload["StartedAt"]), cleanText(payload["started_at"]))
+	if startedAt == "" {
+		startedAt = firstText(cleanText(payload["CreatedAt"]), cleanText(payload["created_at"]))
+	}
+	return map[string]any{
+		"key":                 serviceKey,
+		"label":               label,
+		"instance":            nil,
+		"unit_name":           containerName,
+		"compose_service":     serviceKey,
+		"runtime":             "compose",
+		"docker_state":        state,
+		"docker_health":       nullableStringValue(health),
+		"docker_status":       displayStatus,
+		"docker_status_text":  statusText,
+		"display_status":      displayStatus,
+		"active_state":        state,
+		"sub_state":           firstText(health, state),
+		"enabled_state":       "compose",
+		"main_pid":            coerceInt64(payload["Pid"]),
+		"started_at":          nullableStringValue(normalizeStartedAt(startedAt)),
+		"fragment_path":       nil,
+		"restart_supported":   overviewServiceRestartSupported(serviceKey),
+		"actions":             overviewServiceActions(serviceKey),
+		"pending_action":      nil,
+		"status":              overviewComposeStatus(state, health),
+		"container_image":     firstText(cleanText(payload["Image"]), cleanText(payload["image"])),
+		"snapshot_source":     "job-scheduler",
+		"snapshot_updated_at": snapshot.updatedAt,
+	}
+}
+
+func collectOverviewK3sWorkloadRows(ctx context.Context) []map[string]any {
+	rows := []map[string]any{}
+	client, configured := newBorealisOperatorClientFromEnv()
+	for _, spec := range k3sWorkloadServiceSpecs {
+		if !overviewK3sWorkloadEnabled(spec.key) {
+			continue
+		}
+		row := overviewK3sWorkloadServiceRow(spec.key, spec.label, nil, false, configured)
+		if configured {
+			requestCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			payload, err := client.command(requestCtx, "GetWorkloadStatus", map[string]any{"service_key": spec.key})
+			cancel()
+			if err == nil {
+				row = overviewK3sWorkloadServiceRow(spec.key, spec.label, schedulerAnyMap(payload["result"]), true, true)
+			}
+		}
+		rows = append(rows, row)
 	}
 	return rows
+}
+
+func overviewK3sWorkloadEnabled(serviceKey string) bool {
+	switch strings.ToLower(strings.TrimSpace(serviceKey)) {
+	case "api-backend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_API_BACKEND_TRAFFIC_OWNER")
+	case "job-scheduler":
+		return schedulerEnvOwnerIsK3s("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER")
+	case "postgres-db":
+		return schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_POSTGRES_TRAFFIC_OWNER")
+	case "remote-desktop-guacd":
+		return schedulerEnvOwnerIsK3s("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER")
+	case "traefik-edge":
+		return schedulerEnvOwnerIsK3s("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER")
+	case "webui-frontend":
+		return schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_RUNTIME_OWNER") || schedulerEnvOwnerIsK3s("BOREALIS_WEBUI_TRAFFIC_OWNER")
+	case "wireguard-tunnel":
+		return schedulerEnvOwnerIsK3s("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER")
+	default:
+		return false
+	}
+}
+
+func overviewK3sWorkloadKind(serviceKey string) string {
+	switch strings.ToLower(strings.TrimSpace(serviceKey)) {
+	case "postgres-db":
+		return "StatefulSet"
+	default:
+		return "Deployment"
+	}
+}
+
+func overviewK3sWorkloadServiceRow(serviceKey string, label string, workload map[string]any, available bool, operatorConfigured bool) map[string]any {
+	desiredReady := false
+	if available {
+		if value, ok := workload["desired_ready"].(bool); ok {
+			desiredReady = value
+		}
+	}
+	status := "unknown"
+	state := "unknown"
+	if desiredReady {
+		status = "healthy"
+		state = "running"
+	} else if operatorConfigured {
+		status = "warning"
+		state = "pending"
+	}
+	kind := firstText(cleanText(workload["kind"]), overviewK3sWorkloadKind(serviceKey))
+	name := firstText(cleanText(workload["name"]), serviceKey)
+	actions := overviewServiceActions(serviceKey)
+	return map[string]any{
+		"key":                serviceKey,
+		"label":              label,
+		"instance":           nil,
+		"unit_name":          strings.ToLower(kind) + "/" + name,
+		"compose_service":    nil,
+		"kubernetes_kind":    kind,
+		"kubernetes_name":    name,
+		"kubernetes_ready":   desiredReady,
+		"replicas":           coerceInt64(workload["replicas"]),
+		"ready_replicas":     coerceInt64(workload["ready_replicas"]),
+		"available_replicas": coerceInt64(workload["available_replicas"]),
+		"runtime":            "k3s",
+		"docker_state":       "",
+		"docker_health":      nullableStringValue(status),
+		"docker_status":      status,
+		"docker_status_text": state,
+		"display_status":     status,
+		"active_state":       state,
+		"sub_state":          state,
+		"enabled_state":      "k3s",
+		"main_pid":           int64(0),
+		"started_at":         nil,
+		"fragment_path":      nil,
+		"restart_supported":  overviewServiceRestartSupported(serviceKey),
+		"actions":            actions,
+		"pending_action":     nil,
+		"status":             status,
+		"container_image":    nil,
+	}
 }
 
 func collectOverviewWireGuardPayload(ctx context.Context, store operatorStore) map[string]any {
@@ -769,15 +1014,12 @@ func (s *postgresOperatorStore) activeWireGuardLeaseCount(ctx context.Context) i
 func overviewServiceActions(serviceKey string) []map[string]string {
 	switch serviceKey {
 	case "webui-frontend":
-		return []map[string]string{
-			{"id": "rebuild_prod", "label": "Rebuild Prod", "action": "rebuild", "mode": "prod"},
-			{"id": "rebuild_dev", "label": "Rebuild Dev", "action": "rebuild", "mode": "dev"},
-		}
+		return []map[string]string{{"id": "restart", "label": "Restart", "action": "restart"}}
 	case "traefik-edge":
 		return []map[string]string{{"id": "reload", "label": "Reload", "action": "reload"}}
 	case "wireguard-tunnel":
 		return []map[string]string{{"id": "reconcile", "label": "Reconcile", "action": "reconcile"}}
-	case "docker-proxy", "api-backend", "job-scheduler", "postgres-db", "remote-desktop-guacd":
+	case "api-backend", "postgres-db", "remote-desktop-guacd":
 		return []map[string]string{{"id": "restart", "label": "Restart", "action": "restart"}}
 	default:
 		return []map[string]string{}
@@ -830,6 +1072,15 @@ func normalizeOverviewWebUIMode(value string) string {
 			return "unknown"
 		}
 		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func normalizeOverviewWebUITrafficOwner(value string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.ReplaceAll(value, "_", "-"))) {
+	case "", "auto", "k3s", "kubernetes", "compose", "docker", "docker-compose":
+		return "k3s"
+	default:
+		return "unknown"
 	}
 }
 

@@ -49,12 +49,26 @@ type Client struct {
 	handlerMu   sync.RWMutex
 	stateMu     sync.RWMutex
 	connected   bool
+	asyncErrMu  sync.Mutex
+	asyncErr    error
+	ackMu       sync.Mutex
+	nextAckID   int64
+	pendingAcks map[string]chan ackResult
 	timeout     time.Duration
+	readIdle    time.Duration
 	tlsConfig   *tls.Config
 	dialContext func(context.Context, string, string) (net.Conn, error)
 }
 
-const defaultNamespaceConnectTimeout = 45 * time.Second
+const (
+	defaultNamespaceConnectTimeout = 45 * time.Second
+	defaultReadIdleTimeout         = 60 * time.Second
+)
+
+type ackResult struct {
+	payload []any
+	err     error
+}
 
 type Option func(*Client)
 
@@ -80,10 +94,12 @@ func NewClient(baseURL string, headers map[string]string, opts ...Option) *Clien
 		copiedHeaders[key] = value
 	}
 	client := &Client{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		headers:  copiedHeaders,
-		handlers: map[string]Handler{},
-		timeout:  defaultNamespaceConnectTimeout,
+		baseURL:     strings.TrimRight(baseURL, "/"),
+		headers:     copiedHeaders,
+		handlers:    map[string]Handler{},
+		pendingAcks: map[string]chan ackResult{},
+		timeout:     defaultNamespaceConnectTimeout,
+		readIdle:    defaultReadIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(client)
@@ -111,6 +127,12 @@ func (c *Client) SetConnectTimeout(timeout time.Duration) {
 	c.timeout = timeout
 }
 
+func (c *Client) SetReadIdleTimeout(timeout time.Duration) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.readIdle = timeout
+}
+
 func (c *Client) Connect(ctx context.Context) error {
 	wsURL, err := socketURL(c.baseURL)
 	if err != nil {
@@ -134,6 +156,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return err
 	}
 	c.resetConnected()
+	c.resetAsyncError()
 	c.writeMu.Lock()
 	c.conn = conn
 	c.writeMu.Unlock()
@@ -143,6 +166,7 @@ func (c *Client) Connect(ctx context.Context) error {
 			c.conn = nil
 		}
 		c.writeMu.Unlock()
+		c.failPendingAcks(fmt.Errorf("socket disconnected"))
 		_ = conn.Close()
 	}()
 	connectTimeout := c.connectTimeout()
@@ -159,6 +183,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 		_, message, err := conn.ReadMessage()
 		if err != nil {
+			if asyncErr := c.takeAsyncError(); asyncErr != nil {
+				return asyncErr
+			}
 			if deadlineActive && isTimeoutError(err) && !c.isConnected() {
 				return fmt.Errorf("socket namespace connect timeout after %s", connectTimeout)
 			}
@@ -168,8 +195,12 @@ func (c *Client) Connect(ctx context.Context) error {
 			return err
 		}
 		c.recordActivity()
-		if deadlineActive && c.isConnected() {
-			_ = conn.SetReadDeadline(time.Time{})
+		if c.isConnected() {
+			if readIdle := c.readIdleTimeout(); readIdle > 0 {
+				_ = conn.SetReadDeadline(time.Now().Add(readIdle))
+			} else if deadlineActive {
+				_ = conn.SetReadDeadline(time.Time{})
+			}
 			deadlineActive = false
 		}
 	}
@@ -187,6 +218,34 @@ func (c *Client) Emit(event string, payload any) error {
 		return err
 	}
 	return c.write(packet)
+}
+
+func (c *Client) EmitWithAck(ctx context.Context, event string, payload any, timeout time.Duration) ([]any, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	ackID, ackCh := c.registerPendingAck()
+	packet, err := encodeEventPacketWithAck(event, payload, ackID)
+	if err != nil {
+		c.removePendingAck(ackID)
+		return nil, err
+	}
+	if err := c.write(packet); err != nil {
+		c.removePendingAck(ackID)
+		return nil, err
+	}
+	select {
+	case result := <-ackCh:
+		return result.payload, result.err
+	case <-ctx.Done():
+		c.removePendingAck(ackID)
+		return nil, ctx.Err()
+	}
 }
 
 func (c *Client) write(message string) error {
@@ -220,12 +279,10 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 	}
 	switch packet[0] {
 	case '0':
-		if c.onConnected != nil {
-			if err := c.onConnected(ctx); err != nil {
-				return err
-			}
-		}
 		c.markConnected()
+		if c.onConnected != nil {
+			go c.runConnectedCallback(ctx)
+		}
 	case '2':
 		eventName, payload, ackID, err := parseEventPacket(packet[1:])
 		if err != nil {
@@ -241,8 +298,22 @@ func (c *Client) handleSocketPacket(ctx context.Context, packet string) error {
 			return nil
 		}
 		go c.dispatchEvent(ctx, handler, payload, ackID)
+	case '3':
+		if err := c.handleAckPacket(packet[1:]); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (c *Client) runConnectedCallback(ctx context.Context) {
+	if c.onConnected == nil {
+		return
+	}
+	if err := c.onConnected(ctx); err != nil {
+		c.setAsyncError(err)
+		c.closeCurrent()
+	}
 }
 
 func (c *Client) dispatchEvent(ctx context.Context, handler Handler, payload any, ackID string) {
@@ -302,6 +373,82 @@ func (c *Client) connectTimeout() time.Duration {
 	return c.timeout
 }
 
+func (c *Client) readIdleTimeout() time.Duration {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.readIdle
+}
+
+func (c *Client) resetAsyncError() {
+	c.asyncErrMu.Lock()
+	defer c.asyncErrMu.Unlock()
+	c.asyncErr = nil
+}
+
+func (c *Client) setAsyncError(err error) {
+	if err == nil {
+		return
+	}
+	c.asyncErrMu.Lock()
+	defer c.asyncErrMu.Unlock()
+	c.asyncErr = err
+}
+
+func (c *Client) takeAsyncError() error {
+	c.asyncErrMu.Lock()
+	defer c.asyncErrMu.Unlock()
+	err := c.asyncErr
+	c.asyncErr = nil
+	return err
+}
+
+func (c *Client) closeCurrent() {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.conn != nil {
+		_ = c.conn.Close()
+	}
+}
+
+func (c *Client) registerPendingAck() (string, chan ackResult) {
+	c.ackMu.Lock()
+	defer c.ackMu.Unlock()
+	c.nextAckID++
+	ackID := strconv.FormatInt(c.nextAckID, 10)
+	ackCh := make(chan ackResult, 1)
+	if c.pendingAcks == nil {
+		c.pendingAcks = map[string]chan ackResult{}
+	}
+	c.pendingAcks[ackID] = ackCh
+	return ackID, ackCh
+}
+
+func (c *Client) removePendingAck(ackID string) {
+	c.ackMu.Lock()
+	defer c.ackMu.Unlock()
+	delete(c.pendingAcks, ackID)
+}
+
+func (c *Client) resolvePendingAck(ackID string, payload []any, err error) {
+	c.ackMu.Lock()
+	ackCh := c.pendingAcks[ackID]
+	delete(c.pendingAcks, ackID)
+	c.ackMu.Unlock()
+	if ackCh != nil {
+		ackCh <- ackResult{payload: payload, err: err}
+	}
+}
+
+func (c *Client) failPendingAcks(err error) {
+	c.ackMu.Lock()
+	pending := c.pendingAcks
+	c.pendingAcks = map[string]chan ackResult{}
+	c.ackMu.Unlock()
+	for _, ackCh := range pending {
+		ackCh <- ackResult{err: err}
+	}
+}
+
 func isTimeoutError(err error) bool {
 	var netErr net.Error
 	return errors.As(err, &netErr) && netErr.Timeout()
@@ -353,11 +500,15 @@ func afterAckCallback(response any) func() {
 }
 
 func encodeEventPacket(event string, payload any) (string, error) {
+	return encodeEventPacketWithAck(event, payload, "")
+}
+
+func encodeEventPacketWithAck(event string, payload any, ackID string) (string, error) {
 	body, err := json.Marshal([]any{event, payload})
 	if err != nil {
 		return "", err
 	}
-	return "42" + string(body), nil
+	return "42" + strings.TrimSpace(ackID) + string(body), nil
 }
 
 func parseEventPacket(rest string) (string, any, string, error) {
@@ -389,6 +540,32 @@ func parseEventPacket(rest string) (string, any, string, error) {
 		return eventName, nil, ackID, nil
 	}
 	return eventName, values[1], ackID, nil
+}
+
+func (c *Client) handleAckPacket(rest string) error {
+	ackID, jsonText := splitPacketID(rest)
+	if ackID == "" {
+		return fmt.Errorf("ack packet missing id")
+	}
+	if jsonText == "" {
+		c.resolvePendingAck(ackID, nil, nil)
+		return nil
+	}
+	var values []any
+	if err := json.Unmarshal([]byte(jsonText), &values); err != nil {
+		c.resolvePendingAck(ackID, nil, err)
+		return err
+	}
+	c.resolvePendingAck(ackID, values, nil)
+	return nil
+}
+
+func splitPacketID(rest string) (string, string) {
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	return rest[:i], rest[i:]
 }
 
 func AckIDFromInt(value int64) string {

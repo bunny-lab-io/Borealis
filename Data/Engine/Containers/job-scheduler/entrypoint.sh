@@ -7,9 +7,8 @@ ROLE="${BOREALIS_PROCESS_ROLE:-job-scheduler}"
 
 case "${ROLE}" in
   site-worker-orchestrator|worker-orchestrator|site-worker-orchestrator-healthcheck|worker-orchestrator-healthcheck)
-    mkdir -p \
-      "${API_ROOT}/cache" \
-      "${API_ROOT}/logs/site-workers"
+    echo "site-worker-orchestrator runtime mode is retired; use borealis-operator managed K3s site-worker lifecycle" >&2
+    exit 64
     ;;
   *)
     mkdir -p \

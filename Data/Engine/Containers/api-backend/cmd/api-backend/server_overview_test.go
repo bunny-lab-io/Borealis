@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -9,6 +10,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,6 +78,205 @@ func TestCollectOverviewPublicEdgePayloadReadsTraefikACMECertificate(t *testing.
 	}
 	if got := row["sha256_fingerprint"]; cleanText(got) == "" {
 		t.Fatalf("expected certificate fingerprint, got %#v", row)
+	}
+}
+
+func TestCollectOverviewHostPayloadReportsWebUITrafficOwner(t *testing.T) {
+	t.Setenv("BOREALIS_WEBUI_MODE", "prod")
+	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
+	t.Setenv("BOREALIS_WEBUI_UPSTREAM_HOST", "10.43.82.247")
+	t.Setenv("BOREALIS_WEBUI_UPSTREAM_PORT", "8000")
+
+	payload := collectOverviewHostPayload()
+	if got := payload["webui_mode"]; got != "production" {
+		t.Fatalf("webui mode = %#v", got)
+	}
+	if got := payload["webui_traffic_owner"]; got != "k3s" {
+		t.Fatalf("webui traffic owner = %#v", got)
+	}
+	upstream, ok := payload["webui_upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("webui upstream missing: %#v", payload["webui_upstream"])
+	}
+	if got := upstream["display"]; got != "10.43.82.247:8000" {
+		t.Fatalf("webui upstream display = %#v", got)
+	}
+}
+
+func TestCollectOverviewServiceRowsOmitsRetiredComposeWebUI(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	t.Setenv("BOREALIS_WEBUI_TRAFFIC_OWNER", "k3s")
+	t.Setenv("BOREALIS_WEBUI_FRONTEND_IMAGE", "borealis-engine/webui-frontend:sha-test")
+
+	rows := collectOverviewServiceRows(context.Background(), nil)
+	for _, row := range rows {
+		if row["key"] == "webui-frontend" && row["runtime"] == "compose" {
+			t.Fatalf("retired Compose webui-frontend row should be omitted: %#v", row)
+		}
+	}
+}
+
+func TestCollectOverviewServiceRowsIncludesK3sScheduler(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req borealisOperatorCommandRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Verb != "GetWorkloadStatus" {
+			t.Fatalf("unexpected operator verb %q", req.Verb)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"verb": req.Verb,
+			"result": map[string]any{
+				"kind":               "Deployment",
+				"name":               "job-scheduler",
+				"service_key":        "job-scheduler",
+				"replicas":           1,
+				"ready_replicas":     1,
+				"available_replicas": 1,
+				"desired_ready":      true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	t.Setenv("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "test-secret")
+
+	rows := collectOverviewServiceRows(context.Background(), nil)
+	for _, row := range rows {
+		if row["key"] == "job-scheduler" {
+			if row["runtime"] != "k3s" || row["status"] != "healthy" {
+				t.Fatalf("unexpected K3s scheduler row: %#v", row)
+			}
+			return
+		}
+	}
+	t.Fatalf("K3s scheduler row missing: %#v", rows)
+}
+
+func TestCollectOverviewServiceRowsUsesK3sRowsForRetiredWorkloads(t *testing.T) {
+	expected := map[string]string{
+		"api-backend":          "Deployment",
+		"job-scheduler":        "Deployment",
+		"postgres-db":          "StatefulSet",
+		"remote-desktop-guacd": "Deployment",
+		"traefik-edge":         "Deployment",
+		"webui-frontend":       "Deployment",
+		"wireguard-tunnel":     "Deployment",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req borealisOperatorCommandRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Verb != "GetWorkloadStatus" {
+			t.Fatalf("unexpected operator verb %q", req.Verb)
+		}
+		serviceKey := cleanText(req.Params["service_key"])
+		kind, ok := expected[serviceKey]
+		if !ok {
+			t.Fatalf("unexpected service_key %q", serviceKey)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":   true,
+			"verb": req.Verb,
+			"result": map[string]any{
+				"kind":               kind,
+				"name":               serviceKey,
+				"service_key":        serviceKey,
+				"replicas":           1,
+				"ready_replicas":     1,
+				"available_replicas": 1,
+				"desired_ready":      true,
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	t.Setenv("BOREALIS_API_BACKEND_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_JOB_SCHEDULER_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_POSTGRES_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_REMOTE_DESKTOP_GUACD_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_TRAEFIK_EDGE_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_WEBUI_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_WIREGUARD_TUNNEL_RUNTIME_OWNER", "k3s")
+	t.Setenv("BOREALIS_OPERATOR_BASE_URL", server.URL)
+	t.Setenv("BOREALIS_OPERATOR_SECRET", "test-secret")
+
+	rows := collectOverviewServiceRows(context.Background(), nil)
+	seen := map[string]map[string]any{}
+	for _, row := range rows {
+		seen[cleanText(row["key"])] = row
+	}
+	for serviceKey, kind := range expected {
+		row := seen[serviceKey]
+		if row == nil {
+			t.Fatalf("K3s row missing for %s: %#v", serviceKey, rows)
+		}
+		if row["runtime"] != "k3s" || row["compose_service"] != nil || row["status"] != "healthy" {
+			t.Fatalf("unexpected K3s row for %s: %#v", serviceKey, row)
+		}
+		if row["kubernetes_kind"] != kind {
+			t.Fatalf("kind for %s = %#v", serviceKey, row["kubernetes_kind"])
+		}
+	}
+}
+
+type overviewServiceSnapshotStoreStub struct {
+	snapshots map[string]overviewServiceSnapshot
+	err       error
+}
+
+func (s overviewServiceSnapshotStoreStub) lookupOperator(context.Context, string, string) (operatorProfile, error) {
+	return operatorProfile{}, nil
+}
+
+func (s overviewServiceSnapshotStoreStub) overviewServiceSnapshots(context.Context) (map[string]overviewServiceSnapshot, error) {
+	return s.snapshots, s.err
+}
+
+func TestCollectOverviewServiceRowsIgnoresRetiredComposeBridgeSnapshots(t *testing.T) {
+	t.Setenv("BOREALIS_ENGINE_CONTAINERIZED", "1")
+	now := time.Now().Unix()
+	store := overviewServiceSnapshotStoreStub{snapshots: map[string]overviewServiceSnapshot{
+		"site-worker-orchestrator": {
+			updatedAt: now,
+			payload: map[string]any{
+				"Name":    "borealis-engine-site-worker-orchestrator",
+				"Service": "site-worker-orchestrator",
+				"State":   "running",
+				"Health":  "healthy",
+				"Status":  "Up 10 minutes (healthy)",
+				"Image":   "borealis-engine/api-backend:sha-test",
+			},
+		},
+		"traefik-edge": {
+			updatedAt: now,
+			payload: map[string]any{
+				"Name":    "borealis-engine-traefik-edge",
+				"Service": "traefik-edge",
+				"State":   "running",
+				"Health":  "healthy",
+				"Status":  "Up 10 minutes (healthy)",
+				"Image":   "traefik:v3.4.3",
+			},
+		},
+	}}
+
+	rows := collectOverviewServiceRows(context.Background(), store)
+	seen := map[string]map[string]any{}
+	for _, row := range rows {
+		seen[cleanText(row["key"])] = row
+	}
+	for _, serviceKey := range []string{"site-worker-orchestrator", "traefik-edge"} {
+		if row := seen[serviceKey]; row != nil && row["runtime"] == "compose" {
+			t.Fatalf("retired Compose bridge row should be ignored for %s: %#v", serviceKey, rows)
+		}
 	}
 }
 

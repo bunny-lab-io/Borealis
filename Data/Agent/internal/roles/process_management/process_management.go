@@ -17,11 +17,11 @@ import (
 
 const (
 	refreshIntervalSeconds  = 5.0
-	defaultCommandTimeout   = 8 * time.Second
+	defaultCommandTimeout   = 20 * time.Second
 	terminateTimeout        = 15 * time.Second
 	emptySnapshotRetryDelay = 250 * time.Millisecond
 	emptySnapshotRetryLimit = 2
-	warmupSnapshotTimeout   = defaultCommandTimeout + 2*time.Second
+	warmupSnapshotTimeout   = defaultCommandTimeout + 5*time.Second
 )
 
 type Manager struct {

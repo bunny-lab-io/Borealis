@@ -3831,7 +3831,7 @@ export default function DeviceSummary() {
       return { value: "Connected", tone: "ready", detail: "Engine can reach agent management socket." };
     }
     if (statusIsOnline) {
-      return { value: "Disconnected", tone: "warning", detail: "Agent heartbeat is present, but management socket is unavailable." };
+      return { value: "Reconnecting", tone: "warning", detail: "Agent heartbeat is present while the management socket reconnects." };
     }
     return { value: "Unavailable", tone: "danger", detail: "Agent must heartbeat before management socket can be confirmed." };
   }, [statusIsOnline, tunnelInfo?.agent_socket]);
@@ -3840,7 +3840,7 @@ export default function DeviceSummary() {
       return { value: "Connected", tone: "ready" };
     }
     if (statusIsOnline) {
-      return { value: "Degraded", tone: "warning" };
+      return { value: "Reconnecting", tone: "warning" };
     }
     return { value: "Offline", tone: "danger" };
   }, [statusIsOnline, tunnelInfo?.agent_socket]);
@@ -3866,7 +3866,7 @@ export default function DeviceSummary() {
         detail: !statusIsOnline
           ? "Recover control before running backend tools."
           : tunnelBlocked
-            ? "Agent management connection needs review."
+            ? "Agent heartbeat is online while the management socket reconnects."
             : updateFailed
               ? "Review updater state and startup flow."
               : "Role health needs review.",
@@ -3976,7 +3976,7 @@ export default function DeviceSummary() {
   );
   const agentManagementSummary = useMemo(() => {
     if (!statusIsOnline) return "Agent heartbeat offline.";
-    if (engineConnection.value !== "Connected") return "Agent heartbeat online, management socket degraded.";
+    if (engineConnection.value !== "Connected") return "Agent heartbeat online, management socket reconnecting.";
     if (tunnelConnection.value !== "Connected") return "Management socket connected, tunnel not active.";
     return "Management socket and WireGuard tunnel connected.";
   }, [engineConnection.value, statusIsOnline, tunnelConnection.value]);

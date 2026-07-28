@@ -53,4 +53,20 @@ describe("site worker resource refresh value", () => {
 
     expect(siteWorkerContainerRefreshValue(nextRow)).not.toBe(siteWorkerContainerRefreshValue(baseRow));
   });
+
+  it("changes when active worker status changes without docker stats", () => {
+    const baseRow = {
+      site_worker_payload_ready: true,
+      site_worker_container_id: "N/A",
+      site_worker_status: "",
+      site_worker_docker_stats: null,
+    };
+    const nextRow = {
+      ...baseRow,
+      site_worker_container_id: "abcdef123456",
+      site_worker_status: "running",
+    };
+
+    expect(siteWorkerContainerRefreshValue(nextRow)).not.toBe(siteWorkerContainerRefreshValue(baseRow));
+  });
 });

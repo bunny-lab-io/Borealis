@@ -62,7 +62,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 | `agent-role` | Engine-side Agent RoleManager import and role health behavior. |
 | `ansible` | Engine Ansible runner behavior. |
 | `assemblies` | Assembly cache, import/export, payload, permission, execution type, and official catalog behavior. |
-| `core` | Core API, edge runtime, Engine secret config, and web UI API checks. |
+| `core` | Core API, database schema bootstrap, edge runtime, Engine secret config, and web UI API checks. |
 | `devices` | Device APIs, purge flow, filters, and session inventory. |
 | `enrollment` | Agent enrollment and token API behavior. |
 | `files` | Engine file management API behavior. |
@@ -105,7 +105,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 - Agent tests use Go 1.22+; `Data/Agent/build-agent.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
 - WebUI tests require a prepared runtime cache at `Engine/Services/webui-frontend/cache/web-interface` with `node_modules` and `Unit_Tests`. Container deploys also seed editable dev/HMR source under `Engine/Services/webui-frontend/data/web-interface/`, but that source folder is not the test dependency cache.
 - Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache, the dev/HMR runtime source, or defer UI runtime validation to the operator redeploying the WebUI container.
-- Container launcher/static validation should start with shell and Compose checks before broader unit lanes:
+- Container launcher/static validation should start with shell and retired Compose policy checks before broader unit lanes:
 ```bash
 bash -n Engine.sh
 docker compose --env-file Data/Engine/Containers/compose.env.example -f Data/Engine/Containers/compose.yaml config

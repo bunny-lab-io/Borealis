@@ -11,7 +11,15 @@ const GO_REALTIME_EVENTS = [
   "watchdog_incidents_changed",
   "device_watchdogs_changed",
 ];
-const GO_REALTIME_EVENT_SET = new Set(GO_REALTIME_EVENTS);
+const LEGACY_SOCKET_EVENTS = new Set([
+  "agent_window_list",
+  "agent_screenshot_task",
+  "connect_error",
+  "device_activity_changed",
+  "device_processes_changed",
+  "macro_status",
+]);
+const LEGACY_SOCKET_EMIT_EVENTS = new Set(["list_agent_windows"]);
 
 function hasAuthCookie() {
   if (typeof document === "undefined") return false;
@@ -101,14 +109,14 @@ function createBorealisSocketBridge() {
 
   const bridge = {
     on(eventName, handler) {
-      if (!GO_REALTIME_EVENT_SET.has(eventName)) {
+      if (LEGACY_SOCKET_EVENTS.has(eventName)) {
         legacySocket.on(eventName, handler);
       }
       rememberHandler(eventName, handler);
       return bridge;
     },
     off(eventName, handler) {
-      if (!GO_REALTIME_EVENT_SET.has(eventName)) {
+      if (LEGACY_SOCKET_EVENTS.has(eventName)) {
         legacySocket.off(eventName, handler);
       }
       forgetHandler(eventName, handler);
@@ -118,24 +126,31 @@ function createBorealisSocketBridge() {
       if (eventName === "operator_presence_sync" || eventName === "operator_presence_clear") {
         return false;
       }
+      if (!LEGACY_SOCKET_EMIT_EVENTS.has(eventName)) {
+        return false;
+      }
       if (!legacySocket.connected) {
         legacySocket.connect?.();
       }
       return legacySocket.emit(eventName, ...args);
     },
     connect() {
-      legacySocket.connect?.();
       connectOperatorEvents();
+      dispatchLocal("connect", { transport: "sse" });
       return bridge;
     },
     disconnect() {
       closeOperatorEvents();
-      return legacySocket.disconnect?.();
+      dispatchLocal("disconnect", { transport: "sse" });
+      if (legacySocket.connected) {
+        return legacySocket.disconnect?.();
+      }
+      return undefined;
     },
     connectOperatorEvents,
     disconnectOperatorEvents: closeOperatorEvents,
     get connected() {
-      return Boolean(legacySocket.connected);
+      return Boolean(eventSource) || Boolean(legacySocket.connected);
     },
     get id() {
       return legacySocket.id;

@@ -577,6 +577,11 @@ func (c *AgentConfig) ApplyDefaults() {
 	}
 }
 
+func (c *AgentConfig) ResetAuthForEnrollment() {
+	c.Tokens = TokenSection{}
+	c.RemoteOps = RemoteOpsSection{}
+}
+
 func MetadataFieldKey(fieldNumber int) string {
 	return fmt.Sprintf("field_%03d", fieldNumber)
 }
