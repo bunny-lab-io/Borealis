@@ -262,7 +262,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] K3s PostgreSQL PVC is bound to Longhorn.
     - [x] Second live redeploy keeps PostgreSQL on K3s and does not rerun Compose snapshot/import.
     - [x] Encrypted WebUI Backup/Restore analyze path is documented and covered by Go tests without mutating K3s PostgreSQL.
-    - [x] Encrypted WebUI Backup/Restore Import live validation on a clean/disposable K3s target is waived for this PR and tracked by [Technical Debt #381](https://github.com/bunny-lab-io/Borealis/issues/381).
+    - [x] Encrypted WebUI Backup/Restore Import live validation passed on a clean/disposable K3s target after rollback, redeploy, restore, Agent reconnect, site-worker reconnect, Remote Desktop smoke, and basic 7-Zip assembly execution on `LAB-OPERATOR-01`.
     - [x] DB profile settings preserved or documented.
 
 ## Stage 10: WireGuard Cutover
@@ -331,10 +331,10 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
 - [x] Validation:
     - [x] Fresh install path works.
     - [x] Redeploy path works.
-    - [x] Backup/restore path is accepted for this PR with export/analyze/test coverage; destructive clean-target Import live proof remains tracked by [Technical Debt #381](https://github.com/bunny-lab-io/Borealis/issues/381).
+    - [x] Backup/restore path is validated for this PR with export/analyze/test coverage plus destructive clean-target Import live proof on a disposable DEV Engine.
         - [x] Backup export works against authoritative K3s API/PostgreSQL.
         - [x] Backup analyze path is documented and covered by focused Go tests without data mutation.
-        - [x] Backup Import live proof on a clean K3s restore target is waived for this PR and tracked by [Technical Debt #381](https://github.com/bunny-lab-io/Borealis/issues/381).
+        - [x] Backup Import live proof on a clean K3s restore target passed after DEV rollback, redeploy, restore, restored Agent reconnect, site-worker reconnect, Remote Desktop, remote tooling, and assembly execution validation.
     - [x] Operator WebUI smoke passes after Compose retirement: login, Server Info, Device Inventory, Remote Desktop, Remote Shell, Files, Process Management, Service Management, Registry, and Backup Export.
     - [x] Narrow Engine tests pass.
     - [x] Compose policy confirms retired services stay out of `compose.yaml`.
