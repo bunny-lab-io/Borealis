@@ -26,7 +26,8 @@ On a fresh Engine, the Aegis setup screen shows **Restore Engine Config Backup**
 3. Select **Analyze** and review the import counts.
 4. Type `RESTORE ENGINE CONFIG BACKUP`.
 5. Select **Import**.
-6. Wait for the Engine runtime refresh to finish, then unlock Aegis when prompted.
+6. Keep the restore page open while Borealis refreshes Engine runtime services.
+7. Unlock Aegis when the page says the Engine is ready.
 
 Agents keep trust when the restored Engine remains reachable at the same FQDN they already trust. Internal-Only restores also keep the Borealis local CA and leaf key material, so do not change the Engine FQDN during a clean migration unless you plan to reinstall or reconfigure agents and browser trust.
 
@@ -39,7 +40,8 @@ Agents keep trust when the restored Engine remains reachable at the same FQDN th
 5. Select **Analyze** and review the import counts.
 6. Type `RESTORE ENGINE CONFIG BACKUP`.
 7. Select **Import**.
-8. Wait for the Engine runtime refresh to finish, then unlock Aegis when prompted.
+8. Keep the restore page open while Borealis refreshes Engine runtime services.
+9. Unlock Aegis when the page says the Engine is ready.
 
 !!! danger
     Import does not merge. Current users, sites, directory settings, credentials, agents, trust keys, filters, scheduled job definitions, watchdog definitions, and automation content are cleared before the backup is imported.
@@ -53,7 +55,7 @@ Use **Analyze** first when validating a backup on a running production Engine. A
 !!! danger
     **Import** is destructive on K3s too. It clears allow-listed Engine configuration and trust tables in the active K3s PostgreSQL database, replaces allow-listed secret/config files on mounted Engine paths, clears mounted Engine service log roots, clears the in-memory Aegis key, and starts an automatic runtime refresh. Run full Import validation on a fresh or disposable Engine unless production data replacement is intentional.
 
-After a K3s import completes, Borealis asks the in-cluster operator to retire stale site-workers and restart the API, WireGuard, Traefik, and scheduler workloads against the restored state. The web session may briefly disconnect while those pods restart. Wait for the refresh to settle before reinstalling or re-enrolling agents.
+After a K3s import completes, Borealis asks the in-cluster operator to retire stale site-workers and restart the API, WireGuard, Traefik, and scheduler workloads against the restored state. The restore page stays open, explains what is happening, and waits for the API to become stable again before sending you to Aegis unlock or login. Do not enter the Aegis Cipher or try to sign in from another tab until the restore page says the Engine is ready.
 
 If the restore response says a manual restart is required, redeploy the Engine in the same network mode:
 
@@ -65,7 +67,7 @@ sudo bash Engine.sh --network-mode public deploy prod
 Use `--network-mode local` instead when the restored Engine is an Internal-Only deployment.
 
 !!! warning
-    Wait for the automatic refresh or fallback redeploy to finish before reinstalling or re-enrolling agents. If an agent receives a new access token from an API pod that started before restore replaced the Engine auth files, the site-worker may reject the management socket as `invalid_token` until the runtime refresh completes and the agent reconnects.
+    Wait for the automatic refresh or fallback redeploy to finish before reinstalling or re-enrolling agents. Agents preserve their existing refresh token when they temporarily reach a blank or not-yet-restored Engine, then retry until the restored Engine trust database is available. Explicit revoke, purge, token expiry, fingerprint mismatch, or token-version mismatch still invalidates trust.
 
 ## Validate a K3s Restore Target
 
@@ -78,7 +80,7 @@ Validate full Import on a fresh or disposable Engine, not on the production Engi
 5. Select **Analyze** and confirm the reported table and file counts match the expected backup contents.
 6. Type `RESTORE ENGINE CONFIG BACKUP`.
 7. Select **Import**.
-8. Wait for the automatic runtime refresh to settle. If the restore response says manual restart is required, redeploy the Engine in the same network mode and wait for the rollout checks to pass before reconnecting agents.
+8. Wait on the restore page until the automatic runtime refresh finishes. If the restore response says manual restart is required, redeploy the Engine in the same network mode and wait for the rollout checks to pass before reconnecting agents.
 9. Sign in, unlock Aegis, and run the normal post-restore smoke checks.
 
 !!! warning
@@ -125,6 +127,7 @@ Use `--network-mode local` for Internal-Only restore validation. After the clust
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
     - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears pending device approvals and saved views, clears the in-memory Aegis key, clears operator cookies, and asks `borealis-operator` to run the post-restore runtime refresh.
     - The post-restore runtime refresh retires existing site-worker pods, then restarts `api-backend`, `wireguard-tunnel`, `traefik-edge`, and `job-scheduler` so restored auth keys, Engine secret material, WireGuard state, and Traefik TLS state are loaded before agents reconnect. If `borealis-operator` is unavailable, restore returns `restart_required: true` and operators should run the documented deploy command.
+    - WebUI restore waits through the expected API outage by polling `/api/bootstrap/state`. It requires a minimum refresh window plus two stable API responses before navigation so operators do not land on Aegis unlock or login while pods are still restarting.
 
     ### Included state
     - LDAP/directory providers, server URLs, host overrides, TLS/LDAPS settings, PEM trust anchors, encrypted bind/keytab secrets, group-role mappings, group-site mappings, and cached directory users.

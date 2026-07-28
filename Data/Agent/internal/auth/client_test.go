@@ -428,13 +428,60 @@ func TestTransientRefreshFailureKeepsRefreshToken(t *testing.T) {
 	}
 }
 
+func TestRestoreMismatchRefreshFailureKeepsRefreshToken(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "invalid refresh token", status: http.StatusUnauthorized, body: `{"error":"invalid_refresh_token"}`},
+		{name: "device missing on blank engine", status: http.StatusNotFound, body: `{"error":"device_not_found"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/agent/token/refresh" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, agentconfig.FileName)
+			cfg := agentconfig.Default()
+			cfg.ServerURL = server.URL
+			cfg.Agent.GUID = "GUID"
+			cfg.Tokens.AccessToken = "old"
+			cfg.Tokens.AccessExpiresAt = time.Now().Add(-time.Minute).Unix()
+			cfg.Tokens.RefreshToken = "refresh"
+			if err := agentconfig.Save(path, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			client, err := NewClient(path, &cfg, "system", WithHTTPClient(server.Client()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := client.EnsureAuthenticated(context.Background()); err == nil {
+				t.Fatal("expected refresh failure")
+			}
+			loaded, _ := agentconfig.Load(path)
+			if loaded.Tokens.RefreshToken != "refresh" || loaded.Tokens.AccessToken != "old" {
+				t.Fatalf("restore mismatch refresh failure cleared tokens: %#v", loaded.Tokens)
+			}
+		})
+	}
+}
+
 func TestPermanentRefreshFailureClearsRefreshToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/agent/token/refresh" {
 			http.NotFound(w, r)
 			return
 		}
-		http.Error(w, "invalid_refresh", http.StatusUnauthorized)
+		http.Error(w, "refresh_token_revoked", http.StatusUnauthorized)
 	}))
 	defer server.Close()
 

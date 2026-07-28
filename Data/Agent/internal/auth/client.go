@@ -686,16 +686,25 @@ func permanentRefreshFailure(err error) bool {
 		return false
 	}
 	text := strings.ToLower(err.Error())
-	if strings.Contains(text, "http 401") || strings.Contains(text, "http 403") {
-		return true
+	for _, marker := range []string{
+		"invalid_refresh_token",
+		"device_not_found",
+		"token_refresh_unavailable",
+		"auth_unavailable",
+	} {
+		if strings.Contains(text, marker) {
+			return false
+		}
 	}
 	for _, marker := range []string{
-		"invalid_refresh",
 		"refresh_token_expired",
+		"refresh_token_revoked",
 		"device_purged",
+		"device_revoked",
 		"fingerprint_mismatch",
 		"token_version",
 		"revoked",
+		"decommissioned",
 	} {
 		if strings.Contains(text, marker) {
 			return true
