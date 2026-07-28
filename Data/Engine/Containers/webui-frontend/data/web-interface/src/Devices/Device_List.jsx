@@ -478,14 +478,14 @@ function statusFromHeartbeat(tsSec, offlineAfter = 300) {
 export function normalizeDeviceConnectivityStatus(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "connected" || normalized === "online") return "Connected";
-  if (normalized === "disconnected" || normalized === "degraded") return "Disconnected";
+  if (["disconnected", "degraded", "reconnecting", "recovering"].includes(normalized)) return "Reconnecting";
   if (normalized === "offline" || normalized === "down" || normalized === "unavailable") return "Offline";
   return "";
 }
 
 function heartbeatOnlineFromStatus(status, lastSeen, offlineAfter = 300) {
   const normalizedStatus = String(status || "").trim().toLowerCase();
-  if (["connected", "disconnected", "degraded", "online"].includes(normalizedStatus)) return true;
+  if (["connected", "disconnected", "degraded", "online", "reconnecting", "recovering"].includes(normalizedStatus)) return true;
   if (["offline", "down", "unavailable"].includes(normalizedStatus)) return false;
   return statusFromHeartbeat(lastSeen, offlineAfter) === "Online";
 }
@@ -494,9 +494,9 @@ export function deviceConnectivityStatusFromState({ status, lastSeen, agentSocke
   const rawStatus = String(status || "").trim().toLowerCase();
   if (!heartbeatOnlineFromStatus(status, lastSeen)) return "Offline";
   if (agentSocket === true) return "Connected";
-  if (agentSocket === false) return "Disconnected";
+  if (agentSocket === false) return "Reconnecting";
   if (rawStatus === "connected") return "Connected";
-  return "Disconnected";
+  return "Reconnecting";
 }
 
 export function buildDeviceConnectivityStatusFilter(status) {
@@ -1099,7 +1099,7 @@ export default function DeviceList({
       }
       const statusRaw = normalizeDeviceConnectivityStatus(row.status);
       if (statusRaw === "Connected") connected += 1;
-      else if (statusRaw === "Disconnected") disconnected += 1;
+      else if (statusRaw === "Reconnecting" || statusRaw === "Disconnected") disconnected += 1;
       else offline += 1;
     });
     return {
@@ -1510,6 +1510,12 @@ export default function DeviceList({
         background: "rgba(255, 79, 79, 0.15)",
         border: "1px solid rgba(255, 79, 79, 0.42)",
         dot: "#ff4f4f",
+      },
+      Reconnecting: {
+        text: "#ffb347",
+        background: "rgba(255, 179, 71, 0.16)",
+        border: "1px solid rgba(255, 179, 71, 0.45)",
+        dot: "#ffb347",
       },
       Recovering: {
         text: "#ffb347",

@@ -12,13 +12,14 @@ import {
 describe("device list connectivity status", () => {
   it("normalizes route status tokens to Device List labels", () => {
     expect(normalizeDeviceConnectivityStatus("connected")).toBe("Connected");
-    expect(normalizeDeviceConnectivityStatus("DISCONNECTED")).toBe("Disconnected");
+    expect(normalizeDeviceConnectivityStatus("DISCONNECTED")).toBe("Reconnecting");
+    expect(normalizeDeviceConnectivityStatus("reconnecting")).toBe("Reconnecting");
     expect(normalizeDeviceConnectivityStatus("offline")).toBe("Offline");
   });
 
   it("maps online heartbeat plus socket state to site list status labels", () => {
     expect(deviceConnectivityStatusFromState({ status: "Online", agentSocket: true })).toBe("Connected");
-    expect(deviceConnectivityStatusFromState({ status: "Online", agentSocket: false })).toBe("Disconnected");
+    expect(deviceConnectivityStatusFromState({ status: "Online", agentSocket: false })).toBe("Reconnecting");
     expect(deviceConnectivityStatusFromState({ status: "Offline", agentSocket: true })).toBe("Offline");
     expect(deviceConnectivityStatusFromState({ status: "Disconnected", agentSocket: true })).toBe("Connected");
   });
@@ -27,7 +28,7 @@ describe("device list connectivity status", () => {
     expect(buildDeviceConnectivityStatusFilter("disconnected")).toEqual({
       filterType: "text",
       type: "equals",
-      filter: "Disconnected",
+      filter: "Reconnecting",
     });
   });
 

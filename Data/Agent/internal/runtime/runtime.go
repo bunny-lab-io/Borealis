@@ -309,6 +309,8 @@ func heartbeatIntervalWithJitter(now time.Time) time.Duration {
 	return base + jitter
 }
 
+const socketRegistrationAckTimeout = 15 * time.Second
+
 func (a *Agent) socketLoop(ctx context.Context) error {
 	backoff := time.Second
 	for {
@@ -317,11 +319,17 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
+		wasConnected := false
 		if err := a.connectSocket(ctx); err != nil {
+			socketState, _ := a.currentSocketState()
+			wasConnected = strings.EqualFold(strings.TrimSpace(socketState), "connected")
 			a.recordSocketState("disconnected")
 			a.logger.Printf("socket disconnected: %v", err)
 			if err := a.postStatus(context.Background(), "socket_disconnected", "degraded", err.Error()); err != nil {
 				a.logger.Printf("status post failed: %v", err)
+			}
+			if wasConnected {
+				backoff = time.Second
 			}
 		}
 		select {
@@ -329,7 +337,7 @@ func (a *Agent) socketLoop(ctx context.Context) error {
 			return ctx.Err()
 		case <-time.After(backoff):
 		}
-		if backoff < 30*time.Second {
+		if !wasConnected && backoff < 30*time.Second {
 			backoff *= 2
 		}
 	}
@@ -420,7 +428,11 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 			payload["helper_contexts"] = []string{"currentuser"}
 			payload["capabilities"].(map[string]any)["helper_contexts"] = []string{"currentuser"}
 		}
-		if err := socket.Emit("connect_agent", payload); err != nil {
+		ack, err := socket.EmitWithAck(ctx, "connect_agent", payload, socketRegistrationAckTimeout)
+		if err != nil {
+			return err
+		}
+		if err := validateSocketRegistrationAck(ack); err != nil {
 			return err
 		}
 		a.recordSocketState("connected")
@@ -439,6 +451,27 @@ func (a *Agent) connectSocket(ctx context.Context) error {
 			}
 		}
 		return err
+	}
+	return nil
+}
+
+func validateSocketRegistrationAck(ack []any) error {
+	if len(ack) == 0 {
+		return fmt.Errorf("site-worker socket registration missing ack")
+	}
+	payload, ok := ack[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("site-worker socket registration ack has invalid payload")
+	}
+	if errorText := cleanSocketAckText(payload["error"]); errorText != "" {
+		if statusCode := cleanSocketAckText(payload["status_code"]); statusCode != "" {
+			return fmt.Errorf("site-worker socket registration rejected: %s status=%s", errorText, statusCode)
+		}
+		return fmt.Errorf("site-worker socket registration rejected: %s", errorText)
+	}
+	status := strings.ToLower(cleanSocketAckText(payload["status"]))
+	if status != "ok" {
+		return fmt.Errorf("site-worker socket registration rejected: status=%s", cleanSocketAckText(payload["status"]))
 	}
 	return nil
 }
@@ -802,6 +835,13 @@ func firstNonNil(values ...any) any {
 		}
 	}
 	return ""
+}
+
+func cleanSocketAckText(value any) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func (a *Agent) engineSocketRoleSnapshot(now int64) RoleSnapshot {

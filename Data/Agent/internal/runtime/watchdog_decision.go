@@ -24,7 +24,7 @@ type watchdogDecisionInput struct {
 
 const (
 	watchdogStaleAfter          = 180 * time.Second
-	watchdogSocketStaleAfter    = 180 * time.Second
+	watchdogSocketStaleAfter    = 90 * time.Second
 	watchdogHeartbeatStaleAfter = 240 * time.Second
 )
 

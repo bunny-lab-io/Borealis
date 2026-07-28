@@ -142,7 +142,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Redeploy validates K3s site workers survive PostgreSQL pod rollout/restart without disconnecting the fleet.
     - [x] Focused Go tests confirm new K3s site-worker pods are not host-networked and route through a per-worker ClusterIP Service.
     - [x] Live redeploy validates existing host-loopback site-worker pods retire and relaunch through ClusterIP Services without manual Agent service restart.
-    - [x] Agent release rollout validation is waived for this PR; stale connected Socket.IO recovery is covered by Agent runtime tests/docs, with reconnect tuning tracked by [Technical Debt #376](https://github.com/bunny-lab-io/Borealis/issues/376).
+    - [x] Agent Socket.IO reconnect hardening is covered by Agent runtime tests/docs, and Device Inventory labels API-online/socket-missing devices as `Reconnecting`.
 
 ## Stage 6: Production WebUI Cutover
 
@@ -375,7 +375,7 @@ Migrate Borealis Engine from Docker Compose into single-node K3s through staged 
     - [x] Code audit confirms normal deploy only recycles K3s site-worker pods for API base URL changes, site-worker runtime Secret hash changes, or timezone mismatch; repeated unchanged deploys should not recycle workers.
     - [x] Code audit confirms PostgreSQL StatefulSet storage/profile hash changes do not directly recycle site workers unless shared runtime env values that workers consume actually change.
 - [x] Agents that already hold stale connected Socket.IO state may require Agent release rollout or manual service restart before the new reconnect logic is active.
-    - [x] Reconnect delay follow-up tracked by [Technical Debt #376](https://github.com/bunny-lab-io/Borealis/issues/376).
+    - [x] Current Agent code waits for site-worker registration acknowledgement, reconnects after 60 seconds of read-idle socket inactivity, and lets the watchdog restart stale socket states after 90 seconds. WebUI labels API-online/socket-missing devices as `Reconnecting` while the management socket reattaches.
 - [x] Longhorn adds CSI/storage-manager dependencies that must be reconciled idempotently before PVC workloads depend on it.
     - [x] Live audit confirms Longhorn StorageClass exists as explicit-use only, `postgres-data-postgres-db-0` is `Bound` to StorageClass `longhorn`, and all Longhorn pods report `Running`.
     - [x] Live audit found single-node Longhorn volume robustness is `degraded` because upstream StorageClass provisioned `numberOfReplicas: 3`; tracked by [Technical Debt #378](https://github.com/bunny-lab-io/Borealis/issues/378).
