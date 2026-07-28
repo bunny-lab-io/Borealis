@@ -1,9 +1,6 @@
 # Updating the Engine
 Use this page when updating an existing Borealis Engine host from the Git repository.
 
-!!! warning "K3s migration release"
-    The Docker Compose to K3s Engine migration should use a configuration Backup/Restore flow after the source Engine backup is exported. Read [K3s Engine Migration](../Release%20Notes/k3s-engine-migration.md) before updating production.
-
 !!! info "Expected path"
     Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install.
 

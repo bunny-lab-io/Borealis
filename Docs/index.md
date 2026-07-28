@@ -84,7 +84,6 @@ Deploy the Borealis Engine to a Linux host via the [Engine Deployment](Engine/de
     Documentation Map:
 
     - [Engine Deployment](Engine/deploying-the-engine.md) - install path, architecture, security, UI rules, and testing entrypoints.
-    - [Release Notes](Release%20Notes/index.md) - major operator-facing release changes and migration notes.
     - [Screenshots](screenshots.md) - visual tour of Borealis operator surfaces.
     - [Using the Platform](Using%20the%20Platform/index.md) - operator workflows for devices, sites, remote operations, automation, access, logs, and software.
     - [Assemblies](Using%20the%20Platform/Assemblies/assemblies.md) - scripts, workflows, Ansible playbooks, quick jobs, and Aurora content.
