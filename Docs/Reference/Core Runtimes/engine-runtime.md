@@ -31,7 +31,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - [Security Whitepaper](../../Reference/security-whitepaper.md)
     - [API Reference](../Data%20and%20Schema/api-reference.md)
     - [Backup and Restore](../../Using%20the%20Platform/backup-restore.md)
-    - [Engine Log Management](../../Using%20the%20Platform/engine-log-management.md)
+    - [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md)
     - [Remote Shell](../../Using%20the%20Platform/remote-shell.md)
     - [Watchdogs](../../Using%20the%20Platform/watchdogs.md)
     - [Alerts](../../Using%20the%20Platform/alerts.md)
@@ -209,7 +209,7 @@ Describe the Borealis Engine runtime, its services, configuration, and operation
     - Every Python module under `Data/Engine` or `Engine/Data/Engine` starts with the standard commentary header (purpose + API endpoints). Add the header to any existing module before further edits.
 
     #### Logging
-    - Primary API log: `Engine/Services/api-backend/logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); do not auto-delete rotated files.
+    - Primary API log: `Engine/Services/api-backend/logs/engine.log` with daily rotation (`engine.log.YYYY-MM-DD`); Borealis prunes rotated file logs after `BOREALIS_ENGINE_FILE_LOG_RETENTION_DAYS`, defaulting to 30 days.
     - Subsystems: `Engine/Services/api-backend/logs/<service>.log`; container build output: `Engine/Deploy/build.log`; Traefik logs: `Engine/Services/traefik-edge/logs/`; PostgreSQL logs: K3s pod logs for `statefulset/postgres-db`; guacd logs: K3s pod logs for `deployment/remote-desktop-guacd`.
     - Keep Engine-specific artifacts within `Engine/Services/<role>/logs/` or `Engine/Deploy/` to preserve the runtime boundary.
 

@@ -45,7 +45,7 @@ Use `Disconnect` when finished.
     ### Related documentation
 
     - [Remote Desktop](remote-desktop.md)
-    - [Engine Log Management](engine-log-management.md)
+    - [Engine Log Access](engine-log-management.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [SSH Connection Logic](../Reference/ssh-connection-logic.md)

@@ -39,6 +39,8 @@ K3S_API_PORT="${BOREALIS_K3S_API_PORT:-6443}"
 K3S_CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 K3S_SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 K3S_KUBECONFIG_MODE="${BOREALIS_K3S_KUBECONFIG_MODE:-0600}"
+K3S_CONTAINER_LOG_MAX_SIZE="${BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE:-}"
+K3S_CONTAINER_LOG_MAX_FILES="${BOREALIS_K3S_CONTAINER_LOG_MAX_FILES:-}"
 K3S_INSTALL_SCRIPT_URL="${BOREALIS_K3S_INSTALL_SCRIPT_URL:-https://get.k3s.io}"
 K3S_INSTALL_CHANNEL="${BOREALIS_K3S_INSTALL_CHANNEL:-stable}"
 K3S_INSTALL_VERSION="${BOREALIS_K3S_INSTALL_VERSION:-}"
@@ -53,6 +55,7 @@ K3S_LONGHORN_UPSTREAM_STORAGE_CLASS="${BOREALIS_K3S_LONGHORN_UPSTREAM_STORAGE_CL
 K3S_BOREALIS_LONGHORN_STORAGE_CLASS="${BOREALIS_K3S_BOREALIS_LONGHORN_STORAGE_CLASS:-borealis-longhorn}"
 K3S_BOREALIS_LONGHORN_REPLICA_COUNT="${BOREALIS_K3S_BOREALIS_LONGHORN_REPLICA_COUNT:-1}"
 K3S_PVC_STORAGE_CLASS="${BOREALIS_K3S_PVC_STORAGE_CLASS:-${BOREALIS_K3S_STORAGE_CLASS:-${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}}}"
+ENGINE_FILE_LOG_RETENTION_DAYS="${BOREALIS_ENGINE_FILE_LOG_RETENTION_DAYS:-30}"
 BOREALIS_OPERATOR_SERVICE_NAME="${BOREALIS_OPERATOR_SERVICE_NAME:-borealis-operator}"
 BOREALIS_OPERATOR_SECRET_NAME="${BOREALIS_OPERATOR_SECRET_NAME:-borealis-operator-auth}"
 BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME="${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME:-borealis-site-worker-runtime-env}"
@@ -2173,6 +2176,19 @@ validate_k3s_baseline_settings() {
     || die "BOREALIS_K3S_CLUSTER_CIDR must be an IPv4 CIDR, for example 10.42.0.0/16."
   [[ "${K3S_SERVICE_CIDR}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$ ]] \
     || die "BOREALIS_K3S_SERVICE_CIDR must be an IPv4 CIDR, for example 10.43.0.0/16."
+  if [[ -n "${K3S_CONTAINER_LOG_MAX_SIZE}" ]]; then
+    [[ "${K3S_CONTAINER_LOG_MAX_SIZE}" =~ ^[1-9][0-9]*([EPTGMK]i?|m)?$ ]] \
+      || die "BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE must be a Kubernetes quantity like 10Mi."
+  fi
+  if [[ -n "${K3S_CONTAINER_LOG_MAX_FILES}" ]]; then
+    [[ "${K3S_CONTAINER_LOG_MAX_FILES}" =~ ^[0-9]+$ && "${K3S_CONTAINER_LOG_MAX_FILES}" -ge 2 ]] \
+      || die "BOREALIS_K3S_CONTAINER_LOG_MAX_FILES must be a number greater than or equal to 2."
+  fi
+}
+
+validate_engine_log_retention_settings() {
+  [[ "${ENGINE_FILE_LOG_RETENTION_DAYS}" =~ ^[1-9][0-9]*$ && "${ENGINE_FILE_LOG_RETENTION_DAYS}" -le 3650 ]] \
+    || die "BOREALIS_ENGINE_FILE_LOG_RETENTION_DAYS must be a number from 1 through 3650."
 }
 
 normalize_enabled_flag() {
@@ -2356,6 +2372,15 @@ secrets-encryption: true
 node-label:
   - "borealis.io/engine-node=true"
 EOF
+  if [[ -n "${K3S_CONTAINER_LOG_MAX_SIZE}" || -n "${K3S_CONTAINER_LOG_MAX_FILES}" ]]; then
+    printf 'kubelet-arg:\n'
+    if [[ -n "${K3S_CONTAINER_LOG_MAX_SIZE}" ]]; then
+      printf '  - "container-log-max-size=%s"\n' "${K3S_CONTAINER_LOG_MAX_SIZE}"
+    fi
+    if [[ -n "${K3S_CONTAINER_LOG_MAX_FILES}" ]]; then
+      printf '  - "container-log-max-files=%s"\n' "${K3S_CONTAINER_LOG_MAX_FILES}"
+    fi
+  fi
 }
 
 render_k3s_api_firewall_script() {
@@ -3814,6 +3839,8 @@ $(k3s_timezone_volume_mount_entries)
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/config
             - name: wireguard-run
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/run
+            - name: wireguard-logs
+              mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/logs
             - name: wireguard-secrets
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
       volumes:
@@ -3865,6 +3892,10 @@ $(k3s_timezone_volume_entries)
           hostPath:
             path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/run
             type: Directory
+        - name: wireguard-logs
+          hostPath:
+            path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/logs
+            type: Directory
         - name: wireguard-secrets
           hostPath:
             path: ${RUNTIME_ROOT}/Services/wireguard-tunnel/secrets
@@ -3915,6 +3946,7 @@ ensure_k3s_api_backend_bridge() {
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
       "project_root=${SCRIPT_DIR}" \
+      "log_retention_mounts=wireguard-logs-v1" \
       | sha256sum | awk '{print $1}'
   )"
 
@@ -7834,6 +7866,8 @@ BOREALIS_K3S_PVC_STORAGE_CLASS=${postgres_storage_class}
 BOREALIS_K3S_POSTGRES_ENABLED=$(normalize_enabled_flag "BOREALIS_K3S_POSTGRES_ENABLED" "${K3S_POSTGRES_ENABLED}")
 BOREALIS_K3S_POSTGRES_STORAGE_SIZE=${K3S_POSTGRES_STORAGE_SIZE}
 BOREALIS_K3S_POSTGRES_ROLLOUT_TIMEOUT=${K3S_POSTGRES_ROLLOUT_TIMEOUT}
+BOREALIS_K3S_CONTAINER_LOG_MAX_SIZE=${K3S_CONTAINER_LOG_MAX_SIZE}
+BOREALIS_K3S_CONTAINER_LOG_MAX_FILES=${K3S_CONTAINER_LOG_MAX_FILES}
 BOREALIS_ACME_EMAIL=${acme_email}
 BOREALIS_LETSENCRYPT_SETTINGS_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json
 BOREALIS_TRAEFIK_ACME_STORAGE_PATH=${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json
@@ -7956,6 +7990,7 @@ BOREALIS_SITE_WORKER_SCHEDULED_CONCURRENCY=${PROFILE_SITE_WORKER_CONCURRENCY}
 BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE=${BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE:-eventlet}
 BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS=${BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS:-300}
 BOREALIS_OFFICIAL_ASSEMBLIES_CHECKOUT_ROOT=${RUNTIME_ROOT}/Services/api-backend/cache
+BOREALIS_ENGINE_FILE_LOG_RETENTION_DAYS=${ENGINE_FILE_LOG_RETENTION_DAYS}
 BOREALIS_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/engine.log
 BOREALIS_ERROR_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/error.log
 BOREALIS_API_LOG_FILE=${RUNTIME_ROOT}/Services/api-backend/logs/api.log
@@ -8785,6 +8820,7 @@ prepare_runtime() {
   public_host="$(resolve_public_hostname)"
   fqdn_aliases="$(resolve_engine_hostname_aliases "${public_host}")"
   validate_engine_hostname_aliases "${fqdn_aliases}"
+  validate_engine_log_retention_settings
   if [[ "${engine_profile}" == "internal-only" ]]; then
     acme_email=""
     ensure_local_ca_material "${engine_profile}" "${public_host}" "${fqdn_aliases}"
