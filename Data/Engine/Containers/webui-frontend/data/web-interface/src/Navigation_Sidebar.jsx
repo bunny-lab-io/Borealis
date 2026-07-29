@@ -59,14 +59,8 @@ const SITE_SCOPED_NAV_KEYS = new Set([
   "watchdogs",
   "jobs",
   "software",
-  "patch-management-windows",
+  "patch-management",
 ]);
-
-const OS_NAV_ICON_CLASSES = Object.freeze({
-  windows: "fa-brands fa-windows",
-  linux: "fa-brands fa-linux",
-  macos: "fa-brands fa-apple",
-});
 
 const FONT_AWESOME_NAV_ICON_SX = {
   fontSize: "0.95rem",
@@ -76,14 +70,18 @@ const FONT_AWESOME_NAV_ICON_SX = {
 };
 
 function buildSiteScopedPath(path, siteId, extraParams = {}) {
-  const params = new URLSearchParams();
+  const rawPath = String(path || "");
+  const queryIndex = rawPath.indexOf("?");
+  const basePath = queryIndex >= 0 ? rawPath.slice(0, queryIndex) : rawPath;
+  const existingQuery = queryIndex >= 0 ? rawPath.slice(queryIndex + 1) : "";
+  const params = new URLSearchParams(existingQuery);
   params.set("site", String(siteId || ""));
   Object.entries(extraParams).forEach(([key, value]) => {
     if (value != null && value !== "") {
       params.set(key, String(value));
     }
   });
-  return `${path}?${params.toString()}`;
+  return `${basePath}?${params.toString()}`;
 }
 
 function EllipsisTooltip({ children, title, tooltipTitle, ...typographyProps }) {
@@ -166,6 +164,12 @@ const BASE_NAV_SECTIONS = Object.freeze([
         navKey: "watchdogs",
         to: APP_PATHS.watchdogs,
       },
+      {
+        icon: PatchIcon,
+        label: "Patch Management",
+        navKey: "patch-management",
+        to: APP_PATHS.patchManagement,
+      },
     ],
   },
   {
@@ -183,32 +187,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Software Audit",
         navKey: "software",
         to: APP_PATHS.software,
-      },
-    ],
-  },
-  {
-    id: "patch-management",
-    title: "Patch Management",
-    items: [
-      {
-        iconClass: OS_NAV_ICON_CLASSES.windows,
-        label: "Windows",
-        navKey: "patch-management-windows",
-        to: APP_PATHS.patchManagementWindows,
-      },
-      {
-        iconClass: OS_NAV_ICON_CLASSES.linux,
-        label: "Linux",
-        navKey: "patch-management-linux",
-        to: APP_PATHS.patchManagementLinux,
-        developerOnly: true,
-      },
-      {
-        iconClass: OS_NAV_ICON_CLASSES.macos,
-        label: "MacOS",
-        navKey: "patch-management-macos",
-        to: APP_PATHS.patchManagementMacOS,
-        developerOnly: true,
       },
     ],
   },
@@ -307,7 +285,6 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
     devices: true,
     automation: true,
     alerting: true,
-    "patch-management": true,
     filters: true,
     access: true,
     admin: true,
@@ -390,8 +367,8 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
         {
           icon: PatchIcon,
           label: "Patch Management",
-          navKey: "patch-management-windows",
-          to: buildSiteScopedPath(APP_PATHS.patchManagementWindows, selectedSiteId),
+          navKey: "patch-management",
+          to: buildSiteScopedPath(APP_PATHS.patchManagement, selectedSiteId),
         },
         {
           icon: SettingsIcon,

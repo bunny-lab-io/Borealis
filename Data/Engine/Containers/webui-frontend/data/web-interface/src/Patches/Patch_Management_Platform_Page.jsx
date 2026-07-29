@@ -27,12 +27,11 @@ import {
   MAGIC_UI,
 } from "../Devices/Tabs/Shared.jsx";
 import {
-  LinuxPatchPageIcon,
-  MacOSPatchPageIcon,
   PATCH_GRID_SX,
   PATCH_PAGE_TABS,
   formatScheduleType,
-} from "./Patch_Management.jsx";
+  resolvePatchPlatformCopy,
+} from "./Patch_Management_Shared.jsx";
 
 const STATE_FILTER_OPTIONS = [
   { key: "pending", label: "Pending" },
@@ -54,24 +53,6 @@ const FILTER_LABEL_SX = {
   lineHeight: 1.1,
   pl: 1,
 };
-
-function platformCopy(platform) {
-  const normalized = String(platform || "").toLowerCase();
-  if (normalized === "macos") {
-    return {
-      title: "MacOS Patch Management",
-      subtitle: "macOS patch inventory and policies are planned for a future Borealis release.",
-      label: "MacOS",
-      Icon: MacOSPatchPageIcon,
-    };
-  }
-  return {
-    title: "Linux Patch Management",
-    subtitle: "Linux patch inventory and policies are planned for a future Borealis release.",
-    label: "Linux",
-    Icon: LinuxPatchPageIcon,
-  };
-}
 
 function FilterSliderBlock({ label = "", children }) {
   return (
@@ -102,8 +83,8 @@ function PlaceholderPolicyBooleanCell({ value = false }) {
   );
 }
 
-export default function PatchManagementPlatformPage({ platform = "linux" }) {
-  const copy = platformCopy(platform);
+export function usePatchManagementPlatformPane({ platform = "linux" } = {}) {
+  const copy = resolvePatchPlatformCopy(platform);
   const notifyOperator = useAppNotifications({
     title: copy.title,
     icon: "pendingactions",
@@ -140,13 +121,6 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
     ],
     [notifyNotImplemented, platform]
   );
-
-  useRoutePageChrome({
-    title: copy.title,
-    subtitle: copy.subtitle,
-    Icon: copy.Icon,
-    actions: pageHeaderActions,
-  });
 
   const patchColumnDefs = useMemo(
     () => [
@@ -248,130 +222,159 @@ export default function PatchManagementPlatformPage({ platform = "linux" }) {
     []
   );
 
-  return (
-    <>
-      <Menu
-        anchorEl={newPolicyMenuAnchor}
-        open={Boolean(newPolicyMenuAnchor)}
-        onClose={() => setNewPolicyMenuAnchor(null)}
-        PaperProps={{
-          sx: {
-            mt: 1,
-            borderRadius: 2,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: "rgba(8,13,30,0.98)",
+  const menu = (
+    <Menu
+      anchorEl={newPolicyMenuAnchor}
+      open={Boolean(newPolicyMenuAnchor)}
+      onClose={() => setNewPolicyMenuAnchor(null)}
+      PaperProps={{
+        sx: {
+          mt: 1,
+          borderRadius: 2,
+          border: `1px solid ${MAGIC_UI.panelBorder}`,
+          background: "rgba(8,13,30,0.98)",
+          color: MAGIC_UI.textBright,
+          boxShadow: "0 24px 60px rgba(2,8,23,0.7)",
+          "& .MuiMenuItem-root": {
+            fontSize: "0.88rem",
             color: MAGIC_UI.textBright,
-            boxShadow: "0 24px 60px rgba(2,8,23,0.7)",
-            "& .MuiMenuItem-root": {
-              fontSize: "0.88rem",
-              color: MAGIC_UI.textBright,
-              minHeight: 34,
-            },
-            "& .MuiMenuItem-root:hover": {
-              background: "rgba(125, 183, 255, 0.12)",
-            },
+            minHeight: 34,
           },
+          "& .MuiMenuItem-root:hover": {
+            background: "rgba(125, 183, 255, 0.12)",
+          },
+        },
+      }}
+    >
+      <MenuItem
+        onClick={() => {
+          setNewPolicyMenuAnchor(null);
+          notifyNotImplemented();
         }}
       >
-        <MenuItem
-          onClick={() => {
-            setNewPolicyMenuAnchor(null);
-            notifyNotImplemented();
-          }}
-        >
-          New Site Policy
-        </MenuItem>
-        <MenuItem
-          onClick={() => {
-            setNewPolicyMenuAnchor(null);
-            notifyNotImplemented();
-          }}
-        >
-          New Device Filter Policy
-        </MenuItem>
-      </Menu>
+        New Site Policy
+      </MenuItem>
+      <MenuItem
+        onClick={() => {
+          setNewPolicyMenuAnchor(null);
+          notifyNotImplemented();
+        }}
+      >
+        New Device Filter Policy
+      </MenuItem>
+    </Menu>
+  );
+
+  const stackContent = (
+    <>
+      <Tabs
+        value={activeTab}
+        onChange={(_, value) => {
+          setActiveTab(value);
+          notifyNotImplemented();
+        }}
+        sx={buildNavTabsSx()}
+        TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
+      >
+        {PATCH_PAGE_TABS.map((tab) => (
+          <Tab key={tab.key} value={tab.key} label={tab.label} />
+        ))}
+      </Tabs>
+      <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
+        <FilterSliderBlock label="State">
+          <CountSliderGroup
+            options={STATE_FILTER_OPTIONS}
+            activeKey={stateFilter}
+            counts={zeroCounts}
+            onChange={(value) => {
+              setStateFilter(value);
+              notifyNotImplemented();
+            }}
+          />
+        </FilterSliderBlock>
+        <FilterSliderBlock label="Severity">
+          <CountSliderGroup
+            options={SEVERITY_FILTER_OPTIONS}
+            activeKey={severityFilter}
+            counts={zeroCounts}
+            onChange={(value) => {
+              setSeverityFilter(value);
+              notifyNotImplemented();
+            }}
+          />
+        </FilterSliderBlock>
+      </Box>
+      <Alert
+        severity="warning"
+        icon={<WarningAmberRoundedIcon />}
+        sx={{
+          background: "rgba(113, 63, 18, 0.42)",
+          color: MAGIC_UI.textBright,
+          border: "1px solid rgba(245, 158, 11, 0.45)",
+          "& .MuiAlert-icon": { color: "#facc15" },
+        }}
+      >
+        Coming Soon
+      </Alert>
+    </>
+  );
+
+  const content = (
+    <GridShell
+      sx={{
+        ...PATCH_GRID_SX,
+        flexGrow: 1,
+        minHeight: 520,
+        height: "100%",
+        borderRadius: 0,
+        border: "none",
+      }}
+    >
+      <AgGridReact
+        rowData={[]}
+        columnDefs={activeColumnDefs}
+        defaultColDef={DEFAULT_GRID_COL_DEF}
+        rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
+        suppressCellFocus
+        pagination
+        paginationPageSize={100}
+        paginationPageSizeSelector={[20, 50, 100]}
+        animateRows
+        rowHeight={44}
+        headerHeight={44}
+        overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
+        theme={DEVICE_DETAILS_GRID_THEME}
+      />
+    </GridShell>
+  );
+
+  return {
+    copy,
+    content,
+    menu,
+    pageHeaderActions,
+    stackContent,
+  };
+}
+
+export default function PatchManagementPlatformPage({ platform = "linux" }) {
+  const pane = usePatchManagementPlatformPane({ platform });
+
+  useRoutePageChrome({
+    title: pane.copy.title,
+    subtitle: pane.copy.subtitle,
+    Icon: pane.copy.Icon,
+    actions: pane.pageHeaderActions,
+  });
+
+  return (
+    <>
+      {pane.menu}
       <PageBodyFrame
         variant="grid_with_stack"
-        stack={
-          <Stack spacing={1.2}>
-            <Tabs
-              value={activeTab}
-              onChange={(_, value) => {
-                setActiveTab(value);
-                notifyNotImplemented();
-              }}
-              sx={buildNavTabsSx()}
-              TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
-            >
-              {PATCH_PAGE_TABS.map((tab) => (
-                <Tab key={tab.key} value={tab.key} label={tab.label} />
-              ))}
-            </Tabs>
-            <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
-              <FilterSliderBlock label="State">
-                <CountSliderGroup
-                  options={STATE_FILTER_OPTIONS}
-                  activeKey={stateFilter}
-                  counts={zeroCounts}
-                  onChange={(value) => {
-                    setStateFilter(value);
-                    notifyNotImplemented();
-                  }}
-                />
-              </FilterSliderBlock>
-              <FilterSliderBlock label="Severity">
-                <CountSliderGroup
-                  options={SEVERITY_FILTER_OPTIONS}
-                  activeKey={severityFilter}
-                  counts={zeroCounts}
-                  onChange={(value) => {
-                    setSeverityFilter(value);
-                    notifyNotImplemented();
-                  }}
-                />
-              </FilterSliderBlock>
-            </Box>
-            <Alert
-              severity="warning"
-              icon={<WarningAmberRoundedIcon />}
-              sx={{
-                background: "rgba(113, 63, 18, 0.42)",
-                color: MAGIC_UI.textBright,
-                border: "1px solid rgba(245, 158, 11, 0.45)",
-                "& .MuiAlert-icon": { color: "#facc15" },
-              }}
-            >
-              Coming Soon
-            </Alert>
-          </Stack>
-        }
+        stack={<Stack spacing={1.2}>{pane.stackContent}</Stack>}
       >
-        <GridShell
-          sx={{
-            ...PATCH_GRID_SX,
-            flexGrow: 1,
-            minHeight: 520,
-            height: "100%",
-            borderRadius: 0,
-            border: "none",
-          }}
-        >
-          <AgGridReact
-            rowData={[]}
-            columnDefs={activeColumnDefs}
-            defaultColDef={DEFAULT_GRID_COL_DEF}
-            rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
-            suppressCellFocus
-            pagination
-            paginationPageSize={100}
-            paginationPageSizeSelector={[20, 50, 100]}
-            animateRows
-            rowHeight={44}
-            headerHeight={44}
-            overlayNoRowsTemplate={`<span class="ag-overlay-no-rows-center">${copy.label} Patch Management Coming Soon</span>`}
-            theme={DEVICE_DETAILS_GRID_THEME}
-          />
-        </GridShell>
+        {pane.content}
       </PageBodyFrame>
     </>
   );

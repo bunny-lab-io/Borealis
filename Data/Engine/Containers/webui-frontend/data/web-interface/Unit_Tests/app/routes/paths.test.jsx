@@ -13,6 +13,12 @@ describe("route path helpers", () => {
     expect(APP_PATHS.deviceRemoteDesktop("agent-1")).toBe("/devices/agent-1/remote-desktop");
     expect(APP_PATHS.filter(42)).toBe("/filters/42");
     expect(APP_PATHS.job(19)).toBe("/jobs/19");
+    expect(APP_PATHS.patchManagementWindows).toBe("/patch-management?platform=windows");
+    expect(APP_PATHS.patchManagementLinux).toBe("/patch-management?platform=linux");
+    expect(APP_PATHS.patchManagementMacOS).toBe("/patch-management?platform=macos");
+    expect(APP_PATHS.patchManagementSitePolicies).toBe(
+      "/patch-management?platform=windows&tab=policies"
+    );
     expect(APP_PATHS.assemblyScript("SCRIPT-123")).toBe("/assemblies/scripts/SCRIPT-123");
     expect(APP_PATHS.assemblyAnsible("PLAY-123")).toBe("/assemblies/ansible_playbooks/PLAY-123");
     expect(APP_PATHS.assemblyWorkflow("FLOW-123")).toBe("/assemblies/workflows/FLOW-123");

@@ -8,13 +8,13 @@ const DEVELOPER_MODE_STORAGE_KEY = "borealis_sidebar_developer_mode";
 
 function renderSidebar() {
   return render(
-    <MemoryRouter initialEntries={["/patch-management/windows"]}>
-      <NavigationSidebar activeNavKey="patch-management-windows" isAdmin />
+    <MemoryRouter initialEntries={["/patch-management"]}>
+      <NavigationSidebar activeNavKey="patch-management" isAdmin />
     </MemoryRouter>
   );
 }
 
-describe("NavigationSidebar developer mode visibility", () => {
+describe("NavigationSidebar patch management visibility", () => {
   beforeEach(() => {
     window.localStorage.clear();
   });
@@ -24,23 +24,26 @@ describe("NavigationSidebar developer mode visibility", () => {
     window.localStorage.clear();
   });
 
-  it("hides Linux and MacOS patch management entries by default", () => {
+  it("shows Patch Management as one Automation item by default", () => {
     renderSidebar();
 
+    expect(screen.getByText("Automation")).toBeInTheDocument();
     expect(screen.getByText("Patch Management")).toBeInTheDocument();
-    expect(screen.getByText("Windows")).toBeInTheDocument();
+    expect(screen.getAllByText("Patch Management")).toHaveLength(1);
+    expect(screen.queryByText("Windows")).not.toBeInTheDocument();
     expect(screen.queryByText("Linux")).not.toBeInTheDocument();
     expect(screen.queryByText("MacOS")).not.toBeInTheDocument();
   });
 
-  it("shows Linux and MacOS patch management entries in developer mode", () => {
+  it("keeps operating systems out of the sidebar in developer mode", () => {
     window.localStorage.setItem(DEVELOPER_MODE_STORAGE_KEY, "1");
 
     renderSidebar();
 
-    expect(screen.getByText("Windows")).toBeInTheDocument();
-    expect(screen.getByText("Linux")).toBeInTheDocument();
-    expect(screen.getByText("MacOS")).toBeInTheDocument();
+    expect(screen.getAllByText("Patch Management")).toHaveLength(1);
+    expect(screen.queryByText("Windows")).not.toBeInTheDocument();
+    expect(screen.queryByText("Linux")).not.toBeInTheDocument();
+    expect(screen.queryByText("MacOS")).not.toBeInTheDocument();
   });
 
   it("uses in-progress hidden sections copy in the developer mode menu", async () => {

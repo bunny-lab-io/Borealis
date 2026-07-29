@@ -34,7 +34,13 @@ import WarningAmberRoundedIcon from "@mui/icons-material/WarningAmberRounded";
 import { AgGridReact } from "ag-grid-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import PageBodyFrame from "../PageBodyFrame.jsx";
-import { BOREALIS_BLUE, CountSliderGroup, buildNavTabsSx } from "../Automation/Watchdogs/shared.jsx";
+import {
+  BOREALIS_BLUE,
+  CountSliderGroup,
+  NAV_TAB_COLORS,
+  buildNavTabsSx,
+} from "../Automation/Watchdogs/shared.jsx";
+import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import {
@@ -43,10 +49,29 @@ import {
   GridShell,
   MAGIC_UI,
 } from "../Devices/Tabs/Shared.jsx";
+import {
+  PATCH_GRID_SX,
+  PATCH_PAGE_TABS,
+  PATCH_PLATFORM_TABS,
+  WindowsPatchPageIcon,
+  formatScheduleType,
+  normalizePatchPlatform,
+  resolvePatchPlatformCopy,
+} from "./Patch_Management_Shared.jsx";
+import { usePatchManagementPlatformPane } from "./Patch_Management_Platform_Page.jsx";
 
-const PAGE_TITLE = "Windows Patch Management";
+export {
+  LinuxPatchPageIcon,
+  MacOSPatchPageIcon,
+  PATCH_GRID_SX,
+  PATCH_PAGE_TABS,
+  WindowsPatchPageIcon,
+  formatScheduleType,
+} from "./Patch_Management_Shared.jsx";
+
+const PAGE_TITLE = "Patch Management";
 const PAGE_SUBTITLE =
-  "Ad-hoc installation of Windows Updates and patch policies. Policies are applied on a hierarchal granular level, where the deepest nested policies apply last.";
+  "Manage patch inventory and policies across Windows, Linux, and MacOS endpoints.";
 
 const STATE_FILTER_OPTIONS = [
   { key: "pending", label: "Pending" },
@@ -59,49 +84,6 @@ const SEVERITY_FILTER_OPTIONS = [
   { key: "moderate", label: "Moderate" },
   { key: "low", label: "Low" },
   { key: "unspecified", label: "Unspecified" },
-];
-
-const OS_PAGE_ICON_CLASSES = Object.freeze({
-  windows: "fa-brands fa-windows",
-  linux: "fa-brands fa-linux",
-  macos: "fa-brands fa-apple",
-});
-
-function PatchOSPageIcon({ os = "windows", sx, className = "", ...props }) {
-  return (
-    <Box
-      component="i"
-      aria-hidden="true"
-      className={`${OS_PAGE_ICON_CLASSES[os] || OS_PAGE_ICON_CLASSES.windows} ${className}`.trim()}
-      sx={{
-        width: 22,
-        lineHeight: 1,
-        textAlign: "center",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        ...sx,
-      }}
-      {...props}
-    />
-  );
-}
-
-export function WindowsPatchPageIcon(props) {
-  return <PatchOSPageIcon os="windows" {...props} />;
-}
-
-export function LinuxPatchPageIcon(props) {
-  return <PatchOSPageIcon os="linux" {...props} />;
-}
-
-export function MacOSPatchPageIcon(props) {
-  return <PatchOSPageIcon os="macos" {...props} />;
-}
-
-export const PATCH_PAGE_TABS = [
-  { key: "patch_list", label: "Patch List" },
-  { key: "policies", label: "Patch Management Policies" },
 ];
 
 export const POLICY_MATCH_TYPES = [
@@ -180,51 +162,6 @@ const PATCH_CHIP_TOKEN_SX = {
   },
 };
 
-export const PATCH_GRID_SX = {
-  "--ag-background-color": "#070b1a",
-  "--ag-foreground-color": "#f4f7ff",
-  "--ag-header-background-color": "#0f172a",
-  "--ag-header-foreground-color": "#cfe0ff",
-  "--ag-odd-row-background-color": "rgba(255,255,255,0.02)",
-  "--ag-row-hover-color": "rgba(73,156,196,0.2)",
-  "--ag-selected-row-background-color": "rgba(125,211,252,0.2)",
-  "--ag-border-color": "rgba(125,183,255,0.18)",
-  "--ag-row-border-color": "rgba(125,183,255,0.14)",
-  "--ag-border-radius": "8px",
-  "& .ag-row-hover": {
-    backgroundColor: "rgba(73,156,196,0.2) !important",
-  },
-  "& .ag-row-selected": {
-    backgroundColor: "rgba(125,211,252,0.2) !important",
-    boxShadow: "inset 0 0 0 1px rgba(125,211,252,0.45)",
-  },
-  "& .ag-center-cols-container .ag-cell, & .ag-pinned-left-cols-container .ag-cell, & .ag-pinned-right-cols-container .ag-cell": {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-start",
-  },
-  "& .ag-center-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-left-cols-container .ag-cell .ag-cell-wrapper, & .ag-pinned-right-cols-container .ag-cell .ag-cell-wrapper": {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "flex-start",
-    paddingTop: 0,
-    paddingBottom: 0,
-    minWidth: 0,
-  },
-  "& .ag-center-cols-container .ag-cell .ag-cell-value, & .ag-pinned-left-cols-container .ag-cell .ag-cell-value, & .ag-pinned-right-cols-container .ag-cell .ag-cell-value": {
-    width: "100%",
-    height: "100%",
-    display: "flex",
-    alignItems: "center",
-    minWidth: 0,
-  },
-  "& .patch-chip-cell .ag-cell-wrapper, & .patch-chip-cell .ag-cell-value": {
-    alignItems: "center",
-  },
-};
-
 export function text(value) {
   return String(value ?? "").trim();
 }
@@ -283,16 +220,6 @@ function formatDeviceCount(value) {
   const count = Number(value || 0);
   const safeCount = Number.isFinite(count) && count > 0 ? count : 0;
   return `${safeCount.toLocaleString()} ${safeCount === 1 ? "Device" : "Devices"}`;
-}
-
-export function formatScheduleType(value) {
-  const raw = text(value);
-  if (!raw) return "";
-  return raw
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((segment) => `${segment.charAt(0).toUpperCase()}${segment.slice(1).toLowerCase()}`)
-    .join(" ");
 }
 
 const WEEKDAY_PLURAL_LABELS = Object.freeze([
@@ -514,6 +441,37 @@ function FilterSliderBlock({ label = "", children }) {
     </Box>
   );
 }
+
+function buildPatchPlatformTabsSx() {
+  const baseSx = buildNavTabsSx();
+  return {
+    ...baseSx,
+    "& .MuiTab-root": {
+      ...baseSx["& .MuiTab-root"],
+      gap: 0.75,
+      px: 1.4,
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.icon,
+        fontSize: "0.95rem",
+        mr: 0.75,
+      },
+      "&:hover": {
+        background: NAV_TAB_COLORS.hover,
+      },
+    },
+    "& .MuiTab-root.Mui-selected": {
+      ...baseSx["& .MuiTab-root.Mui-selected"],
+      "& .MuiTab-iconWrapper": {
+        color: NAV_TAB_COLORS.iconActive,
+      },
+      "&:hover": {
+        background: NAV_TAB_COLORS.activeBg,
+      },
+    },
+  };
+}
+
+const PATCH_PLATFORM_TABS_SX = buildPatchPlatformTabsSx();
 
 function buildPatchFleetRows(rows = []) {
   const groups = new Map();
@@ -2275,6 +2233,24 @@ export default function PatchManagement() {
   const [severityFilter, setSeverityFilter] = useState("");
   const [selectedPatchRows, setSelectedPatchRows] = useState({});
   const [newPolicyMenuAnchor, setNewPolicyMenuAnchor] = useState(null);
+  const requestedPlatform = useMemo(
+    () => text(searchParams.get("platform")).toLowerCase(),
+    [searchParams]
+  );
+  const activePlatform = useMemo(
+    () => normalizePatchPlatform(requestedPlatform),
+    [requestedPlatform]
+  );
+  const platformPane = usePatchManagementPlatformPane({ platform: activePlatform });
+  const activePlatformCopy = useMemo(
+    () => resolvePatchPlatformCopy(activePlatform),
+    [activePlatform]
+  );
+  const notifyOperator = useAppNotifications({
+    title: PAGE_TITLE,
+    icon: "pendingactions",
+    variant: "info",
+  });
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
@@ -2293,8 +2269,24 @@ export default function PatchManagement() {
   }, [searchParams]);
   const activeTab = useMemo(() => {
     const requested = text(searchParams.get("tab")) || "patch_list";
+    if (["global_policies", "site_policies", "device_filter_policies"].includes(requested)) {
+      return "policies";
+    }
     return PATCH_PAGE_TABS.some((tab) => tab.key === requested) ? requested : "patch_list";
   }, [searchParams]);
+  const notifyNotImplemented = useCallback(() => {
+    void notifyOperator("Feature not implemented yet.");
+  }, [notifyOperator]);
+  const setActivePlatform = useCallback(
+    (nextPlatform) => {
+      const normalizedPlatform = normalizePatchPlatform(nextPlatform);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set("platform", normalizedPlatform);
+      setNewPolicyMenuAnchor(null);
+      setSearchParams(nextParams, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
   const setActiveTab = useCallback(
     (nextTab) => {
       const nextParams = new URLSearchParams(searchParams);
@@ -2307,6 +2299,12 @@ export default function PatchManagement() {
     },
     [searchParams, setSearchParams]
   );
+  useEffect(() => {
+    if (!requestedPlatform || requestedPlatform === activePlatform) return;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set("platform", activePlatform);
+    setSearchParams(nextParams, { replace: true });
+  }, [activePlatform, requestedPlatform, searchParams, setSearchParams]);
   const clearPolicyPendingFilter = useCallback(() => {
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete("policy_scope");
@@ -2349,8 +2347,9 @@ export default function PatchManagement() {
   }, []);
 
   useEffect(() => {
+    if (activePlatform !== "windows") return;
     void loadPatchRows();
-  }, [loadPatchRows]);
+  }, [activePlatform, loadPatchRows]);
 
   const clearPatchRefreshTimers = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -2376,6 +2375,7 @@ export default function PatchManagement() {
   useEffect(() => () => clearPatchRefreshTimers(), [clearPatchRefreshTimers]);
 
   useEffect(() => {
+    if (activePlatform !== "windows") return undefined;
     const socket = typeof window !== "undefined" ? window.BorealisSocket : null;
     if (!socket) return undefined;
     const handleInventoryChanged = (payload = {}) => {
@@ -2387,7 +2387,7 @@ export default function PatchManagement() {
     return () => {
       socket.off("device_inventory_changed", handleInventoryChanged);
     };
-  }, [requestPatchAuditRefresh]);
+  }, [activePlatform, requestPatchAuditRefresh]);
 
   const siteName = useMemo(() => {
     if (!selectedSiteId) return "";
@@ -2580,31 +2580,46 @@ export default function PatchManagement() {
     [navigate]
   );
 
+  const handleNewPolicyMenuOption = useCallback(
+    (policyType) => {
+      if (activePlatform !== "windows") {
+        setNewPolicyMenuAnchor(null);
+        notifyNotImplemented();
+        return;
+      }
+      handleNewPolicyOption(policyType);
+    },
+    [activePlatform, handleNewPolicyOption, notifyNotImplemented]
+  );
+
   const pageHeaderActions = useMemo(
-    () => [
-      {
-        id: "patch-management-bulk-install",
-        label: "Bulk Install",
-        icon: <SystemUpdateAltRoundedIcon />,
-        tone: "secondary",
-        disabled: activeTab !== "patch_list" || selectedBulkPatchCount < 2,
-        onClick: handleBulkInstallFleet,
-      },
-      {
-        id: "patch-management-new-policy",
-        label: "New Policy",
-        icon: <AddRoundedIcon />,
-        tone: "primary",
-        onClick: (event) => setNewPolicyMenuAnchor(event.currentTarget),
-      },
-    ],
-    [activeTab, handleBulkInstallFleet, selectedBulkPatchCount]
+    () =>
+      activePlatform !== "windows"
+        ? platformPane.pageHeaderActions
+        : [
+            {
+              id: "patch-management-bulk-install",
+              label: "Bulk Install",
+              icon: <SystemUpdateAltRoundedIcon />,
+              tone: "secondary",
+              disabled: activeTab !== "patch_list" || selectedBulkPatchCount < 2,
+              onClick: handleBulkInstallFleet,
+            },
+            {
+              id: "patch-management-new-policy",
+              label: "New Policy",
+              icon: <AddRoundedIcon />,
+              tone: "primary",
+              onClick: (event) => setNewPolicyMenuAnchor(event.currentTarget),
+            },
+          ],
+    [activePlatform, activeTab, handleBulkInstallFleet, platformPane.pageHeaderActions, selectedBulkPatchCount]
   );
 
   useRoutePageChrome({
     title: PAGE_TITLE,
-    subtitle: PAGE_SUBTITLE,
-    Icon: WindowsPatchPageIcon,
+    subtitle: activePlatformCopy.subtitle || PAGE_SUBTITLE,
+    Icon: activePlatformCopy.Icon || WindowsPatchPageIcon,
     actions: pageHeaderActions,
   });
 
@@ -2821,187 +2836,230 @@ export default function PatchManagement() {
 
   return (
     <>
-      <Menu
-        anchorEl={newPolicyMenuAnchor}
-        open={Boolean(newPolicyMenuAnchor)}
-        onClose={() => setNewPolicyMenuAnchor(null)}
-        PaperProps={{
-          sx: {
-            mt: 1,
-            borderRadius: 2,
-            border: `1px solid ${MAGIC_UI.panelBorder}`,
-            background: "rgba(8,13,30,0.98)",
-            color: MAGIC_UI.textBright,
-            boxShadow: "0 24px 60px rgba(2,8,23,0.7)",
-            "& .MuiMenuItem-root": {
-              fontSize: "0.88rem",
+      {activePlatform === "windows" ? (
+        <Menu
+          anchorEl={newPolicyMenuAnchor}
+          open={Boolean(newPolicyMenuAnchor)}
+          onClose={() => setNewPolicyMenuAnchor(null)}
+          PaperProps={{
+            sx: {
+              mt: 1,
+              borderRadius: 2,
+              border: `1px solid ${MAGIC_UI.panelBorder}`,
+              background: "rgba(8,13,30,0.98)",
               color: MAGIC_UI.textBright,
-              minHeight: 34,
+              boxShadow: "0 24px 60px rgba(2,8,23,0.7)",
+              "& .MuiMenuItem-root": {
+                fontSize: "0.88rem",
+                color: MAGIC_UI.textBright,
+                minHeight: 34,
+              },
+              "& .MuiMenuItem-root:hover": {
+                background: "rgba(125, 183, 255, 0.12)",
+              },
             },
-            "& .MuiMenuItem-root:hover": {
-              background: "rgba(125, 183, 255, 0.12)",
-            },
-          },
-        }}
-      >
-        <MenuItem onClick={() => handleNewPolicyOption("site")}>New Site Policy</MenuItem>
-        <MenuItem onClick={() => handleNewPolicyOption("device_filter")}>
-          New Device Filter Policy
-        </MenuItem>
-      </Menu>
-      <PageBodyFrame
-      variant="grid_with_stack"
-      stack={
-        <Stack spacing={1.2}>
-          <Tabs
-            value={activeTab}
-            onChange={(_, value) => setActiveTab(value)}
-            sx={buildNavTabsSx()}
-            TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
-          >
-            {PATCH_PAGE_TABS.map((tab) => (
-              <Tab key={tab.key} value={tab.key} label={tab.label} />
-            ))}
-          </Tabs>
-          {activeTab === "patch_list" ? (
-            <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
-              <FilterSliderBlock label="State">
-                <CountSliderGroup
-                  options={STATE_FILTER_OPTIONS}
-                  activeKey={stateFilter}
-                  counts={stateCounts}
-                  onChange={(value) => {
-                    setStateFilter(value);
-                    if (policyPendingFilter.active && value !== "pending") {
-                      clearPolicyPendingFilter();
-                    }
-                  }}
-                />
-              </FilterSliderBlock>
-              <FilterSliderBlock label="Severity">
-                <CountSliderGroup
-                  options={SEVERITY_FILTER_OPTIONS}
-                  activeKey={severityFilter}
-                  counts={severityCounts}
-                  onChange={setSeverityFilter}
-                />
-              </FilterSliderBlock>
-              {policyPendingFilter.active ? (
-                <Box
-                  sx={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    alignSelf: "flex-end",
-                    gap: 0.8,
-                    borderRadius: 999,
-                    border: "1px solid rgba(88,166,255,0.35)",
-                    background: "rgba(8,12,24,0.78)",
-                    px: 1.35,
-                    py: 0.55,
-                  }}
-                >
-                  <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 700 }}>
-                    {`Policy: ${policyPendingFilter.scopeName || "Patch Policy"} - ${policyPendingFilter.layerLabel || "Pending Updates"}`}
-                  </Typography>
-                  <Button
-                    size="small"
-                    onClick={clearPolicyPendingFilter}
-                    sx={{
-                      minWidth: 0,
-                      px: 1,
-                      py: 0.15,
-                      borderRadius: 999,
-                      color: MAGIC_UI.textBright,
-                      textTransform: "none",
-                      fontSize: "0.76rem",
-                      border: "1px solid rgba(148,163,184,0.28)",
-                      "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
-                    }}
-                  >
-                    Clear
-                  </Button>
-                </Box>
-              ) : null}
-              {siteName ? (
-                <Box
-                  sx={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    alignSelf: "flex-end",
-                    gap: 0.8,
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.35)",
-                    background: "rgba(8,12,24,0.78)",
-                    px: 1.35,
-                    py: 0.55,
-                  }}
-                >
-                  <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 600 }}>
-                    {`Site: ${siteName}`}
-                  </Typography>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      const nextParams = new URLSearchParams(searchParams);
-                      nextParams.delete("site");
-                      setSearchParams(nextParams, { replace: true });
-                    }}
-                    sx={{
-                      minWidth: 0,
-                      px: 1,
-                      py: 0.15,
-                      borderRadius: 999,
-                      color: MAGIC_UI.textBright,
-                      textTransform: "none",
-                      fontSize: "0.76rem",
-                      border: "1px solid rgba(148,163,184,0.28)",
-                      "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
-                    }}
-                  >
-                    Clear
-                  </Button>
-                </Box>
-              ) : null}
-            </Box>
-          ) : null}
-        </Stack>
-      }
-    >
-      {activeTab === "patch_list" ? (
-        <>
-          {loadError ? (
-            <Box sx={{ p: 2, color: "rgba(248,113,113,0.95)" }}>Failed to load patch audit: {loadError}</Box>
-          ) : null}
-          <GridShell
-            sx={{
-              ...PATCH_GRID_SX,
-              flexGrow: 1,
-              minHeight: 520,
-              borderRadius: 0,
-              border: "none",
-            }}
-          >
-            <AgGridReact
-              ref={gridRef}
-              rowData={displayRows}
-              columnDefs={columnDefs}
-              defaultColDef={DEFAULT_GRID_COL_DEF}
-              rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
-              suppressCellFocus
-              pagination
-              paginationPageSize={100}
-              paginationPageSizeSelector={[20, 50, 100]}
-              animateRows
-              rowHeight={44}
-              headerHeight={44}
-              getRowId={(params) => String(params.data?.id || params.rowIndex)}
-              theme={DEVICE_DETAILS_GRID_THEME}
-            />
-          </GridShell>
-        </>
+          }}
+        >
+          <MenuItem onClick={() => handleNewPolicyMenuOption("site")}>New Site Policy</MenuItem>
+          <MenuItem onClick={() => handleNewPolicyMenuOption("device_filter")}>
+            New Device Filter Policy
+          </MenuItem>
+        </Menu>
       ) : (
-        <PatchPolicyTab onPendingUpdatesClick={applyPolicyPendingFilter} />
+        platformPane.menu
       )}
+      <PageBodyFrame
+        variant="grid_with_stack"
+        stack={
+          <Stack spacing={1.2}>
+            <Tabs
+              value={activePlatform}
+              onChange={(_, value) => setActivePlatform(value)}
+              aria-label="Patch management operating system tabs"
+              variant="scrollable"
+              scrollButtons="auto"
+              sx={PATCH_PLATFORM_TABS_SX}
+              TabIndicatorProps={{ sx: { background: NAV_TAB_COLORS.iconActive } }}
+            >
+              {PATCH_PLATFORM_TABS.map((tab) => {
+                const PlatformIcon = tab.Icon;
+                return (
+                  <Tab
+                    key={tab.key}
+                    value={tab.key}
+                    label={tab.label}
+                    icon={<PlatformIcon />}
+                    iconPosition="start"
+                    id={`patch-management-${tab.key}-tab`}
+                    aria-controls={`patch-management-${tab.key}-panel`}
+                  />
+                );
+              })}
+            </Tabs>
+            {activePlatform === "windows" ? (
+              <>
+                <Tabs
+                  value={activeTab}
+                  onChange={(_, value) => setActiveTab(value)}
+                  sx={buildNavTabsSx()}
+                  TabIndicatorProps={{ sx: { background: "linear-gradient(90deg, #7dd3fc, #c084fc)" } }}
+                >
+                  {PATCH_PAGE_TABS.map((tab) => (
+                    <Tab key={tab.key} value={tab.key} label={tab.label} />
+                  ))}
+                </Tabs>
+                {activeTab === "patch_list" ? (
+                  <Box sx={{ display: "flex", alignItems: "flex-start", columnGap: 1, rowGap: 1, flexWrap: "wrap" }}>
+                    <FilterSliderBlock label="State">
+                      <CountSliderGroup
+                        options={STATE_FILTER_OPTIONS}
+                        activeKey={stateFilter}
+                        counts={stateCounts}
+                        onChange={(value) => {
+                          setStateFilter(value);
+                          if (policyPendingFilter.active && value !== "pending") {
+                            clearPolicyPendingFilter();
+                          }
+                        }}
+                      />
+                    </FilterSliderBlock>
+                    <FilterSliderBlock label="Severity">
+                      <CountSliderGroup
+                        options={SEVERITY_FILTER_OPTIONS}
+                        activeKey={severityFilter}
+                        counts={severityCounts}
+                        onChange={setSeverityFilter}
+                      />
+                    </FilterSliderBlock>
+                    {policyPendingFilter.active ? (
+                      <Box
+                        sx={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          alignSelf: "flex-end",
+                          gap: 0.8,
+                          borderRadius: 999,
+                          border: "1px solid rgba(88,166,255,0.35)",
+                          background: "rgba(8,12,24,0.78)",
+                          px: 1.35,
+                          py: 0.55,
+                        }}
+                      >
+                        <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 700 }}>
+                          {`Policy: ${policyPendingFilter.scopeName || "Patch Policy"} - ${policyPendingFilter.layerLabel || "Pending Updates"}`}
+                        </Typography>
+                        <Button
+                          size="small"
+                          onClick={clearPolicyPendingFilter}
+                          sx={{
+                            minWidth: 0,
+                            px: 1,
+                            py: 0.15,
+                            borderRadius: 999,
+                            color: MAGIC_UI.textBright,
+                            textTransform: "none",
+                            fontSize: "0.76rem",
+                            border: "1px solid rgba(148,163,184,0.28)",
+                            "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
+                          }}
+                        >
+                          Clear
+                        </Button>
+                      </Box>
+                    ) : null}
+                    {siteName ? (
+                      <Box
+                        sx={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          alignSelf: "flex-end",
+                          gap: 0.8,
+                          borderRadius: 999,
+                          border: "1px solid rgba(148,163,184,0.35)",
+                          background: "rgba(8,12,24,0.78)",
+                          px: 1.35,
+                          py: 0.55,
+                        }}
+                      >
+                        <Typography sx={{ color: "rgba(191,219,254,0.92)", fontSize: "0.82rem", fontWeight: 600 }}>
+                          {`Site: ${siteName}`}
+                        </Typography>
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            const nextParams = new URLSearchParams(searchParams);
+                            nextParams.delete("site");
+                            setSearchParams(nextParams, { replace: true });
+                          }}
+                          sx={{
+                            minWidth: 0,
+                            px: 1,
+                            py: 0.15,
+                            borderRadius: 999,
+                            color: MAGIC_UI.textBright,
+                            textTransform: "none",
+                            fontSize: "0.76rem",
+                            border: "1px solid rgba(148,163,184,0.28)",
+                            "&:hover": { borderColor: "rgba(125,211,252,0.5)", background: "rgba(125,211,252,0.1)" },
+                          }}
+                        >
+                          Clear
+                        </Button>
+                      </Box>
+                    ) : null}
+                  </Box>
+                ) : null}
+              </>
+            ) : (
+              platformPane.stackContent
+            )}
+          </Stack>
+        }
+      >
+        <Box
+          role="tabpanel"
+          id={`patch-management-${activePlatform}-panel`}
+          aria-labelledby={`patch-management-${activePlatform}-tab`}
+          sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minHeight: 0 }}
+        >
+          {activePlatform !== "windows" ? (
+            platformPane.content
+          ) : activeTab === "patch_list" ? (
+            <>
+              {loadError ? (
+                <Box sx={{ p: 2, color: "rgba(248,113,113,0.95)" }}>Failed to load patch audit: {loadError}</Box>
+              ) : null}
+              <GridShell
+                sx={{
+                  ...PATCH_GRID_SX,
+                  flexGrow: 1,
+                  minHeight: 520,
+                  borderRadius: 0,
+                  border: "none",
+                }}
+              >
+                <AgGridReact
+                  ref={gridRef}
+                  rowData={displayRows}
+                  columnDefs={columnDefs}
+                  defaultColDef={DEFAULT_GRID_COL_DEF}
+                  rowSelection={{ mode: "singleRow", checkboxes: false, headerCheckbox: false, enableClickSelection: true }}
+                  suppressCellFocus
+                  pagination
+                  paginationPageSize={100}
+                  paginationPageSizeSelector={[20, 50, 100]}
+                  animateRows
+                  rowHeight={44}
+                  headerHeight={44}
+                  getRowId={(params) => String(params.data?.id || params.rowIndex)}
+                  theme={DEVICE_DETAILS_GRID_THEME}
+                />
+              </GridShell>
+            </>
+          ) : (
+            <PatchPolicyTab onPendingUpdatesClick={applyPolicyPendingFilter} />
+          )}
+        </Box>
       </PageBodyFrame>
     </>
   );
