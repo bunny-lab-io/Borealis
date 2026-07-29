@@ -162,17 +162,7 @@ Browse Borealis screens from one page. Individual docs stay focused on behavior 
   <figcaption>Directory Services configures external identity providers and directory authentication behavior.</figcaption>
 </figure>
 
-## Logs And Local Agent
-
-<figure class="bo-screenshot">
-  <img src="Reference/images/repo_screenshots/Log_Management.png" alt="Borealis Log Management" loading="lazy">
-  <figcaption>Log Management provides filtered access to Engine and service logs from the WebUI.</figcaption>
-</figure>
-
-<figure class="bo-screenshot">
-  <img src="Reference/images/repo_screenshots/Log_Management_Raw.png" alt="Borealis Raw Log Viewer" loading="lazy">
-  <figcaption>Raw log view exposes detailed log contents for focused troubleshooting.</figcaption>
-</figure>
+## Local Agent
 
 <figure class="bo-screenshot">
   <img src="Reference/images/repo_screenshots/Agent_System_Tray.png" alt="Borealis Agent system tray" loading="lazy">

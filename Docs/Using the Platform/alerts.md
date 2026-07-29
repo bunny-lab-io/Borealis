@@ -47,7 +47,7 @@ Device-level suppressions also require a reason so other operators can tell why 
 
     - [Watchdogs](watchdogs.md)
     - [Device Auditing](device-auditing.md)
-    - [Engine Log Management](engine-log-management.md)
+    - [Engine Log Access](engine-log-management.md)
     - [UI and Notifications](../Reference/ui-and-notifications.md)
 
     ### Source map

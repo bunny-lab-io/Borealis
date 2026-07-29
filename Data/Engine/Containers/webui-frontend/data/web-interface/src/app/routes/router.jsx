@@ -670,19 +670,6 @@ export function buildAppRoutes() {
                   ),
                 },
                 {
-                  path: "logs",
-                  handle: {
-                    title: "Log Management",
-                    breadcrumb: "Log Management",
-                    navKey: "logs",
-                    pageKey: "logs",
-                  },
-                  lazy: lazyNamed(
-                    () => import("../route-modules/adminRoutes.jsx"),
-                    "LogsRoute"
-                  ),
-                },
-                {
                   path: "dev-tools",
                   handle: {
                     title: "Dev Tools",

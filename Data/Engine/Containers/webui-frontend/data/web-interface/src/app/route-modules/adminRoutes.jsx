@@ -1,6 +1,5 @@
 import React from "react";
 import ServerInfo, { loadServerOverviewPageData } from "../../Admin/Server_Info.jsx";
-import LogManagement from "../../Admin/Log_Management.jsx";
 import DevTools from "../../DevTools/Dev_Tools.jsx";
 import MetadataFieldList, { loadMetadataFieldsPageData } from "../../Admin/Metadata_Field_List.jsx";
 import BackupRestore from "../../Admin/Backup_Restore.jsx";
@@ -11,10 +10,6 @@ export async function ServerRouteLoader({ request }) {
 
 export function ServerRoute() {
   return <ServerInfo />;
-}
-
-export function LogsRoute() {
-  return <LogManagement />;
 }
 
 export function BackupRestoreRoute() {

@@ -131,7 +131,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [API Reference](../Reference/Data%20and%20Schema/api-reference.md)
     - [Technical Debt issues](https://github.com/bunny-lab-io/Borealis/issues?q=is%3Aissue%20label%3A%22Technical%20Debt%22)
-    - [Engine Log Management](../Using%20the%20Platform/engine-log-management.md)
+    - [Engine Log Access](../Using%20the%20Platform/engine-log-management.md)
     - [Remote Shell](../Using%20the%20Platform/remote-shell.md)
     - [Workflows](../Using%20the%20Platform/Assemblies/workflows.md)
     - [Migrating Pages to React Router](../Reference/Migration%20Paths/migrating-pages-to-react-router.md)

@@ -34,7 +34,6 @@ import {
   AccountTree as DirectoryIcon,
   AdminPanelSettings as AdminPanelSettingsIcon,
   DashboardCustomizeRounded as PageStyleTemplateIcon,
-  ReceiptLong as LogsIcon,
   LabelRounded as MetadataFieldsIcon,
   BackupRounded as BackupRestoreIcon,
 } from "@mui/icons-material";
@@ -270,12 +269,6 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Metadata Fields",
         navKey: "metadata-fields",
         to: APP_PATHS.metadataFields,
-      },
-      {
-        icon: LogsIcon,
-        label: "Log Management",
-        navKey: "logs",
-        to: APP_PATHS.logs,
       },
     ],
   },

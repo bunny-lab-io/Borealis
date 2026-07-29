@@ -257,10 +257,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.
     - `POST /api/server/wireguard/recover` (Admin) - queue a WireGuard tunnel reconcile when active VPN sessions exist.
-    - `GET /api/server/logs` (Admin) - list logs and retention.
-    - `GET /api/server/logs/<log_name>/entries` (Admin) - tail log lines.
-    - `PUT /api/server/logs/retention` (Admin) - update retention policies.
-    - `DELETE /api/server/logs/<log_name>` (Admin) - delete log file(s).
+    - `/api/server/logs*` (Admin) - retired log access surface. Authenticated administrators receive `410 Gone`; log inspection is CLI-only through [Engine Log Access](../../Using%20the%20Platform/engine-log-management.md).
 
     ### Related documentation
 

@@ -159,6 +159,7 @@ func main() {
 	mux.Handle("/", fallback)
 	if apiBackgroundLoopsEnabled() {
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
+		startServerLogRetentionRuntime(rootCtx)
 	} else {
 		log.Printf("Go api-backend background loops disabled")
 	}

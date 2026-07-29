@@ -53,7 +53,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     ### Related documentation
 
-    - [Engine Log Management](engine-log-management.md)
+    - [Engine Log Access](engine-log-management.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 
@@ -78,5 +78,5 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - Service actions queue work items so API request can return before service changes interrupt runtime. K3s-owned workload actions are reconciled through `borealis-operator`; K3s WireGuard reconcile uses the mounted WireGuard control socket from `job-scheduler`. Stage 11 retires Docker/Compose service-action helpers and stale Compose service rows.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
-    - Server Info is informational first; raw log inspection belongs in Engine Log Management.
+    - Server Info is informational first; raw log inspection belongs in CLI-driven Engine Log Access.
     - Legacy `/engine-status` URLs redirect to `/server`; the old Engine Status React Flow page was retired.

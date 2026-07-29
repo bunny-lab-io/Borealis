@@ -2997,254 +2997,126 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	}
 }
 
-func TestServerLogsHandlerReturnsDomains(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte("[2026-06-02T00:00:00Z] [INFO] engine ready\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logRoot, "engine.log.2026-06-01"), []byte("old\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestServerLogEndpointsAreRetired(t *testing.T) {
 	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/logs", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogsHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	cases := []struct {
+		name    string
+		method  string
+		path    string
+		handler http.HandlerFunc
+		body    string
+	}{
+		{"list", http.MethodGet, "/api/server/logs", serverLogsHandler(auth), ""},
+		{"entries", http.MethodGet, "/api/server/logs/engine.log/entries?limit=50", serverLogEntriesHandler(auth), ""},
+		{"unsafe_entries", http.MethodGet, "/api/server/logs/%2E%2E%2Fsecret.log/entries", serverLogEntriesHandler(auth), ""},
+		{"retention", http.MethodPut, "/api/server/logs/retention", serverLogEntriesHandler(auth), `{"retention":{"engine.log":5}}`},
+		{"delete", http.MethodDelete, "/api/server/logs/engine.log?scope=family", serverLogEntriesHandler(auth), ""},
 	}
-	var payload struct {
-		Logs []map[string]any `json:"logs"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Logs) != 1 || payload.Logs[0]["file"] != "engine.log" {
-		t.Fatalf("unexpected logs payload %+v", payload)
-	}
-	if int(payload.Logs[0]["rotation_count"].(float64)) != 1 {
-		t.Fatalf("expected one rotation, got %+v", payload.Logs[0])
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			body := strings.NewReader(tt.body)
+			if tt.body == "" {
+				body = strings.NewReader("")
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, body)
+			request.Header.Set("Authorization", "Bearer "+testAuthToken)
+			tt.handler.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusGone {
+				t.Fatalf("expected 410, got %d body=%s", recorder.Code, recorder.Body.String())
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["error"] != "server_logs_retired" {
+				t.Fatalf("unexpected retired endpoint payload %+v", payload)
+			}
+		})
 	}
 }
 
-func TestServerLogsHandlerReturnsNestedDomains(t *testing.T) {
+func TestApplyLogRetentionDeletesOnlyExpiredRotations(t *testing.T) {
 	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
 	nestedRoot := filepath.Join(logRoot, "site-workers")
 	if err := os.MkdirAll(nestedRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nestedRoot, "worker.log"), []byte("[2026-06-02T00:00:00Z] [INFO] worker ready\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(nestedRoot, "worker.log.2026-06-01"), []byte("old\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/logs", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogsHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload struct {
-		Logs []map[string]any `json:"logs"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Logs) != 1 || payload.Logs[0]["file"] != "site-workers/worker.log" {
-		t.Fatalf("unexpected nested logs payload %+v", payload)
-	}
-	if int(payload.Logs[0]["rotation_count"].(float64)) != 1 {
-		t.Fatalf("expected one nested rotation, got %+v", payload.Logs[0])
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodGet, "/api/server/logs/site-workers%2Fworker.log/entries?limit=50", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected entries 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var entriesPayload struct {
-		File    string           `json:"file"`
-		Entries []map[string]any `json:"entries"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &entriesPayload); err != nil {
-		t.Fatal(err)
-	}
-	if entriesPayload.File != "site-workers/worker.log" || len(entriesPayload.Entries) != 1 {
-		t.Fatalf("unexpected nested entries payload %+v", entriesPayload)
-	}
-	if entriesPayload.Entries[0]["message"] != "worker ready" {
-		t.Fatalf("unexpected nested entry message %+v", entriesPayload.Entries[0])
-	}
-}
-
-func TestServerLogEntriesHandlerReturnsParsedEntries(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	content := strings.Join([]string{
-		"[2026-06-02T00:00:00Z] [INFO][CONTEXT-ADMIN] first message",
-		"2026-06-02 00:01:00,000-engine-ERROR: second message",
-	}, "\n") + "\n"
-	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/server/logs/engine.log/entries?limit=50", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload struct {
-		Entries []map[string]any `json:"entries"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if len(payload.Entries) != 2 {
-		t.Fatalf("expected two entries, got %+v", payload)
-	}
-	if payload.Entries[0]["scope"] != "ADMIN" || payload.Entries[1]["level"] != "ERROR" {
-		t.Fatalf("unexpected parsed entries %+v", payload.Entries)
-	}
-}
-
-func TestServerLogEntriesHandlerRejectsUnsafeNames(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	if err := os.WriteFile(filepath.Join(logRoot, "retention_policy.json"), []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logRoot, "secret.log"), []byte("secret\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	for _, path := range []string{
-		"/api/server/logs/%2E%2E%2Fsecret.log/entries",
-		"/api/server/logs/%2Fsecret.log/entries",
-		"/api/server/logs/retention_policy.json/entries",
-	} {
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, path, nil)
-		request.Header.Set("Authorization", "Bearer "+testAuthToken)
-		serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-		if recorder.Code != http.StatusNotFound {
-			t.Fatalf("expected unsafe path %q to return 404, got %d body=%s", path, recorder.Code, recorder.Body.String())
-		}
-	}
-}
-
-func TestServerLogRetentionHandlerUpdatesPolicy(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	if err := os.WriteFile(filepath.Join(logRoot, "engine.log"), []byte("active\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(logRoot, "engine.log.2026-06-01"), []byte("old\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":5}}`))
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	overrides := payload["retention_overrides"].(map[string]any)
-	if got := overrides["engine.log"]; got != float64(5) {
-		t.Fatalf("expected retention override 5, got %#v", got)
-	}
-
-	recorder = httptest.NewRecorder()
-	request = httptest.NewRequest(http.MethodPut, "/api/server/logs/retention", strings.NewReader(`{"retention":{"engine.log":null}}`))
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected clear 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if got := loadLogRetention(logRoot)["engine.log"]; got != nil {
-		t.Fatalf("expected cleared override, got %#v", got)
-	}
-}
-
-func TestServerLogDeleteHandlerDeletesFamily(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	for _, name := range []string{"engine.log", "engine.log.2026-06-01", "other.log"} {
-		if err := os.WriteFile(filepath.Join(logRoot, name), []byte("line\n"), 0o600); err != nil {
+	oldRotation := filepath.Join(logRoot, "engine.log.2026-06-01")
+	oldNestedRotation := filepath.Join(nestedRoot, "worker.log.2026-06-01")
+	recentRotation := filepath.Join(logRoot, "api.log.2026-06-02")
+	activeLog := filepath.Join(logRoot, "engine.log")
+	nonRotation := filepath.Join(logRoot, "engine.log.tmp")
+	for _, path := range []string{oldRotation, oldNestedRotation, recentRotation, activeLog, nonRotation} {
+		if err := os.WriteFile(path, []byte("line\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodDelete, "/api/server/logs/engine.log?scope=family", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
-	}
-	if _, err := os.Stat(filepath.Join(logRoot, "engine.log")); !os.IsNotExist(err) {
-		t.Fatalf("expected active log deleted, err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(logRoot, "engine.log.2026-06-01")); !os.IsNotExist(err) {
-		t.Fatalf("expected rotated log deleted, err=%v", err)
-	}
-	if _, err := os.Stat(filepath.Join(logRoot, "other.log")); err != nil {
-		t.Fatalf("expected other log retained, err=%v", err)
-	}
-}
-
-func TestServerLogDeleteHandlerDeletesNestedFamily(t *testing.T) {
-	logRoot := t.TempDir()
-	t.Setenv("BOREALIS_GO_API_LOG_ROOT", logRoot)
-	nestedRoot := filepath.Join(logRoot, "site-workers")
-	if err := os.MkdirAll(nestedRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"worker.log", "worker.log.2026-06-01"} {
-		if err := os.WriteFile(filepath.Join(nestedRoot, name), []byte("line\n"), 0o600); err != nil {
+	now := time.Now()
+	expired := now.AddDate(0, 0, -31)
+	recent := now.AddDate(0, 0, -2)
+	for _, path := range []string{oldRotation, oldNestedRotation, activeLog, nonRotation} {
+		if err := os.Chtimes(path, expired, expired); err != nil {
 			t.Fatal(err)
 		}
 	}
-	auth := testAuthService(operatorProfile{Username: "operator", Role: "Admin"})
-
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodDelete, "/api/server/logs/site-workers%2Fworker.log?scope=family", nil)
-	request.Header.Set("Authorization", "Bearer "+testAuthToken)
-	serverLogEntriesHandler(auth).ServeHTTP(recorder, request)
-
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	if err := os.Chtimes(recentRotation, recent, recent); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(nestedRoot, "worker.log")); !os.IsNotExist(err) {
-		t.Fatalf("expected active nested log deleted, err=%v", err)
+
+	deleted, err := applyLogRetention(logRoot, 30)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(nestedRoot, "worker.log.2026-06-01")); !os.IsNotExist(err) {
-		t.Fatalf("expected rotated nested log deleted, err=%v", err)
+	wantDeleted := map[string]bool{
+		"engine.log.2026-06-01":              false,
+		"site-workers/worker.log.2026-06-01": false,
+	}
+	for _, name := range deleted {
+		if _, ok := wantDeleted[name]; ok {
+			wantDeleted[name] = true
+		}
+	}
+	for name, seen := range wantDeleted {
+		if !seen {
+			t.Fatalf("expected %s deleted, deleted=%v", name, deleted)
+		}
+	}
+	for _, path := range []string{recentRotation, activeLog, nonRotation} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected retained log %s, err=%v", path, err)
+		}
+	}
+}
+
+func TestServerLogRetentionSweepUsesConfiguredRoots(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	t.Setenv("BOREALIS_ENGINE_FILE_LOG_RETENTION_ROOTS", rootA+string(os.PathListSeparator)+rootB)
+	t.Setenv("BOREALIS_ENGINE_FILE_LOG_RETENTION_DAYS", "30")
+
+	for _, root := range []string{rootA, rootB} {
+		path := filepath.Join(root, "engine.log.2026-06-01")
+		if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().AddDate(0, 0, -31)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deletions := runServerLogRetentionSweep()
+	if len(deletions) != 2 {
+		t.Fatalf("expected two retention deletions, got %+v", deletions)
+	}
+	for _, root := range []string{rootA, rootB} {
+		if _, err := os.Stat(filepath.Join(root, "engine.log.2026-06-01")); !os.IsNotExist(err) {
+			t.Fatalf("expected old rotation in %s deleted, err=%v", root, err)
+		}
 	}
 }
 

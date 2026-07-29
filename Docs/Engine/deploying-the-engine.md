@@ -272,7 +272,7 @@ After deployment finishes:
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Security Whitepaper](../Reference/security-whitepaper.md)
-    - [Engine Log Management](../Using%20the%20Platform/engine-log-management.md)
+    - [Engine Log Access](../Using%20the%20Platform/engine-log-management.md)
 
     ### Bootstrap and runtime separation
 

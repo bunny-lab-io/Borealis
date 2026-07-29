@@ -44,4 +44,4 @@ Use this section for daily Borealis work: sites, inventory, approvals, filters, 
 - [User Management](user-management.md) - manage local and cached directory operators.
 - [Backup and Restore](backup-restore.md) - export or import encrypted Engine configuration backups.
 - [Server Info](server-info.md) - inspect Engine runtime health and service controls.
-- [Engine Log Management](engine-log-management.md) - browse logs, set retention, and open raw log files.
+- [Engine Log Access](engine-log-management.md) - use CLI commands for K3s pod logs and Borealis file logs.
