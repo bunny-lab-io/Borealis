@@ -201,12 +201,14 @@ const BASE_NAV_SECTIONS = Object.freeze([
         label: "Linux",
         navKey: "patch-management-linux",
         to: APP_PATHS.patchManagementLinux,
+        developerOnly: true,
       },
       {
         iconClass: OS_NAV_ICON_CLASSES.macos,
         label: "MacOS",
         navKey: "patch-management-macos",
         to: APP_PATHS.patchManagementMacOS,
+        developerOnly: true,
       },
     ],
   },
@@ -414,15 +416,21 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
 
   const visibleSections = useMemo(
     () =>
-      navSections.filter((section) => {
-        if (section.adminOnly && !isAdmin) {
-          return false;
-        }
-        if (section.developerOnly && !developerModeEnabled) {
-          return false;
-        }
-        return true;
-      }),
+      navSections
+        .filter((section) => {
+          if (section.adminOnly && !isAdmin) {
+            return false;
+          }
+          if (section.developerOnly && !developerModeEnabled) {
+            return false;
+          }
+          return true;
+        })
+        .map((section) => {
+          const items = section.items.filter((item) => !item.developerOnly || developerModeEnabled);
+          return items.length === section.items.length ? section : { ...section, items };
+        })
+        .filter((section) => section.items.length > 0),
     [developerModeEnabled, isAdmin, navSections]
   );
 
