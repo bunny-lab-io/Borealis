@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import NavigationSidebar from "@/Navigation_Sidebar.jsx";
@@ -41,5 +41,14 @@ describe("NavigationSidebar developer mode visibility", () => {
     expect(screen.getByText("Windows")).toBeInTheDocument();
     expect(screen.getByText("Linux")).toBeInTheDocument();
     expect(screen.getByText("MacOS")).toBeInTheDocument();
+  });
+
+  it("uses in-progress hidden sections copy in the developer mode menu", async () => {
+    renderSidebar();
+
+    fireEvent.contextMenu(screen.getByText("Patch Management"));
+
+    expect(await screen.findByText("Show In-Progress / Hidden Sections")).toBeInTheDocument();
+    expect(screen.queryByText("Show Dev Tools in the sidebar.")).not.toBeInTheDocument();
   });
 });

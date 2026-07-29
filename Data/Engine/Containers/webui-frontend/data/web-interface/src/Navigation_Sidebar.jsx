@@ -797,8 +797,8 @@ function NavigationSidebar({ activeNavKey, isAdmin = false }) {
               }}
             >
               {developerModeEnabled
-                ? "Hide Dev Tools from the sidebar."
-                : "Show Dev Tools in the sidebar."}
+                ? "Hide In-Progress / Hidden Sections"
+                : "Show In-Progress / Hidden Sections"}
             </Typography>
           </Box>
         </MenuItem>
