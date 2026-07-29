@@ -53,6 +53,7 @@ Use `Delete File` for one file. Use domain/family deletion only when you intenti
     ### Runtime behavior
 
     - Primary API logs live under `Engine/Services/api-backend/logs/`.
+    - The Log Management API scans `.log` files recursively below the API log root so nested domains such as `site-workers/<worker-guid>.log` and `VPN_Tunnel/tunnel.log` remain selectable.
     - Traefik logs live under `Engine/Services/traefik-edge/logs/`.
     - guacd writes transient in-container logs under `/tmp/borealis-guacd-logs` and mirrors daemon output to K3s pod logs for `deployment/remote-desktop-guacd`.
     - PostgreSQL logs use K3s pod logs for `statefulset/postgres-db` in the `borealis` namespace.

@@ -3,8 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -68,7 +71,8 @@ func serverLogEntriesHandler(auth *authService) http.HandlerFunc {
 		}
 		prefix := "/api/server/logs/"
 		suffix := "/entries"
-		if !strings.HasPrefix(r.URL.Path, prefix) || !strings.HasSuffix(r.URL.Path, suffix) {
+		requestPath := r.URL.EscapedPath()
+		if !strings.HasPrefix(requestPath, prefix) || !strings.HasSuffix(requestPath, suffix) {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not_found"})
 			return
 		}
@@ -76,8 +80,7 @@ func serverLogEntriesHandler(auth *authService) http.HandlerFunc {
 			failure.write(w)
 			return
 		}
-		logName := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, prefix), suffix)
-		logName = strings.Trim(logName, "/")
+		logName := routeLogName(strings.TrimSuffix(strings.TrimPrefix(requestPath, prefix), suffix))
 		limit := parseIntDefault(r.URL.Query().Get("limit"), 750)
 		if limit < 50 {
 			limit = 50
@@ -142,7 +145,8 @@ func serverLogDelete(w http.ResponseWriter, r *http.Request, auth *authService) 
 		return
 	}
 	prefix := "/api/server/logs/"
-	logName := strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	requestPath := r.URL.EscapedPath()
+	logName := routeLogName(strings.TrimPrefix(requestPath, prefix))
 	root := resolveLogRoot()
 	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
 	var deleted []string
@@ -181,41 +185,78 @@ func resolveLogRoot() string {
 	return "/opt/Borealis/Engine/Services/api-backend/logs"
 }
 
-func canonicalLogName(name string) string {
-	cleaned := strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
-	if cleaned == "" || strings.Contains(cleaned, "/") || strings.HasPrefix(cleaned, ".") || strings.Contains(cleaned, "..") {
-		return ""
+func routeLogName(raw string) string {
+	cleaned := strings.Trim(raw, "/")
+	if decoded, err := url.PathUnescape(cleaned); err == nil {
+		return decoded
 	}
 	return cleaned
 }
 
-func logBaseName(filename string) string {
-	if strings.HasSuffix(filename, ".log") {
-		return filename
+func canonicalLogName(name string) string {
+	cleaned := strings.TrimSpace(strings.ReplaceAll(name, "\\", "/"))
+	if decoded, err := url.PathUnescape(cleaned); err == nil {
+		cleaned = strings.TrimSpace(strings.ReplaceAll(decoded, "\\", "/"))
 	}
-	if index := strings.Index(filename, ".log."); index >= 0 {
-		return filename[:index+4]
+	if cleaned == "" || strings.HasPrefix(cleaned, "/") {
+		return ""
+	}
+	normalized := pathpkg.Clean(cleaned)
+	if normalized == "." || normalized == ".." || pathpkg.IsAbs(normalized) || strings.HasPrefix(normalized, "../") {
+		return ""
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == "" || segment == "." || segment == ".." || strings.HasPrefix(segment, ".") {
+			return ""
+		}
+	}
+	return normalized
+}
+
+func logBaseName(filename string) string {
+	normalized := strings.TrimSpace(strings.ReplaceAll(filename, "\\", "/"))
+	dir, leaf := pathpkg.Split(normalized)
+	if strings.HasSuffix(leaf, ".log") {
+		return normalized
+	}
+	if index := strings.Index(leaf, ".log."); index >= 0 {
+		return dir + leaf[:index+4]
 	}
 	return ""
 }
 
 func displayLogLabel(filename string) string {
-	base := filename
-	if strings.HasSuffix(base, ".log") {
-		base = strings.TrimSuffix(base, ".log")
+	base := strings.TrimSpace(strings.ReplaceAll(filename, "\\", "/"))
+	if domain := logBaseName(base); domain != "" {
+		base = domain
 	}
-	base = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(base, "_", " "), "-", " "))
+	base = strings.TrimSuffix(base, ".log")
 	if base == "" {
 		return filename
 	}
-	parts := strings.Fields(base)
-	for index, part := range parts {
-		if part == "" {
-			continue
+	segments := strings.Split(base, "/")
+	labels := make([]string, 0, len(segments))
+	for _, segment := range segments {
+		segment = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(segment, "_", " "), "-", " "))
+		parts := strings.Fields(segment)
+		for index, part := range parts {
+			if part == "" {
+				continue
+			}
+			if strings.ToUpper(part) == part {
+				parts[index] = part
+				continue
+			}
+			parts[index] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
 		}
-		parts[index] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+		if len(parts) > 0 {
+			labels = append(labels, strings.Join(parts, " "))
+		}
 	}
-	return strings.Join(parts, " ")
+	if len(labels) == 0 {
+		return filename
+	}
+	return strings.Join(labels, " / ")
 }
 
 func logFileMetadata(path string) map[string]any {
@@ -331,53 +372,59 @@ func logRetentionDays(retention map[string]any, base string, defaultDays int) in
 }
 
 func applyLogRetention(root string, retention map[string]any, defaultDays int) []any {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return []any{}
-	}
 	now := time.Now().UTC()
 	deleted := []any{}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		name := entry.Name()
+		if entry.IsDir() {
+			return nil
+		}
+		name, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		name = filepath.ToSlash(name)
 		base := logBaseName(name)
 		if base == "" || name == base {
-			continue
+			return nil
 		}
 		days := logRetentionDays(retention, base, defaultDays)
 		if days <= 0 {
-			continue
+			return nil
 		}
-		path := filepath.Join(root, name)
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return nil
 		}
 		if info.ModTime().UTC().Before(now.Add(-time.Duration(days) * 24 * time.Hour)) {
 			if err := os.Remove(path); err == nil {
 				deleted = append(deleted, name)
 			}
 		}
-	}
+		return nil
+	})
 	return deleted
 }
 
 func logDomainSnapshot(root string, retention map[string]any, defaultDays int) []any {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return []any{}
-	}
 	domains := map[string]map[string]any{}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		name := entry.Name()
+		if entry.IsDir() {
+			return nil
+		}
+		name, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		name = filepath.ToSlash(name)
 		base := logBaseName(name)
 		if base == "" {
-			continue
+			return nil
 		}
 		domain := domains[base]
 		if domain == nil {
@@ -386,20 +433,23 @@ func logDomainSnapshot(root string, retention map[string]any, defaultDays int) [
 				"display_name":      displayLogLabel(base),
 				"rotations":         []any{},
 				"family_size_bytes": int64(0),
+				"active":            false,
 			}
 			domains[base] = domain
 		}
-		metadata := logFileMetadata(filepath.Join(root, name))
+		metadata := logFileMetadata(path)
 		metadata["file"] = name
 		domain["family_size_bytes"] = coerceInt64(domain["family_size_bytes"]) + coerceInt64(metadata["size_bytes"])
 		if name == base {
+			domain["active"] = true
 			for key, value := range metadata {
 				domain[key] = value
 			}
 		} else {
 			domain["rotations"] = append(jsonArray(domain["rotations"]), metadata)
 		}
-	}
+		return nil
+	})
 	results := make([]map[string]any, 0, len(domains))
 	for _, domain := range domains {
 		rotations := jsonArray(domain["rotations"])
@@ -409,12 +459,20 @@ func logDomainSnapshot(root string, retention map[string]any, defaultDays int) [
 		domain["rotations"] = rotations
 		domain["rotation_count"] = len(rotations)
 		domain["retention_days"] = logRetentionDays(retention, cleanText(domain["file"]), defaultDays)
-		versions := []any{map[string]any{
-			"file":       domain["file"],
-			"label":      "Active",
-			"modified":   domain["modified"],
-			"size_bytes": domain["size_bytes"],
-		}}
+		hasActive := domain["active"] == true
+		delete(domain, "active")
+		versions := []any{}
+		if hasActive {
+			versions = append(versions, map[string]any{
+				"file":       domain["file"],
+				"label":      "Active",
+				"modified":   domain["modified"],
+				"size_bytes": domain["size_bytes"],
+			})
+		} else {
+			domain["size_bytes"] = int64(0)
+			domain["modified"] = nil
+		}
 		for _, rotation := range rotations {
 			item := asMap(rotation)
 			versions = append(versions, map[string]any{
@@ -439,7 +497,7 @@ func logDomainSnapshot(root string, retention map[string]any, defaultDays int) [
 
 func readLogEntries(root string, filename string, limit int) (map[string]any, int, error) {
 	canonical := canonicalLogName(filename)
-	if canonical == "" {
+	if canonical == "" || logBaseName(canonical) == "" {
 		return map[string]any{"error": "not_found", "message": "Log file not found."}, http.StatusNotFound, os.ErrNotExist
 	}
 	path := filepath.Clean(filepath.Join(root, canonical))
@@ -477,7 +535,7 @@ func readLogEntries(root string, filename string, limit int) (map[string]any, in
 
 func resolveLogPath(root string, filename string) (string, string, error) {
 	canonical := canonicalLogName(filename)
-	if canonical == "" {
+	if canonical == "" || logBaseName(canonical) == "" {
 		return "", "", os.ErrNotExist
 	}
 	path := filepath.Clean(filepath.Join(root, canonical))
@@ -519,26 +577,32 @@ func deleteLogFamily(root string, filename string) ([]string, error) {
 	if canonical == "" {
 		return nil, os.ErrNotExist
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, err
-	}
 	prefix := canonical + "."
 	deleted := []string{}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	if err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
 		}
-		name := entry.Name()
+		if entry.IsDir() {
+			return nil
+		}
+		name, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		name = filepath.ToSlash(name)
 		if name != canonical && !strings.HasPrefix(name, prefix) {
-			continue
+			return nil
 		}
 		if _, _, err := resolveLogPath(root, name); err != nil {
-			continue
+			return nil
 		}
-		if err := os.Remove(filepath.Join(root, name)); err == nil {
+		if err := os.Remove(path); err == nil {
 			deleted = append(deleted, name)
 		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if len(deleted) == 0 {
 		return nil, os.ErrNotExist
