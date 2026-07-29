@@ -48,6 +48,10 @@ describe("app router", () => {
     expect(lazyPaths).toContain("/filters");
     expect(lazyPaths).toContain("/jobs");
     expect(lazyPaths).toContain("/assemblies");
+    expect(lazyPaths).toContain("/patch-management");
+    expect(lazyPaths).toContain("/patch-management/windows");
+    expect(lazyPaths).toContain("/patch-management/linux");
+    expect(lazyPaths).toContain("/patch-management/macos");
     expect(lazyPaths).toContain("/credentials");
   });
 
@@ -62,5 +66,9 @@ describe("app router", () => {
     expect(byPath.get("/assemblies/scripts/:assemblyGuid")?.pageKey).toBe("script-assembly");
     expect(byPath.get("/assemblies/ansible_playbooks/:assemblyGuid")?.pageKey).toBe("ansible-playbook");
     expect(byPath.get("/assemblies/workflows/:workflowGuid")?.pageKey).toBe("workflow");
+    expect(byPath.get("/patch-management")?.navKey).toBe("patch-management");
+    expect(byPath.get("/patch-management/windows")?.navKey).toBe("patch-management");
+    expect(byPath.get("/patch-management/linux")?.navKey).toBe("patch-management");
+    expect(byPath.get("/patch-management/macos")?.navKey).toBe("patch-management");
   });
 });

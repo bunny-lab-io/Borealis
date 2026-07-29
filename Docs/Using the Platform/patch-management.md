@@ -1,21 +1,22 @@
 # Patch Management
 
-Patch Management groups OS-specific patch surfaces under one sidebar section. Windows patch inventory and policies are active today. Linux and MacOS pages are present for layout consistency and show `Coming Soon` until those patch backends exist.
+Patch Management lives under `Automation` and groups OS-specific patch surfaces behind page tabs. Windows patch inventory and policies are active today. Linux and MacOS tabs are present for layout consistency and show `Coming Soon` until those patch backends exist.
 
-The Windows Patch Management page has two tabs:
+The Patch Management page has top tabs for `Windows`, `Linux`, and `MacOS`. The Windows tab has two inner tabs:
 
 - `Patch List` shows available and installed Windows updates.
 - `Patch Management Policies` shows global baselines, site-level overrides, and device filter policies in one hierarchy table.
 
 ## Open Fleet Patch Audit
 
-1. Open `Patch Management > Windows`.
-2. Use `State` to switch between pending and installed inventory.
-3. Use `Severity` to narrow Windows Update Agent rows when severity is available.
-4. Select a blue KB number to open Microsoft Update Catalog search results in a new browser tab.
-5. Select device counts when you need to jump back to Device Inventory for affected endpoints.
-6. Use `Install` on a pending row to open a Schedule-only Scheduled Job draft for every visible device with that update pending. After the job is created, Borealis returns to Patch Management.
-7. Select two or more pending rows and use `Bulk Install` to open a Schedule-only draft that creates separate one-KB jobs sharing the same immediate or one-time schedule. After the jobs are created, Borealis returns to Patch Management.
+1. Open `Automation > Patch Management`.
+2. Select the `Windows` tab.
+3. Use `State` to switch between pending and installed inventory.
+4. Use `Severity` to narrow Windows Update Agent rows when severity is available.
+5. Select a blue KB number to open Microsoft Update Catalog search results in a new browser tab.
+6. Select device counts when you need to jump back to Device Inventory for affected endpoints.
+7. Use `Install` on a pending row to open a Schedule-only Scheduled Job draft for every visible device with that update pending. After the job is created, Borealis returns to Patch Management.
+8. Select two or more pending rows and use `Bulk Install` to open a Schedule-only draft that creates separate one-KB jobs sharing the same immediate or one-time schedule. After the jobs are created, Borealis returns to Patch Management.
 
 Scheduled patch-install jobs appear under the Scheduled Jobs `Patch Management` filter instead of the default `Normal` job list.
 
@@ -23,15 +24,16 @@ Site-scoped navigation keeps the selected site in the URL as `?site=<site_id>` s
 
 ## Configure Patch Policies
 
-1. Open `Patch Management > Windows`.
-2. Select `Patch Management Policies`.
-3. Use `New Policy` and choose `New Site Policy` or `New Device Filter Policy`.
-4. Create a policy and choose its policy type: `Server` or `Workstation`.
-5. Choose the install schedule. Times use the Engine host timezone.
-6. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
-7. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
-8. Add allow or block rules for severity, classification, category, KB, update ID, patch key, or title text.
-9. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
+1. Open `Automation > Patch Management`.
+2. Select the `Windows` tab.
+3. Select `Patch Management Policies`.
+4. Use `New Policy` and choose `New Site Policy` or `New Device Filter Policy`.
+5. Create a policy and choose its policy type: `Server` or `Workstation`.
+6. Choose the install schedule. Times use the Engine host timezone.
+7. Set deferral days. Borealis waits from the update `published_at` timestamp, or from first-seen catalog time when Microsoft does not provide `published_at`.
+8. Keep `Managed Windows Update` enabled when Borealis should prevent devices from installing updates on their own.
+9. Add allow or block rules for severity, classification, category, KB, update ID, patch key, or title text.
+10. Save the policy. Borealis blocks same-layer coverage conflicts and asks for confirmation before a child policy overrides a parent block rule.
 
 Two Global Patch Policies are created automatically during Engine database initialization. `Global Workstation Policy` is locked from deletion, enabled by default, uses Tuesday 2:00 AM Engine-local time, defers updates for 14 days, applies conservative MSP approvals, enables managed Windows Update mode, and leaves reboot-after-install off. `Global Server Policy` uses the same defaults except its install window is Wednesday 2:00 AM Engine-local time. Global policies also approve update titles containing `Security Intelligence Update` and block update titles containing `Preview`.
 
@@ -120,10 +122,9 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Engine patch policy scheduler hook: `Data/Engine/Containers/api-backend/cmd/api-backend/scheduler_patch_policies.go`
     - Engine schema bootstrap: `Data/Engine/Containers/api-backend/data/database.py`
     - Job creation UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Scheduling/Create_Job.jsx`
-    - Windows fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Windows.jsx`
-    - Linux fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Linux.jsx`
-    - MacOS fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_MacOS.jsx`
-    - OS page shared UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Platform_Page.jsx`
+    - Fleet UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management.jsx`
+    - OS placeholder pane: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Platform_Page.jsx`
+    - Shared patch UI constants: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Management_Shared.jsx`
     - Policy editor UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Patches/Patch_Policy_Editor.jsx`
     - Device tab UI: `Data/Engine/Containers/webui-frontend/data/web-interface/src/Devices/Tabs/Patch_Management.jsx`
 
@@ -138,6 +139,8 @@ Pending rows come from Windows Update Agent search results that are not installe
     - Bulk Install sends multiple selected patch items into `Create_Job.jsx`. Create Job keeps schedule settings shared, then creates one `job_kind=patch_install` scheduled job per selected patch.
     - Global Patch Policy seed happens in `_ensure_patch_policy_tables()` and `ensureSplitGlobalPatchPolicies()`. When no split global policy exists, Borealis clears legacy patch policy definitions/history/state, preserves `patch_catalog_entries` and `device_patch_inventory`, then seeds `Global Workstation Policy` and `Global Server Policy`. Redeploy does not overwrite existing split global policies.
     - Policy hierarchy is Global -> Site -> Device Filter within the same policy type. Device Filter policy is deepest. Same site+role overlaps block site policy save. Direct device filter target overlap blocks device filter policy save. Dynamic filter overlap is evaluated at runtime and conflicting devices are skipped.
+    - Fleet Patch Management renders one route at `/patch-management`. The top OS tab uses `platform=windows|linux|macos`; Windows policy sub-tabs keep using `tab=patch_list|policies`.
+    - Legacy `/patch-management/windows`, `/patch-management/linux`, and `/patch-management/macos` routes redirect to the matching `platform` query tab.
     - Windows fleet UI renders one converged `Patch Management Policies` table. The API includes `target_sites`, `target_site_ids`, and `target_site_names`; device filter target sites come from eligible resolved devices, so linked policy references disappear from a site branch when that policy no longer targets eligible devices in that site.
     - Windows patch policy role scopes are `Server` and `Workstation`. `Both` is retained only as a legacy overlap helper and is rejected by policy save validation. Empty `device_type` devices do not match either role unless `operating_system` identifies Windows Server. Windows Server `operating_system` or `device_type` strings containing `server` match `Server`; any other non-empty `device_type` matches `Workstation`.
     - Effective policy resolution groups policies by device identity, selects the deepest same-role match, and assigns each device to only that effective policy. Parent policy runs therefore do not create duplicate KB jobs for devices covered by child policies.

@@ -203,41 +203,45 @@ export function buildAppRoutes() {
               handle: {
                 title: "Patch Management",
                 breadcrumb: "Patch Management",
-                navKey: "patch-management-windows",
+                navKey: "patch-management",
                 pageKey: "patch-management",
               },
               children: [
                 {
                   index: true,
-                  element: <Navigate to={APP_PATHS.patchManagementWindows} replace />,
-                },
-                {
-                  path: "windows",
                   handle: {
-                    title: "Windows Patch Management",
-                    breadcrumb: "Windows",
-                    navKey: "patch-management-windows",
-                    pageKey: "patch-management-windows",
+                    navKey: "patch-management",
+                    pageKey: "patch-management",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchManagementRoute"),
                 },
                 {
+                  path: "windows",
+                  handle: {
+                    title: "Patch Management",
+                    breadcrumb: "Windows",
+                    navKey: "patch-management",
+                    pageKey: "patch-management",
+                  },
+                  lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchWindowsRoute"),
+                },
+                {
                   path: "linux",
                   handle: {
-                    title: "Linux Patch Management",
+                    title: "Patch Management",
                     breadcrumb: "Linux",
-                    navKey: "patch-management-linux",
-                    pageKey: "patch-management-linux",
+                    navKey: "patch-management",
+                    pageKey: "patch-management",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchLinuxRoute"),
                 },
                 {
                   path: "macos",
                   handle: {
-                    title: "MacOS Patch Management",
+                    title: "Patch Management",
                     breadcrumb: "MacOS",
-                    navKey: "patch-management-macos",
-                    pageKey: "patch-management-macos",
+                    navKey: "patch-management",
+                    pageKey: "patch-management",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchMacOSRoute"),
                 },
@@ -246,7 +250,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "New Site Patch Policy",
                     breadcrumb: "New Site Policy",
-                    navKey: "patch-management-windows",
+                    navKey: "patch-management",
                     pageKey: "patch-policy-site-new",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -256,7 +260,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "Global Patch Policy",
                     breadcrumb: "Global Policy",
-                    navKey: "patch-management-windows",
+                    navKey: "patch-management",
                     pageKey: "patch-policy-global",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -266,7 +270,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "Site Patch Policy",
                     breadcrumb: "Site Policy",
-                    navKey: "patch-management-windows",
+                    navKey: "patch-management",
                     pageKey: "patch-policy-site",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -276,7 +280,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "New Device Filter Patch Policy",
                     breadcrumb: "New Device Filter Policy",
-                    navKey: "patch-management-windows",
+                    navKey: "patch-management",
                     pageKey: "patch-policy-device-filter-new",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
@@ -286,7 +290,7 @@ export function buildAppRoutes() {
                   handle: {
                     title: "Device Filter Patch Policy",
                     breadcrumb: "Device Filter Policy",
-                    navKey: "patch-management-windows",
+                    navKey: "patch-management",
                     pageKey: "patch-policy-device-filter",
                   },
                   lazy: lazyNamed(() => import("../route-modules/patchRoutes.jsx"), "PatchPolicyEditorRoute"),
