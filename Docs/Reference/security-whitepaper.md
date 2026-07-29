@@ -334,7 +334,9 @@ K3s is a host-level control-plane baseline plus locked-down workload migration p
     - Stage 7 API traffic-owner hash: `Engine/Deploy/k3s-api-backend.sha256`.
     - Stage 8 scheduler hash: `Engine/Deploy/k3s-job-scheduler.sha256`.
     - Operator manifest input hash: `Engine/Deploy/borealis-operator.sha256`.
-    - Bridge workload manifest input hash: `Engine/Deploy/k3s-bridge-workloads.sha256`.
+    - WebUI bridge workload manifest input hash: `Engine/Deploy/k3s-webui-frontend.sha256`.
+    - Guacd bridge workload manifest input hash: `Engine/Deploy/k3s-remote-desktop-guacd.sha256`.
+    - Aggregate bridge workload manifest input hash: `Engine/Deploy/k3s-bridge-workloads.sha256`.
     - Stage 1 K3s kubeconfig: `/etc/rancher/k3s/k3s.yaml`.
     - Operator HMAC secret: `BOREALIS_OPERATOR_SECRET` in `Engine/Deploy/runtime.env`, `Engine/Deploy/compose.env`, and K3s Secret `borealis-operator-auth`.
     - Embedded Traefik runtime config: `Engine/Services/traefik-edge/config/traefik.yml` and `Engine/Services/traefik-edge/config/dynamic/core.yml`.

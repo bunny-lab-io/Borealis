@@ -27,11 +27,15 @@ Use service-scoped commands when troubleshooting one Engine component without re
 !!! warning "Service commands are targeted"
     A service command only touches the named component. If multiple services changed, run the normal deployment command from [Updating the Engine](updating-the-engine.md).
 
+!!! tip "WebUI HMR"
+    Use [WebUI HMR Development](webui-hmr-development.md) for frontend-only edit loops. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
 
     - [Updating the Engine](updating-the-engine.md)
+    - [WebUI HMR Development](webui-hmr-development.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 

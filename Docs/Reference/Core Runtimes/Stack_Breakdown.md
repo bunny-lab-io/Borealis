@@ -274,7 +274,7 @@ borealis-engine/<service>:sha-<inputhash12>
 Build cache:
 - Docker Buildx uses retained `Engine/Deploy/cache/buildkit/<service>/<YYYYMMDDTHHMMSSZ>-<inputhash12>` exports when available.
 - Hosts without usable Buildx fall back to `DOCKER_BUILDKIT=1 docker build`.
-- Successful Buildx builds write a full `mode=max` cache export for the service, and successful deploys prune inactive Docker images with `docker image prune -a`, clear Docker builder cache with `docker builder prune --all`, and delete whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
+- Successful Buildx builds write a full `mode=max` cache export for the service, and successful deploys prune inactive non-Borealis Docker images with `docker image prune -a --filter label!=io.borealis.service`, prune stale Borealis service-labeled tags service-by-service, clear Docker builder cache with `docker builder prune --all`, and delete whole Engine Buildx cache export directories older than 7 days. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` to skip this cleanup on a shared Docker host.
 - If Docker cache metadata is corrupt during a required image build or cleanup restore, `Engine.sh` prunes Docker builder cache and retries that image build without cache before failing the deploy.
 - `api-backend` keeps repo-root build context because it packages `Data/Agent` and `Agent.exe`.
 - `api-backend` uses an Alpine runtime image with the Go API binary plus `ca-certificates`, `git`, and `tzdata`. WireGuard command execution belongs to `wireguard-tunnel` through its control socket.
@@ -356,7 +356,8 @@ bash Engine.sh --network-mode local deploy dev
 Dev behavior:
 - `BOREALIS_WEBUI_MODE=dev` is scoped to WebUI.
 - WebUI frontend runs Vite HMR.
-- Vite listens on loopback `127.0.0.1:8000` by default.
+- Vite binds inside the pod on `0.0.0.0:8000` so the K3s `webui-frontend` Service can route to it. Health checks still target `127.0.0.1:8000` inside the pod.
+- Browser HMR uses `wss://<engine-fqdn>/__vite_hmr` through K3s Traefik.
 - Traefik still owns public HTTP/HTTPS and routes UI/API/WebSocket paths without changing its own upstream config.
 - API, PostgreSQL, Traefik, guacd, and WireGuard stay running during a prod/dev mode flip unless their own image or shared runtime inputs changed.
 
@@ -490,7 +491,7 @@ sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis rollout stat
 
 WebUI liveness:
 ```sh
-curl -fsS http://127.0.0.1:8000/
+sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/webui-frontend -- borealis-webui-healthcheck
 webui_ip="$(awk -F= '$1=="BOREALIS_WEBUI_UPSTREAM_HOST"{print $2}' Engine/Deploy/compose.env)"
 curl -fsS "http://${webui_ip:-127.0.0.1}:8000/"
 ```
@@ -617,6 +618,7 @@ WebUI code changed, dev/HMR:
 ```sh
 bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 ```
+Then verify the browser Network tab shows a connected `wss://<engine-fqdn>/__vite_hmr` websocket.
 
 Traefik config changed:
 ```sh
@@ -641,10 +643,10 @@ bash Engine.sh --network-mode local deploy prod
 ```
 
 ## Operational Notes
-- `Engine.sh --network-mode public|local deploy` is idempotent for unchanged inputs and keeps Compose retired when deploy manifest, env, image hashes, and K3s workloads already match.
+- `Engine.sh --network-mode public|local deploy` is idempotent for unchanged inputs and keeps Compose retired when deploy manifest, env, image hashes, stored K3s input hashes, and live Kubernetes resource annotations already match.
 - K3s baseline reconcile is idempotent for unchanged config: deploys do not reinstall K3s, restart K3s, delete cluster state, rotate secrets, or delete PVCs unless later migration stages explicitly add a controlled workflow.
 - `borealis-operator` reconcile is idempotent for unchanged image, namespace, port, secret, RBAC, and image allowlists. Normal deploys apply fixed manifests, wait for rollout, and preserve the existing operator secret.
-- K3s PostgreSQL/API/scheduler/WireGuard/WebUI/guacd reconcile is idempotent for unchanged images, mode, runtime owner IDs, ports, PVC settings, source paths, runtime-env hash, traffic-owner state, and profile caps. Normal deploys apply fixed manifests and wait for rollout without deleting PVCs or rerunning the Compose cutover import.
+- K3s PostgreSQL/API/scheduler/WireGuard/WebUI/guacd reconcile is idempotent for unchanged images, mode, runtime owner IDs, ports, PVC settings, source paths, runtime-env hash, traffic-owner state, and profile caps. Unchanged saved hashes plus matching live annotations skip manifest apply and rollout without deleting PVCs or rerunning the Compose cutover import.
 - Unchanged image hashes skip Docker builds.
 - Service-specific `rebuild` updates image manifests and reconciles the known K3s workload instead of recreating Compose services.
 - Service-specific API, WebUI, guacd, Traefik, and WireGuard rebuilds also reconcile the K3s baseline, operator, and workload manifests so pods follow the current image manifest without requiring a full deploy.
@@ -719,10 +721,13 @@ If remote shell, Ansible, or tunnel-backed operations fail:
     Engine/Deploy/k3s-longhorn.sha256
     Engine/Deploy/borealis-operator.sha256
     Engine/Deploy/k3s-postgres-db.sha256
+    Engine/Deploy/k3s-postgres-schema.sha256
     Engine/Deploy/k3s-api-backend.sha256
     Engine/Deploy/k3s-job-scheduler.sha256
     Engine/Deploy/k3s-wireguard-tunnel.sha256
     Engine/Deploy/k3s-traefik-edge.sha256
+    Engine/Deploy/k3s-webui-frontend.sha256
+    Engine/Deploy/k3s-remote-desktop-guacd.sha256
     Engine/Deploy/k3s-bridge-workloads.sha256
     Engine/Deploy/build.log
     ```
@@ -789,11 +794,17 @@ If remote shell, Ansible, or tunnel-backed operations fail:
 
     `Engine/Deploy/k3s-postgres-db.sha256` records Stage 9 PostgreSQL traffic-owner inputs: PostgreSQL image, deploy mode, namespace, runtime IDs, runtime-env hash, traffic owner, StorageClass, PVC size, generated Secret name, and profile PostgreSQL resource caps.
 
+    `Engine/Deploy/k3s-postgres-schema.sha256` records the last successful K3s PostgreSQL schema initializer input. Full deploy skips the schema Job when this schema hash and live PostgreSQL StatefulSet annotation still match.
+
     `Engine/Deploy/k3s-wireguard-tunnel.sha256` records Stage 10 WireGuard traffic-owner inputs: WireGuard image, namespace, runtime group, listen port, runtime state path, host timezone, device path, control socket contract, and network capabilities.
 
     `Engine/Deploy/k3s-traefik-edge.sha256` records Stage 11 Traefik traffic-owner inputs: Traefik image, namespace, runtime group, health port, runtime state path, network mode, FQDN aliases, ACME/local CA settings, API/WebUI upstreams, trusted proxy settings, host timezone, and host-network security contract.
 
-    `Engine/Deploy/k3s-bridge-workloads.sha256` records Stage 4 bridge workload inputs: WebUI image, guacd image, deploy mode, namespace, runtime owner IDs, ports, source path, and profile resource caps. Full deploys and scoped `webui-frontend` or `remote-desktop-guacd` rebuilds both refresh this bridge state.
+    `Engine/Deploy/k3s-webui-frontend.sha256` records Stage 4 WebUI bridge workload inputs: WebUI image, deploy mode, namespace, runtime owner IDs, port, runtime source path, Vite scratch paths, traffic owner, host timezone, and profile resource caps.
+
+    `Engine/Deploy/k3s-remote-desktop-guacd.sha256` records Stage 4 guacd bridge workload inputs: guacd image, namespace, runtime owner IDs, port, host timezone, and profile resource caps.
+
+    `Engine/Deploy/k3s-bridge-workloads.sha256` records the aggregate Stage 4 bridge state after both WebUI and guacd reconcile. Use the service-specific hash files to identify which bridge workload changed.
 
     Use these files to confirm whether source changes are actually deployed.
 

@@ -34,6 +34,8 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
 ??? note "Optional: Development Redeploy"
     Use development mode only when testing WebUI or Engine changes interactively. Development deploys refresh the HMR runtime source from staged WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 
+    For frontend-only work, prefer the scoped HMR workflow in [WebUI HMR Development](webui-hmr-development.md). It keeps API, scheduler, PostgreSQL, Traefik, WireGuard, and guacd workloads untouched when their inputs have not changed.
+
     === "Public"
 
         ```sh
@@ -55,6 +57,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
     ### Related documentation
 
     - [Engine Deployment](deploying-the-engine.md)
+    - [WebUI HMR Development](webui-hmr-development.md)
     - [Service Maintenance Commands](engine-maintenance-commands.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
