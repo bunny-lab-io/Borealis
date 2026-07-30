@@ -27,16 +27,56 @@ Use a scoped WebUI rebuild when the Engine stack already exists and only the fro
 
 Use full dev deploy when shared Engine configuration changed or when switching a stale stack into dev mode:
 
-```sh
-cd /opt/Borealis
-sudo bash Engine.sh --network-mode local deploy dev
-```
+=== "Local"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode local deploy dev
+    ```
+
+=== "Public"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode public deploy dev
+    ```
+
+## Switch WebUI Modes
+Use these commands to move only the WebUI between dev/HMR and production static serving.
+
+=== "Local Dev"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
+    ```
+
+=== "Public Dev"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode public --service webui-frontend rebuild dev
+    ```
+
+=== "Local Prod"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
+    ```
+
+=== "Public Prod"
+
+    ```sh
+    cd /opt/Borealis
+    sudo bash Engine.sh --network-mode public --service webui-frontend rebuild prod
+    ```
 
 ## Edit Loop
 After dev WebUI starts, the K3s WebUI pod reads source from:
 
 ```text
-Engine/Services/webui-frontend/data/web-interface/
+/opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/
 ```
 
 Edit files there for fastest HMR feedback. Vite serves changes through the normal Borealis HTTPS URL, and browser HMR connects through:
@@ -48,7 +88,7 @@ wss://<engine-fqdn>/__vite_hmr
 When edits are ready to keep, make the same source changes under:
 
 ```text
-Data/Engine/Containers/webui-frontend/data/web-interface/
+/opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/
 ```
 
 Then run the scoped dev rebuild again to refresh the runtime copy from committed source:
@@ -96,3 +136,47 @@ sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
     - `vite.config.mts` enables the public-edge HMR proxy path when `BOREALIS_DEV_UI_PROXY_ENABLED=1`. The browser uses `wss://<engine-fqdn>/__vite_hmr`; Traefik's WebUI catch-all route forwards that websocket to the K3s WebUI Service.
     - Dev source mounts are read-only hostPath mounts from `Engine/Services/webui-frontend/data/web-interface/` into `/opt/Borealis/Data/Engine/web-interface/`. Vite optimizer and temporary config output use memory-backed `emptyDir` mounts at `node_modules/.vite` and `node_modules/.vite-temp`.
     - Do not run raw `npm`, `vite`, or `vitest` from staged source under `Data/Engine/Containers/webui-frontend/data/web-interface/`. Use `Engine.sh` for deploy/rebuild validation and `./Engine_Unit_Tests.sh --domain webui` for WebUI unit tests when the runtime test cache exists.
+
+    ### Codex UI/UX workflow
+
+    When an operator asks Codex to stage WebUI UI/UX changes, use the HMR runtime-first path unless the operator explicitly asks for staging-only or non-runtime work.
+
+    1. Confirm the active branch and current network mode.
+    2. Switch only WebUI into dev/HMR mode with `sudo bash Engine.sh --network-mode <public|local> --service webui-frontend rebuild dev`.
+    3. Make first-pass UI/UX edits under `/opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/`.
+    4. Ask the operator to validate the live browser behavior through HMR before mirroring.
+    5. After operator approval, mirror the accepted source changes into `/opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/`.
+    6. Remove temporary HMR markers or test-only visual probes before staging or committing.
+    7. Run targeted validation, then commit only the staging-source docs/code changes that belong in the repository.
+
+    Use runtime edits for fast visual iteration:
+
+    ```sh
+    sudo nano /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/<file>
+    ```
+
+    Mirror accepted runtime source back to staging after validation:
+
+    ```sh
+    sudo rsync -a --delete \
+      /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src/ \
+      /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src/
+    ```
+
+    Then compare source trees before committing:
+
+    ```sh
+    diff -ru \
+      /opt/Borealis/Data/Engine/Containers/webui-frontend/data/web-interface/src \
+      /opt/Borealis/Engine/Services/webui-frontend/data/web-interface/src
+    ```
+
+    Expected result is no diff for accepted source files. If runtime has throwaway test markers, remove them from runtime before mirroring or revert them from staging before commit.
+
+    ### Validation
+
+    - Browser check: confirm the visible UI/UX change updates without full Engine redeploy.
+    - HMR socket check: browser Network tab shows `__vite_hmr` connected over `wss`.
+    - Pod mode check: `sudo k3s kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml -n borealis exec deployment/webui-frontend -- sh -lc 'test "$BOREALIS_WEBUI_MODE" = dev && echo webui-dev'`.
+    - Repository check: `git diff -- Data/Engine/Containers/webui-frontend/data/web-interface/src`.
+    - Optional WebUI unit tests: `./Engine_Unit_Tests.sh --domain webui` only when runtime WebUI test dependencies exist.
