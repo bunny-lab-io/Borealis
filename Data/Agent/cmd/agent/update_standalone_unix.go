@@ -96,6 +96,10 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if agentconfig.UsesUnstableReleaseChannel(cfg.Agent.ReleaseChannel) {
 		return runLinuxRepoRefUpdateCheck(ctx, client, configPath, &cfg, branch, installed)
 	}
+	return runLinuxStableManifestUpdateCheck(ctx, client, configPath, &cfg, installed)
+}
+
+func runLinuxStableManifestUpdateCheck(ctx context.Context, client *auth.Client, configPath string, cfg *agentconfig.AgentConfig, installed string) error {
 	manifest, err := fetchLinuxUpdateManifest(ctx, client, installed)
 	if err != nil {
 		removeLinuxUpdateStatus(configPath)
@@ -105,7 +109,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if target == "" {
 		return fmt.Errorf("update manifest missing target_build_id")
 	}
-	_ = writeLinuxReleaseTarget(configPath, &cfg, releaseChannelForLinuxUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
+	_ = writeLinuxReleaseTarget(configPath, cfg, releaseChannelForLinuxUpdateManifest(manifest.EffectiveChannel, manifest.TargetChannel), manifest.Branch)
 	if installed != "" && strings.EqualFold(installed, target) {
 		removeLinuxUpdateStatus(configPath)
 		return nil
@@ -138,7 +142,7 @@ func runStandaloneUpdateCheck(options agentruntime.Options) error {
 	if err := stageLinuxAgentUpdate(configPath, archivePath); err != nil {
 		return err
 	}
-	_ = writeLinuxInstalledBuildID(configPath, &cfg, target)
+	_ = writeLinuxInstalledBuildID(configPath, cfg, target)
 	_ = exec.Command("systemctl", "restart", "borealis-agent.service").Run()
 	return nil
 }
@@ -194,6 +198,13 @@ func runLinuxRepoRefUpdateCheck(ctx context.Context, client *auth.Client, config
 		engineErr := err
 		target, err = resolveGithubRefSHA(ctx, branch)
 		if err != nil {
+			if shouldFallbackRepoRefToStable(engineErr, err) {
+				if writeErr := writeLinuxReleaseTarget(configPath, cfg, agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch); writeErr != nil {
+					removeLinuxUpdateStatus(configPath)
+					return writeErr
+				}
+				return runLinuxStableManifestUpdateCheck(ctx, client, configPath, cfg, installed)
+			}
 			removeLinuxUpdateStatus(configPath)
 			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", branch, engineErr, err)
 		}

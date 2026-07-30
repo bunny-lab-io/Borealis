@@ -38,6 +38,31 @@ func (a *Agent) handleReleaseChannelChanged(ctx context.Context, payload any) (a
 	return a.handleAgentMaintenanceRequest(ctx, payload)
 }
 
+func (a *Agent) handleHeartbeatReleaseChannelInstruction(payload map[string]any) {
+	if a == nil || len(payload) == 0 {
+		return
+	}
+	releaseChannel := releaseChannelFromPayload(payload)
+	branch := stringFromPayload(payload, "branch", "target_branch", "repo_ref", "repo_branch")
+	if releaseChannel == "" {
+		if a.logger != nil {
+			a.logger.Printf("heartbeat release-channel instruction ignored: release_channel missing")
+		}
+		return
+	}
+	kind := stringFromPayload(payload, "kind", "action")
+	if kind == "" {
+		kind = "branch_retired_fallback"
+	}
+	operation := a.previewUpdateOperation(
+		stringFromPayload(payload, "operation_id", "request_id"),
+		kind,
+		releaseChannel,
+		branch,
+	)
+	a.storeUpdateAndStartLocalUpdaterAsync(operation, "heartbeat release-channel instruction")
+}
+
 func (a *Agent) handleAgentMaintenanceRequest(ctx context.Context, payload any) (any, error) {
 	if a == nil {
 		return map[string]any{"status": "error", "detail": "agent unavailable"}, nil

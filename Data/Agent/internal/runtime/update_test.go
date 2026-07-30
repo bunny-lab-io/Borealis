@@ -106,6 +106,62 @@ func TestHandleReleaseChannelChangedRejectsMissingChannel(t *testing.T) {
 	}
 }
 
+func TestHandleHeartbeatReleaseChannelInstructionStartsStableFallback(t *testing.T) {
+	originalStarter := startLocalUpdaterForRequest
+	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })
+	startedUpdater := make(chan struct{}, 1)
+	startLocalUpdaterForRequest = func(configPath string) error {
+		startedUpdater <- struct{}{}
+		return nil
+	}
+
+	configPath := filepath.Join(t.TempDir(), agentconfig.FileName)
+	cfg := agentconfig.Default()
+	cfg.ServerURL = "https://borealis.example.com"
+	cfg.Agent.ReleaseChannel = agentconfig.ReleaseChannelUnstable
+	cfg.Agent.Branch = "feature/closed-branch"
+	if err := agentconfig.Save(configPath, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	agent, err := New(Options{ConfigPath: configPath, ServiceMode: "system"}, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.handleHeartbeatReleaseChannelInstruction(map[string]any{
+		"operation_id":    "branch-recovery-1",
+		"kind":            "branch_retired_fallback",
+		"release_channel": "stable",
+		"branch":          "main",
+	})
+
+	select {
+	case <-startedUpdater:
+	case <-time.After(time.Second):
+		t.Fatalf("local updater was not started")
+	}
+	var loaded agentconfig.AgentConfig
+	for i := 0; i < 20; i++ {
+		loaded, err = agentconfig.Load(configPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Agent.Update.Status == "updater_started" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if loaded.Agent.ReleaseChannel != agentconfig.ReleaseChannelStable {
+		t.Fatalf("release channel = %q", loaded.Agent.ReleaseChannel)
+	}
+	if loaded.Agent.Branch != agentconfig.DefaultBranch {
+		t.Fatalf("branch = %q", loaded.Agent.Branch)
+	}
+	if loaded.Agent.Update.Kind != "branch_retired_fallback" {
+		t.Fatalf("update kind = %q", loaded.Agent.Update.Kind)
+	}
+}
+
 func TestHandleAgentMaintenanceRequestStartsUpdaterAfterAckCallback(t *testing.T) {
 	originalStarter := startLocalUpdaterForRequest
 	t.Cleanup(func() { startLocalUpdaterForRequest = originalStarter })

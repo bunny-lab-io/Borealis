@@ -420,13 +420,26 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		updates["agent_hash"] = agentBuildID
 	}
 	updateStatus, _ := payload["agent_update_status"].(map[string]any)
-	agentReleaseChannel := cleanText(payload["agent_release_channel"])
-	agentBranch := cleanText(payload["agent_branch"])
+	agentReleaseChannelRaw := cleanText(payload["agent_release_channel"])
+	agentBranchRaw := cleanText(payload["agent_branch"])
+	agentReleaseChannel := cleanText(agentReleaseChannelRaw)
+	agentBranch := cleanText(agentBranchRaw)
+	releaseInstruction := agentHeartbeatReleaseChannelInstruction(authGUID, agentReleaseChannelRaw, agentBranchRaw, now)
 	if agentReleaseChannel != "" {
 		updates["agent_release_channel"] = agentReleaseChannel
 	}
 	if agentBranch != "" {
 		updates["agent_branch"] = agentBranch
+	}
+	if normalizeAgentReleaseChannel(agentReleaseChannelRaw, "") == "stable" && strings.EqualFold(normalizeAgentBranch(agentBranchRaw), defaultAgentReleaseBranch) {
+		updates["agent_release_channel_override"] = nil
+	}
+	if releaseInstruction != nil {
+		agentReleaseChannel = defaultAgentReleaseChannel
+		agentBranch = defaultAgentReleaseBranch
+		updates["agent_release_channel_override"] = nil
+		updates["agent_release_channel"] = defaultAgentReleaseChannel
+		updates["agent_branch"] = defaultAgentReleaseBranch
 	}
 	if len(updateStatus) > 0 {
 		updates["agent_update_channel"] = cleanText(firstNonEmpty(updateStatus["target_channel"], updateStatus["effective_channel"]))
@@ -502,14 +515,18 @@ func (s *postgresOperatorStore) updateAgentHeartbeat(ctx context.Context, device
 		_ = s.reconcileAgentMaintenanceHeartbeat(ctx, reconcileHostname, updateStatus, firstText(cleanText(updateStatus["target_channel"]), cleanText(updateStatus["effective_channel"]), agentReleaseChannel), firstText(cleanText(updateStatus["target_branch"]), agentBranch), agentBuildID)
 	}
 
-	return map[string]any{
+	response := map[string]any{
 		"status":              "ok",
 		"poll_after_ms":       int64(15000),
 		"site_id":             nullableInt64(siteID),
 		"site_name":           siteName,
 		"metadata_fields":     metadataSync["updates"],
 		"metadata_field_acks": metadataSync["acks"],
-	}, http.StatusOK, nil
+	}
+	if releaseInstruction != nil {
+		response["agent_release_channel_instruction"] = releaseInstruction
+	}
+	return response, http.StatusOK, nil
 }
 
 func (s *postgresOperatorStore) updateAgentStatus(ctx context.Context, deviceCtx deviceBearerAuthContext, payload map[string]any) (agentStatusUpdateResult, int, error) {
