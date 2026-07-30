@@ -1,6 +1,6 @@
 # Server Info
 
-Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, worker state, timezone, WebUI route owner, and site-worker scheduled task slots.
+Server Info is the admin dashboard for Engine runtime health. Use it to inspect service state, resources, public edge certificates, live operators, WireGuard, Aegis, release channels, timezone, WebUI route owner, and site-worker scheduled task slots.
 
 <figure class="bo-screenshot">
   <img src="../Reference/images/repo_screenshots/Server_Overview.png" alt="Borealis Server Overview" loading="lazy">
@@ -42,7 +42,6 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/overview` - dashboard snapshot.
     - `GET /api/server/time` - server clock.
     - `GET /api/server/timezones` - current Engine timezone metadata. Timezone changes are handled on the host, then applied through Engine redeploy.
-    - `GET /api/server/workers` - active/recent worker state.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `GET /api/server/agent-release-channels` - read Agent update channel targets.
     - `PUT /api/server/agent-release-channels` - update default channel or repo and refresh cached artifacts.
@@ -69,8 +68,8 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
 
     ### Runtime behavior
 
-    - Container mode reads remaining Compose bridge service state from job-scheduler snapshots, reads K3s state through `borealis-operator`, and reads scheduler-owned worker/task state through job-scheduler snapshots.
-    - K3s site-worker rows merge operator metrics directly, so operator-backed worker rows do not query Docker for status or stats.
+    - Container mode reads remaining Compose bridge service state from job-scheduler snapshots and reads K3s state through `borealis-operator`.
+    - Site-worker resource and task rows live on the Sites page through `/api/server/workers`; Server Info only shows profile-managed Site Worker Scheduled Tasks.
     - Host runtime details include `webui_traffic_owner` and `webui_upstream` so K3s WebUI cutover can be validated without reading Traefik files directly.
     - When `webui_traffic_owner` is `k3s`, the Compose `webui-frontend` service row reports `enabled_state=disabled` instead of a missing or failed Compose container.
     - Public-edge certificate health reads Traefik `acme.json` for Externally Accessible deployments, or the Borealis local CA/leaf certificate files for Internal-Only deployments. `/api/server/overview` reports profile, certificate mode, expiry, severity, domains, resolver/source, fingerprint, and local CA bundle metadata for install flows.

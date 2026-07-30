@@ -75,24 +75,6 @@ func serverOverviewHandler(auth *authService, realtime *operatorRealtimeHub) htt
 }
 
 func collectServerOverviewPayload(ctx context.Context, store operatorStore, realtime *operatorRealtimeHub) (map[string]any, error) {
-	workerPayload := map[string]any{
-		"active_count":              int64(0),
-		"manager_active_count":      int64(0),
-		"workers":                   []any{},
-		"active_work":               []any{},
-		"recent_work":               []any{},
-		"site_names":                map[string]string{},
-		"site_device_counts":        map[string]int64{},
-		"site_online_device_counts": map[string]int64{},
-		"sites":                     []any{},
-		"worker_idle_ttl_seconds":   parseEnvIntMin("BOREALIS_SITE_WORKER_IDLE_TTL_SECONDS", 300, 300),
-	}
-	if workerStore, ok := store.(serverWorkerStore); ok {
-		if payload, err := workerStore.serverWorkerPayload(ctx, 60, true); err == nil && payload != nil {
-			workerPayload = payload
-		}
-	}
-
 	releasePayload := collectAgentReleaseChannelSettings()
 	if githubStore, ok := store.(githubTokenStateStore); ok {
 		releasePayload["github_token"] = githubStore.githubTokenState(ctx)
@@ -117,7 +99,6 @@ func collectServerOverviewPayload(ctx context.Context, store operatorStore, real
 		"agent_release_channels": releasePayload,
 		"remote_desktop":         collectOverviewRemoteDesktopPayload(),
 		"operator_session_count": overviewOperatorSessionCount(realtime),
-		"workers":                workerPayload,
 	}, nil
 }
 
