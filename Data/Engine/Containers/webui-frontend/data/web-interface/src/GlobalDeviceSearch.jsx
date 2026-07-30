@@ -8,6 +8,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const MIN_SEARCH_LENGTH = 3;
+const SEARCH_DEBOUNCE_MS = 1000;
 const SEARCH_ROW_HEIGHT = 42;
 const SEARCH_HEADER_HEIGHT = 34;
 const SEARCH_PANEL_MAX_HEIGHT = 320;
@@ -57,6 +58,19 @@ function buildRowKey(device) {
   const siteId = String(device?.site_id ?? "").trim().toLowerCase();
   const agentId = String(device?.agent_id || "").trim().toLowerCase();
   return guid || `${hostname}::${siteId}::${agentId}`;
+}
+
+function normalizeSearchQuery(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function cacheHasQuery(cache, query) {
+  return Object.prototype.hasOwnProperty.call(cache, query);
+}
+
+function hostnameMatchesSearch(device, normalizedQuery) {
+  if (!normalizedQuery) return false;
+  return normalizeSearchQuery(device?.hostname).includes(normalizedQuery);
 }
 
 function getOsIconClass(osName) {
@@ -193,14 +207,18 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
   const anchorRef = useRef(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(false);
-  const [results, setResults] = useState([]);
+  const [resultCache, setResultCache] = useState({});
+  const [isDebouncing, setIsDebouncing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dropdownWidth, setDropdownWidth] = useState(0);
 
   const trimmedQuery = query.trim();
-  const queryReady = trimmedQuery.length >= MIN_SEARCH_LENGTH;
-  const showDropdown = expanded && queryReady;
+  const normalizedQuery = normalizeSearchQuery(query);
+  const queryReady = normalizedQuery.length >= MIN_SEARCH_LENGTH;
+  const searchBaseQuery = queryReady ? normalizedQuery.slice(0, MIN_SEARCH_LENGTH) : "";
+  const hasCachedBase = searchBaseQuery ? cacheHasQuery(resultCache, searchBaseQuery) : false;
+  const showDropdown = expanded && queryReady && (hasCachedBase || loading || Boolean(error));
 
   useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -229,21 +247,30 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
   }, []);
 
   useEffect(() => {
-    if (!showDropdown) {
+    if (!expanded || !queryReady || !searchBaseQuery) {
       setLoading(false);
+      setIsDebouncing(false);
       setError("");
-      setResults([]);
+      return undefined;
+    }
+
+    if (hasCachedBase) {
+      setLoading(false);
+      setIsDebouncing(false);
+      setError("");
       return undefined;
     }
 
     const controller = new AbortController();
-    setLoading(true);
+    setLoading(false);
+    setIsDebouncing(true);
     setError("");
-    setResults([]);
     const timer = window.setTimeout(async () => {
       try {
+        setIsDebouncing(false);
+        setLoading(true);
         const resp = await fetch(
-          `/api/devices/search?hostname=${encodeURIComponent(trimmedQuery)}`,
+          `/api/devices/search?hostname=${encodeURIComponent(searchBaseQuery)}`,
           {
             cache: "no-store",
             credentials: "include",
@@ -255,10 +282,12 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
         }
         const payload = await resp.json();
         if (controller.signal.aborted) return;
-        setResults(Array.isArray(payload?.devices) ? payload.devices : []);
+        setResultCache((current) => ({
+          ...current,
+          [searchBaseQuery]: Array.isArray(payload?.devices) ? payload.devices : [],
+        }));
       } catch (err) {
         if (controller.signal.aborted) return;
-        setResults([]);
         setError("Search is temporarily unavailable.");
       } finally {
         if (!controller.signal.aborted) {
@@ -271,17 +300,24 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [showDropdown, trimmedQuery]);
+  }, [expanded, queryReady, searchBaseQuery, normalizedQuery, hasCachedBase]);
+
+  const sourceResults = useMemo(() => {
+    if (!queryReady || !hasCachedBase) return [];
+    return (resultCache[searchBaseQuery] || []).filter((device) =>
+      hostnameMatchesSearch(device, normalizedQuery)
+    );
+  }, [queryReady, hasCachedBase, resultCache, searchBaseQuery, normalizedQuery]);
 
   const rowData = useMemo(
     () =>
-      results.map((device) => ({
+      sourceResults.map((device) => ({
         ...device,
         rowKey: buildRowKey(device),
         siteLabel: String(device?.site_name || "").trim() || "Not Configured",
         connectivityStatus: normalizeConnectivityStatus(device),
       })),
-    [results]
+    [sourceResults]
   );
 
   const columnDefs = useMemo(
@@ -337,17 +373,22 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
     []
   );
 
-  const showStatusLabel = expanded || loading;
+  const showStatusLabel = expanded || loading || isDebouncing;
   const statusLabel = !showStatusLabel
     ? ""
     : loading
     ? "Searching"
-    : queryReady
+    : isDebouncing
+    ? "Waiting"
+    : error
+    ? "Error"
+    : queryReady && hasCachedBase
     ? `${rowData.length} result${rowData.length === 1 ? "" : "s"}`
     : `Min ${MIN_SEARCH_LENGTH} chars`;
 
   const handleClose = () => {
     setExpanded(false);
+    setResultCache({});
   };
 
   const handleSelect = (device) => {
@@ -364,7 +405,7 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
     });
     setQuery("");
     setExpanded(false);
-    setResults([]);
+    setResultCache({});
     setError("");
   };
 
@@ -407,8 +448,12 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
           <InputBase
             value={query}
             onChange={(event) => {
-              setQuery(event.target.value);
+              const nextQuery = event.target.value;
+              setQuery(nextQuery);
               setExpanded(true);
+              if (nextQuery.trim().length < MIN_SEARCH_LENGTH) {
+                setResultCache({});
+              }
             }}
             onFocus={() => setExpanded(true)}
             onKeyDown={(event) => {
