@@ -8,6 +8,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const MIN_SEARCH_LENGTH = 3;
+const SEARCH_DEBOUNCE_MS = 2000;
 const SEARCH_ROW_HEIGHT = 42;
 const SEARCH_HEADER_HEIGHT = 34;
 const SEARCH_PANEL_MAX_HEIGHT = 320;
@@ -32,6 +33,12 @@ const themeClassName = searchGridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
+const DEVICE_SEARCH_STATUS_COLORS = {
+  Connected: "#00d18c",
+  Disconnected: "#ff4f4f",
+  Offline: "#6b7280",
+};
+
 const MAGIC_UI = {
   panelBg:
     "linear-gradient(135deg, rgba(10, 16, 31, 0.97) 0%, rgba(7, 11, 26, 0.95) 55%, rgba(20, 8, 33, 0.96) 100%)",
@@ -51,6 +58,66 @@ function buildRowKey(device) {
   const siteId = String(device?.site_id ?? "").trim().toLowerCase();
   const agentId = String(device?.agent_id || "").trim().toLowerCase();
   return guid || `${hostname}::${siteId}::${agentId}`;
+}
+
+function normalizeSearchQuery(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function cacheHasQuery(cache, query) {
+  return Object.prototype.hasOwnProperty.call(cache, query);
+}
+
+function hostnameMatchesSearch(device, normalizedQuery) {
+  if (!normalizedQuery) return false;
+  return normalizeSearchQuery(device?.hostname).includes(normalizedQuery);
+}
+
+function getOsIconClass(osName) {
+  const value = String(osName || "").toLowerCase();
+  if (!value) return "";
+
+  if (value.includes("mac") || value.includes("os x") || value.includes("darwin")) {
+    return "fa-brands fa-apple";
+  }
+
+  if (value.includes("win")) {
+    return "fa-brands fa-windows";
+  }
+
+  if (
+    value.includes("linux") ||
+    value.includes("ubuntu") ||
+    value.includes("debian") ||
+    value.includes("fedora") ||
+    value.includes("red hat") ||
+    value.includes("centos") ||
+    value.includes("suse") ||
+    value.includes("rhel")
+  ) {
+    return "fa-brands fa-linux";
+  }
+
+  return "";
+}
+
+function normalizeConnectivityStatus(device) {
+  const explicit = String(device?.connectivity_status || device?.connection_status || "").trim().toLowerCase();
+  if (explicit === "connected") return "Connected";
+  if (explicit === "online") return device?.agent_socket === true ? "Connected" : "Disconnected";
+  if (["disconnected", "degraded", "reconnecting", "recovering"].includes(explicit)) return "Disconnected";
+  if (["offline", "down", "unavailable"].includes(explicit)) return "Offline";
+
+  const rawStatus = String(device?.status || "").trim().toLowerCase();
+  if (rawStatus === "connected") return "Connected";
+  if (["disconnected", "degraded", "reconnecting", "recovering"].includes(rawStatus)) return "Disconnected";
+  if (["offline", "down", "unavailable"].includes(rawStatus)) return "Offline";
+
+  const lastSeen = Number(device?.last_seen || 0);
+  const heartbeatOnline = rawStatus === "online" || (lastSeen > 0 && Date.now() / 1000 - lastSeen <= 300);
+  if (!heartbeatOnline) return "Offline";
+  if (device?.agent_socket === true) return "Connected";
+  return "Disconnected";
 }
 
 function highlightHostname(hostname, query) {
@@ -73,8 +140,8 @@ function highlightHostname(hostname, query) {
       <Box
         component="span"
         sx={{
-          color: "#c9ebff",
-          textShadow: "0 0 14px rgba(125, 211, 252, 0.28)",
+          color: MAGIC_UI.accentA,
+          textShadow: "0 0 14px rgba(88, 166, 255, 0.32)",
         }}
       >
         {match}
@@ -84,18 +151,74 @@ function highlightHostname(hostname, query) {
   );
 }
 
+function HostnameSearchCell({ device, query }) {
+  const iconClass = getOsIconClass(device?.operating_system || device?.os_name || "");
+  const status = normalizeConnectivityStatus(device);
+  const statusColor = DEVICE_SEARCH_STATUS_COLORS[status] || DEVICE_SEARCH_STATUS_COLORS.Offline;
+
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.85,
+        minWidth: 0,
+        width: "100%",
+      }}
+    >
+      {iconClass ? (
+        <Box
+          component="i"
+          className={iconClass}
+          aria-hidden="true"
+          title={`${status} device`}
+          sx={{
+            color: statusColor,
+            fontSize: "1rem",
+            lineHeight: 1,
+            width: "1.15rem",
+            textAlign: "center",
+            flexShrink: 0,
+            textShadow: `0 0 12px ${statusColor}55`,
+          }}
+        />
+      ) : null}
+      <Typography
+        component="span"
+        sx={{
+          color: MAGIC_UI.textBright,
+          fontWeight: 600,
+          fontSize: "0.9rem",
+          letterSpacing: 0.1,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+        }}
+      >
+        {highlightHostname(device?.hostname, query)}
+      </Typography>
+    </Box>
+  );
+}
+
 export default function GlobalDeviceSearch({ onSelectDevice }) {
   const anchorRef = useRef(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(false);
-  const [results, setResults] = useState([]);
+  const [resultCache, setResultCache] = useState({});
+  const [isDebouncing, setIsDebouncing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dropdownWidth, setDropdownWidth] = useState(0);
 
   const trimmedQuery = query.trim();
-  const queryReady = trimmedQuery.length >= MIN_SEARCH_LENGTH;
-  const showDropdown = expanded && queryReady;
+  const normalizedQuery = normalizeSearchQuery(query);
+  const queryReady = normalizedQuery.length >= MIN_SEARCH_LENGTH;
+  const searchBaseQuery = queryReady ? normalizedQuery.slice(0, MIN_SEARCH_LENGTH) : "";
+  const hasCachedBase = searchBaseQuery ? cacheHasQuery(resultCache, searchBaseQuery) : false;
+  const showDropdown = expanded && queryReady && (hasCachedBase || loading || Boolean(error));
 
   useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -124,21 +247,30 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
   }, []);
 
   useEffect(() => {
-    if (!showDropdown) {
+    if (!expanded || !queryReady || !searchBaseQuery) {
       setLoading(false);
+      setIsDebouncing(false);
       setError("");
-      setResults([]);
+      return undefined;
+    }
+
+    if (hasCachedBase) {
+      setLoading(false);
+      setIsDebouncing(false);
+      setError("");
       return undefined;
     }
 
     const controller = new AbortController();
-    setLoading(true);
+    setLoading(false);
+    setIsDebouncing(true);
     setError("");
-    setResults([]);
     const timer = window.setTimeout(async () => {
       try {
+        setIsDebouncing(false);
+        setLoading(true);
         const resp = await fetch(
-          `/api/devices/search?hostname=${encodeURIComponent(trimmedQuery)}`,
+          `/api/devices/search?hostname=${encodeURIComponent(searchBaseQuery)}`,
           {
             cache: "no-store",
             credentials: "include",
@@ -150,10 +282,12 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
         }
         const payload = await resp.json();
         if (controller.signal.aborted) return;
-        setResults(Array.isArray(payload?.devices) ? payload.devices : []);
+        setResultCache((current) => ({
+          ...current,
+          [searchBaseQuery]: Array.isArray(payload?.devices) ? payload.devices : [],
+        }));
       } catch (err) {
         if (controller.signal.aborted) return;
-        setResults([]);
         setError("Search is temporarily unavailable.");
       } finally {
         if (!controller.signal.aborted) {
@@ -166,16 +300,24 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [showDropdown, trimmedQuery]);
+  }, [expanded, queryReady, searchBaseQuery, normalizedQuery, hasCachedBase]);
+
+  const sourceResults = useMemo(() => {
+    if (!queryReady || !hasCachedBase) return [];
+    return (resultCache[searchBaseQuery] || []).filter((device) =>
+      hostnameMatchesSearch(device, normalizedQuery)
+    );
+  }, [queryReady, hasCachedBase, resultCache, searchBaseQuery, normalizedQuery]);
 
   const rowData = useMemo(
     () =>
-      results.map((device) => ({
+      sourceResults.map((device) => ({
         ...device,
         rowKey: buildRowKey(device),
         siteLabel: String(device?.site_name || "").trim() || "Not Configured",
+        connectivityStatus: normalizeConnectivityStatus(device),
       })),
-    [results]
+    [sourceResults]
   );
 
   const columnDefs = useMemo(
@@ -189,22 +331,7 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
         sortable: false,
         suppressMenu: true,
         cellClass: "auto-col-tight",
-        cellRenderer: (params) => (
-          <Typography
-            component="span"
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontWeight: 600,
-              fontSize: "0.9rem",
-              letterSpacing: 0.1,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {highlightHostname(params.value, trimmedQuery)}
-          </Typography>
-        ),
+        cellRenderer: (params) => <HostnameSearchCell device={params.data} query={trimmedQuery} />,
       },
       {
         field: "siteLabel",
@@ -246,14 +373,22 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
     []
   );
 
-  const statusLabel = loading
+  const showStatusLabel = expanded || loading || isDebouncing;
+  const statusLabel = !showStatusLabel
+    ? ""
+    : loading
     ? "Searching"
-    : queryReady
+    : isDebouncing
+    ? "Waiting"
+    : error
+    ? "Error"
+    : queryReady && hasCachedBase
     ? `${rowData.length} result${rowData.length === 1 ? "" : "s"}`
     : `Min ${MIN_SEARCH_LENGTH} chars`;
 
   const handleClose = () => {
     setExpanded(false);
+    setResultCache({});
   };
 
   const handleSelect = (device) => {
@@ -265,10 +400,12 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
       site_id: device.site_id ?? null,
       site_name: device.site_name || "",
       connection_type: device.connection_type || "",
+      operating_system: device.operating_system || "",
+      status: device.connectivity_status || device.connectivityStatus || device.status || "",
     });
     setQuery("");
     setExpanded(false);
-    setResults([]);
+    setResultCache({});
     setError("");
   };
 
@@ -311,8 +448,12 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
           <InputBase
             value={query}
             onChange={(event) => {
-              setQuery(event.target.value);
+              const nextQuery = event.target.value;
+              setQuery(nextQuery);
               setExpanded(true);
+              if (nextQuery.trim().length < MIN_SEARCH_LENGTH) {
+                setResultCache({});
+              }
             }}
             onFocus={() => setExpanded(true)}
             onKeyDown={(event) => {
@@ -340,20 +481,22 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
               },
             }}
           />
-          <Box sx={{ minWidth: 64, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.7 }}>
-            {loading ? <CircularProgress size={14} sx={{ color: MAGIC_UI.accentB }} /> : null}
-            <Typography
-              variant="caption"
-              sx={{
-                color: queryReady ? MAGIC_UI.textBright : MAGIC_UI.textMuted,
-                fontWeight: 600,
-                letterSpacing: 0.18,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {statusLabel}
-            </Typography>
-          </Box>
+          {showStatusLabel ? (
+            <Box sx={{ minWidth: 64, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.7 }}>
+              {loading ? <CircularProgress size={14} sx={{ color: MAGIC_UI.accentB }} /> : null}
+              <Typography
+                variant="caption"
+                sx={{
+                  color: queryReady ? MAGIC_UI.textBright : MAGIC_UI.textMuted,
+                  fontWeight: 600,
+                  letterSpacing: 0.18,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {statusLabel}
+              </Typography>
+            </Box>
+          ) : null}
         </Box>
 
         <Popper

@@ -93,7 +93,7 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     ### API endpoints
 
     - `POST /api/notifications/notify` (Token Authenticated) - broadcast a toast to all connected operators.
-    - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin.
+    - `GET /api/devices/search?hostname=<query>` (Token Authenticated) - shared header device search, scoped to the current operator's visible sites unless the operator is an admin. Results include operating system and `connectivity_status` so Global Device Search can color the OS glyph without opening Device Inventory.
     - `GET /api/server/overview` (Operator Admin Session) - returns the Server Info dashboard snapshot including service state, host runtime details, WebUI route owner/upstream, disabled Compose WebUI state when K3s owns production WebUI traffic, WireGuard runtime status, public-edge certificate health, and live operator presence.
     - `GET /api/server/workers` (Operator Admin Session) - returns active and recent site-worker container state, all sites with total and online device counts, connected Agent counts, and worker-assigned work for Sites. Sites does not call this endpoint from the route loader; it shows `Polling Site Worker Metrics`, starts polling immediately after the first render, and displays mini-trends after the first successful worker payload with active Docker stats. Sites forces AG Grid to refresh the Site Worker Container renderer because the visible metric value is a nested Docker stats sample, not the stable container id.
     - `GET /api/server/site-worker-settings` (Operator Admin Session) - returns profile-managed site-worker scheduled-lane work-item capacity shown in Server Info.
@@ -191,10 +191,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     #### Global Device Search
     - Shared header ownership: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx`.
     - Scope: search is hostname-only and should use `GET /api/devices/search?hostname=<query>` so operators only see devices inside their assigned sites while admins can see any device, including unassigned inventory.
-    - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters.
+    - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters. Keep the `Min 3 chars` hint hidden until the field is focused.
+    - Search timing: debounce backend lookup until the operator has stopped typing for at least 2 seconds. Fetch the first 3 normalized characters as the active cache base, then filter cached rows locally as the query narrows or widens; reset the cache when search closes or drops below 3 characters.
     - Presentation: style the field as a compact dark glass control with cyan hover/focus treatment so it feels like part of the shared header band rather than a legacy toolbar widget.
     - Results overlay: use a compact AG Grid rendered as a dropdown surface with `Hostname` and `Site` columns, Quartz styling, muted matte headers, and rounded overlay chrome.
-    - Cell treatment: hostnames use the Borealis blue accent; site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
+    - Cell treatment: hostnames use bright white copy with the matched query substring in the Borealis blue accent. Place the OS FontAwesome glyph to the left and color the glyph by connection status: `Connected` green, `Disconnected` red, and `Offline` gray. Site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
     - Interaction: clicking a row should navigate directly to the target device's canonical `/devices/:deviceId` route.
 
     #### MagicUI Styling Language (Visual System)

@@ -9,16 +9,22 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type deviceSearchMatch struct {
-	AgentGUID       string `json:"agent_guid"`
-	AgentID         string `json:"agent_id"`
-	Hostname        string `json:"hostname"`
-	ConnectionType  string `json:"connection_type"`
-	SiteID          any    `json:"site_id"`
-	SiteName        string `json:"site_name"`
-	SiteDescription string `json:"site_description"`
+	AgentGUID         string `json:"agent_guid"`
+	AgentID           string `json:"agent_id"`
+	Hostname          string `json:"hostname"`
+	ConnectionType    string `json:"connection_type"`
+	OperatingSystem   string `json:"operating_system"`
+	LastSeen          int64  `json:"last_seen"`
+	Status            string `json:"status"`
+	AgentSocket       bool   `json:"agent_socket"`
+	ConnectivityState string `json:"connectivity_status"`
+	SiteID            any    `json:"site_id"`
+	SiteName          string `json:"site_name"`
+	SiteDescription   string `json:"site_description"`
 }
 
 type deviceSearchStore interface {
@@ -73,10 +79,19 @@ func deviceSearchHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
+		devices := deviceSearchPayloadDevices(matches)
+		enrichDeviceAgentSocketState(ctx, auth, devices)
+		for _, device := range devices {
+			device["connectivity_status"] = deviceSearchConnectivityStatus(
+				cleanText(device["status"]),
+				coerceInt64(device["last_seen"]),
+				boolFromAny(device["agent_socket"]),
+			)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"devices": matches,
+			"devices": devices,
 			"query":   query,
-			"count":   len(matches),
+			"count":   len(devices),
 		})
 	}
 }
@@ -102,7 +117,7 @@ func (s *postgresOperatorStore) searchDevicesByHostname(ctx context.Context, pro
 	defer conn.Close()
 
 	sqlText := `
-		SELECT d.guid, d.hostname, d.agent_id, d.connection_type, s.id, s.name, s.description
+		SELECT d.guid, d.hostname, d.agent_id, d.connection_type, d.operating_system, d.last_seen, s.id, s.name, s.description
 		  FROM engine.devices AS d
 	 LEFT JOIN engine.device_sites AS ds ON ds.device_hostname = d.hostname
 	 LEFT JOIN engine.sites AS s ON s.id = ds.site_id
@@ -126,10 +141,12 @@ func (s *postgresOperatorStore) searchDevicesByHostname(ctx context.Context, pro
 
 	matches := make([]deviceSearchMatch, 0)
 	seen := map[string]struct{}{}
+	now := time.Now().Unix()
 	for rows.Next() {
-		var rawGUID, hostname, agentID, connectionType, siteName, siteDescription sql.NullString
+		var rawGUID, hostname, agentID, connectionType, operatingSystem, siteName, siteDescription sql.NullString
+		var lastSeen sql.NullInt64
 		var siteID sql.NullInt64
-		if err := rows.Scan(&rawGUID, &hostname, &agentID, &connectionType, &siteID, &siteName, &siteDescription); err != nil {
+		if err := rows.Scan(&rawGUID, &hostname, &agentID, &connectionType, &operatingSystem, &lastSeen, &siteID, &siteName, &siteDescription); err != nil {
 			return nil, err
 		}
 		hostnameValue := cleanText(hostname.String)
@@ -145,6 +162,9 @@ func (s *postgresOperatorStore) searchDevicesByHostname(ctx context.Context, pro
 			AgentID:         cleanText(agentID.String),
 			Hostname:        hostnameValue,
 			ConnectionType:  cleanText(connectionType.String),
+			OperatingSystem: cleanText(operatingSystem.String),
+			LastSeen:        nullInt(lastSeen),
+			Status:          statusFromLastSeen(nullInt(lastSeen), now),
 			SiteID:          siteValue,
 			SiteName:        cleanText(siteName.String),
 			SiteDescription: cleanText(siteDescription.String),
@@ -166,6 +186,49 @@ func (s *postgresOperatorStore) searchDevicesByHostname(ctx context.Context, pro
 	}
 	sortDeviceSearchMatches(matches, query)
 	return matches, nil
+}
+
+func deviceSearchPayloadDevices(matches []deviceSearchMatch) []map[string]any {
+	devices := make([]map[string]any, 0, len(matches))
+	now := time.Now().Unix()
+	for _, match := range matches {
+		devices = append(devices, map[string]any{
+			"agent_guid":          match.AgentGUID,
+			"guid":                match.AgentGUID,
+			"agent_id":            match.AgentID,
+			"hostname":            match.Hostname,
+			"connection_type":     match.ConnectionType,
+			"operating_system":    match.OperatingSystem,
+			"last_seen":           match.LastSeen,
+			"status":              firstText(match.Status, statusFromLastSeen(match.LastSeen, now)),
+			"agent_socket":        match.AgentSocket,
+			"connectivity_status": match.ConnectivityState,
+			"site_id":             match.SiteID,
+			"site_name":           match.SiteName,
+			"site_description":    match.SiteDescription,
+		})
+	}
+	return devices
+}
+
+func deviceSearchConnectivityStatus(status string, lastSeen int64, agentSocket bool) string {
+	normalized := strings.ToLower(strings.TrimSpace(status))
+	heartbeatOnline := false
+	switch normalized {
+	case "connected", "disconnected", "degraded", "online", "reconnecting", "recovering":
+		heartbeatOnline = true
+	case "offline", "down", "unavailable":
+		heartbeatOnline = false
+	default:
+		heartbeatOnline = statusFromLastSeen(lastSeen, time.Now().Unix()) == "Online"
+	}
+	if !heartbeatOnline {
+		return "Offline"
+	}
+	if agentSocket {
+		return "Connected"
+	}
+	return "Disconnected"
 }
 
 func (s *postgresOperatorStore) siteIDsForProfile(ctx context.Context, profile operatorProfile) ([]int64, error) {
