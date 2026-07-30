@@ -780,7 +780,6 @@ export default function ServerInfo() {
   const [releaseChannelsSaving, setReleaseChannelsSaving] = useState(false);
   const [releaseChannelsRefreshing, setReleaseChannelsRefreshing] = useState(false);
   const [releaseChannelsError, setReleaseChannelsError] = useState("");
-  const [releaseDefaultChannel, setReleaseDefaultChannel] = useState("stable");
   const [releaseRepo, setReleaseRepo] = useState("");
   const hasOverviewRef = useRef(Boolean(loaderData?.overview));
 
@@ -978,7 +977,6 @@ export default function ServerInfo() {
 
   const openReleaseChannelsDialog = useCallback(() => {
     const currentSettings = overview?.agent_release_channels || {};
-    setReleaseDefaultChannel(String(currentSettings?.default_channel || "stable").toLowerCase());
     setReleaseRepo(String(currentSettings?.github?.repo || ""));
     setReleaseChannelsError("");
     setReleaseChannelsDialogOpen(true);
@@ -1004,7 +1002,6 @@ export default function ServerInfo() {
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          default_channel: releaseDefaultChannel,
           repo: repoValue,
         }),
       });
@@ -1015,7 +1012,7 @@ export default function ServerInfo() {
       setReleaseChannelsDialogOpen(false);
       await sendScopedNotification({
         title: "Release Channels Updated",
-        message: `Default agent channel set to ${String(payload?.default_channel || releaseDefaultChannel)}.`,
+        message: "Agent release-channel repository and cached targets updated.",
         icon: "settings",
         variant: "info",
       });
@@ -1036,7 +1033,7 @@ export default function ServerInfo() {
     } finally {
       setReleaseChannelsSaving(false);
     }
-  }, [fetchOverview, releaseDefaultChannel, releaseRepo, sendScopedNotification]);
+  }, [fetchOverview, releaseRepo, sendScopedNotification]);
 
   const refreshReleaseChannelTargets = useCallback(async () => {
     setReleaseChannelsRefreshing(true);
@@ -1311,7 +1308,7 @@ export default function ServerInfo() {
       {
         id: "agent_release_channels",
         name: "Agent Release Channels",
-        value: `${formatTitleCase(agentReleaseChannels?.default_channel || "stable")} / ${String(agentReleaseChannels?.github?.repo || "Unavailable")}`,
+        value: `Stable:main / ${String(agentReleaseChannels?.github?.repo || "Unavailable")}`,
         details: `Stable ${String(stableChannel?.release_tag || formatBuildShort(stableChannel?.build_id))} · Unstable ${formatBuildShort(unstableChannel?.build_id)} · Refreshed ${formatDateTime(agentReleaseChannels?.last_refresh_completed_at ? new Date(Number(agentReleaseChannels.last_refresh_completed_at) * 1000).toISOString() : "")}`,
         actions: [
           {
@@ -1646,27 +1643,14 @@ export default function ServerInfo() {
         <DialogTitle sx={DIALOG_TITLE_SX}>
           <DialogHeaderBlock
             title="Agent Release Channels"
-            subtitle="Choose the Engine-wide default agent channel and refresh the cached Stable / Unstable targets."
+            subtitle="Devices without overrides use Stable:main. Refresh cached Stable / Unstable targets or change the source repository."
           />
         </DialogTitle>
         <DialogContent sx={DIALOG_CONTENT_SX}>
           <Typography sx={DIALOG_BODY_TEXT_SX}>
-            Stable tracks the latest GitHub release. Unstable tracks the default branch head. Borealis caches a Go agent binary bundle for Windows and Linux before connected SYSTEM agents can update.
+            Stable:main is the fixed default for devices without an ad-hoc override. Unstable tracks the configured repository default branch. Borealis caches a Go agent binary bundle for Windows and Linux before connected SYSTEM agents can update.
           </Typography>
           <Stack spacing={2} sx={{ mt: 2 }}>
-            <TextField
-              select
-              label="Default Agent Channel"
-              value={releaseDefaultChannel}
-              onChange={(event) => {
-                setReleaseDefaultChannel(String(event.target.value || "stable").toLowerCase());
-                if (releaseChannelsError) setReleaseChannelsError("");
-              }}
-              sx={DIALOG_INPUT_SX}
-            >
-              <MenuItem value="stable">Stable</MenuItem>
-              <MenuItem value="unstable">Unstable</MenuItem>
-            </TextField>
             <TextField
               label="GitHub Repo"
               value={releaseRepo}

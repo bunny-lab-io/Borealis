@@ -1910,7 +1910,7 @@ func TestNormalizeAgentBranchMatchesPythonRules(t *testing.T) {
 func TestAttachAgentVersionStatusUsesReleaseChannelTarget(t *testing.T) {
 	settingsPath := filepath.Join(t.TempDir(), "agent_release_channels.json")
 	content := `{
-		"default_channel": "stable",
+		"default_channel": "unstable",
 		"channels": {
 			"stable": {"channel": "stable", "build_id": "stable-build", "published_at": "2026-06-02T00:00:00Z"},
 			"unstable": {"channel": "unstable", "build_id": "unstable-build"}
@@ -1936,6 +1936,9 @@ func TestAttachAgentVersionStatusUsesReleaseChannelTarget(t *testing.T) {
 	summary := updated["summary"].(map[string]any)
 	if got := summary["agent_release_channel_effective"]; got != "stable" {
 		t.Fatalf("expected stable effective channel, got %#v", got)
+	}
+	if got := summary["agent_branch"]; got != "main" {
+		t.Fatalf("expected stable branch main, got %#v", got)
 	}
 }
 
@@ -2851,8 +2854,8 @@ func TestAgentReleaseChannelsHandlerReturnsSettings(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if got := payload["default_channel"]; got != "unstable" {
-		t.Fatalf("expected unstable default, got %#v", got)
+	if got := payload["default_channel"]; got != "stable" {
+		t.Fatalf("expected stable default, got %#v", got)
 	}
 	if got := payload["settings_path"]; got != settingsPath {
 		t.Fatalf("expected settings path, got %#v", got)
@@ -2865,6 +2868,9 @@ func TestAgentReleaseChannelsHandlerReturnsSettings(t *testing.T) {
 	stable := channels["stable"].(map[string]any)
 	if got := stable["build_id"]; got != "stable-build" {
 		t.Fatalf("expected stable build, got %#v", got)
+	}
+	if got := stable["branch"]; got != "main" {
+		t.Fatalf("expected stable branch main, got %#v", got)
 	}
 	unstable := channels["unstable"].(map[string]any)
 	if got := unstable["branch"]; got != "feature/rewrite-api-backend-in-golang" {
@@ -3004,8 +3010,8 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 		t.Fatalf("expected public base url, got %#v", got)
 	}
 	channels := payload["agent_release_channels"].(map[string]any)
-	if got := channels["default_channel"]; got != "unstable" {
-		t.Fatalf("expected unstable default, got %#v", got)
+	if got := channels["default_channel"]; got != "stable" {
+		t.Fatalf("expected stable default, got %#v", got)
 	}
 	if got := payload["operator_session_count"]; got != float64(1) {
 		t.Fatalf("expected operator session count 1, got %#v", got)
