@@ -125,6 +125,23 @@ func TestSchedulerSiteWorkerLifecycleModeRejectsLegacyDockerModes(t *testing.T) 
 	}
 }
 
+func TestSchedulerWorkerHistorySecondsDefaultsToFiveMinutes(t *testing.T) {
+	t.Setenv("BOREALIS_WORKER_HISTORY_SECONDS", "")
+	if got := schedulerWorkerHistorySeconds(); got != 300 {
+		t.Fatalf("expected default worker history 300 seconds, got %d", got)
+	}
+
+	t.Setenv("BOREALIS_WORKER_HISTORY_SECONDS", "30")
+	if got := schedulerWorkerHistorySeconds(); got != 60 {
+		t.Fatalf("expected worker history minimum 60 seconds, got %d", got)
+	}
+
+	t.Setenv("BOREALIS_WORKER_HISTORY_SECONDS", "999999")
+	if got := schedulerWorkerHistorySeconds(); got != 86400 {
+		t.Fatalf("expected worker history maximum 86400 seconds, got %d", got)
+	}
+}
+
 func TestSchedulerManagerOnboardingSiteID(t *testing.T) {
 	siteID := schedulerOnboardingSiteID([]any{
 		map[string]any{"kind": "device", "hostname": "ignored"},

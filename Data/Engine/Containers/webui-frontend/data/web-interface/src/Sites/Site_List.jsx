@@ -160,7 +160,7 @@ const TASK_SECTIONS = [
 const CONNECTION_SECTIONS = [
   { key: "connected", label: "Connected", color: "#00d18c" },
   { key: "disconnected", label: "Reconnecting", color: "#ffb347" },
-  { key: "offline", label: "Offline", color: "#999999" },
+  { key: "offline", label: "Offline", color: "#6b7280" },
 ];
 
 const MAGIC_UI = {

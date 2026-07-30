@@ -36,12 +36,15 @@ const (
 	schedulerRouteStatusRetired = "retired"
 	schedulerRouteStatusLost    = "lost"
 
-	schedulerDefaultRouteRoot           = "/_borealis/site-workers"
-	schedulerDefaultRemoteOpsPortBase   = 56000
-	schedulerDefaultRemoteOpsPortRange  = 5000
-	schedulerDefaultRemoteDeskPortBase  = 61000
-	schedulerDefaultRemoteDeskPortRange = 3000
-	schedulerK3sWorkerGUIDNamespace     = "borealis:k3s:site-worker"
+	schedulerDefaultRouteRoot            = "/_borealis/site-workers"
+	schedulerDefaultRemoteOpsPortBase    = 56000
+	schedulerDefaultRemoteOpsPortRange   = 5000
+	schedulerDefaultRemoteDeskPortBase   = 61000
+	schedulerDefaultRemoteDeskPortRange  = 3000
+	schedulerK3sWorkerGUIDNamespace      = "borealis:k3s:site-worker"
+	schedulerDefaultWorkerHistorySeconds = 300
+	schedulerMinWorkerHistorySeconds     = 60
+	schedulerMaxWorkerHistorySeconds     = 86400
 )
 
 type goSchedulerManager struct {
@@ -127,6 +130,15 @@ func runGoJobSchedulerHealthcheck(ctx context.Context, cfg gatewayConfig) error 
 	return pgStore.db.PingContext(pingCtx)
 }
 
+func schedulerWorkerHistorySeconds() int {
+	return envInt(
+		"BOREALIS_WORKER_HISTORY_SECONDS",
+		schedulerDefaultWorkerHistorySeconds,
+		schedulerMinWorkerHistorySeconds,
+		schedulerMaxWorkerHistorySeconds,
+	)
+}
+
 func (m *goSchedulerManager) run(ctx context.Context) error {
 	if err := m.ensureTables(ctx); err != nil {
 		return err
@@ -142,7 +154,7 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 	nextTick := int64(0)
 	nextReconcile := int64(0)
 	reconcileInterval := int64(envInt("BOREALIS_SITE_WORKER_RECONCILE_SECONDS", 30, 10, 3600))
-	historySeconds := envInt("BOREALIS_WORKER_HISTORY_SECONDS", 60, 60, 86400)
+	historySeconds := schedulerWorkerHistorySeconds()
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 

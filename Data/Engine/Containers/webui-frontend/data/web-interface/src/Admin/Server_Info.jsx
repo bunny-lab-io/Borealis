@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useNavigate } from "react-router-dom";
+import { useLoaderData } from "react-router-dom";
 import {
   Box,
   Button,
@@ -328,19 +328,6 @@ function formatPercent(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "0%";
   return `${num.toFixed(num >= 10 ? 0 : 1)}%`;
-}
-
-function workerResourceSummary(row) {
-  const stats = row?.docker_stats;
-  if (!stats || typeof stats !== "object" || !Object.keys(stats).length) return "";
-  const source = String(stats?.source || row?.container_metrics_source || "").trim();
-  const sourceLabel = source === "metrics.k8s.io" ? "K3s" : "Docker";
-  const memoryUsage = Number(stats?.memory_usage_bytes || 0);
-  const memoryLimit = Number(stats?.memory_limit_bytes || 0);
-  const memoryLabel = memoryLimit > 0
-    ? `${formatBytes(memoryUsage)} / ${formatBytes(memoryLimit)}`
-    : formatBytes(memoryUsage);
-  return `${sourceLabel} CPU ${formatPercent(stats?.cpu_percent)} · RAM ${memoryLabel}`;
 }
 
 function formatDateTime(value) {
@@ -777,7 +764,6 @@ export async function loadServerOverviewPageData(request) {
 
 export default function ServerInfo() {
   const loaderData = useLoaderData();
-  const navigate = useNavigate();
   const { isAdmin } = useAuth();
   const [aboutOpen, setAboutOpen] = useState(false);
   const [overview, setOverview] = useState(() => loaderData?.overview || null);
@@ -1191,8 +1177,6 @@ export default function ServerInfo() {
   const deploymentProfile = siteWorkerSettings?.deployment_profile || host?.deployment_profile || {};
   const deploymentProfileName = String(deploymentProfile?.name || "Deployment Profile").trim();
   const agentReleaseChannels = overview?.agent_release_channels || {};
-  const workerPayload = overview?.workers || {};
-  const workers = Array.isArray(workerPayload?.workers) ? workerPayload.workers : [];
   const certificates = Array.isArray(publicEdge?.certificates) ? publicEdge.certificates : [];
   const worstCert = getWorstCertificate(certificates);
   const aegis = overview?.security?.aegis || {};
@@ -1325,15 +1309,6 @@ export default function ServerInfo() {
         actions: [],
       },
       {
-        id: "site_workers",
-        name: "Site Workers",
-        value: String(Number(workerPayload?.active_count || 0)),
-        details: workers.length
-          ? `${Number(workerPayload?.manager_active_count || 0)} manager · ${workers.length} worker record${workers.length === 1 ? "" : "s"} tracked by job-scheduler`
-          : "No active site workers",
-        actions: [],
-      },
-      {
         id: "agent_release_channels",
         name: "Agent Release Channels",
         value: `${formatTitleCase(agentReleaseChannels?.default_channel || "stable")} / ${String(agentReleaseChannels?.github?.repo || "Unavailable")}`,
@@ -1383,9 +1358,6 @@ export default function ServerInfo() {
       stableChannel,
       timezoneDisplayValue,
       unstableChannel,
-      workerPayload?.active_count,
-      workerPayload?.manager_active_count,
-      workers.length,
     ]
   );
 
@@ -1588,44 +1560,6 @@ export default function ServerInfo() {
       sort_order: index,
     }));
 
-    const workerMasterRows = workers.map((row, index) => {
-      const started = row?.started_at ? formatDateTime(new Date(Number(row.started_at) * 1000).toISOString()) : "Unavailable";
-      const lanes = Array.isArray(row?.current_lanes) ? row.current_lanes.filter(Boolean).join(", ") : "";
-      const links = Array.isArray(row?.task_links) ? row.task_links : [];
-      const isManager = Number(row?.site_id || 0) <= 0;
-      const firstLink = links.find((link) => String(link?.path || "").trim());
-      const taskLabels = links.map((link) => String(link?.label || link?.kind || "").trim()).filter(Boolean).join(", ");
-      const resourceSummary = workerResourceSummary(row);
-      const detailParts = [
-        isManager ? "Manager" : `Site ${row?.site_id || "—"}`,
-        lanes,
-        taskLabels,
-        resourceSummary,
-        `claimed ${Number(row?.claimed_count || 0)}`,
-      ].filter(Boolean);
-      return {
-        id: `workers:${row?.worker_guid || index}`,
-        domain: "Workers",
-        name: row?.container_name || row?.worker_guid || "Site Worker",
-        details: detailParts.join(" · "),
-        value: row?.worker_guid || "—",
-        health: String(row?.status || "").toLowerCase() === "lost" ? "critical" : String(row?.status || "").toLowerCase() === "stopped" ? "unknown" : "healthy",
-        state: formatTitleCase(row?.status),
-        enabled: isManager ? "Long-Lived" : "Ephemeral",
-        started,
-        actions: firstLink
-          ? [
-              {
-                id: `open-worker-link-${row?.worker_guid || index}`,
-                label: "Open Task",
-                onClick: () => navigate(String(firstLink.path || "")),
-              },
-            ]
-          : [],
-        sort_order: index,
-      };
-    });
-
     const accessMasterRows = accessRows.map((row, index) => {
       const health =
         row.id === "active_vpn_tunnels"
@@ -1686,12 +1620,11 @@ export default function ServerInfo() {
 
     return [
       ...runtimeMasterRows,
-      ...workerMasterRows,
       ...resourceMasterRows,
       ...accessMasterRows,
       ...securityMasterRows,
     ];
-  }, [accessRows, actionBusyKey, navigate, operatorSessionCount, requestRestart, requestServiceAction, resourceRows, runtimeRows, securityRows, services, wireguard, workers, worstCert]);
+  }, [accessRows, actionBusyKey, operatorSessionCount, requestRestart, requestServiceAction, resourceRows, runtimeRows, securityRows, services, wireguard, worstCert]);
 
   if (!isAdmin) return null;
 

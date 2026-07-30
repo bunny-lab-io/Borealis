@@ -909,7 +909,7 @@ finally:
     - Site-worker onboarding execution.
     - Notes:
     - Work kinds include `onboarding_run`, `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, `patch_install_run`, and `service_action`.
-    - `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `patch_install_run` payloads include task-link metadata for Server Info and the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
+    - `scheduled_run`, `scheduled_workflow_run`, `agent_maintenance_run`, and `patch_install_run` payloads include task-link metadata for the Sites Active Site Workers canvas; secrets stay out of `payload_json`.
     - Credentials are not stored in `payload_json`; workers retrieve decrypted credential material from the internal API only while executing.
     - `lease_owner` plus `lease_expires_at` protect work from duplicate claims and allow stale work to be reclaimed.
 
@@ -918,12 +918,11 @@ finally:
     - Purpose: Worker lifecycle/status visibility for ephemeral site workers.
     - Columns: `worker_guid`, `container_name`, `site_id`, `status`, `started_at`, `last_seen_at`, `idle_since`, `stopped_at`, `current_lanes_json`, `claimed_count`, `task_links_json`, `docker_state`, `exit_code`, `created_at`, `updated_at`.
     - Used by:
-    - Server Info Workers view.
     - Sites Active Site Workers canvas.
     - Task-scheduler worker reconciliation.
     - Notes:
     - Docker-backed worker container names use random UUIDs (`site-worker-<uuid>`). K3s bridge worker pod names use deterministic site slugs (`site-worker-<sanitized-site-name>`), while `worker_guid` remains the stable worker identity for route records, labels, and lifecycle reconciliation.
-    - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 60 seconds), and `/api/server/workers?history_seconds=60` hides old terminal rows even if legacy rows lack `stopped_at`.
+    - Terminal site-worker rows are lifecycle records, not job history. `job-scheduler` prunes stopped/lost site workers after `BOREALIS_WORKER_HISTORY_SECONDS` (default 300 seconds), and `/api/server/workers?history_seconds=300` hides old terminal rows even if legacy rows lack `stopped_at`.
 
     #### `job_scheduler_worker_routes`
     - Status: Active.

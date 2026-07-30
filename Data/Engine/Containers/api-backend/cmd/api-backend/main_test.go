@@ -2954,10 +2954,6 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	t.Setenv("BOREALIS_PUBLIC_HOSTNAME", "borealis.example.test")
 	t.Setenv("BOREALIS_WEBUI_MODE", "prod")
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
-	store.serverWorkers = map[string]any{
-		"active_count": int64(1),
-		"workers":      []any{map[string]any{"worker_guid": "worker-1", "status": "running"}},
-	}
 	store.githubToken = map[string]any{"has_token": true, "reset_required": false, "reset_at": int64(0)}
 	realtime := newOperatorRealtimeHub()
 	events := realtime.subscribe()
@@ -2975,10 +2971,16 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"host", "resources", "services", "wireguard", "public_edge", "security", "ansible_runner", "site_worker_settings", "agent_release_channels", "remote_desktop", "operator_session_count", "workers"} {
+	for _, key := range []string{"host", "resources", "services", "wireguard", "public_edge", "security", "ansible_runner", "site_worker_settings", "agent_release_channels", "remote_desktop", "operator_session_count"} {
 		if _, ok := payload[key]; !ok {
 			t.Fatalf("expected overview key %q in %+v", key, payload)
 		}
+	}
+	if _, ok := payload["workers"]; ok {
+		t.Fatalf("server overview should not include worker payload: %+v", payload["workers"])
+	}
+	if store.workerHistory != 0 || store.workerContainers {
+		t.Fatalf("server overview should not fetch worker payload, history=%d containers=%v", store.workerHistory, store.workerContainers)
 	}
 	host := payload["host"].(map[string]any)
 	if got := host["public_base_url"]; got != "https://borealis.example.test" {
@@ -2987,10 +2989,6 @@ func TestServerOverviewHandlerReturnsPayload(t *testing.T) {
 	channels := payload["agent_release_channels"].(map[string]any)
 	if got := channels["default_channel"]; got != "unstable" {
 		t.Fatalf("expected unstable default, got %#v", got)
-	}
-	workers := payload["workers"].(map[string]any)
-	if got := workers["active_count"]; got != float64(1) {
-		t.Fatalf("expected worker active count 1, got %#v", got)
 	}
 	if got := payload["operator_session_count"]; got != float64(1) {
 		t.Fatalf("expected operator session count 1, got %#v", got)

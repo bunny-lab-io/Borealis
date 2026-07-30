@@ -635,6 +635,70 @@ def test_prune_worker_history_removes_old_terminal_route_records(tmp_path: Path)
         conn.close()
 
 
+def test_prune_worker_history_default_retains_recent_terminal_workers(tmp_path: Path) -> None:
+    conn = _connect_queue_db(tmp_path)
+    try:
+        register_worker(
+            conn,
+            worker_guid="worker-prune-default",
+            container_name="site-worker-worker-prune-default",
+            site_id=18,
+            status=WORKER_STATUS_RUNNING,
+        )
+        stop_worker(conn, worker_guid="worker-prune-default")
+        recent_ts = int(time.time()) - 120
+        conn.execute(
+            """
+            UPDATE job_scheduler_workers
+               SET stopped_at=?, last_seen_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (recent_ts, recent_ts, recent_ts, "worker-prune-default"),
+        )
+        conn.execute(
+            """
+            UPDATE job_scheduler_worker_routes
+               SET retired_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (recent_ts, recent_ts, "worker-prune-default"),
+        )
+        conn.commit()
+
+        deleted = prune_worker_history(conn)
+        conn.commit()
+
+        assert deleted == 0
+        assert worker_route_for_worker(conn, worker_guid="worker-prune-default") is not None
+
+        old_ts = int(time.time()) - 360
+        conn.execute(
+            """
+            UPDATE job_scheduler_workers
+               SET stopped_at=?, last_seen_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (old_ts, old_ts, old_ts, "worker-prune-default"),
+        )
+        conn.execute(
+            """
+            UPDATE job_scheduler_worker_routes
+               SET retired_at=?, updated_at=?
+             WHERE worker_guid=?
+            """,
+            (old_ts, old_ts, "worker-prune-default"),
+        )
+        conn.commit()
+
+        deleted = prune_worker_history(conn)
+        conn.commit()
+
+        assert deleted == 1
+        assert worker_route_for_worker(conn, worker_guid="worker-prune-default") is None
+    finally:
+        conn.close()
+
+
 def test_expire_stale_leases_requeues_terminal_worker_item_before_timeout(tmp_path: Path) -> None:
     conn = _connect_queue_db(tmp_path)
     try:

@@ -1701,10 +1701,10 @@ def mark_missing_workers_lost(conn: sqlite3.Connection, *, live_worker_guids: Se
     return updated
 
 
-def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 60) -> int:
+def prune_worker_history(conn: sqlite3.Connection, *, retention_seconds: int = 300) -> int:
     ensure_job_scheduler_tables(conn)
     now = _now_ts()
-    cutoff = now - max(0, int(retention_seconds or 60))
+    cutoff = now - max(0, int(retention_seconds or 300))
     cur = conn.cursor()
     cur.execute(
         """
