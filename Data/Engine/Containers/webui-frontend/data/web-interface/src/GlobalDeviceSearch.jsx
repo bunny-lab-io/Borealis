@@ -32,6 +32,12 @@ const themeClassName = searchGridTheme.themeName || "ag-theme-quartz";
 const gridFontFamily = '"IBM Plex Sans", "Helvetica Neue", Arial, sans-serif';
 const iconFontFamily = '"Quartz Regular"';
 
+const DEVICE_SEARCH_STATUS_COLORS = {
+  Connected: "#00d18c",
+  Disconnected: "#ff4f4f",
+  Offline: "#6b7280",
+};
+
 const MAGIC_UI = {
   panelBg:
     "linear-gradient(135deg, rgba(10, 16, 31, 0.97) 0%, rgba(7, 11, 26, 0.95) 55%, rgba(20, 8, 33, 0.96) 100%)",
@@ -51,6 +57,53 @@ function buildRowKey(device) {
   const siteId = String(device?.site_id ?? "").trim().toLowerCase();
   const agentId = String(device?.agent_id || "").trim().toLowerCase();
   return guid || `${hostname}::${siteId}::${agentId}`;
+}
+
+function getOsIconClass(osName) {
+  const value = String(osName || "").toLowerCase();
+  if (!value) return "";
+
+  if (value.includes("mac") || value.includes("os x") || value.includes("darwin")) {
+    return "fa-brands fa-apple";
+  }
+
+  if (value.includes("win")) {
+    return "fa-brands fa-windows";
+  }
+
+  if (
+    value.includes("linux") ||
+    value.includes("ubuntu") ||
+    value.includes("debian") ||
+    value.includes("fedora") ||
+    value.includes("red hat") ||
+    value.includes("centos") ||
+    value.includes("suse") ||
+    value.includes("rhel")
+  ) {
+    return "fa-brands fa-linux";
+  }
+
+  return "";
+}
+
+function normalizeConnectivityStatus(device) {
+  const explicit = String(device?.connectivity_status || device?.connection_status || "").trim().toLowerCase();
+  if (explicit === "connected") return "Connected";
+  if (explicit === "online") return device?.agent_socket === true ? "Connected" : "Disconnected";
+  if (["disconnected", "degraded", "reconnecting", "recovering"].includes(explicit)) return "Disconnected";
+  if (["offline", "down", "unavailable"].includes(explicit)) return "Offline";
+
+  const rawStatus = String(device?.status || "").trim().toLowerCase();
+  if (rawStatus === "connected") return "Connected";
+  if (["disconnected", "degraded", "reconnecting", "recovering"].includes(rawStatus)) return "Disconnected";
+  if (["offline", "down", "unavailable"].includes(rawStatus)) return "Offline";
+
+  const lastSeen = Number(device?.last_seen || 0);
+  const heartbeatOnline = rawStatus === "online" || (lastSeen > 0 && Date.now() / 1000 - lastSeen <= 300);
+  if (!heartbeatOnline) return "Offline";
+  if (device?.agent_socket === true) return "Connected";
+  return "Disconnected";
 }
 
 function highlightHostname(hostname, query) {
@@ -81,6 +134,58 @@ function highlightHostname(hostname, query) {
       </Box>
       {after}
     </>
+  );
+}
+
+function HostnameSearchCell({ device, query }) {
+  const iconClass = getOsIconClass(device?.operating_system || device?.os_name || "");
+  const status = normalizeConnectivityStatus(device);
+  const statusColor = DEVICE_SEARCH_STATUS_COLORS[status] || DEVICE_SEARCH_STATUS_COLORS.Offline;
+
+  return (
+    <Box
+      component="span"
+      sx={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 0.85,
+        minWidth: 0,
+        width: "100%",
+      }}
+    >
+      {iconClass ? (
+        <Box
+          component="i"
+          className={iconClass}
+          aria-hidden="true"
+          title={`${status} device`}
+          sx={{
+            color: statusColor,
+            fontSize: "1rem",
+            lineHeight: 1,
+            width: "1.15rem",
+            textAlign: "center",
+            flexShrink: 0,
+            textShadow: `0 0 12px ${statusColor}55`,
+          }}
+        />
+      ) : null}
+      <Typography
+        component="span"
+        sx={{
+          color: MAGIC_UI.accentA,
+          fontWeight: 600,
+          fontSize: "0.9rem",
+          letterSpacing: 0.1,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          minWidth: 0,
+        }}
+      >
+        {highlightHostname(device?.hostname, query)}
+      </Typography>
+    </Box>
   );
 }
 
@@ -174,6 +279,7 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
         ...device,
         rowKey: buildRowKey(device),
         siteLabel: String(device?.site_name || "").trim() || "Not Configured",
+        connectivityStatus: normalizeConnectivityStatus(device),
       })),
     [results]
   );
@@ -189,22 +295,7 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
         sortable: false,
         suppressMenu: true,
         cellClass: "auto-col-tight",
-        cellRenderer: (params) => (
-          <Typography
-            component="span"
-            sx={{
-              color: MAGIC_UI.accentA,
-              fontWeight: 600,
-              fontSize: "0.9rem",
-              letterSpacing: 0.1,
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {highlightHostname(params.value, trimmedQuery)}
-          </Typography>
-        ),
+        cellRenderer: (params) => <HostnameSearchCell device={params.data} query={trimmedQuery} />,
       },
       {
         field: "siteLabel",
@@ -265,6 +356,8 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
       site_id: device.site_id ?? null,
       site_name: device.site_name || "",
       connection_type: device.connection_type || "",
+      operating_system: device.operating_system || "",
+      status: device.connectivity_status || device.connectivityStatus || device.status || "",
     });
     setQuery("");
     setExpanded(false);

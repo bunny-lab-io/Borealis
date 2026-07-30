@@ -1630,10 +1630,11 @@ func TestDeviceSearchHandlerReturnsEmptyForShortQueryAfterAuth(t *testing.T) {
 
 func TestDeviceSearchHandlerReturnsSortedMatches(t *testing.T) {
 	auth, store := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	now := time.Now().Unix()
 	store.search = []deviceSearchMatch{
-		{AgentGUID: "CCCC", AgentID: "agent-c", Hostname: "z-lab", SiteName: "Zeta"},
-		{AgentGUID: "BBBB", AgentID: "agent-b", Hostname: "lab-02", SiteName: "Beta"},
-		{AgentGUID: "AAAA", AgentID: "agent-a", Hostname: "lab", SiteName: "Alpha"},
+		{AgentGUID: "CCCC", AgentID: "agent-c", Hostname: "z-lab", OperatingSystem: "Ubuntu Linux", LastSeen: now - 900, Status: "Offline", SiteName: "Zeta"},
+		{AgentGUID: "BBBB", AgentID: "agent-b", Hostname: "lab-02", OperatingSystem: "macOS", LastSeen: now, Status: "Online", SiteName: "Beta"},
+		{AgentGUID: "AAAA", AgentID: "agent-a", Hostname: "lab", OperatingSystem: "Windows 11", LastSeen: now, Status: "Online", AgentSocket: true, SiteName: "Alpha"},
 	}
 
 	recorder := httptest.NewRecorder()
@@ -1657,6 +1658,22 @@ func TestDeviceSearchHandlerReturnsSortedMatches(t *testing.T) {
 	}
 	if got := payload.Devices[0].Hostname; got != "lab" {
 		t.Fatalf("expected exact hostname first, got %q", got)
+	}
+	byHost := make(map[string]deviceSearchMatch, len(payload.Devices))
+	for _, device := range payload.Devices {
+		byHost[device.Hostname] = device
+	}
+	if got := byHost["lab"].OperatingSystem; got != "Windows 11" {
+		t.Fatalf("expected operating system in search result, got %q", got)
+	}
+	if !byHost["lab"].AgentSocket || byHost["lab"].ConnectivityState != "Connected" {
+		t.Fatalf("expected connected search result, got %+v", byHost["lab"])
+	}
+	if got := byHost["lab-02"].ConnectivityState; got != "Disconnected" {
+		t.Fatalf("expected disconnected search result, got %q", got)
+	}
+	if got := byHost["z-lab"].ConnectivityState; got != "Offline" {
+		t.Fatalf("expected offline search result, got %q", got)
 	}
 	if store.searchProfile.Username != "operator" || store.searchQuery != "lab" {
 		t.Fatalf("expected search called with operator profile/query, got %+v %q", store.searchProfile, store.searchQuery)
