@@ -126,8 +126,8 @@ function highlightHostname(hostname, query) {
       <Box
         component="span"
         sx={{
-          color: "#c9ebff",
-          textShadow: "0 0 14px rgba(125, 211, 252, 0.28)",
+          color: MAGIC_UI.accentA,
+          textShadow: "0 0 14px rgba(88, 166, 255, 0.32)",
         }}
       >
         {match}
@@ -173,7 +173,7 @@ function HostnameSearchCell({ device, query }) {
       <Typography
         component="span"
         sx={{
-          color: MAGIC_UI.accentA,
+          color: MAGIC_UI.textBright,
           fontWeight: 600,
           fontSize: "0.9rem",
           letterSpacing: 0.1,
@@ -337,7 +337,10 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
     []
   );
 
-  const statusLabel = loading
+  const showStatusLabel = expanded || loading;
+  const statusLabel = !showStatusLabel
+    ? ""
+    : loading
     ? "Searching"
     : queryReady
     ? `${rowData.length} result${rowData.length === 1 ? "" : "s"}`
@@ -433,20 +436,22 @@ export default function GlobalDeviceSearch({ onSelectDevice }) {
               },
             }}
           />
-          <Box sx={{ minWidth: 64, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.7 }}>
-            {loading ? <CircularProgress size={14} sx={{ color: MAGIC_UI.accentB }} /> : null}
-            <Typography
-              variant="caption"
-              sx={{
-                color: queryReady ? MAGIC_UI.textBright : MAGIC_UI.textMuted,
-                fontWeight: 600,
-                letterSpacing: 0.18,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {statusLabel}
-            </Typography>
-          </Box>
+          {showStatusLabel ? (
+            <Box sx={{ minWidth: 64, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 0.7 }}>
+              {loading ? <CircularProgress size={14} sx={{ color: MAGIC_UI.accentB }} /> : null}
+              <Typography
+                variant="caption"
+                sx={{
+                  color: queryReady ? MAGIC_UI.textBright : MAGIC_UI.textMuted,
+                  fontWeight: 600,
+                  letterSpacing: 0.18,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {statusLabel}
+              </Typography>
+            </Box>
+          ) : null}
         </Box>
 
         <Popper

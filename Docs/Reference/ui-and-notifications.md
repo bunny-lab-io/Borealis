@@ -191,10 +191,10 @@ Treat this document as the single source of truth for Borealis WebUI design rule
     #### Global Device Search
     - Shared header ownership: `Data/Engine/Containers/webui-frontend/data/web-interface/src/app/shell/AppShell.jsx` places the global device search in the top app bar; the search UI itself lives in `Data/Engine/Containers/webui-frontend/data/web-interface/src/GlobalDeviceSearch.jsx`.
     - Scope: search is hostname-only and should use `GET /api/devices/search?hostname=<query>` so operators only see devices inside their assigned sites while admins can see any device, including unassigned inventory.
-    - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters.
+    - Minimum activation: do not open the search overlay or call the API until the operator has entered at least 3 characters. Keep the `Min 3 chars` hint hidden until the field is focused.
     - Presentation: style the field as a compact dark glass control with cyan hover/focus treatment so it feels like part of the shared header band rather than a legacy toolbar widget.
     - Results overlay: use a compact AG Grid rendered as a dropdown surface with `Hostname` and `Site` columns, Quartz styling, muted matte headers, and rounded overlay chrome.
-    - Cell treatment: hostnames use the Borealis blue accent with the OS FontAwesome glyph to the left. Color the glyph by connection status: `Connected` green, `Disconnected` red, and `Offline` gray. Site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
+    - Cell treatment: hostnames use bright white copy with the matched query substring in the Borealis blue accent. Place the OS FontAwesome glyph to the left and color the glyph by connection status: `Connected` green, `Disconnected` red, and `Offline` gray. Site names use the shared muted gray copy used elsewhere in Borealis. Unassigned devices may display `Not Configured`.
     - Interaction: clicking a row should navigate directly to the target device's canonical `/devices/:deviceId` route.
 
     #### MagicUI Styling Language (Visual System)
