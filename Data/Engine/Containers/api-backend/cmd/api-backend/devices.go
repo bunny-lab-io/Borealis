@@ -208,14 +208,19 @@ func enrichDeviceAgentSocketState(ctx context.Context, auth *authService, device
 	if err != nil {
 		return
 	}
-	defer conn.Close()
 
-	snapshots := make(map[int64]agentSocketSnapshot, len(siteIDs))
+	routes := make(map[int64]*agentWorkerRoute, len(siteIDs))
 	for siteID := range siteIDs {
 		route, err := fetchAgentWorkerRoute(ctx, conn, siteID)
 		if err != nil || route == nil {
 			continue
 		}
+		routes[siteID] = route
+	}
+	_ = conn.Close()
+
+	snapshots := make(map[int64]agentSocketSnapshot, len(routes))
+	for siteID, route := range routes {
 		snapshots[siteID] = fetchWorkerAgentSocketSnapshot(ctx, auth, route)
 	}
 
