@@ -8,7 +8,7 @@ import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-communi
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const MIN_SEARCH_LENGTH = 3;
-const SEARCH_DEBOUNCE_MS = 1000;
+const SEARCH_DEBOUNCE_MS = 2000;
 const SEARCH_ROW_HEIGHT = 42;
 const SEARCH_HEADER_HEIGHT = 34;
 const SEARCH_PANEL_MAX_HEIGHT = 320;
