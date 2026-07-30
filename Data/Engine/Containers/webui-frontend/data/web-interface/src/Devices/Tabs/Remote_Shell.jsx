@@ -13,7 +13,6 @@ import {
   PlayArrowRounded as PlayIcon,
   StopRounded as StopIcon,
   ContentCopy as CopyIcon,
-  RefreshRounded as RefreshIcon,
 } from "@mui/icons-material";
 import { io } from "socket.io-client";
 import "prismjs/themes/prism-okaidia.css";
@@ -44,6 +43,22 @@ const gradientButtonSx = {
   minWidth: 120,
   "&:hover": {
     backgroundImage: "linear-gradient(135deg,#86e1ff,#d1a6ff)",
+  },
+};
+
+const terminalActionButtonSx = {
+  width: 30,
+  height: 30,
+  color: MAGIC_UI.textMuted,
+  backgroundColor: "transparent",
+  borderRadius: 1,
+  "&:hover": {
+    color: MAGIC_UI.textBright,
+    backgroundColor: "transparent",
+  },
+  "&.Mui-focusVisible": {
+    outline: `1px solid ${MAGIC_UI.accentA}`,
+    outlineOffset: 2,
   },
 };
 
@@ -549,78 +564,84 @@ export default function ReverseTunnelRemoteShell({ device }) {
         }}
       >
         {loading ? <LinearProgress color="info" sx={{ height: 3 }} /> : null}
-        <Box
-          ref={terminalRef}
-          sx={{
-            flexGrow: 1,
-            minHeight: 240,
-            maxHeight: "100%",
-            overflow: "auto",
-            position: "relative",
-            p: 2,
-            "& pre": {
-              margin: 0,
-              fontFamily: fontFamilyMono,
-              fontSize: 13,
-              lineHeight: 1.5,
-              color: "#e6edf3",
-            },
-          }}
-        >
+        <Box sx={{ flexGrow: 1, minHeight: 240, minWidth: 0, display: "flex", position: "relative" }}>
           <Box
-            component="pre"
-            className={`language-${shellLanguage}`}
+            ref={terminalRef}
             sx={{
-              margin: 0,
-              minHeight: "100%",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              background: "transparent !important",
-              backgroundColor: "transparent !important",
-              color: "#e6edf3",
-              fontFamily: fontFamilyMono,
-              fontSize: 13,
-              lineHeight: 1.5,
-              pr: 4,
-              "& code": {
-                display: "block",
-                fontFamily: "inherit",
-                fontSize: "inherit",
-                lineHeight: "inherit",
-                color: "inherit",
-                whiteSpace: "inherit",
-                background: "transparent !important",
-                backgroundColor: "transparent !important",
-              },
-              "&[class*='language-']": {
-                background: "transparent !important",
-                backgroundColor: "transparent !important",
-              },
-              "& code[class*='language-']": {
-                background: "transparent !important",
-                backgroundColor: "transparent !important",
+              flexGrow: 1,
+              minHeight: 0,
+              overflow: "auto",
+              p: 2,
+              pr: { xs: 2, sm: 6 },
+              "& pre": {
+                margin: 0,
+                fontFamily: fontFamilyMono,
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: "#e6edf3",
               },
             }}
           >
             <Box
-              component="code"
+              component="pre"
               className={`language-${shellLanguage}`}
-              dangerouslySetInnerHTML={{ __html: highlightedOutput }}
-            />
+              sx={{
+                margin: 0,
+                minHeight: "100%",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                background: "transparent !important",
+                backgroundColor: "transparent !important",
+                color: "#e6edf3",
+                fontFamily: fontFamilyMono,
+                fontSize: 13,
+                lineHeight: 1.5,
+                "& code": {
+                  display: "block",
+                  fontFamily: "inherit",
+                  fontSize: "inherit",
+                  lineHeight: "inherit",
+                  color: "inherit",
+                  whiteSpace: "inherit",
+                  background: "transparent !important",
+                  backgroundColor: "transparent !important",
+                },
+                "&[class*='language-']": {
+                  background: "transparent !important",
+                  backgroundColor: "transparent !important",
+                },
+                "& code[class*='language-']": {
+                  background: "transparent !important",
+                  backgroundColor: "transparent !important",
+                },
+              }}
+            >
+              <Box
+                component="code"
+                className={`language-${shellLanguage}`}
+                dangerouslySetInnerHTML={{ __html: highlightedOutput }}
+              />
+            </Box>
           </Box>
-          <Box sx={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 0.5 }}>
+          <Box
+            sx={{
+              position: "absolute",
+              top: 10,
+              right: 10,
+              zIndex: 2,
+              display: "flex",
+              gap: 0.5,
+            }}
+          >
             <Tooltip title="Copy output">
-              <IconButton size="small" onClick={handleCopy} sx={{ color: copyFlash ? MAGIC_UI.accentC : MAGIC_UI.textMuted }}>
-                <CopyIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Clear output">
               <IconButton
                 size="small"
-                onClick={() => setOutput("")}
-                sx={{ color: MAGIC_UI.textMuted }}
+                aria-label="Copy output"
+                disableRipple
+                onClick={handleCopy}
+                sx={{ ...terminalActionButtonSx, color: copyFlash ? MAGIC_UI.accentC : MAGIC_UI.textMuted }}
               >
-                <RefreshIcon fontSize="small" />
+                <CopyIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           </Box>
