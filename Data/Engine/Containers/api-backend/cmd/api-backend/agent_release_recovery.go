@@ -57,6 +57,21 @@ func agentHeartbeatReleaseChannelInstruction(guid string, rawChannel string, raw
 	return stableMainAgentReleaseInstruction(guid, fmt.Sprintf("reported branch %q no longer resolves: %s", branch, firstText(errText, "repository head missing")), firstMissingAt, now)
 }
 
+func agentHeartbeatNoOverrideReleaseInstruction(guid string, override string, rawChannel string, rawBranch string, now int64) map[string]any {
+	if normalizeAgentReleaseChannel(override, "") != "" {
+		return nil
+	}
+	channel := normalizeAgentReleaseChannel(rawChannel, "")
+	branch := normalizeAgentBranch(rawBranch)
+	if channel == "" {
+		return nil
+	}
+	if channel == defaultAgentReleaseChannel && strings.EqualFold(branch, defaultAgentReleaseBranch) {
+		return nil
+	}
+	return stableMainAgentReleaseInstruction(guid, "device has no release-channel override; default is stable/main", now, now)
+}
+
 func agentReleaseTrackMissing(key string, now int64, errText string) int64 {
 	agentReleaseRecoveryMu.Lock()
 	defer agentReleaseRecoveryMu.Unlock()

@@ -52,6 +52,35 @@ func TestAgentHeartbeatReleaseChannelInstructionPreservesResolvableBranch(t *tes
 	}
 }
 
+func TestAgentHeartbeatNoOverrideReleaseInstructionCorrectsStaleUnstableMain(t *testing.T) {
+	instruction := agentHeartbeatNoOverrideReleaseInstruction(
+		"2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+		"",
+		"unstable",
+		"main",
+		2000,
+	)
+	if instruction == nil {
+		t.Fatalf("expected no-override unstable/main report to receive stable fallback")
+	}
+	if instruction["release_channel"] != "stable" || instruction["branch"] != "main" {
+		t.Fatalf("unexpected instruction target %+v", instruction)
+	}
+	if instruction["reason"] != "device has no release-channel override; default is stable/main" {
+		t.Fatalf("unexpected reason %+v", instruction)
+	}
+
+	if got := agentHeartbeatNoOverrideReleaseInstruction(
+		"2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+		"unstable",
+		"unstable",
+		"main",
+		2000,
+	); got != nil {
+		t.Fatalf("explicit override should not be corrected by no-override path: %+v", got)
+	}
+}
+
 func TestAgentHeartbeatReleaseChannelInstructionIgnoresAmbiguousLookupFailure(t *testing.T) {
 	originalFetch := repoHashFetchHead
 	repoHashFetchHead = func(repo string, branch string, token string) (string, string) {

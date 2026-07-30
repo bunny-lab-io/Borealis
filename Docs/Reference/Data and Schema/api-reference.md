@@ -59,7 +59,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/agent/token/refresh` (Refresh Token) - mint new access token; returns `401 device_purged` when a GUID is blocked by a purge barrier.
 
     ### Devices and Inventory
-    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, Agent Metadata Field sync, and Engine-side release-channel correction. Responses may include `agent_release_channel_instruction` with `stable/main` when the Agent keeps reporting a retired branch after the recovery grace window.
+    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, Agent Metadata Field sync, and Engine-side release-channel correction. Responses may include `agent_release_channel_instruction` with `stable/main` when a no-override Agent reports `unstable` or when an overridden Agent keeps reporting a retired branch after the recovery grace window.
     - `POST /api/agent/status` (Device Authenticated) - update `devices.last_seen`, upsert the `system:system_heartbeat` startup timeline row in `agent_role_health`, and emit `agent_status_changed` for Device Summary Agent Health refresh.
     - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
     - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
