@@ -4,6 +4,7 @@ Use this workflow when testing Engine WebUI changes on a K3s-based Borealis Engi
 ## Requirements
 - Run commands from the Engine host checkout, usually `/opt/Borealis`.
 - Use the same `--network-mode` value that was used for the Engine install.
+- Run `Engine.sh` with `sudo` unless the shell user can access `/var/run/docker.sock`.
 - Keep durable WebUI source under `Data/Engine/Containers/webui-frontend/data/web-interface/`.
 - Treat `Engine/Services/webui-frontend/data/web-interface/` as disposable runtime source for live HMR sessions.
 
@@ -14,21 +15,21 @@ Use a scoped WebUI rebuild when the Engine stack already exists and only the fro
 
     ```sh
     cd /opt/Borealis
-    ./Engine.sh --network-mode local --service webui-frontend rebuild dev
+    sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
     ```
 
 === "Public"
 
     ```sh
     cd /opt/Borealis
-    ./Engine.sh --network-mode public --service webui-frontend rebuild dev
+    sudo bash Engine.sh --network-mode public --service webui-frontend rebuild dev
     ```
 
 Use full dev deploy when shared Engine configuration changed or when switching a stale stack into dev mode:
 
 ```sh
 cd /opt/Borealis
-./Engine.sh --network-mode local deploy dev
+sudo bash Engine.sh --network-mode local deploy dev
 ```
 
 ## Edit Loop
@@ -53,7 +54,7 @@ Data/Engine/Containers/webui-frontend/data/web-interface/
 Then run the scoped dev rebuild again to refresh the runtime copy from committed source:
 
 ```sh
-./Engine.sh --network-mode local --service webui-frontend rebuild dev
+sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 ```
 
 ## Verify HMR
@@ -76,7 +77,7 @@ Switch WebUI back to production static serving after HMR work:
 
 ```sh
 cd /opt/Borealis
-./Engine.sh --network-mode local --service webui-frontend rebuild prod
+sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 ```
 
 ??? example "Detailed Codex Breakdown"

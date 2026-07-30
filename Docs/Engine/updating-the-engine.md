@@ -2,7 +2,7 @@
 Use this page when updating an existing Borealis Engine host from the Git repository.
 
 !!! info "Expected path"
-    Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install.
+    Run these commands from the Engine host. They pull current staging files and redeploy the production container stack. Keep the same network mode used during install. Use `sudo` for `Engine.sh` unless the shell user can access `/var/run/docker.sock`.
 
 === "Public"
 
@@ -13,7 +13,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
     git pull --ff-only
 
     # Redeploy updated Engine containers.
-    ./Engine.sh --network-mode public deploy prod
+    sudo bash Engine.sh --network-mode public deploy prod
     ```
 
 === "Local"
@@ -25,7 +25,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
     git pull --ff-only
 
     # Redeploy updated Engine containers.
-    ./Engine.sh --network-mode local deploy prod
+    sudo bash Engine.sh --network-mode local deploy prod
     ```
 
 !!! warning "Local changes"
@@ -41,7 +41,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
         ```sh
         cd /opt/Borealis
         git pull --ff-only
-        ./Engine.sh --network-mode public deploy dev
+        sudo bash Engine.sh --network-mode public deploy dev
         ```
 
     === "Local"
@@ -49,7 +49,7 @@ Use this page when updating an existing Borealis Engine host from the Git reposi
         ```sh
         cd /opt/Borealis
         git pull --ff-only
-        ./Engine.sh --network-mode local deploy dev
+        sudo bash Engine.sh --network-mode local deploy dev
         ```
 
 ??? example "Detailed Codex Breakdown"

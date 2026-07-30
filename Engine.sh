@@ -1982,7 +1982,17 @@ sync_and_reexec_if_needed() {
 
 require_docker() {
   command_exists docker || die "Docker Engine CLI missing. Run Engine.sh deploy after installing Docker Engine."
-  docker info >/dev/null 2>&1 || die "Docker daemon unreachable. Start Docker Engine and retry."
+  local docker_info_output=""
+  if docker_info_output="$(docker info 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  if printf '%s\n' "${docker_info_output}" | grep -qi "permission denied"; then
+    die "Docker socket permission denied for user '${USER:-$(id -un)}'. Re-run Engine.sh with sudo, or add the user to the docker group and start a new login session."
+  fi
+  if command_exists systemctl && systemctl is-active --quiet docker 2>/dev/null; then
+    die "Docker daemon is active, but Docker CLI cannot connect. Check Docker context and /var/run/docker.sock access. First error: $(printf '%s\n' "${docker_info_output}" | head -n 1)"
+  fi
+  die "Docker daemon unreachable. Start Docker Engine and retry. First error: $(printf '%s\n' "${docker_info_output}" | head -n 1)"
 }
 
 require_python() {

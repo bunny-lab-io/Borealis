@@ -7,6 +7,7 @@ You can follow the instructions on this page to install the Borealis Engine onto
 
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
     - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
+    - Run `Engine.sh` with `sudo` unless the shell user can access `/var/run/docker.sock`.
 
     **DNS Records & Certificate Considerations**:
 
@@ -217,9 +218,9 @@ sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ```
 
 ### Docker Storage Cleanup
-Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
+Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive non-Borealis Docker images, removes stale Borealis service tags, and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
 
-`site-worker` images are handled carefully because K3s site-worker pods may need the current image after Docker build cleanup. Borealis keeps the current site-worker image available for K3s import and removes stale site-worker tags only when no Docker container still references them.
+Borealis service images are handled carefully because K3s pods may need current images after Docker build cleanup. Borealis keeps current `io.borealis.service` images available for K3s import and removes stale service tags only when no Docker container still references them.
 
 !!! warning "Shared Docker Hosts"
     Engine hosts should be dedicated to Borealis. Docker cleanup removes unused images and build cache from the host, which may affect unrelated Docker workloads if you co-host them. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` before deploy only when you intentionally need to preserve unused Docker images or build cache.
