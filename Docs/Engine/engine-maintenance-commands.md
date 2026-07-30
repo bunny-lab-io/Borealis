@@ -2,36 +2,40 @@
 Use service-scoped commands when troubleshooting one Engine component without redeploying the full Borealis stack.
 
 !!! info "When to use these"
-    These commands are useful after config edits, WebUI rebuilds, Traefik routing changes, or WireGuard tunnel issues. Use the same `--network-mode` value used during install. Use the normal Engine update path when you want to pull and redeploy the entire platform.
+    These commands are useful after config edits, WebUI rebuilds, Traefik routing changes, or WireGuard tunnel issues. Use the same `--network-mode` value used during install. Run with `sudo` unless the shell user can access `/var/run/docker.sock`. Use the normal Engine update path when you want to pull and redeploy the entire platform.
 
 ```sh
 # Restart the API backend workload.
-./Engine.sh --network-mode local --service api-backend restart
+sudo bash Engine.sh --network-mode local --service api-backend restart
 
 # Restart the WebUI frontend workload without rebuilding its image.
-./Engine.sh --network-mode local --service webui-frontend restart
+sudo bash Engine.sh --network-mode local --service webui-frontend restart
 
 # Rebuild the WebUI frontend workload in production mode.
-./Engine.sh --network-mode local --service webui-frontend rebuild prod
+sudo bash Engine.sh --network-mode local --service webui-frontend rebuild prod
 
 # Rebuild the WebUI frontend workload in development mode.
-./Engine.sh --network-mode local --service webui-frontend rebuild dev
+sudo bash Engine.sh --network-mode local --service webui-frontend rebuild dev
 
 # Reload Traefik edge configuration.
-./Engine.sh --network-mode local --service traefik-edge reload
+sudo bash Engine.sh --network-mode local --service traefik-edge reload
 
 # Reconcile WireGuard tunnel state to fix agent tunnel connections.
-./Engine.sh --network-mode local --service wireguard-tunnel reconcile
+sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 ```
 
 !!! warning "Service commands are targeted"
     A service command only touches the named component. If multiple services changed, run the normal deployment command from [Updating the Engine](updating-the-engine.md).
+
+!!! tip "WebUI HMR"
+    Use [WebUI HMR Development](webui-hmr-development.md) for frontend-only edit loops. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
 
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
 
     - [Updating the Engine](updating-the-engine.md)
+    - [WebUI HMR Development](webui-hmr-development.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
 

@@ -69,10 +69,13 @@ BOREALIS_OPERATOR_PORT="${BOREALIS_OPERATOR_PORT:-8088}"
 BOREALIS_OPERATOR_CONFIG_HASH_FILE="${DEPLOY_DIR}/borealis-operator.sha256"
 K3S_API_BACKEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-api-backend.sha256"
 K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-bridge-workloads.sha256"
+K3S_WEBUI_FRONTEND_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-webui-frontend.sha256"
+K3S_REMOTE_DESKTOP_GUACD_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-remote-desktop-guacd.sha256"
 K3S_JOB_SCHEDULER_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-job-scheduler.sha256"
 K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-wireguard-tunnel.sha256"
 K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-traefik-edge.sha256"
 K3S_POSTGRES_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-db.sha256"
+K3S_POSTGRES_SCHEMA_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-postgres-schema.sha256"
 K3S_SITE_WORKER_RUNTIME_CONFIG_HASH_FILE="${DEPLOY_DIR}/k3s-site-worker-runtime-env.sha256"
 BOREALIS_POSTGRES_RUNTIME_SECRET_NAME="${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME:-borealis-postgres-runtime-env}"
 K3S_API_BACKEND_BRIDGE_VERSION="4"
@@ -80,6 +83,8 @@ K3S_API_BACKEND_DB_VALIDATION_VERSION="3"
 K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME="${BOREALIS_K3S_API_BACKEND_DB_VALIDATOR_JOB_NAME:-api-backend-shadow-db-validator}"
 K3S_API_BACKEND_DB_VALIDATION_TIMEOUT="${BOREALIS_K3S_API_BACKEND_DB_VALIDATION_TIMEOUT:-120s}"
 K3S_BRIDGE_WORKLOADS_VERSION="4"
+K3S_WEBUI_FRONTEND_VERSION="1"
+K3S_REMOTE_DESKTOP_GUACD_VERSION="1"
 K3S_JOB_SCHEDULER_VERSION="4"
 K3S_WIREGUARD_TUNNEL_VERSION="1"
 K3S_TRAEFIK_EDGE_VERSION="1"
@@ -1977,7 +1982,17 @@ sync_and_reexec_if_needed() {
 
 require_docker() {
   command_exists docker || die "Docker Engine CLI missing. Run Engine.sh deploy after installing Docker Engine."
-  docker info >/dev/null 2>&1 || die "Docker daemon unreachable. Start Docker Engine and retry."
+  local docker_info_output=""
+  if docker_info_output="$(docker info 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  if printf '%s\n' "${docker_info_output}" | grep -qi "permission denied"; then
+    die "Docker socket permission denied for user '${USER:-$(id -un)}'. Re-run Engine.sh with sudo, or add the user to the docker group and start a new login session."
+  fi
+  if command_exists systemctl && systemctl is-active --quiet docker 2>/dev/null; then
+    die "Docker daemon is active, but Docker CLI cannot connect. Check Docker context and /var/run/docker.sock access. First error: $(printf '%s\n' "${docker_info_output}" | head -n 1)"
+  fi
+  die "Docker daemon unreachable. Start Docker Engine and retry. First error: $(printf '%s\n' "${docker_info_output}" | head -n 1)"
 }
 
 require_python() {
@@ -2357,6 +2372,51 @@ k3s_kubectl() {
   local k3s_bin
   k3s_bin="$(k3s_binary_path)" || die "K3s binary missing after install."
   run_privileged "${k3s_bin}" kubectl --kubeconfig "${K3S_KUBECONFIG}" "$@"
+}
+
+stored_k3s_config_hash() {
+  local hash_file="$1"
+  awk '{print $1; exit}' "${hash_file}" 2>/dev/null || true
+}
+
+k3s_resource_annotation_matches() {
+  local resource="$1"
+  local annotation="$2"
+  local expected_hash="$3"
+  local namespace="${4:-${K3S_NAMESPACE}}"
+  local actual_hash=""
+  if [[ "${namespace}" == "-" ]]; then
+    actual_hash="$(
+      k3s_kubectl get "${resource}" -o json 2>>"${BUILD_LOG}" \
+        | python3 -c 'import json, sys; data = json.load(sys.stdin); print(((data.get("metadata") or {}).get("annotations") or {}).get(sys.argv[1]) or "")' "${annotation}" 2>>"${BUILD_LOG}"
+    )" || return 1
+  else
+    actual_hash="$(
+      k3s_kubectl -n "${namespace}" get "${resource}" -o json 2>>"${BUILD_LOG}" \
+        | python3 -c 'import json, sys; data = json.load(sys.stdin); print(((data.get("metadata") or {}).get("annotations") or {}).get(sys.argv[1]) or "")' "${annotation}" 2>>"${BUILD_LOG}"
+    )" || return 1
+  fi
+  [[ "${actual_hash}" == "${expected_hash}" ]]
+}
+
+k3s_manifest_config_current() {
+  local hash_file="$1"
+  local expected_hash="$2"
+  local annotation="$3"
+  shift 3
+  [[ "$(stored_k3s_config_hash "${hash_file}")" == "${expected_hash}" ]] || return 1
+  local resource=""
+  for resource in "$@"; do
+    k3s_resource_annotation_matches "${resource}" "${annotation}" "${expected_hash}" || return 1
+  done
+  return 0
+}
+
+log_k3s_manifest_unchanged() {
+  local row="$1"
+  local hash="$2"
+  log_status "${row}" "Unchanged" "${C_GREEN}"
+  printf '[%s] %s K3s manifest unchanged as %s; apply and rollout skipped\n' "$(date +%FT%T)" "${row}" "${hash}" >> "${BUILD_LOG}"
 }
 
 render_k3s_borealis_config() {
@@ -2955,6 +3015,15 @@ ensure_longhorn_storage_baseline() {
   fi
 
   ensure_longhorn_node_dependencies
+  if [[ "$(stored_k3s_config_hash "${K3S_LONGHORN_CONFIG_HASH_FILE}")" == "${config_hash}" ]] \
+    && k3s_resource_annotation_matches "namespace/${K3S_LONGHORN_NAMESPACE}" "borealis.io/longhorn-config-hash" "${config_hash}" "-" \
+    && k3s_kubectl get storageclass "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+    if [[ "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" == "${K3S_LONGHORN_UPSTREAM_STORAGE_CLASS}" ]] \
+      || k3s_kubectl get storageclass "${K3S_BOREALIS_LONGHORN_STORAGE_CLASS}" >/dev/null 2>>"${BUILD_LOG}"; then
+      log_k3s_manifest_unchanged "k3s-longhorn-storage" "${config_hash}"
+      return 0
+    fi
+  fi
 
   log_status "k3s-longhorn-storage" "Applying Manifests" "${C_YELLOW}"
   if ! k3s_kubectl apply -f "${K3S_LONGHORN_MANIFEST_URL}" >> "${BUILD_LOG}" 2>&1; then
@@ -3299,6 +3368,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
 type: Opaque
 data:
   BOREALIS_OPERATOR_SECRET: "${secret_b64}"
@@ -3314,6 +3385,7 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: site-worker-migration
   annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
     borealis.io/site-worker-runtime-config-hash: "${site_worker_runtime_secret_hash}"
 type: Opaque
 data:
@@ -3329,6 +3401,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
 automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -3341,6 +3415,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
 rules:
   - apiGroups: [""]
     resources: ["pods", "services"]
@@ -3376,6 +3452,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: operator-bridge
+  annotations:
+    borealis.io/operator-config-hash: "${config_hash}"
 subjects:
   - kind: ServiceAccount
     name: ${BOREALIS_OPERATOR_SERVICE_NAME}
@@ -3562,6 +3640,21 @@ ensure_borealis_operator_bridge() {
   if [[ -n "${site_worker_image_allowlist}" ]]; then
     import_k3s_local_image_into_k3s "site-worker" "${site_worker_image_allowlist}" ""
   fi
+  retire_legacy_borealis_operator_readonly_rbac
+  if k3s_manifest_config_current \
+    "${BOREALIS_OPERATOR_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/operator-config-hash" \
+    "secret/${BOREALIS_OPERATOR_SECRET_NAME}" \
+    "secret/${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" \
+    "serviceaccount/${BOREALIS_OPERATOR_SERVICE_NAME}" \
+    "role/${BOREALIS_OPERATOR_SERVICE_NAME}-controller" \
+    "rolebinding/${BOREALIS_OPERATOR_SERVICE_NAME}-controller" \
+    "deployment/${BOREALIS_OPERATOR_SERVICE_NAME}" \
+    "service/${BOREALIS_OPERATOR_SERVICE_NAME}"; then
+    log_k3s_manifest_unchanged "borealis-operator" "${config_hash}"
+    return 0
+  fi
   log_status "borealis-operator" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
   manifest_file="$(mktemp "${DEPLOY_DIR}/borealis-operator.XXXXXX.yaml")"
@@ -3573,7 +3666,6 @@ ensure_borealis_operator_bridge() {
     die "Failed to apply Borealis operator manifests. See ${BUILD_LOG}."
   fi
   rm -f "${manifest_file}"
-  retire_legacy_borealis_operator_readonly_rbac
 
   log_status "borealis-operator" "Waiting For Rollout" "${C_YELLOW}"
   if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/${BOREALIS_OPERATOR_SERVICE_NAME}" --timeout=90s >> "${BUILD_LOG}" 2>&1; then
@@ -3669,6 +3761,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: api-backend-cutover
+  annotations:
+    borealis.io/bridge-config-hash: "${config_hash}"
 type: Opaque
 data:
 $(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
@@ -3917,6 +4011,7 @@ ensure_k3s_api_backend_bridge() {
   local runtime_env_hash
   local traffic_owner
   local service_host
+  local pids_limit
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
@@ -3925,6 +4020,7 @@ ensure_k3s_api_backend_bridge() {
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
   traffic_owner="$(resolve_api_backend_traffic_owner)"
   service_host="$(api_backend_service_dns_name)"
+  pids_limit="$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
 
   local config_hash
   config_hash="$(
@@ -3942,6 +4038,7 @@ ensure_k3s_api_backend_bridge() {
       "listen_host=0.0.0.0" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
       "traffic_owner=${traffic_owner}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
@@ -3951,6 +4048,16 @@ ensure_k3s_api_backend_bridge() {
   )"
 
   import_k3s_local_image_into_k3s "api-backend" "${image}" "k3s-api-backend"
+  if k3s_manifest_config_current \
+    "${K3S_API_BACKEND_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/bridge-config-hash" \
+    "secret/${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}" \
+    "service/api-backend" \
+    "deployment/api-backend"; then
+    log_k3s_manifest_unchanged "k3s-api-backend" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-api-backend" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
@@ -4201,6 +4308,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: scheduler-cutover
+  annotations:
+    borealis.io/scheduler-config-hash: "${config_hash}"
 type: Opaque
 data:
 $(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
@@ -4392,6 +4501,7 @@ ensure_k3s_job_scheduler() {
   local runtime_env_hash
   local api_bridge_port
   local internal_api_base
+  local pids_limit
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_JOB_SCHEDULER_MEMORY_LIMIT)")"
@@ -4399,6 +4509,7 @@ ensure_k3s_job_scheduler() {
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
   api_bridge_port="$(format_k3s_tcp_port "${BOREALIS_API_BACKEND_K3S_BRIDGE_PORT}")"
   internal_api_base="http://$(api_backend_service_dns_name):${api_bridge_port}"
+  pids_limit="$(read_env_value BOREALIS_JOB_SCHEDULER_PIDS_LIMIT)"
 
   local config_hash
   config_hash="$(
@@ -4412,6 +4523,7 @@ ensure_k3s_job_scheduler() {
       "site_worker_image=${site_worker_image}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
       "network_mode=cluster-ip" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
@@ -4423,6 +4535,15 @@ ensure_k3s_job_scheduler() {
   )"
 
   import_k3s_local_image_into_k3s "job-scheduler" "${image}" "k3s-job-scheduler"
+  if k3s_manifest_config_current \
+    "${K3S_JOB_SCHEDULER_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/scheduler-config-hash" \
+    "secret/${BOREALIS_JOB_SCHEDULER_RUNTIME_SECRET_NAME}" \
+    "deployment/job-scheduler"; then
+    log_k3s_manifest_unchanged "k3s-job-scheduler" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-job-scheduler" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
@@ -4479,6 +4600,8 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
     borealis.io/runtime-owner: ${runtime_owner}
+  annotations:
+    borealis.io/postgres-config-hash: "${config_hash}"
 type: Opaque
 data:
 $(borealis_postgres_runtime_secret_data)
@@ -4494,6 +4617,8 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
     borealis.io/runtime-owner: ${runtime_owner}
+  annotations:
+    borealis.io/postgres-config-hash: "${config_hash}"
 spec:
   clusterIP: None
   selector:
@@ -4516,6 +4641,8 @@ metadata:
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: postgres-cutover
     borealis.io/runtime-owner: ${runtime_owner}
+  annotations:
+    borealis.io/postgres-config-hash: "${config_hash}"
 spec:
   type: ClusterIP
   selector:
@@ -4795,12 +4922,14 @@ ensure_k3s_postgres_statefulset() {
   local postgres_gid
   local memory_limit
   local cpu_limit
+  local pids_limit
   image="$(service_image_tag_or_previous postgres-db borealis-engine/postgres-db:local)"
   [[ -n "${image}" ]] || die "PostgreSQL image tag unavailable."
   postgres_uid="$(resolve_postgres_runtime_uid)"
   postgres_gid="$(resolve_postgres_runtime_gid)"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_POSTGRES_DB_MEMORY_LIMIT)")"
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_POSTGRES_DB_CPU_LIMIT)")"
+  pids_limit="$(read_env_value BOREALIS_POSTGRES_DB_PIDS_LIMIT)"
 
   config_hash="$(
     printf '%s\n' \
@@ -4814,6 +4943,7 @@ ensure_k3s_postgres_statefulset() {
       "postgres_gid=${postgres_gid}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
       "storage_class=${storage_class}" \
       "storage_size=${K3S_POSTGRES_STORAGE_SIZE}" \
       "rollout_timeout=${K3S_POSTGRES_ROLLOUT_TIMEOUT}" \
@@ -4823,6 +4953,17 @@ ensure_k3s_postgres_statefulset() {
   )"
 
   import_k3s_local_image_into_k3s "postgres-db" "${image}" "k3s-postgres-db"
+  if k3s_manifest_config_current \
+    "${K3S_POSTGRES_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/postgres-config-hash" \
+    "secret/${BOREALIS_POSTGRES_RUNTIME_SECRET_NAME}" \
+    "service/postgres-db-headless" \
+    "service/postgres-db" \
+    "statefulset/postgres-db"; then
+    log_k3s_manifest_unchanged "k3s-postgres-db" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-postgres-db" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
@@ -5145,6 +5286,15 @@ ensure_k3s_engine_database_schema() {
       | sha256sum | awk '{print $1}'
   )"
 
+  local postgres_config_hash
+  postgres_config_hash="$(stored_k3s_config_hash "${K3S_POSTGRES_CONFIG_HASH_FILE}")"
+  if [[ "$(stored_k3s_config_hash "${K3S_POSTGRES_SCHEMA_CONFIG_HASH_FILE}")" == "${config_hash}" ]] \
+    && [[ -n "${postgres_config_hash}" ]] \
+    && k3s_resource_annotation_matches "statefulset/postgres-db" "borealis.io/postgres-config-hash" "${postgres_config_hash}"; then
+    log_k3s_manifest_unchanged "Database schema" "${config_hash}"
+    return 0
+  fi
+
   import_k3s_local_image_into_k3s "site-worker" "${image}" "site-worker"
   log_status "Database schema" "Preparing K3s Engine Tables" "${C_YELLOW}"
   k3s_kubectl -n "${K3S_NAMESPACE}" delete "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --ignore-not-found=true --wait=true >> "${BUILD_LOG}" 2>&1 || true
@@ -5174,6 +5324,7 @@ ensure_k3s_engine_database_schema() {
     die "K3s PostgreSQL schema initialization failed. See ${BUILD_LOG}."
   fi
   k3s_kubectl -n "${K3S_NAMESPACE}" logs "job/${K3S_POSTGRES_SCHEMA_JOB_NAME}" --tail=240 2>/dev/null | stream_database_schema_output || true
+  printf '%s  k3s-postgres-schema\n' "${config_hash}" > "${K3S_POSTGRES_SCHEMA_CONFIG_HASH_FILE}"
   log_status "Database schema" "Ready - K3s DB" "${C_GREEN}"
 }
 
@@ -5599,108 +5750,81 @@ spec:
 EOF
 }
 
-render_k3s_bridge_workloads_manifest() {
-  local webui_image="$1"
-  local guacd_image="$2"
-  local mode="$3"
-  local config_hash="$4"
-  local runtime_uid="$5"
-  local runtime_gid="$6"
-  local webui_port="$7"
-  local guacd_port="$8"
-  local webui_memory_limit="$9"
-  local webui_cpu_limit="${10}"
-  local guacd_memory_limit="${11}"
-  local guacd_cpu_limit="${12}"
-  local webui_traffic_owner="${13}"
-  render_k3s_webui_frontend_bridge_manifest "${webui_image}" "${mode}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${webui_port}" "${webui_memory_limit}" "${webui_cpu_limit}" "${webui_traffic_owner}"
-  printf '%s\n' "---"
-  render_k3s_remote_desktop_guacd_bridge_manifest "${guacd_image}" "${config_hash}" "${runtime_uid}" "${runtime_gid}" "${guacd_port}" "${guacd_memory_limit}" "${guacd_cpu_limit}"
-}
-
-ensure_k3s_bridge_workloads() {
+ensure_k3s_webui_frontend_workload() {
   local mode="$1"
-  local webui_image
-  local guacd_image
-  webui_image="$(service_image_tag_or_previous webui-frontend borealis-engine/webui-frontend:local)"
-  guacd_image="$(service_image_tag_or_previous remote-desktop-guacd borealis-engine/remote-desktop-guacd:local)"
-  [[ -n "${webui_image}" ]] || die "WebUI frontend image tag unavailable."
-  [[ -n "${guacd_image}" ]] || die "Remote desktop guacd image tag unavailable."
+  local image
+  image="$(service_image_tag_or_previous webui-frontend borealis-engine/webui-frontend:local)"
+  [[ -n "${image}" ]] || die "WebUI frontend image tag unavailable."
 
   local runtime_uid
   local runtime_gid
-  local webui_port
-  local guacd_port
-  local webui_memory_limit
-  local webui_cpu_limit
-  local webui_traffic_owner
-  local guacd_memory_limit
-  local guacd_cpu_limit
+  local port
+  local memory_limit
+  local cpu_limit
+  local pids_limit
+  local traffic_owner
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
-  webui_port="$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)"
-  webui_port="${webui_port:-8000}"
-  guacd_port="$(read_env_value BOREALIS_GUACD_PORT)"
-  guacd_port="${guacd_port:-4822}"
-  webui_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT)")"
-  webui_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_CPU_LIMIT)")"
-  webui_traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
-  guacd_memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT)")"
-  guacd_cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT)")"
+  port="$(read_env_value BOREALIS_WEBUI_UPSTREAM_PORT)"
+  port="${port:-8000}"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WEBUI_FRONTEND_CPU_LIMIT)")"
+  pids_limit="$(read_env_value BOREALIS_WEBUI_FRONTEND_PIDS_LIMIT)"
+  traffic_owner="$(resolve_webui_traffic_owner "${mode}")"
 
   local config_hash
   config_hash="$(
     printf '%s\n' \
-      "schema=${K3S_BRIDGE_WORKLOADS_VERSION}" \
+      "schema=${K3S_WEBUI_FRONTEND_VERSION}" \
       "namespace=${K3S_NAMESPACE}" \
       "mode=${mode}" \
       "runtime_uid=${runtime_uid}" \
       "runtime_gid=${runtime_gid}" \
-      "webui_image=${webui_image}" \
-      "webui_port=${webui_port}" \
-      "webui_memory_limit=${webui_memory_limit}" \
-      "webui_cpu_limit=${webui_cpu_limit}" \
-      "webui_traffic_owner=${webui_traffic_owner}" \
-      "webui_runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
-      "webui_vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
-      "webui_vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
+      "image=${image}" \
+      "port=${port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
+      "traffic_owner=${traffic_owner}" \
+      "runtime_source_dir=${WEBUI_RUNTIME_SOURCE_DIR}" \
+      "vite_cache_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite" \
+      "vite_temp_dir=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp" \
       "timezone=$(host_timezone_value)" \
       "timezone_host_mounts=host-zoneinfo-v1" \
-      "guacd_image=${guacd_image}" \
-      "guacd_port=${guacd_port}" \
-      "guacd_memory_limit=${guacd_memory_limit}" \
-      "guacd_cpu_limit=${guacd_cpu_limit}" \
       | sha256sum | awk '{print $1}'
   )"
+  K3S_LAST_WEBUI_FRONTEND_CONFIG_HASH="${config_hash}"
 
-  import_k3s_local_image_into_k3s "webui-frontend" "${webui_image}" "k3s-webui-frontend"
-  import_k3s_local_image_into_k3s "remote-desktop-guacd" "${guacd_image}" "k3s-remote-desktop-guacd"
+  import_k3s_local_image_into_k3s "webui-frontend" "${image}" "k3s-webui-frontend"
+  if k3s_manifest_config_current \
+    "${K3S_WEBUI_FRONTEND_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/bridge-config-hash" \
+    "deployment/webui-frontend" \
+    "service/webui-frontend"; then
+    log_k3s_manifest_unchanged "k3s-webui-frontend" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-webui-frontend" "Applying Manifests" "${C_YELLOW}"
-  log_status "k3s-remote-desktop-guacd" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
-  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-bridge-workloads.XXXXXX.yaml")"
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-webui-frontend.XXXXXX.yaml")"
   chmod 0600 "${manifest_file}" 2>/dev/null || true
-  render_k3s_bridge_workloads_manifest \
-    "${webui_image}" \
-    "${guacd_image}" \
+  render_k3s_webui_frontend_bridge_manifest \
+    "${image}" \
     "${mode}" \
     "${config_hash}" \
     "${runtime_uid}" \
     "${runtime_gid}" \
-    "${webui_port}" \
-    "${guacd_port}" \
-    "${webui_memory_limit}" \
-    "${webui_cpu_limit}" \
-    "${guacd_memory_limit}" \
-    "${guacd_cpu_limit}" \
-    "${webui_traffic_owner}" \
+    "${port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    "${traffic_owner}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
     log_status "k3s-webui-frontend" "Apply Failed" "${C_RED}"
-    log_status "k3s-remote-desktop-guacd" "Apply Failed" "${C_RED}"
-    die "Failed to apply K3s bridge workload manifests. See ${BUILD_LOG}."
+    die "Failed to apply K3s WebUI frontend manifest. See ${BUILD_LOG}."
   fi
   rm -f "${manifest_file}"
 
@@ -5709,20 +5833,106 @@ ensure_k3s_bridge_workloads() {
     log_status "k3s-webui-frontend" "Rollout Failed" "${C_RED}"
     die "K3s WebUI bridge rollout failed. See ${BUILD_LOG}."
   fi
-  if [[ "${webui_traffic_owner}" == "k3s" ]]; then
+  printf '%s  k3s-webui-frontend\n' "${config_hash}" > "${K3S_WEBUI_FRONTEND_CONFIG_HASH_FILE}"
+  if [[ "${traffic_owner}" == "k3s" ]]; then
     log_status "k3s-webui-frontend" "Ready - Traffic Owner" "${C_GREEN}"
   else
     log_status "k3s-webui-frontend" "Ready - Bridge" "${C_GREEN}"
   fi
+}
+
+ensure_k3s_remote_desktop_guacd_workload() {
+  local image
+  image="$(service_image_tag_or_previous remote-desktop-guacd borealis-engine/remote-desktop-guacd:local)"
+  [[ -n "${image}" ]] || die "Remote desktop guacd image tag unavailable."
+
+  local runtime_uid
+  local runtime_gid
+  local port
+  local memory_limit
+  local cpu_limit
+  local pids_limit
+  runtime_uid="$(resolve_runtime_owner_uid)"
+  runtime_gid="$(resolve_runtime_owner_gid)"
+  port="$(read_env_value BOREALIS_GUACD_PORT)"
+  port="${port:-4822}"
+  memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_MEMORY_LIMIT)")"
+  cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_CPU_LIMIT)")"
+  pids_limit="$(read_env_value BOREALIS_REMOTE_DESKTOP_GUACD_PIDS_LIMIT)"
+
+  local config_hash
+  config_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_REMOTE_DESKTOP_GUACD_VERSION}" \
+      "namespace=${K3S_NAMESPACE}" \
+      "runtime_uid=${runtime_uid}" \
+      "runtime_gid=${runtime_gid}" \
+      "image=${image}" \
+      "port=${port}" \
+      "memory_limit=${memory_limit}" \
+      "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
+      "timezone=$(host_timezone_value)" \
+      "timezone_host_mounts=host-zoneinfo-v1" \
+      | sha256sum | awk '{print $1}'
+  )"
+  K3S_LAST_REMOTE_DESKTOP_GUACD_CONFIG_HASH="${config_hash}"
+
+  import_k3s_local_image_into_k3s "remote-desktop-guacd" "${image}" "k3s-remote-desktop-guacd"
+  if k3s_manifest_config_current \
+    "${K3S_REMOTE_DESKTOP_GUACD_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/bridge-config-hash" \
+    "deployment/remote-desktop-guacd" \
+    "service/remote-desktop-guacd"; then
+    log_k3s_manifest_unchanged "k3s-remote-desktop-guacd" "${config_hash}"
+    return 0
+  fi
+
+  log_status "k3s-remote-desktop-guacd" "Applying Manifests" "${C_YELLOW}"
+  local manifest_file
+  manifest_file="$(mktemp "${DEPLOY_DIR}/k3s-remote-desktop-guacd.XXXXXX.yaml")"
+  chmod 0600 "${manifest_file}" 2>/dev/null || true
+  render_k3s_remote_desktop_guacd_bridge_manifest \
+    "${image}" \
+    "${config_hash}" \
+    "${runtime_uid}" \
+    "${runtime_gid}" \
+    "${port}" \
+    "${memory_limit}" \
+    "${cpu_limit}" \
+    > "${manifest_file}"
+  if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
+    rm -f "${manifest_file}"
+    log_status "k3s-remote-desktop-guacd" "Apply Failed" "${C_RED}"
+    die "Failed to apply K3s guacd manifest. See ${BUILD_LOG}."
+  fi
+  rm -f "${manifest_file}"
 
   log_status "k3s-remote-desktop-guacd" "Waiting For Rollout" "${C_YELLOW}"
   if ! k3s_kubectl -n "${K3S_NAMESPACE}" rollout status "deployment/remote-desktop-guacd" --timeout=120s >> "${BUILD_LOG}" 2>&1; then
     log_status "k3s-remote-desktop-guacd" "Rollout Failed" "${C_RED}"
     die "K3s guacd bridge rollout failed. See ${BUILD_LOG}."
   fi
+  printf '%s  k3s-remote-desktop-guacd\n' "${config_hash}" > "${K3S_REMOTE_DESKTOP_GUACD_CONFIG_HASH_FILE}"
   log_status "k3s-remote-desktop-guacd" "Ready" "${C_GREEN}"
+}
 
-  printf '%s  k3s-bridge-workloads\n' "${config_hash}" > "${K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE}"
+ensure_k3s_bridge_workloads() {
+  local mode="$1"
+  K3S_LAST_WEBUI_FRONTEND_CONFIG_HASH=""
+  K3S_LAST_REMOTE_DESKTOP_GUACD_CONFIG_HASH=""
+  ensure_k3s_webui_frontend_workload "${mode}"
+  ensure_k3s_remote_desktop_guacd_workload "${mode}"
+  local aggregate_hash
+  aggregate_hash="$(
+    printf '%s\n' \
+      "schema=${K3S_BRIDGE_WORKLOADS_VERSION}" \
+      "webui=${K3S_LAST_WEBUI_FRONTEND_CONFIG_HASH}" \
+      "remote_desktop_guacd=${K3S_LAST_REMOTE_DESKTOP_GUACD_CONFIG_HASH}" \
+      | sha256sum | awk '{print $1}'
+  )"
+  printf '%s  k3s-bridge-workloads\n' "${aggregate_hash}" > "${K3S_BRIDGE_WORKLOADS_CONFIG_HASH_FILE}"
 }
 
 k3s_wireguard_tunnel_pod_name() {
@@ -5758,6 +5968,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: wireguard-cutover
+  annotations:
+    borealis.io/wireguard-config-hash: "${config_hash}"
 type: Opaque
 data:
 $(borealis_runtime_env_secret_data "${RUNTIME_ENV}")
@@ -5904,12 +6116,14 @@ ensure_k3s_wireguard_tunnel() {
   local memory_limit
   local cpu_limit
   local runtime_env_hash
+  local pids_limit
   runtime_gid="$(resolve_runtime_owner_gid)"
   port="$(read_env_value BOREALIS_WIREGUARD_PORT)"
   port="$(format_k3s_tcp_port "${port:-30000}")"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_WIREGUARD_TUNNEL_MEMORY_LIMIT)")"
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_WIREGUARD_TUNNEL_CPU_LIMIT)")"
   runtime_env_hash="$(sha256sum "${RUNTIME_ENV}" | awk '{print $1}')"
+  pids_limit="$(read_env_value BOREALIS_WIREGUARD_TUNNEL_PIDS_LIMIT)"
 
   local config_hash
   config_hash="$(
@@ -5922,6 +6136,7 @@ ensure_k3s_wireguard_tunnel() {
       "port=${port}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
       "runtime_env_hash=${runtime_env_hash}" \
       "runtime_secret=${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
       "wireguard_runtime=${RUNTIME_ROOT}/Services/wireguard-tunnel" \
@@ -5934,6 +6149,15 @@ ensure_k3s_wireguard_tunnel() {
 
   import_k3s_local_image_into_k3s "wireguard-tunnel" "${image}" "k3s-wireguard-tunnel"
   retire_compose_wireguard_tunnel_container
+  if k3s_manifest_config_current \
+    "${K3S_WIREGUARD_TUNNEL_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/wireguard-config-hash" \
+    "secret/${BOREALIS_WIREGUARD_TUNNEL_RUNTIME_SECRET_NAME}" \
+    "deployment/wireguard-tunnel"; then
+    log_k3s_manifest_unchanged "k3s-wireguard-tunnel" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-wireguard-tunnel" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
@@ -5995,6 +6219,8 @@ metadata:
     app.kubernetes.io/part-of: borealis
     app.kubernetes.io/managed-by: Engine.sh
     borealis.io/stage: edge-cutover
+  annotations:
+    borealis.io/edge-config-hash: "${config_hash}"
 type: Opaque
 data:
 $(borealis_traefik_runtime_secret_data)
@@ -6131,11 +6357,13 @@ ensure_k3s_traefik_edge() {
   local health_port
   local memory_limit
   local cpu_limit
+  local pids_limit
   runtime_gid="$(resolve_runtime_owner_gid)"
   health_port="$(read_env_value BOREALIS_TRAEFIK_HEALTH_PORT)"
   health_port="${health_port:-8082}"
   memory_limit="$(format_k3s_memory_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_MEMORY_LIMIT)")"
   cpu_limit="$(format_k3s_cpu_quantity "$(read_env_value BOREALIS_TRAEFIK_EDGE_CPU_LIMIT)")"
+  pids_limit="$(read_env_value BOREALIS_TRAEFIK_EDGE_PIDS_LIMIT)"
 
   local config_hash
   config_hash="$(
@@ -6148,6 +6376,7 @@ ensure_k3s_traefik_edge() {
       "health_port=${health_port}" \
       "memory_limit=${memory_limit}" \
       "cpu_limit=${cpu_limit}" \
+      "pids_limit=${pids_limit}" \
       "runtime=${RUNTIME_ROOT}/Services/traefik-edge" \
       "hostname=$(read_env_value BOREALIS_PUBLIC_HOSTNAME)" \
       "aliases=$(read_env_value BOREALIS_PUBLIC_HOSTNAME_ALIASES)" \
@@ -6167,6 +6396,16 @@ ensure_k3s_traefik_edge() {
   )"
 
   import_k3s_local_image_into_k3s "traefik-edge" "${image}" "k3s-traefik-edge"
+  retire_compose_traefik_edge_container
+  if k3s_manifest_config_current \
+    "${K3S_TRAEFIK_EDGE_CONFIG_HASH_FILE}" \
+    "${config_hash}" \
+    "borealis.io/edge-config-hash" \
+    "secret/${BOREALIS_TRAEFIK_EDGE_RUNTIME_SECRET_NAME}" \
+    "deployment/traefik-edge"; then
+    log_k3s_manifest_unchanged "k3s-traefik-edge" "${config_hash}"
+    return 0
+  fi
 
   log_status "k3s-traefik-edge" "Applying Manifests" "${C_YELLOW}"
   local manifest_file
@@ -6185,7 +6424,6 @@ ensure_k3s_traefik_edge() {
     log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
     die "K3s Traefik edge manifest validation failed. See ${BUILD_LOG}."
   fi
-  retire_compose_traefik_edge_container
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
     log_status "k3s-traefik-edge" "Apply Failed" "${C_RED}"
@@ -8344,54 +8582,50 @@ engine_docker_cleanup_enabled() {
   return 0
 }
 
-prune_stale_site_worker_images() {
-  local active_tag="${IMAGE_TAGS[site-worker]:-}"
+prune_stale_borealis_service_images_for_service() {
+  local service="$1"
+  local active_tag="${IMAGE_TAGS[${service}]:-}"
   [[ -n "${active_tag}" ]] || return 0
   local stale_images=()
   mapfile -t stale_images < <(
     docker image ls \
-      --filter "label=io.borealis.service=site-worker" \
+      --filter "label=io.borealis.service=${service}" \
       --format '{{.Repository}}:{{.Tag}}' \
       | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
   )
   ((${#stale_images[@]} > 0)) || return 0
-  log_status "Docker Cleanup" "Pruning Stale Site Worker Images" "${C_YELLOW}"
+  log_status "Docker Cleanup" "Pruning Stale ${service} Images" "${C_YELLOW}"
+  local failed=0
   local image=""
   for image in "${stale_images[@]}"; do
     local referencing_containers=""
     referencing_containers="$(docker container ls -a --filter "ancestor=${image}" --format '{{.ID}}' 2>>"${BUILD_LOG}" || true)"
     if [[ -n "${referencing_containers}" ]]; then
-      printf '[%s] Retaining stale site-worker image %s because container(s) still reference it: %s\n' \
+      printf '[%s] Retaining stale %s image %s because container(s) still reference it: %s\n' \
         "$(date +%FT%T)" \
+        "${service}" \
         "${image}" \
         "$(printf '%s' "${referencing_containers}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')" \
         >> "${BUILD_LOG}"
       continue
     fi
     if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
-      printf '[%s] Failed to remove stale site-worker image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
+      failed=1
+      printf '[%s] Failed to remove stale %s image %s\n' "$(date +%FT%T)" "${service}" "${image}" >> "${BUILD_LOG}"
     fi
   done
+  return "${failed}"
 }
 
-prune_stale_borealis_operator_images() {
-  local active_tag="${IMAGE_TAGS[borealis-operator]:-}"
-  [[ -n "${active_tag}" ]] || return 0
-  local stale_images=()
-  mapfile -t stale_images < <(
-    docker image ls \
-      --filter "label=io.borealis.service=borealis-operator" \
-      --format '{{.Repository}}:{{.Tag}}' \
-      | awk -v active="${active_tag}" 'NF && $0 != active && $0 != "<none>:<none>" {print}'
-  )
-  ((${#stale_images[@]} > 0)) || return 0
-  log_status "Docker Cleanup" "Pruning Stale Operator Images" "${C_YELLOW}"
-  local image=""
-  for image in "${stale_images[@]}"; do
-    if ! docker image rm "${image}" >> "${BUILD_LOG}" 2>&1; then
-      printf '[%s] Failed to remove stale borealis-operator image %s\n' "$(date +%FT%T)" "${image}" >> "${BUILD_LOG}"
+prune_stale_borealis_service_images() {
+  local failed=0
+  local service=""
+  for service in "${BUILD_ROLES[@]}"; do
+    if ! prune_stale_borealis_service_images_for_service "${service}"; then
+      failed=1
     fi
   done
+  return "${failed}"
 }
 
 restore_required_engine_images() {
@@ -8505,13 +8739,14 @@ prune_engine_docker_storage() {
 
   local cleanup_failed=0
   log_status "Docker Cleanup" "Pruning Inactive Container Images" "${C_YELLOW}"
-  if ! docker image prune -a --force --filter "label!=io.borealis.service=site-worker" --filter "label!=io.borealis.service=borealis-operator" >> "${BUILD_LOG}" 2>&1; then
+  if ! docker image prune -a --force --filter "label!=io.borealis.service" >> "${BUILD_LOG}" 2>&1; then
     cleanup_failed=1
     log_status "Docker Cleanup" "Image Prune Failed" "${C_RED}"
   fi
 
-  prune_stale_site_worker_images
-  prune_stale_borealis_operator_images
+  if ! prune_stale_borealis_service_images; then
+    cleanup_failed=1
+  fi
   restore_required_engine_images "${mode}"
 
   if ! docker builder prune --all --force >> "${BUILD_LOG}" 2>&1; then

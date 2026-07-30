@@ -7,6 +7,7 @@ You can follow the instructions on this page to install the Borealis Engine onto
 
     - Use a Linux server for the Engine. Ubuntu Server 24.04 LTS or newer is the preferred baseline.
     - While you can use something else like Fedora/Rocky Linux, it has not been tested as extensively yet.
+    - Run `Engine.sh` with `sudo` unless the shell user can access `/var/run/docker.sock`.
 
     **DNS Records & Certificate Considerations**:
 
@@ -217,9 +218,9 @@ sudo iptables -C INPUT -p tcp --dport 6443 -j BOREALIS-K3S-API
 ```
 
 ### Docker Storage Cleanup
-Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive Docker images and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
+Every Engine deploy cleans Docker storage after the stack has reconciled successfully. Borealis prunes inactive non-Borealis Docker images, removes stale Borealis service tags, and clears Docker builder cache while keeping timestamped per-service Buildx cache exports for 7 days under `Engine/Deploy/cache/buildkit/<service>/`. Each retained export is a complete Buildx cache snapshot from that service build, so source-only rebuilds can reuse dependency layers without letting cache directories grow forever.
 
-`site-worker` images are handled carefully because K3s site-worker pods may need the current image after Docker build cleanup. Borealis keeps the current site-worker image available for K3s import and removes stale site-worker tags only when no Docker container still references them.
+Borealis service images are handled carefully because K3s pods may need current images after Docker build cleanup. Borealis keeps current `io.borealis.service` images available for K3s import and removes stale service tags only when no Docker container still references them.
 
 !!! warning "Shared Docker Hosts"
     Engine hosts should be dedicated to Borealis. Docker cleanup removes unused images and build cache from the host, which may affect unrelated Docker workloads if you co-host them. Set `BOREALIS_SKIP_DOCKER_PRUNE=1` before deploy only when you intentionally need to preserve unused Docker images or build cache.
@@ -270,6 +271,7 @@ After deployment finishes:
     - [Architecture Overview](../Reference/architecture-overview.md)
     - [Engine Runtime](../Reference/Core%20Runtimes/engine-runtime.md)
     - [Docker Stack Breakdown](../Reference/Core%20Runtimes/Stack_Breakdown.md)
+    - [WebUI HMR Development](webui-hmr-development.md)
     - [Agent Runtime](../Reference/Core%20Runtimes/agent-runtime.md)
     - [Security Whitepaper](../Reference/security-whitepaper.md)
     - [Engine Log Access](../Using%20the%20Platform/engine-log-management.md)
@@ -282,7 +284,7 @@ After deployment finishes:
     - Agent source code lives in `Data/Agent/`.
     - Runtime copies are staged to `Engine/` and `Agent/` every launch; these are disposable.
     - Engine container source lives in `Data/Engine/Containers/`; generated runtime state lives under `Engine/Deploy/` and sparse service-owned folders under `Engine/Services/<role>/`.
-    - Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For WebUI HMR testing, edit `Data/Engine/Containers/webui-frontend/data/web-interface/`, then run `Engine.sh --network-mode public|local deploy dev` or `Engine.sh --network-mode public|local --service webui-frontend rebuild dev` to sync the HMR runtime copy.
+    - Edit durable source under `Data/` and re-run the appropriate launcher/build: `Engine.sh` for Linux Engine first install and redeploys, `Data/Agent/build-agent.sh` for Go Agent binaries, and `Agent.exe` for installed Agent service control. For WebUI HMR testing, use [WebUI HMR Development](webui-hmr-development.md).
 
     ### Launch mechanics
 
@@ -295,7 +297,7 @@ After deployment finishes:
     - Stage 2 deploys `borealis-operator` into the `borealis` namespace as a single-replica Deployment, ClusterIP Service, Secret, ServiceAccount, Role, and RoleBinding.
     - Stage 3 keeps runtime services Kubernetes-blind by routing lifecycle work through `borealis-operator`. Its API is `POST /v1/command` with `X-Borealis-Operator-Token`.
     - Operator status verbs are `GetClusterSummary`, `ListWorkloads`, `GetWorkloadStatus`, and `ListSiteWorkers`. Operator lifecycle verbs are `RolloutKnownWorkload`, `RestartKnownWorkload`, `ScaleKnownWorkload`, `LaunchSiteWorker`, and `RetireSiteWorker`.
-    - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. `Engine/Deploy/k3s-bridge-workloads.sha256` records bridge manifest inputs. Scoped `webui-frontend` and `remote-desktop-guacd` rebuilds reconcile the K3s baseline, operator, and workload manifests after image refresh.
+    - Stage 4 deploys fixed-template `webui-frontend` and `remote-desktop-guacd` bridge workloads into K3s with ClusterIP Services only. `Engine/Deploy/k3s-webui-frontend.sha256` and `Engine/Deploy/k3s-remote-desktop-guacd.sha256` record separate manifest inputs so a WebUI-only image or dev-mode change does not reconcile guacd. `Engine/Deploy/k3s-bridge-workloads.sha256` remains an aggregate bridge record.
     - Stage 7 made K3s `api-backend` the API traffic owner. It uses `Engine/Deploy/k3s-api-backend.sha256`, the `api-backend.borealis.svc.cluster.local:5001` ClusterIP Service, narrow API cache/config/logs/secrets hostPath mounts, fixed Traefik/WireGuard hostPath mounts, generated Secret env mirroring, and `BOREALIS_API_BACKGROUND_LOOPS=1`. `Engine.sh` removes stale Compose API containers during deploy.
     - Stage 6 WebUI cutover changes Traefik's core WebUI upstream to the K3s `webui-frontend` ClusterIP by writing `BOREALIS_WEBUI_TRAFFIC_OWNER=k3s` and `BOREALIS_WEBUI_UPSTREAM_HOST=<cluster-ip>` into `Engine/Deploy/compose.env`. Production and dev WebUI traffic both use this K3s route. `Engine.sh` removes stale Compose WebUI containers during deploy.
     - Stage 8 made K3s `job-scheduler` the scheduler traffic owner. It runs one `Recreate` Deployment, owns scheduled ticks, service-action queueing, and K3s site-worker reconciliation, and removes stale Compose scheduler containers during deploy.
