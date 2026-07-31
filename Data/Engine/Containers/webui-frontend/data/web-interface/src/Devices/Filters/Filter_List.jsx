@@ -8,7 +8,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   LinearProgress,
   Stack,
   Tooltip,
@@ -28,6 +27,8 @@ import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 
 import PageBodyFrame from "../../PageBodyFrame.jsx";
+import { buildRowContextMenuColumnDef } from "../../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../../Row_Context_Menu.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BUTTON_SX,
@@ -311,6 +312,7 @@ export default function DeviceFilterList({ refreshToken }) {
   const [error, setError] = useState(() => String(loaderData?.initialError || ""));
   const [actionError, setActionError] = useState("");
   const [jobsDialog, setJobsDialog] = useState({ open: false, jobs: [], title: "" });
+  const [filterContextMenu, setFilterContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const selectedSiteId = useMemo(
     () => String(searchParams.get("site") || "").trim(),
     [searchParams]
@@ -515,6 +517,106 @@ export default function DeviceFilterList({ refreshToken }) {
     });
   }, []);
 
+  const openFilterContextMenu = useCallback((event, record, rowNode = null) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!record) return;
+    if (rowNode && !rowNode.isSelected?.()) {
+      rowNode.setSelected?.(true, true);
+    }
+    setFilterContextMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row: record,
+    });
+  }, []);
+
+  const closeFilterContextMenu = useCallback(() => {
+    setFilterContextMenu({ open: false, top: 0, left: 0, row: null });
+  }, []);
+
+  const contextFilter = filterContextMenu.row || null;
+  const contextFilterDeviceCount = Number(contextFilter?.matching_device_count || 0);
+  const contextFilterJobCount = Number(contextFilter?.usage?.job_count || 0);
+  const contextFilterSubtitle = contextFilter
+    ? `${scopeSummary(contextFilter)} - ${contextFilterDeviceCount.toLocaleString()} device${contextFilterDeviceCount === 1 ? "" : "s"}`
+    : "Device filter";
+  const filterContextActions = useMemo(
+    () => [
+      {
+        id: "view-devices",
+        label: "View Devices",
+        icon: LaunchIcon,
+        group: "primary",
+        disabled: !contextFilter,
+        disabledReason: !contextFilter ? "Select a filter first." : "",
+        description: "Open Device List with this saved filter preview.",
+        onClick: () => handleViewDevices(contextFilter),
+      },
+      {
+        id: "edit-filter",
+        label: "Edit Filter",
+        icon: HeaderIcon,
+        group: "primary",
+        disabled: !contextFilter,
+        disabledReason: !contextFilter ? "Select a filter first." : "",
+        description: "Open filter criteria, scope, and lifecycle settings.",
+        onClick: () => handleEditFilter(contextFilter),
+      },
+      {
+        id: "clone-filter",
+        label: "Clone Filter",
+        icon: CloneIcon,
+        group: "organize",
+        disabled: !contextFilter,
+        disabledReason: !contextFilter ? "Select a filter first." : "",
+        description: "Create a copy that can be edited independently.",
+        onClick: () => {
+          void handleClone(contextFilter);
+        },
+      },
+      {
+        id: "archive-filter",
+        label: contextFilter?.archived ? "Unarchive Filter" : "Archive Filter",
+        icon: contextFilter?.archived ? UnarchiveIcon : ArchiveIcon,
+        group: "organize",
+        disabled: !contextFilter,
+        disabledReason: !contextFilter ? "Select a filter first." : "",
+        description: contextFilter?.archived
+          ? "Return this filter to active use."
+          : "Hide this filter from active lists without deleting it.",
+        onClick: () => {
+          void handleArchiveToggle(contextFilter);
+        },
+      },
+      {
+        id: "delete-filter",
+        label: "Delete Filter",
+        icon: DeleteIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: !contextFilter,
+        disabledReason: !contextFilter ? "Select a filter first." : "",
+        description: contextFilterJobCount
+          ? `${contextFilterJobCount.toLocaleString()} scheduled job${contextFilterJobCount === 1 ? "" : "s"} reference this filter.`
+          : "Permanently remove this saved filter.",
+        onClick: () => {
+          void handleDelete(contextFilter);
+        },
+      },
+    ],
+    [
+      contextFilter,
+      contextFilterJobCount,
+      handleArchiveToggle,
+      handleClone,
+      handleDelete,
+      handleEditFilter,
+      handleViewDevices,
+    ]
+  );
+
   const columnDefs = useMemo(
     () => [
       {
@@ -622,42 +724,22 @@ export default function DeviceFilterList({ refreshToken }) {
         valueFormatter: (params) => formatTimestamp(params.value),
       },
       {
-        field: "actions",
+        field: "__actions__",
         headerName: "",
-        minWidth: 150,
-        flex: 1.2,
-        sortable: false,
-        filter: false,
-        cellRenderer: (params) => {
-          const record = params.data;
-          return (
-            <Stack direction="row" spacing={0.5} sx={{ width: "100%", justifyContent: "flex-end" }}>
-              <Tooltip title="View Devices">
-                <IconButton size="small" onClick={() => handleViewDevices(record)}>
-                  <LaunchIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Clone">
-                <IconButton size="small" onClick={() => handleClone(record)}>
-                  <CloneIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title={record?.archived ? "Unarchive" : "Archive"}>
-                <IconButton size="small" onClick={() => handleArchiveToggle(record)}>
-                  {record?.archived ? <UnarchiveIcon fontSize="small" /> : <ArchiveIcon fontSize="small" />}
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Delete">
-                <IconButton size="small" onClick={() => handleDelete(record)} sx={{ color: "#fb7185" }}>
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            </Stack>
-          );
-        },
+        ...buildRowContextMenuColumnDef(openFilterContextMenu, { tooltip: "Filter Actions" }),
       },
     ],
-    [handleArchiveToggle, handleClone, handleDelete, handleEditFilter, handleViewDevices, openJobs]
+    [handleEditFilter, openFilterContextMenu, openJobs]
+  );
+
+  const rowSelection = useMemo(
+    () => ({
+      mode: "singleRow",
+      checkboxes: false,
+      headerCheckbox: false,
+      enableClickSelection: true,
+    }),
+    []
   );
 
   const defaultColDef = useMemo(
@@ -711,7 +793,10 @@ export default function DeviceFilterList({ refreshToken }) {
               rowData={filters}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
+              rowSelection={rowSelection}
               suppressCellFocus
+              suppressContextMenu
+              preventDefaultOnContextMenu
               animateRows
               pagination
               paginationPageSize={20}
@@ -721,6 +806,7 @@ export default function DeviceFilterList({ refreshToken }) {
                 autoSize();
               }}
               getRowId={(params) => String(params.data?.id || "")}
+              onCellContextMenu={(params) => openFilterContextMenu(params.event, params.data, params.node)}
               theme={gridTheme}
               style={{
                 width: "100%",
@@ -738,6 +824,15 @@ export default function DeviceFilterList({ refreshToken }) {
         title={jobsDialog.title}
         onClose={() => setJobsDialog({ open: false, jobs: [], title: "" })}
         onOpenJob={handleOpenJob}
+      />
+      <RowContextMenu
+        open={Boolean(filterContextMenu.open)}
+        onClose={closeFilterContextMenu}
+        position={filterContextMenu.open ? { top: filterContextMenu.top, left: filterContextMenu.left } : null}
+        headerIcon={HeaderIcon}
+        title={contextFilter?.name || "Filter Actions"}
+        subtitle={contextFilterSubtitle}
+        actions={filterContextActions}
       />
     </>
   );
