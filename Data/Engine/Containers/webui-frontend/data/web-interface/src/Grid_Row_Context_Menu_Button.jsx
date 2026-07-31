@@ -13,7 +13,7 @@ const ROW_CONTEXT_MENU_CELL_SX = {
   justifyContent: "center",
 };
 
-const ROW_CONTEXT_MENU_BUTTON_SX = {
+export const ROW_CONTEXT_MENU_BUTTON_SX = {
   width: 30,
   height: 30,
   borderRadius: "50%",

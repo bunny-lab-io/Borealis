@@ -25,6 +25,10 @@ import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
+import {
+  ROW_CONTEXT_MENU_BUTTON_SX,
+  ROW_CONTEXT_MENU_COLUMN_WIDTH,
+} from "../Grid_Row_Context_Menu_Button.jsx";
 import AddDevice from "./Add_Device.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
@@ -2319,7 +2323,7 @@ export default function DeviceList({
         openMenu(event, row);
       };
       return (
-        <IconButton size="small" onClick={handleClick} sx={{ color: "#ccc" }}>
+        <IconButton size="small" onClick={handleClick} sx={ROW_CONTEXT_MENU_BUTTON_SX}>
           <MoreVertIcon fontSize="small" />
         </IconButton>
       );
@@ -2626,8 +2630,9 @@ export default function DeviceList({
       {
         headerName: "",
         field: "__actions__",
-        width: 64,
-        maxWidth: 64,
+        width: ROW_CONTEXT_MENU_COLUMN_WIDTH,
+        minWidth: ROW_CONTEXT_MENU_COLUMN_WIDTH,
+        maxWidth: ROW_CONTEXT_MENU_COLUMN_WIDTH,
         resizable: false,
         sortable: false,
         suppressHeaderMenuButton: true,
@@ -2818,7 +2823,7 @@ export default function DeviceList({
                             setViewActionAnchor(e.currentTarget);
                             setViewActionTarget(v);
                           }}
-                          sx={{ color: "#ccc" }}
+                          sx={ROW_CONTEXT_MENU_BUTTON_SX}
                         >
                           <MoreVertIcon fontSize="small" />
                         </IconButton>
