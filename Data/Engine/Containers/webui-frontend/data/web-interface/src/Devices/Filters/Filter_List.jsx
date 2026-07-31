@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useLoaderData, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
@@ -69,16 +69,6 @@ const gridTheme = themeQuartz.withParams({
   foregroundColor: "#f4f7ff",
   headerFontSize: 13,
 });
-
-const AUTO_SIZE_COLUMNS = [
-  "name",
-  "description",
-  "site_mode",
-  "matching_device_count",
-  "usage",
-  "last_edited_by",
-  "updated_at",
-];
 
 const GRID_WRAPPER_SX = {
   width: "100%",
@@ -303,7 +293,6 @@ export default function DeviceFilterList({ refreshToken }) {
   const loaderData = useLoaderData();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const gridRef = useRef(null);
   const [tab, setTab] = useState("active");
   const [filterCollections, setFilterCollections] = useState(
     () => loaderData?.filterCollections || { active: [], archived: [] }
@@ -433,22 +422,6 @@ export default function DeviceFilterList({ refreshToken }) {
     Icon: PAGE_ICON,
     actions: pageHeaderActions,
   });
-
-  const autoSize = useCallback(() => {
-    const api = gridRef.current;
-    if (!api || !filters.length) return;
-    requestAnimationFrame(() => {
-      try {
-        api.autoSizeColumns(AUTO_SIZE_COLUMNS, true);
-      } catch {
-        /* ignore */
-      }
-    });
-  }, [filters.length]);
-
-  useEffect(() => {
-    autoSize();
-  }, [autoSize]);
 
   const performAction = useCallback(
     async (path, options = {}) => {
@@ -622,8 +595,8 @@ export default function DeviceFilterList({ refreshToken }) {
       {
         field: "name",
         headerName: "Filter Name",
-        minWidth: 350,
-        flex: 1.4,
+        minWidth: 260,
+        flex: 6,
         cellRenderer: (params) => (
           <Box
             component="a"
@@ -651,15 +624,15 @@ export default function DeviceFilterList({ refreshToken }) {
       {
         field: "description",
         headerName: "Description",
-        minWidth: 220,
-        flex: 1.2,
+        minWidth: 260,
+        flex: 6,
         valueFormatter: (params) => params.value || "—",
       },
       {
         field: "site_mode",
         headerName: "Scope",
-        minWidth: 120,
-        flex: 1,
+        minWidth: 130,
+        flex: 1.3,
         cellRenderer: (params) => (
           <Tooltip title={scopeSummary(params.data)}>
             <Box sx={{ display: "inline-flex", alignItems: "center" }}>
@@ -672,15 +645,15 @@ export default function DeviceFilterList({ refreshToken }) {
         field: "matching_device_count",
         headerName: "Devices",
         minWidth: 110,
-        flex: 0.8,
+        flex: 0.9,
         valueFormatter: (params) =>
           typeof params.value === "number" ? params.value.toLocaleString() : "0",
       },
       {
         field: "usage",
         headerName: "Jobs Using this Filter",
-        minWidth: 170,
-        flex: 1,
+        minWidth: 165,
+        flex: 1.5,
         sortable: false,
         filter: false,
         cellRenderer: (params) => {
@@ -713,14 +686,14 @@ export default function DeviceFilterList({ refreshToken }) {
         field: "last_edited_by",
         headerName: "Last Edited By",
         minWidth: 150,
-        flex: 0.9,
+        flex: 1.1,
         valueFormatter: (params) => params.value || "Unknown",
       },
       {
         field: "updated_at",
         headerName: "Last Updated",
-        minWidth: 180,
-        flex: 1,
+        minWidth: 170,
+        flex: 1.2,
         valueFormatter: (params) => formatTimestamp(params.value),
       },
       {
@@ -801,10 +774,6 @@ export default function DeviceFilterList({ refreshToken }) {
               pagination
               paginationPageSize={20}
               paginationPageSizeSelector={[20, 50, 100]}
-              onGridReady={(params) => {
-                gridRef.current = params.api;
-                autoSize();
-              }}
               getRowId={(params) => String(params.data?.id || "")}
               onCellContextMenu={(params) => openFilterContextMenu(params.event, params.data, params.node)}
               theme={gridTheme}

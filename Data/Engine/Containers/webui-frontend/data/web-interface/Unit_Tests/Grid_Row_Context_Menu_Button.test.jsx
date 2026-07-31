@@ -14,6 +14,7 @@ describe("Grid row context menu button", () => {
     expect(columnDef.colId).toBe(ROW_CONTEXT_MENU_COL_ID);
     expect(columnDef.pinned).toBe("right");
     expect(columnDef.width).toBe(ROW_CONTEXT_MENU_COLUMN_WIDTH);
+    expect(columnDef.flex).toBe(0);
     expect(columnDef.sortable).toBe(false);
     expect(columnDef.filter).toBe(false);
     expect(columnDef.suppressHeaderContextMenu).toBe(true);

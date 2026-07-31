@@ -106,6 +106,7 @@ export function buildRowContextMenuColumnDef(onOpenContextMenu, options = {}) {
     width,
     minWidth: width,
     maxWidth: width,
+    flex: 0,
     pinned: "right",
     lockPinned: true,
     lockPosition: true,
