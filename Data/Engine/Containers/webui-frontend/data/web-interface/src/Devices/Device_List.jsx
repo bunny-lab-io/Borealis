@@ -90,9 +90,9 @@ const MAGIC_UI = {
 const PAGE_ICON = DevicesOtherIcon;
 const DEFAULT_VISIBLE_COLUMN_IDS = [
   "status",
+  "agentChannelBranch",
   "site",
   "hostname",
-  "agentChannelBranch",
   "description",
   "lastUser",
   "type",
