@@ -82,6 +82,7 @@ import FindReplaceRoundedIcon from "@mui/icons-material/FindReplaceRounded";
 import MoreVertRoundedIcon from "@mui/icons-material/MoreVertRounded";
 import SearchRoundedIcon from "@mui/icons-material/SearchRounded";
 import UnfoldMoreRoundedIcon from "@mui/icons-material/UnfoldMoreRounded";
+import { buildRowContextMenuColumnDef } from "../../Grid_Row_Context_Menu_Button.jsx";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -3325,6 +3326,13 @@ export default function RemoteFileManagement({ device }) {
     [handleOpenContextMenuAtPointer]
   );
 
+  const handleRowContextMenuButton = useCallback(
+    (event, row, node, params = {}) => {
+      handleGridCellContextMenu({ ...params, event, data: row, node, api: params?.api || gridRef.current?.api });
+    },
+    [handleGridCellContextMenu]
+  );
+
   const handleGridShellContextMenu = useCallback(
     (event) => {
       if (event?.target?.closest?.(".ag-cell")) return;
@@ -3859,8 +3867,9 @@ export default function RemoteFileManagement({ device }) {
         minWidth: 170,
         valueFormatter: (params) => formatModifiedAt(params?.value),
       },
+      buildRowContextMenuColumnDef(handleRowContextMenuButton, { tooltip: "File Row Actions" }),
     ],
-    [currentPath, platform]
+    [currentPath, handleRowContextMenuButton, platform]
   );
 
   const gridContext = useMemo(

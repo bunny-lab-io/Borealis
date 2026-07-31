@@ -33,6 +33,7 @@ import SettingsEthernetRoundedIcon from "@mui/icons-material/SettingsEthernetRou
 import SyncIcon from "@mui/icons-material/Sync";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import {
   DIALOG_ACTIONS_SX,
@@ -960,7 +961,8 @@ export default function DirectoryServices() {
       minWidth: 180,
       valueFormatter: (params) => formatTs(params.value),
     },
-  ], []);
+    buildRowContextMenuColumnDef(openContextMenu, { tooltip: "Credential Provider Actions" }),
+  ], [openContextMenu]);
 
   const availableSitesById = useMemo(() => {
     const byId = new Map();

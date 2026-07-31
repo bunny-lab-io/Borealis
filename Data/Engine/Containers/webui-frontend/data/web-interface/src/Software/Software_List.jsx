@@ -25,6 +25,7 @@ import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import { AgGridReact } from "ag-grid-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BUTTON_SX,
@@ -1017,6 +1018,7 @@ export default function SoftwareList() {
           <ActionCell row={params.data} busyKey={busyKey} onUninstall={(row) => setConfirmRow(row)} />
         ),
       },
+      buildRowContextMenuColumnDef(openContextMenu, { tooltip: "Software Actions" }),
     ],
     [busyKey, openContextMenu, openInstalledDevices]
   );

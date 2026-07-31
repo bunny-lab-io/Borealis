@@ -30,6 +30,7 @@ import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog, NewWorkflowDialog } from "../Dialogs";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BODY_TEXT_SX,
@@ -926,6 +927,13 @@ export default function AssemblyList() {
     });
   }, []);
 
+  const handleRowContextMenuButton = useCallback(
+    (event, row, node, params = {}) => {
+      handleCellContextMenu({ ...params, event, data: row, node });
+    },
+    [handleCellContextMenu],
+  );
+
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
   const startRename = useCallback(() => {
@@ -1513,8 +1521,9 @@ export default function AssemblyList() {
         cellClass: "auto-col-tight",
         cellRenderer: OfficialUpdateCellRenderer,
       },
+      buildRowContextMenuColumnDef(handleRowContextMenuButton, { tooltip: "Assembly Actions" }),
     ],
-    [compareAssemblyNames],
+    [compareAssemblyNames, handleRowContextMenuButton],
   );
 
   const defaultColDef = useMemo(
