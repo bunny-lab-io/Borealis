@@ -347,6 +347,56 @@ func SaveWithWriter(path string, writer string, cfg *AgentConfig) error {
 	})
 }
 
+func PruneStaleTempFiles(configPath string, minAge time.Duration) (int, error) {
+	cleanPath := strings.TrimSpace(configPath)
+	if cleanPath == "" {
+		return 0, errors.New("config path missing")
+	}
+	parent := filepath.Dir(cleanPath)
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if minAge < 0 {
+		minAge = 0
+	}
+	cutoff := time.Now().Add(-minAge)
+	removed := 0
+	var errs []error
+	for _, entry := range entries {
+		name := entry.Name()
+		if !isAgentTempFileName(name) {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			if !errors.Is(infoErr, os.ErrNotExist) {
+				errs = append(errs, fmt.Errorf("inspect %s: %w", name, infoErr))
+			}
+			continue
+		}
+		if info.IsDir() || info.ModTime().After(cutoff) {
+			continue
+		}
+		if removeErr := os.Remove(filepath.Join(parent, name)); removeErr != nil {
+			if !errors.Is(removeErr, os.ErrNotExist) {
+				errs = append(errs, fmt.Errorf("remove %s: %w", name, removeErr))
+			}
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
+}
+
+func isAgentTempFileName(name string) bool {
+	return (strings.HasPrefix(name, ".config-") || strings.HasPrefix(name, ".metadata-queue-")) &&
+		strings.HasSuffix(name, ".tmp")
+}
+
 func saveUnlocked(path string, cfg *AgentConfig, writer string) error {
 	if cfg == nil {
 		return errors.New("nil config")

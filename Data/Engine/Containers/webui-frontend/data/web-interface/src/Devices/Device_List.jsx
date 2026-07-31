@@ -21,6 +21,7 @@ import AddIcon from "@mui/icons-material/Add";
 import CachedIcon from "@mui/icons-material/Cached";
 import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
@@ -38,6 +39,12 @@ import {
 } from "../app/routes/routeData.js";
 import { APP_PATHS } from "../app/routes/paths.js";
 import QuickJobDialog from "../Assemblies/Quick_Job_Dialog.jsx";
+import AgentBranchChannelDialog, {
+  fetchAgentBranchRows,
+  normalizeAgentBranch,
+  normalizeAgentReleaseChannel,
+} from "../AgentBranchChannelDialog.jsx";
+import { DEVICE_DETAILS_GRID_THEME } from "./Tabs/Shared.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -81,7 +88,17 @@ const MAGIC_UI = {
 };
 
 const PAGE_ICON = DevicesOtherIcon;
-const DEFAULT_VISIBLE_COLUMN_IDS = ["status", "site", "hostname", "description", "lastUser", "type", "internalIp", "os"];
+const DEFAULT_VISIBLE_COLUMN_IDS = [
+  "status",
+  "agentChannelBranch",
+  "site",
+  "hostname",
+  "description",
+  "lastUser",
+  "type",
+  "internalIp",
+  "os",
+];
 const DEVICE_METADATA_COLUMN_PREFIX = "metadataField";
 const METADATA_FIELD_COUNT = 500;
 const DEVICE_LIST_COLUMN_GROUP_DEFINITIONS = [
@@ -89,6 +106,11 @@ const DEVICE_LIST_COLUMN_GROUP_DEFINITIONS = [
     id: "deviceSpecs",
     label: "Device Specs",
     columnIds: ["hostname", "os", "type", "uptime", "memory", "storage", "cpu", "description", "software"],
+  },
+  {
+    id: "agent",
+    label: "Agent",
+    columnIds: ["agentChannelBranch", "agentId", "agentGuid"],
   },
   {
     id: "location",
@@ -272,6 +294,92 @@ const resolveDevicePurgeGuid = (device) =>
 
 const getDeviceDisplayLabel = (device) =>
   String(device?.hostname || device?.summary?.hostname || device?.agentGuid || device?.guid || "Unknown Device").trim();
+
+function toTitleCaseToken(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+}
+
+export function getDeviceAgentChannelBranch(row = {}) {
+  const summary = row?.summary && typeof row.summary === "object" ? row.summary : {};
+  const configuredChannel = String(
+    row?.agentReleaseChannel ||
+      row?.agent_release_channel ||
+      summary.agent_release_channel ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+  const rawEffectiveChannel = String(
+    configuredChannel ||
+      row?.agentReleaseChannelEffective ||
+      row?.agent_release_channel_effective ||
+      summary.agent_release_channel_effective ||
+      row?.agentReleaseChannelOverride ||
+      row?.agent_release_channel_override ||
+      summary.agent_release_channel_override ||
+      "stable"
+  )
+    .trim()
+    .toLowerCase();
+  const channel = normalizeAgentReleaseChannel(rawEffectiveChannel || "stable");
+  const branch = normalizeAgentBranch(
+    channel,
+    row?.agentBranch ||
+      row?.agent_branch ||
+      summary.agent_branch ||
+      ""
+  );
+  return { channel, branch };
+}
+
+export function formatDeviceAgentChannelBranch(row = {}) {
+  const { channel, branch } = getDeviceAgentChannelBranch(row);
+  if (channel === "stable") return toTitleCaseToken(channel);
+  return `${toTitleCaseToken(channel)} / ${branch}`;
+}
+
+function withDeviceAgentChannelBranch(row, channel, branch) {
+  if (!row || typeof row !== "object") return row;
+  const normalizedChannel = normalizeAgentReleaseChannel(channel);
+  const normalizedBranch = normalizeAgentBranch(normalizedChannel, branch);
+  const nextSummary = {
+    ...(row.summary || {}),
+    agent_release_channel_override: normalizedChannel,
+    agent_release_channel: normalizedChannel,
+    agent_release_channel_effective: normalizedChannel,
+    agent_branch: normalizedBranch,
+  };
+  const nextDetails = row.details && typeof row.details === "object"
+    ? {
+        ...row.details,
+        summary:
+          row.details.summary && typeof row.details.summary === "object"
+            ? {
+                ...row.details.summary,
+                agent_release_channel_override: normalizedChannel,
+                agent_release_channel: normalizedChannel,
+                agent_release_channel_effective: normalizedChannel,
+                agent_branch: normalizedBranch,
+              }
+            : row.details.summary,
+      }
+    : row.details;
+  return {
+    ...row,
+    agentReleaseChannelOverride: normalizedChannel,
+    agentReleaseChannel: normalizedChannel,
+    agentReleaseChannelEffective: normalizedChannel,
+    agentBranch: normalizedBranch,
+    agentChannelBranch: formatDeviceAgentChannelBranch({
+      agentReleaseChannel: normalizedChannel,
+      agentBranch: normalizedBranch,
+    }),
+    summary: nextSummary,
+    details: nextDetails,
+  };
+}
 
 const alphaSortCollator = new Intl.Collator(undefined, {
   numeric: true,
@@ -646,6 +754,38 @@ export function normalizeDeviceCollection(
     const connectionLabel =
       connectionType === "ssh" ? "SSH" : connectionType === "winrm" ? "WinRM" : "";
     const connectionEndpoint = (device.connection_endpoint || summary.connection_endpoint || "").trim();
+    const agentReleaseChannelOverride = String(
+      device.agent_release_channel_override ||
+        summary.agent_release_channel_override ||
+        ""
+    ).trim();
+    const configuredReleaseChannel = String(
+      device.agent_release_channel ||
+        summary.agent_release_channel ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
+    const rawEffectiveChannel = String(
+      configuredReleaseChannel ||
+        device.agent_release_channel_effective ||
+        summary.agent_release_channel_effective ||
+        agentReleaseChannelOverride ||
+        "stable"
+    )
+      .trim()
+      .toLowerCase();
+    const agentReleaseChannel = normalizeAgentReleaseChannel(rawEffectiveChannel || "stable");
+    const agentBranch = normalizeAgentBranch(
+      agentReleaseChannel,
+      device.agent_branch ||
+        summary.agent_branch ||
+        ""
+    );
+    const agentChannelBranch = formatDeviceAgentChannelBranch({
+      agentReleaseChannel,
+      agentBranch,
+    });
 
     const memoryList = Array.isArray(device.memory) ? device.memory : [];
     const networkList = Array.isArray(device.network) ? device.network : [];
@@ -686,6 +826,11 @@ export function normalizeDeviceCollection(
       createdIso: device.created_at_iso || "",
       agentGuid: guidRaw,
       agentId,
+      agentReleaseChannelOverride,
+      agentReleaseChannel,
+      agentReleaseChannelEffective: agentReleaseChannel,
+      agentBranch,
+      agentChannelBranch,
       domain,
       internalIp,
       externalIp,
@@ -814,6 +959,16 @@ export default function DeviceList({
   const [quickJobOpen, setQuickJobOpen] = useState(false);
   const [quickJobHostnames, setQuickJobHostnames] = useState([]);
   const [quickJobTargetRecords, setQuickJobTargetRecords] = useState([]);
+  const [agentBranchChannelDialogOpen, setAgentBranchChannelDialogOpen] = useState(false);
+  const [agentBranchChannelTargets, setAgentBranchChannelTargets] = useState([]);
+  const [agentBranchChannelSkippedCount, setAgentBranchChannelSkippedCount] = useState(0);
+  const [agentBranchRows, setAgentBranchRows] = useState([]);
+  const [agentBranchesLoading, setAgentBranchesLoading] = useState(false);
+  const [agentBranchLoadError, setAgentBranchLoadError] = useState("");
+  const [draftAgentChannel, setDraftAgentChannel] = useState("stable");
+  const [draftAgentBranch, setDraftAgentBranch] = useState("main");
+  const [agentBranchChannelMixed, setAgentBranchChannelMixed] = useState(false);
+  const [agentBranchChannelSaving, setAgentBranchChannelSaving] = useState(false);
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
   const [addDeviceType, setAddDeviceType] = useState(null);
   const handleSelectDevice = useCallback(
@@ -909,6 +1064,7 @@ export default function DeviceList({
       lastSeen: "Last Seen",
       agentId: "Agent ID",
       agentGuid: "Agent GUID",
+      agentChannelBranch: "Channel / Branch",
       domain: "Domain",
       uptime: "Uptime",
       memory: "Memory",
@@ -1577,6 +1733,11 @@ export default function DeviceList({
     [rows, selectedIds]
   );
 
+  const selectedAgentDeviceRows = useMemo(
+    () => selectedDeviceRows.filter((row) => resolveDevicePurgeGuid(row)),
+    [selectedDeviceRows]
+  );
+
   const deleteTargetRows = useMemo(
     () => rows.filter((row) => row?.id != null && deleteTargetIds.has(row.id)),
     [deleteTargetIds, rows]
@@ -1618,6 +1779,168 @@ export default function DeviceList({
     openPurgeDialog(selectedDeviceRows);
   }, [openPurgeDialog, selectedDeviceRows]);
 
+  const getContextTargetRows = useCallback(() => {
+    if (selected?.id != null && selectedIds.has(selected.id) && selectedDeviceRows.length) {
+      return selectedDeviceRows;
+    }
+    if (selected) return [selected];
+    return selectedDeviceRows;
+  }, [selected, selectedDeviceRows, selectedIds]);
+
+  const fetchAgentBranches = useCallback(async () => {
+    setAgentBranchesLoading(true);
+    setAgentBranchLoadError("");
+    try {
+      const nextRows = await fetchAgentBranchRows();
+      setAgentBranchRows(nextRows);
+      if (!nextRows.length) {
+        setAgentBranchLoadError("No GitHub branches returned.");
+      }
+    } catch (error) {
+      setAgentBranchRows([]);
+      setAgentBranchLoadError(error instanceof Error ? error.message : "GitHub branch lookup failed.");
+    } finally {
+      setAgentBranchesLoading(false);
+    }
+  }, []);
+
+  const openAgentBranchChannelDialog = useCallback(
+    (targetRows = selectedDeviceRows) => {
+      if (!isAdmin || agentBranchChannelSaving) return;
+      const requestedRows = Array.isArray(targetRows) ? targetRows : [];
+      const validTargets = requestedRows.filter((row) => resolveDevicePurgeGuid(row));
+      if (!validTargets.length) return;
+      const pairs = validTargets.map((row) => getDeviceAgentChannelBranch(row));
+      const uniquePairs = new Set(pairs.map((pair) => `${pair.channel}\n${pair.branch}`));
+      const firstPair = pairs[0] || { channel: "stable", branch: "main" };
+      setAgentBranchChannelTargets(validTargets);
+      setAgentBranchChannelSkippedCount(Math.max(0, requestedRows.length - validTargets.length));
+      setAgentBranchChannelMixed(uniquePairs.size > 1);
+      setDraftAgentChannel(firstPair.channel);
+      setDraftAgentBranch(firstPair.branch);
+      setAgentBranchLoadError("");
+      setAgentBranchChannelDialogOpen(true);
+      void fetchAgentBranches();
+    },
+    [agentBranchChannelSaving, fetchAgentBranches, isAdmin, selectedDeviceRows]
+  );
+
+  const closeAgentBranchChannelDialog = useCallback(() => {
+    if (agentBranchChannelSaving) return;
+    setAgentBranchChannelDialogOpen(false);
+  }, [agentBranchChannelSaving]);
+
+  const handleDraftAgentChannelChange = useCallback((channel) => {
+    setAgentBranchChannelMixed(false);
+    setDraftAgentChannel(channel);
+  }, []);
+
+  const handleDraftAgentBranchChange = useCallback((branch) => {
+    setAgentBranchChannelMixed(false);
+    setDraftAgentBranch(branch);
+  }, []);
+
+  const applyAgentBranchChannel = useCallback(async () => {
+    if (!isAdmin || agentBranchChannelSaving) return;
+    const guids = Array.from(
+      new Set(
+        agentBranchChannelTargets
+          .map((row) => resolveDevicePurgeGuid(row))
+          .filter(Boolean)
+      )
+    );
+    if (!guids.length) {
+      setAgentBranchLoadError("Select one or more Agent devices before applying.");
+      return;
+    }
+    const targetChannel = normalizeAgentReleaseChannel(draftAgentChannel);
+    if (!["stable", "unstable"].includes(targetChannel)) {
+      setAgentBranchLoadError("Choose stable or unstable before applying.");
+      return;
+    }
+    const targetBranch = normalizeAgentBranch(targetChannel, draftAgentBranch);
+    setAgentBranchChannelSaving(true);
+    setAgentBranchLoadError("");
+    try {
+      const resp = await fetch("/api/devices/agent-maintenance", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "switch_branch_channel",
+          guids,
+          release_channel: targetChannel,
+          branch: targetBranch,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data?.message || data?.error || `HTTP ${resp.status}`);
+      }
+      const targetGuidSet = new Set(guids.map((guid) => String(guid || "").trim().toUpperCase()));
+      setRows((prev) =>
+        prev.map((row) => {
+          const rowGuid = resolveDevicePurgeGuid(row).toUpperCase();
+          return targetGuidSet.has(rowGuid)
+            ? withDeviceAgentChannelBranch(row, targetChannel, targetBranch)
+            : row;
+        })
+      );
+      setSelected((prev) => {
+        if (!prev) return prev;
+        const rowGuid = resolveDevicePurgeGuid(prev).toUpperCase();
+        return targetGuidSet.has(rowGuid)
+          ? withDeviceAgentChannelBranch(prev, targetChannel, targetBranch)
+          : prev;
+      });
+      setAgentBranchChannelDialogOpen(false);
+      setAgentBranchChannelTargets([]);
+      setAgentBranchChannelSkippedCount(0);
+      setAgentBranchChannelMixed(false);
+      const queuedCount = Array.isArray(data?.queued) ? data.queued.length : guids.length;
+      const errorCount = Array.isArray(data?.errors) ? data.errors.length : 0;
+      await notifyOperator({
+        title: errorCount ? "Agent Branch/Channel Partially Queued" : "Agent Branch/Channel Queued",
+        message:
+          `Queued ${queuedCount} device${queuedCount === 1 ? "" : "s"} for ` +
+          `<b>${targetChannel} / ${targetBranch}</b>` +
+          (data?.job_id ? ` in scheduled job <b>#${data.job_id}</b>.` : ".") +
+          (errorCount ? ` ${errorCount} target${errorCount === 1 ? "" : "s"} failed.` : ""),
+        icon: "update",
+        variant: errorCount ? "warning" : "success",
+      });
+      await fetchDevices({ showLoading: false });
+    } catch (error) {
+      const message = String(error?.message || error || "Agent branch/channel switch failed.");
+      setAgentBranchLoadError(message);
+      await notifyOperator({
+        title: "Agent Branch/Channel Failed",
+        message: `Could not queue the branch/channel switch: ${message}`,
+        icon: "error",
+        variant: "error",
+      });
+    } finally {
+      setAgentBranchChannelSaving(false);
+    }
+  }, [
+    agentBranchChannelSaving,
+    agentBranchChannelTargets,
+    draftAgentBranch,
+    draftAgentChannel,
+    fetchDevices,
+    isAdmin,
+    notifyOperator,
+  ]);
+
+  const agentBranchChannelSubtitle = useMemo(() => {
+    const count = agentBranchChannelTargets.length;
+    const deviceWord = count === 1 ? "device" : "devices";
+    const skipped = agentBranchChannelSkippedCount;
+    return `${count} ${deviceWord} selected${skipped ? `; ${skipped} without Agent GUID skipped` : ""}`;
+  }, [agentBranchChannelSkippedCount, agentBranchChannelTargets.length]);
+
+  const canChangeAgentBranchChannel = isAdmin && selectedAgentDeviceRows.length > 0 && !agentBranchChannelSaving;
+
   const pageHeaderActions = useMemo(
     () => [
       {
@@ -1634,6 +1957,20 @@ export default function DeviceList({
         tone: "secondary",
         loading,
         onClick: () => fetchDevices(),
+      },
+      {
+        id: "device-change-branch-channel",
+        label: "Change Branch/Channel",
+        icon: <AccountTreeRoundedIcon />,
+        tone: "secondary",
+        disabled: !canChangeAgentBranchChannel,
+        loading: agentBranchChannelSaving,
+        tooltip: !isAdmin
+          ? "Only administrators can change Agent branch/channel"
+          : !selectedAgentDeviceRows.length
+            ? "Select one or more Agent devices"
+            : undefined,
+        onClick: () => openAgentBranchChannelDialog(selectedDeviceRows),
       },
       {
         id: "device-quick-job",
@@ -1682,9 +2019,13 @@ export default function DeviceList({
       fetchDevices,
       loading,
       handleQuickJobLaunch,
+      agentBranchChannelSaving,
+      canChangeAgentBranchChannel,
       isAdmin,
       deleteBusy,
+      openAgentBranchChannelDialog,
       openSelectedPurgeDialog,
+      selectedAgentDeviceRows,
       selectedDeviceRows,
     ]
   );
@@ -1922,6 +2263,53 @@ export default function DeviceList({
     );
   }, []);
 
+  const agentChannelBranchCellRenderer = useCallback((params) => {
+    const row = params.data || {};
+    const { channel, branch } = getDeviceAgentChannelBranch(row);
+    const label = formatDeviceAgentChannelBranch(row);
+    const channelColor = channel === "unstable" ? MAGIC_UI.accentB : MAGIC_UI.accentA;
+    return (
+      <Box
+        component="span"
+        sx={{
+          display: "inline-flex",
+          alignItems: "center",
+          minWidth: 0,
+          maxWidth: "100%",
+          gap: 0.85,
+          color: "rgba(255,255,255,0.86)",
+          fontFamily: gridFontFamily,
+        }}
+      >
+        <Box
+          component="span"
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: channel === "stable" ? 66 : 0,
+            maxWidth: "100%",
+            px: 1,
+            py: 0.18,
+            borderRadius: 999,
+            color: channelColor,
+            border: `1px solid ${channel === "unstable" ? "rgba(192,132,252,0.42)" : "rgba(125,211,252,0.42)"}`,
+            backgroundColor: channel === "unstable" ? "rgba(192,132,252,0.12)" : "rgba(125,211,252,0.12)",
+            fontSize: "0.72rem",
+            fontWeight: 700,
+            lineHeight: 1.1,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={label}
+        >
+          {label}
+        </Box>
+      </Box>
+    );
+  }, []);
+
   const actionCellRenderer = useCallback(
     (params) => {
       const row = params.data;
@@ -2063,6 +2451,16 @@ export default function DeviceList({
               ),
             width: 180,
             minWidth: 180,
+            flex: 0,
+          };
+        case "agentChannelBranch":
+          return {
+            field: "agentChannelBranch",
+            headerName: col.label,
+            valueGetter: (params) => formatDeviceAgentChannelBranch(params.data || {}),
+            cellRenderer: agentChannelBranchCellRenderer,
+            width: 220,
+            minWidth: 210,
             flex: 0,
           };
         case "description":
@@ -2242,6 +2640,7 @@ export default function DeviceList({
   }, [
     columns,
     actionCellRenderer,
+    agentChannelBranchCellRenderer,
     formatCreated,
     handleDescriptionSave,
     hostnameCellRenderer,
@@ -2852,6 +3251,18 @@ export default function DeviceList({
           setAssignDialogOpen(true);
         }}>Move to Another Site</MenuItem>
         {isAdmin ? (
+          <MenuItem
+            disabled={!getContextTargetRows().some((row) => resolveDevicePurgeGuid(row)) || agentBranchChannelSaving}
+            onClick={() => {
+              const targets = getContextTargetRows();
+              closeMenu();
+              openAgentBranchChannelDialog(targets);
+            }}
+          >
+            Change Branch/Channel
+          </MenuItem>
+        ) : null}
+        {isAdmin ? (
           <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>
             {selected?.id != null && selectedIds.has(selected.id) && selectedDeviceRows.length > 1 ? "Purge Selected" : "Purge"}
           </MenuItem>
@@ -2968,6 +3379,24 @@ export default function DeviceList({
             : `${quickJobHostnames.length} devices`
         }
         notifyOperator={notifyOperator}
+      />
+      <AgentBranchChannelDialog
+        open={agentBranchChannelDialogOpen}
+        title="Switch Agent Branch/Channel"
+        subtitle={agentBranchChannelSubtitle}
+        rows={agentBranchRows}
+        loading={agentBranchesLoading}
+        error={agentBranchLoadError}
+        channel={draftAgentChannel}
+        branch={draftAgentBranch}
+        mixed={agentBranchChannelMixed}
+        busy={agentBranchChannelSaving}
+        onChannelChange={handleDraftAgentChannelChange}
+        onBranchChange={handleDraftAgentBranchChange}
+        onRefresh={() => void fetchAgentBranches()}
+        onCancel={closeAgentBranchChannelDialog}
+        onApply={() => void applyAgentBranchChannel()}
+        gridTheme={DEVICE_DETAILS_GRID_THEME}
       />
       <AddDevice
         open={addDeviceOpen}

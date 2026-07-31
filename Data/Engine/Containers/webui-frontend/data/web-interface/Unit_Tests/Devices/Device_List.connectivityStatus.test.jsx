@@ -4,6 +4,8 @@ import {
   buildDeviceListMetadataColumnOptions,
   buildDeviceConnectivityStatusFilter,
   deviceMetadataColumnId,
+  formatDeviceAgentChannelBranch,
+  getDeviceAgentChannelBranch,
   deviceConnectivityStatusFromState,
   normalizeDeviceCollection,
   normalizeDeviceConnectivityStatus,
@@ -81,6 +83,9 @@ describe("device list connectivity status", () => {
         lastReboot: "Last Reboot",
         created: "Created",
         lastSeen: "Last Seen",
+        agentChannelBranch: "Channel / Branch",
+        agentId: "Agent ID",
+        agentGuid: "Agent GUID",
       },
       metadataFields: [
         { id: "metadataField012", label: "Warranty Date" },
@@ -90,6 +95,7 @@ describe("device list connectivity status", () => {
 
     expect(groups.map((group) => group.label)).toEqual([
       "Device Specs",
+      "Agent",
       "Location",
       "Networking",
       "Heartbeat",
@@ -105,6 +111,11 @@ describe("device list connectivity status", () => {
       "Storage",
       "Type",
       "Uptime",
+    ]);
+    expect(groups.find((group) => group.label === "Agent").options.map((option) => option.label)).toEqual([
+      "Agent GUID",
+      "Agent ID",
+      "Channel / Branch",
     ]);
     expect(groups.find((group) => group.label === "Location").options.map((option) => option.label)).toEqual([
       "Domain",
@@ -148,5 +159,31 @@ describe("device list connectivity status", () => {
     });
     expect(row.metadataField011).toBe("Asset-123");
     expect(row.metadataField012).toBe("Rack A7");
+  });
+
+  it("normalizes Agent channel and branch values for the Device List column", () => {
+    const [stableRow, unstableRow] = normalizeDeviceCollection([
+      {
+        hostname: "LAB-STABLE-01",
+        agent_guid: "2540DA38-E2B1-45B9-9113-BF7CF0E1778A",
+      },
+      {
+        hostname: "LAB-UNSTABLE-01",
+        agent_guid: "2540DA38-E2B1-45B9-9113-BF7CF0E1778B",
+        agent_release_channel: "source",
+        agent_branch: "feature/fleet-channel-change",
+      },
+    ]);
+
+    expect(getDeviceAgentChannelBranch(stableRow)).toEqual({
+      channel: "stable",
+      branch: "main",
+    });
+    expect(formatDeviceAgentChannelBranch(stableRow)).toBe("Stable");
+    expect(getDeviceAgentChannelBranch(unstableRow)).toEqual({
+      channel: "unstable",
+      branch: "feature/fleet-channel-change",
+    });
+    expect(unstableRow.agentChannelBranch).toBe("Unstable / feature/fleet-channel-change");
   });
 });

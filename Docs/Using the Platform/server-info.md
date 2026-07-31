@@ -27,7 +27,7 @@ Admins can adjust:
 
 - Agent release repository and cached Stable / Unstable targets.
 
-Devices without an ad-hoc branch/channel override always use `Stable:main`. Change a specific device from Device Summary when it should stay on a different branch or channel. Existing agents that were previously following `Unstable:main` are corrected back to `Stable:main` during heartbeat. If an override branch later disappears from the repository, the Agent falls back to `Stable:main`; the Engine also clears the stale override after a short self-remediation window if the device keeps heartbeating from the retired branch.
+Devices without an ad-hoc branch/channel override always use `Stable:main`. Change one device from Device Summary, or select multiple devices in Device Inventory and use `Change Branch/Channel`, when endpoints should stay on a different branch or channel. Existing agents that were previously following `Unstable:main` are corrected back to `Stable:main` during heartbeat. If an override branch later disappears from the repository, the Agent falls back to `Stable:main`; the Engine also clears the stale override after a short self-remediation window if the device keeps heartbeating from the retired branch.
 
 Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh --network-mode public|local deploy` tunes that value from the detected Engine sizing profile, and redeploys overwrite stale manual values.
 

@@ -311,6 +311,7 @@ func heartbeatIntervalWithJitter(now time.Time) time.Duration {
 }
 
 const socketRegistrationAckTimeout = 15 * time.Second
+const configTempCleanupMinAge = time.Hour
 
 func (a *Agent) socketLoop(ctx context.Context) error {
 	backoff := time.Second
@@ -728,6 +729,11 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 	if err == nil {
 		if syncErr := agentconfig.AckQueuedMetadataFields(a.configPath, response.MetadataFieldAcks); syncErr != nil {
 			a.logger.Printf("metadata queue ack failed: %v", syncErr)
+		}
+		if removed, cleanupErr := agentconfig.PruneStaleTempFiles(a.configPath, configTempCleanupMinAge); cleanupErr != nil {
+			a.logger.Printf("config temp cleanup failed: %v", cleanupErr)
+		} else if removed > 0 {
+			a.logger.Printf("config temp cleanup removed %d stale file(s)", removed)
 		}
 		a.handleHeartbeatReleaseChannelInstruction(response.AgentReleaseChannelInstruction)
 	}
