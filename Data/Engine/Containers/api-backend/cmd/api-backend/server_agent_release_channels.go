@@ -54,9 +54,7 @@ func agentReleaseChannelsHandler(auth *authService, fallback http.Handler) http.
 				return
 			}
 			settings := collectAgentReleaseChannelSettings()
-			if value, ok := body["default_channel"]; ok {
-				settings["default_channel"] = normalizeAgentReleaseChannel(value, defaultAgentReleaseChannel)
-			}
+			settings["default_channel"] = defaultAgentReleaseChannel
 			if value, ok := body["repo"]; ok {
 				github, _ := settings["github"].(map[string]any)
 				if github == nil {
@@ -150,7 +148,7 @@ func collectAgentReleaseChannelSettings() map[string]any {
 		}
 		merged[key] = value
 	}
-	merged["default_channel"] = normalizeAgentReleaseChannel(merged["default_channel"], defaultAgentReleaseChannel)
+	merged["default_channel"] = defaultAgentReleaseChannel
 
 	github, _ := merged["github"].(map[string]any)
 	if github == nil {
@@ -205,6 +203,7 @@ func defaultAgentReleaseChannelSettings(now int64) map[string]any {
 				"release_tag":     "",
 				"release_name":    "",
 				"published_at":    "",
+				"branch":          defaultAgentReleaseBranch,
 				"promoted_at":     int64(0),
 				"refreshed_at":    int64(0),
 				"last_error":      "",

@@ -76,7 +76,8 @@ type Agent struct {
 }
 
 type heartbeatResponse struct {
-	MetadataFieldAcks []string `json:"metadata_field_acks"`
+	MetadataFieldAcks              []string       `json:"metadata_field_acks"`
+	AgentReleaseChannelInstruction map[string]any `json:"agent_release_channel_instruction"`
 }
 
 func New(options Options, logger *log.Logger) (*Agent, error) {
@@ -728,6 +729,7 @@ func (a *Agent) postHeartbeat(ctx context.Context) error {
 		if syncErr := agentconfig.AckQueuedMetadataFields(a.configPath, response.MetadataFieldAcks); syncErr != nil {
 			a.logger.Printf("metadata queue ack failed: %v", syncErr)
 		}
+		a.handleHeartbeatReleaseChannelInstruction(response.AgentReleaseChannelInstruction)
 	}
 	a.recordHeartbeatResult(err)
 	return err

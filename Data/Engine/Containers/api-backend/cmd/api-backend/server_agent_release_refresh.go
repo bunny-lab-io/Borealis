@@ -128,6 +128,7 @@ func stableAgentReleaseCandidate(ctx context.Context, repo string) (map[string]a
 		"release_tag":   tagName,
 		"release_name":  firstText(cleanText(payload["name"]), tagName),
 		"published_at":  cleanText(payload["published_at"]),
+		"branch":        defaultAgentReleaseBranch,
 	}, nil
 }
 
@@ -265,10 +266,17 @@ func agentReleaseChannelErrorTarget(repo string, candidate map[string]any, prior
 	base["release_tag"] = cleanText(candidate["release_tag"])
 	base["release_name"] = cleanText(candidate["release_name"])
 	base["published_at"] = cleanText(candidate["published_at"])
-	base["branch"] = cleanText(candidate["branch"])
+	base["branch"] = firstText(cleanText(candidate["branch"]), stableAgentReleaseBranch(base["channel"]))
 	base["refreshed_at"] = time.Now().Unix()
 	base["last_error"] = failure.Error()
 	return base
+}
+
+func stableAgentReleaseBranch(channel any) string {
+	if normalizeAgentReleaseChannel(channel, defaultAgentReleaseChannel) == "stable" {
+		return defaultAgentReleaseBranch
+	}
+	return ""
 }
 
 func validatedPriorAgentReleaseTarget(target map[string]any) (map[string]any, error) {

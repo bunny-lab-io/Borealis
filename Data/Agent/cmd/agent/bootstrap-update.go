@@ -62,6 +62,11 @@ func runAgentUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	if shouldUseRepoRefUpdate(cfg) {
 		return runRepoRefUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
 	}
+	return runStableManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, engineHTTPClient)
+}
+
+func runStableManifestUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, installed string, startedAt time.Time, serverURL string, token string, engineHTTPClient *http.Client) error {
+	configPath := filepath.Join(cfg.InstallDir, agentconfig.FileName)
 	manifest, err := fetchUpdateManifest(engineHTTPClient, serverURL, token, installed)
 	if err != nil {
 		return err
@@ -179,6 +184,11 @@ func runRepoRefUpdateCheck(cfg BootstrapConfig, logger *BootstrapLogger, install
 		logger.Warnf("Engine repo hash lookup failed for repo_ref %q; trying GitHub fallback: %v", ref, engineErr)
 		target, err = resolveGithubRefSHA(cfg.RepoURL, ref)
 		if err != nil {
+			if shouldFallbackRepoRefToStable(engineErr, err) {
+				logger.Warnf("Agent repo_ref %q no longer resolves; switching to stable:%s.", ref, agentconfig.DefaultBranch)
+				writeConfigReleaseTarget(cfg, agentconfig.ReleaseChannelStable, agentconfig.DefaultBranch)
+				return runStableManifestUpdateCheck(cfg, logger, installed, startedAt, serverURL, token, httpClient)
+			}
 			return fmt.Errorf("resolve repo_ref %q update target; Engine repo hash API failed: %v; GitHub fallback failed: %w", ref, engineErr, err)
 		}
 	}

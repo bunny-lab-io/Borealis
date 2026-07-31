@@ -25,7 +25,9 @@ Use service actions for focused restart, Traefik reload, or WireGuard reconcile 
 
 Admins can adjust:
 
-- Agent release channel targets.
+- Agent release repository and cached Stable / Unstable targets.
+
+Devices without an ad-hoc branch/channel override always use `Stable:main`. Change a specific device from Device Summary when it should stay on a different branch or channel. Existing agents that were previously following `Unstable:main` are corrected back to `Stable:main` during heartbeat. If an override branch later disappears from the repository, the Agent falls back to `Stable:main`; the Engine also clears the stale override after a short self-remediation window if the device keeps heartbeating from the retired branch.
 
 Server Info also shows Site Worker Scheduled Tasks as read-only profile-managed data. `Engine.sh --network-mode public|local deploy` tunes that value from the detected Engine sizing profile, and redeploys overwrite stale manual values.
 
@@ -44,7 +46,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - `GET /api/server/timezones` - current Engine timezone metadata. Timezone changes are handled on the host, then applied through Engine redeploy.
     - `GET /api/server/site-worker-settings` - read profile-managed site-worker scheduled-lane work-item capacity.
     - `GET /api/server/agent-release-channels` - read Agent update channel targets.
-    - `PUT /api/server/agent-release-channels` - update default channel or repo and refresh cached artifacts.
+    - `PUT /api/server/agent-release-channels` - update the Agent release repository and refresh cached artifacts. `default_channel` is fixed to `stable` for devices without overrides.
     - `POST /api/server/agent-release-channels/refresh` - refresh cached Agent update artifacts.
     - `POST /api/server/services/<service_key>/action` - queue container service action.
     - `POST /api/server/services/<service_key>/restart` - queue systemd restart path.
@@ -77,5 +79,7 @@ This value is active scheduled-lane work-item capacity per site worker, not raw 
     - Service actions queue work items so API request can return before service changes interrupt runtime. K3s-owned workload actions are reconciled through `borealis-operator`; K3s WireGuard reconcile uses the mounted WireGuard control socket from `job-scheduler`. Stage 11 retires Docker/Compose service-action helpers and stale Compose service rows.
     - The Site Worker Scheduled Tasks value controls active scheduled-lane work items for scheduled jobs, scheduled workflows, scheduled Ansible work, and agent-maintenance work. Onboarding keeps its separate lane behavior.
     - Shared Ansible batches consume one scheduled slot for a site batch even when the batch targets several devices. Individual Ansible runs consume one scheduled slot per one-target run while active.
+    - Agent release-channel default selection is fixed to `Stable:main`; Server Info only manages the repository and cached target refreshes. Per-device override rows still persist through Device Summary and Agent Maintenance branch/channel actions.
+    - Agent branch-retirement recovery is two-sided. The Agent update-check path switches local config to `stable/main` when its configured branch ref returns a missing-ref response. The Engine heartbeat path immediately corrects no-override agents that still report `unstable`, checks overridden non-main unstable branch reports through the repository head lookup cache, waits five minutes from first confirmed missing-ref observation, clears the stale device override, and returns an `agent_release_channel_instruction` heartbeat response that tells the Agent to switch to `stable/main`.
     - Server Info is informational first; raw log inspection belongs in CLI-driven Engine Log Access.
     - Legacy `/engine-status` URLs redirect to `/server`; the old Engine Status React Flow page was retired.

@@ -73,8 +73,8 @@ func TestAgentReleaseChannelsUpdateRefreshesArtifacts(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload["default_channel"] != "unstable" {
-		t.Fatalf("expected unstable default, got %#v", payload["default_channel"])
+	if payload["default_channel"] != "stable" {
+		t.Fatalf("expected stable default, got %#v", payload["default_channel"])
 	}
 	if payload["last_refresh_error"] != "" {
 		t.Fatalf("expected no refresh error, got %#v", payload["last_refresh_error"])
@@ -85,6 +85,9 @@ func TestAgentReleaseChannelsUpdateRefreshesArtifacts(t *testing.T) {
 	}
 	channels := payload["channels"].(map[string]any)
 	stable := channels["stable"].(map[string]any)
+	if got := stable["branch"]; got != "main" {
+		t.Fatalf("expected stable branch main, got %#v", got)
+	}
 	artifactPath := cleanText(stable["artifact_path"])
 	if artifactPath == "" {
 		t.Fatalf("expected stable artifact path")

@@ -196,7 +196,7 @@ func resolveEffectiveAgentReleaseChannel(settings map[string]any, override strin
 	if normalized := normalizeAgentReleaseChannel(override, ""); normalized != "" {
 		return normalized
 	}
-	return normalizeAgentReleaseChannel(settings["default_channel"], defaultAgentReleaseChannel)
+	return defaultAgentReleaseChannel
 }
 
 func agentReleaseChannelTarget(settings map[string]any, channel string) map[string]any {
@@ -211,6 +211,9 @@ func agentReleaseChannelTarget(settings map[string]any, channel string) map[stri
 	}
 	copied := deepCopyMap(target)
 	copied["channel"] = normalized
+	if normalized == "stable" && cleanText(copied["branch"]) == "" {
+		copied["branch"] = defaultAgentReleaseBranch
+	}
 	return copied
 }
 

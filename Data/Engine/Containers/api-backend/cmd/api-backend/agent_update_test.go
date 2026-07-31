@@ -104,6 +104,16 @@ func TestAgentUpdateManifestHandlerReturnsAuthenticatedManifest(t *testing.T) {
 	}
 }
 
+func TestResolveEffectiveAgentReleaseChannelPinsNoOverrideToStable(t *testing.T) {
+	settings := map[string]any{"default_channel": "unstable"}
+	if got := resolveEffectiveAgentReleaseChannel(settings, ""); got != "stable" {
+		t.Fatalf("expected no override to resolve stable, got %q", got)
+	}
+	if got := resolveEffectiveAgentReleaseChannel(settings, "unstable"); got != "unstable" {
+		t.Fatalf("expected explicit override to remain unstable, got %q", got)
+	}
+}
+
 func TestAgentUpdateDownloadHandlerServesCachedArtifact(t *testing.T) {
 	guid := "2540DA38-E2B1-45B9-9113-BF7CF0E1778A"
 	signer := testAgentJWTSigner(t)

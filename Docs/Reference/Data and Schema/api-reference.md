@@ -59,7 +59,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/agent/token/refresh` (Refresh Token) - mint new access token; returns `401 device_purged` when a GUID is blocked by a purge barrier.
 
     ### Devices and Inventory
-    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, and Agent Metadata Field sync.
+    - `POST /api/agent/heartbeat` (Device Authenticated) - heartbeat, metrics, Agent Metadata Field sync, and Engine-side release-channel correction. Responses may include `agent_release_channel_instruction` with `stable/main` when a no-override Agent reports `unstable` or when an overridden Agent keeps reporting a retired branch after the recovery grace window.
     - `POST /api/agent/status` (Device Authenticated) - update `devices.last_seen`, upsert the `system:system_heartbeat` startup timeline row in `agent_role_health`, and emit `agent_status_changed` for Device Summary Agent Health refresh.
     - `POST /api/agent/details` (Device Authenticated) - full hardware, inventory, and cached service payload.
     - `POST /api/agent/script/request` (Device Authenticated) - request work or idle signal.
@@ -84,7 +84,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `POST /api/devices/<guid>/unquarantine` (Admin) - return a quarantined device to active state and bump its token version so stale access tokens cannot continue.
     - `POST /api/devices/<guid>/revoke` (Admin) - mark a device revoked, bump its token version, revoke refresh tokens, and disconnect active WireGuard/VNC runtime state.
     - `POST /api/devices/<guid>/purge` (Admin) - purge a device, revoke stale trust state, remove current-known references, and rewrite scheduled-job targets that referenced the device.
-    - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO.
+    - `PUT /api/devices/<guid>/agent-release-channel` (Admin) - update the device agent release channel override and optional source branch, persist the target on the device row, and notify the online SYSTEM agent over Socket.IO. If a selected source branch later stops resolving, Agent update checks and Engine heartbeat recovery move the device back to `Stable:main`.
     - `POST /api/devices/agent-maintenance` (Token Authenticated) - queue on-demand Agent updates or Agent branch/channel switches for selected devices. Requests create `agent_maintenance` scheduled-job history and site-worker `agent_maintenance_run` work items; site workers fan out to agents through the internal socket bridge.
     - `GET /api/device/details/<hostname>` (Token Authenticated) - full device details, site-scoped for operators, including normalized session inventory with helper readiness fields.
     - `GET /api/device/services/<hostname>` (Token Authenticated) - cached service inventory for an in-scope device.
@@ -252,7 +252,7 @@ Provide a consolidated, human-readable list of Borealis Engine API endpoints gro
     - `GET /api/server/workers` (Admin) - active and recent scheduler/site-worker state, all site names plus total/online device counts, recent assigned work, short Docker container IDs, normalized Docker stats, K3s Metrics Server CPU/RAM stats for bridge workers when `borealis-operator` can read podmetrics, and optional Docker inspect size metadata when Docker metadata is available.
     - `GET /api/server/site-worker-settings` (Admin) - read the profile-managed site-worker scheduled-lane task concurrency limit.
     - `GET /api/server/agent-release-channels` (Admin) - read Agent update channel targets.
-    - `PUT /api/server/agent-release-channels` (Admin) - update default Agent channel or GitHub repo, then refresh cached update artifacts.
+    - `PUT /api/server/agent-release-channels` (Admin) - update Agent release GitHub repo, then refresh cached update artifacts. Devices without overrides remain pinned to `Stable:main`.
     - `POST /api/server/agent-release-channels/refresh` (Admin) - refresh Agent update channel metadata and cached artifacts.
     - `POST /api/server/services/<service_key>/action` (Admin) - queue a detached runtime service action through `job-scheduler`; supported K3s workload restarts route through `borealis-operator`, and K3s WireGuard reconcile routes through the mounted control socket. Docker/Compose helper actions are retired after Stage 11. Supported actions are `api-backend restart`, `webui-frontend restart`, `postgres-db restart`, `remote-desktop-guacd restart`, `traefik-edge reload`, and `wireguard-tunnel reconcile`. WebUI rebuilds are CLI-only through `Engine.sh --network-mode public|local --service webui-frontend rebuild prod|dev`.
     - `POST /api/server/services/<service_key>/restart` (Admin) - queue a detached `systemd-run` restart for `borealis_engine`, `borealis_traefik`, or a `postgresql_cluster` instance on non-container/systemd installs. Container service operations use `Engine.sh --service ...`.

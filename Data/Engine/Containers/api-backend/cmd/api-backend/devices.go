@@ -760,6 +760,9 @@ func (s *postgresOperatorStore) setAgentReleaseChannelOverride(ctx context.Conte
 				targetBranch = normalizeAgentBranch(target["branch"])
 			}
 		}
+		if strings.EqualFold(effectiveChannel, "stable") && targetBranch == "" {
+			targetBranch = defaultAgentReleaseBranch
+		}
 		if strings.EqualFold(effectiveChannel, "unstable") {
 			releaseChannel = "unstable"
 		} else {
@@ -1104,6 +1107,12 @@ func attachAgentVersionStatus(payload map[string]any) map[string]any {
 	}
 	releaseChannel := firstText(cleanText(payload["agent_release_channel"]), cleanText(summary["agent_release_channel"]))
 	branch := firstText(cleanText(payload["agent_branch"]), cleanText(summary["agent_branch"]))
+	if releaseChannel == "" || channelOverride == "" {
+		releaseChannel = effectiveChannel
+	}
+	if strings.EqualFold(effectiveChannel, "stable") && branch == "" {
+		branch = defaultAgentReleaseBranch
+	}
 
 	payload["agent_version_status"] = status
 	payload["agent_target_build_id"] = targetBuildID
@@ -1151,7 +1160,7 @@ func resolveAgentTarget(channelOverride string) (string, string, string) {
 	settings := collectAgentReleaseChannelSettings()
 	effectiveChannel := normalizeAgentReleaseChannel(channelOverride, "")
 	if effectiveChannel == "" {
-		effectiveChannel = normalizeAgentReleaseChannel(settings["default_channel"], defaultAgentReleaseChannel)
+		effectiveChannel = defaultAgentReleaseChannel
 	}
 	channels, _ := settings["channels"].(map[string]any)
 	target, _ := channels[effectiveChannel].(map[string]any)
