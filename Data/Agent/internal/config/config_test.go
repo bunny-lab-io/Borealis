@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSaveLoadConfig(t *testing.T) {
@@ -245,6 +246,50 @@ func TestUpdateWithWriterRecordsStateMetadata(t *testing.T) {
 	}
 	if second.Agent.State.Revision <= first.Agent.State.Revision {
 		t.Fatalf("revision did not advance: first=%d second=%d", first.Agent.State.Revision, second.Agent.State.Revision)
+	}
+}
+
+func TestPruneStaleTempFilesRemovesOnlyOldAgentTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	oldConfigTemp := filepath.Join(dir, ".config-140525730.tmp")
+	oldMetadataTemp := filepath.Join(dir, ".metadata-queue-140525730.tmp")
+	freshConfigTemp := filepath.Join(dir, ".config-215131942.tmp")
+	otherTemp := filepath.Join(dir, "config-140525730.tmp")
+	lockPath := filepath.Join(dir, FileName+".lock")
+	tempDir := filepath.Join(dir, ".config-dir.tmp")
+
+	for _, filePath := range []string{oldConfigTemp, oldMetadataTemp, freshConfigTemp, otherTemp, lockPath} {
+		if err := os.WriteFile(filePath, []byte("stale"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(tempDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-2 * time.Hour)
+	for _, filePath := range []string{oldConfigTemp, oldMetadataTemp, otherTemp, lockPath, tempDir} {
+		if err := os.Chtimes(filePath, oldTime, oldTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	removed, err := PruneStaleTempFiles(path, time.Hour)
+	if err != nil {
+		t.Fatalf("PruneStaleTempFiles failed: %v", err)
+	}
+	if removed != 2 {
+		t.Fatalf("removed = %d, want 2", removed)
+	}
+	for _, removedPath := range []string{oldConfigTemp, oldMetadataTemp} {
+		if _, err := os.Stat(removedPath); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists or stat failed differently: %v", removedPath, err)
+		}
+	}
+	for _, keptPath := range []string{freshConfigTemp, otherTemp, lockPath, tempDir} {
+		if _, err := os.Stat(keptPath); err != nil {
+			t.Fatalf("%s should remain: %v", keptPath, err)
+		}
 	}
 }
 

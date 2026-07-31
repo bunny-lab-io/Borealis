@@ -179,7 +179,7 @@ describe("device list connectivity status", () => {
       channel: "stable",
       branch: "main",
     });
-    expect(formatDeviceAgentChannelBranch(stableRow)).toBe("Stable / main");
+    expect(formatDeviceAgentChannelBranch(stableRow)).toBe("Stable");
     expect(getDeviceAgentChannelBranch(unstableRow)).toEqual({
       channel: "unstable",
       branch: "feature/fleet-channel-change",

@@ -336,6 +336,7 @@ export function getDeviceAgentChannelBranch(row = {}) {
 
 export function formatDeviceAgentChannelBranch(row = {}) {
   const { channel, branch } = getDeviceAgentChannelBranch(row);
+  if (channel === "stable") return toTitleCaseToken(channel);
   return `${toTitleCaseToken(channel)} / ${branch}`;
 }
 
@@ -371,7 +372,10 @@ function withDeviceAgentChannelBranch(row, channel, branch) {
     agentReleaseChannel: normalizedChannel,
     agentReleaseChannelEffective: normalizedChannel,
     agentBranch: normalizedBranch,
-    agentChannelBranch: `${toTitleCaseToken(normalizedChannel)} / ${normalizedBranch}`,
+    agentChannelBranch: formatDeviceAgentChannelBranch({
+      agentReleaseChannel: normalizedChannel,
+      agentBranch: normalizedBranch,
+    }),
     summary: nextSummary,
     details: nextDetails,
   };
@@ -778,7 +782,10 @@ export function normalizeDeviceCollection(
         summary.agent_branch ||
         ""
     );
-    const agentChannelBranch = `${toTitleCaseToken(agentReleaseChannel)} / ${agentBranch}`;
+    const agentChannelBranch = formatDeviceAgentChannelBranch({
+      agentReleaseChannel,
+      agentBranch,
+    });
 
     const memoryList = Array.isArray(device.memory) ? device.memory : [];
     const networkList = Array.isArray(device.network) ? device.network : [];
@@ -2259,7 +2266,7 @@ export default function DeviceList({
   const agentChannelBranchCellRenderer = useCallback((params) => {
     const row = params.data || {};
     const { channel, branch } = getDeviceAgentChannelBranch(row);
-    const channelLabel = toTitleCaseToken(channel);
+    const label = formatDeviceAgentChannelBranch(row);
     const channelColor = channel === "unstable" ? MAGIC_UI.accentB : MAGIC_UI.accentA;
     return (
       <Box
@@ -2280,9 +2287,9 @@ export default function DeviceList({
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            flex: "0 0 auto",
-            minWidth: 66,
-            px: 0.85,
+            minWidth: channel === "stable" ? 66 : 0,
+            maxWidth: "100%",
+            px: 1,
             py: 0.18,
             borderRadius: 999,
             color: channelColor,
@@ -2291,24 +2298,13 @@ export default function DeviceList({
             fontSize: "0.72rem",
             fontWeight: 700,
             lineHeight: 1.1,
-          }}
-        >
-          {channelLabel}
-        </Box>
-        <Box
-          component="span"
-          title={branch}
-          sx={{
-            minWidth: 0,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            color: "#dbeafe",
-            fontSize: "0.86rem",
-            fontWeight: 550,
           }}
+          title={label}
         >
-          {branch}
+          {label}
         </Box>
       </Box>
     );
