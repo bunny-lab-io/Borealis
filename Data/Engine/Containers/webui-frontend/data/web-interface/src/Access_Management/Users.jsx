@@ -4,8 +4,6 @@ import {
   Paper,
   Box,
   Typography,
-  IconButton,
-  Menu,
   MenuItem,
   Button,
   Dialog,
@@ -17,11 +15,14 @@ import {
   Checkbox,
   Stack,
 } from "@mui/material";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
+import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
 import GroupIcon from "@mui/icons-material/Group";
 import LocationCityIcon from "@mui/icons-material/LocationCity";
+import LockResetIcon from "@mui/icons-material/LockReset";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
+import SecurityRoundedIcon from "@mui/icons-material/SecurityRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { ConfirmDeleteDialog } from "../Dialogs.jsx";
@@ -42,6 +43,8 @@ import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
 import { buildSiteAssignmentPath } from "../app/routes/paths.js";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../Row_Context_Menu.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -95,7 +98,7 @@ export default function UserManagement() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
   const [rows, setRows] = useState([]);
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
   const [menuUser, setMenuUser] = useState(null);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
@@ -239,16 +242,28 @@ export default function UserManagement() {
     []
   );
 
-  const openMenu = (event, user) => {
-    setMenuAnchor(event.currentTarget);
+  const openMenu = useCallback((event, user, node = null) => {
+    const mouseEvent = event?.event || event;
+    mouseEvent?.preventDefault?.();
+    mouseEvent?.stopPropagation?.();
+    if (!user) return;
+    try {
+      if (node && !node.isSelected?.()) {
+        node.setSelected?.(true, true);
+      }
+    } catch {}
     setMenuUser(user);
-  };
-  const closeMenu = () => {
-    setMenuAnchor(null);
+    setContextMenu({
+      top: Number(mouseEvent?.clientY || 0),
+      left: Number(mouseEvent?.clientX || 0),
+    });
+  }, []);
+  const closeMenu = useCallback(() => {
+    setContextMenu(null);
     setMenuUser(null);
-  };
+  }, []);
 
-  const confirmDelete = (user) => {
+  const confirmDelete = useCallback((user) => {
     if (!user) return;
     if (isDirectoryUser(user)) {
       setWarnMessage("Directory users are managed by their source provider. Disable the cached directory user instead.");
@@ -262,7 +277,7 @@ export default function UserManagement() {
     }
     setDeleteTarget(user);
     setConfirmDeleteOpen(true);
-  };
+  }, [me]);
 
   const doDelete = async () => {
     const user = deleteTarget;
@@ -292,7 +307,7 @@ export default function UserManagement() {
     }
   };
 
-  const openChangeRole = (user) => {
+  const openChangeRole = useCallback((user) => {
     if (!user) return;
     if (isDirectoryUser(user)) {
       setWarnMessage("Directory user roles are managed by Directory Services group mappings.");
@@ -308,7 +323,7 @@ export default function UserManagement() {
     setChangeRoleTarget(user);
     setChangeRoleNext(nextRole);
     setConfirmChangeRoleOpen(true);
-  };
+  }, [me]);
 
   const doChangeRole = async () => {
     const user = changeRoleTarget;
@@ -340,7 +355,7 @@ export default function UserManagement() {
     }
   };
 
-  const openResetMfa = (user) => {
+  const openResetMfa = useCallback((user) => {
     if (!user) return;
     if (isDirectoryUser(user)) {
       setWarnMessage("Directory user MFA is reset by the operator from their own account recovery controls.");
@@ -349,9 +364,9 @@ export default function UserManagement() {
     }
     setResetMfaTarget(user);
     setResetMfaOpen(true);
-  };
+  }, []);
 
-  const openChangeMfaState = (user) => {
+  const openChangeMfaState = useCallback((user) => {
     if (!user) return;
     if (isDirectoryUser(user)) {
       setWarnMessage("Directory users must keep Borealis MFA enabled.");
@@ -361,7 +376,7 @@ export default function UserManagement() {
     setConfirmMfaStateTarget(user);
     setConfirmMfaStateNextEnabled(!Boolean(user.mfa_enabled));
     setConfirmMfaStateOpen(true);
-  };
+  }, []);
 
   const doChangeMfaState = async () => {
     const user = confirmMfaStateTarget;
@@ -542,7 +557,7 @@ export default function UserManagement() {
     }
   };
 
-  const openReset = (user) => {
+  const openReset = useCallback((user) => {
     if (!user) return;
     if (isDirectoryUser(user)) {
       setWarnMessage("Directory user passwords are managed by their source provider.");
@@ -552,7 +567,7 @@ export default function UserManagement() {
     setResetTarget(user);
     setResetOpen(true);
     setNewPassword("");
-  };
+  }, []);
 
   const openCreate = useCallback(() => {
     setCreateOpen(true);
@@ -660,6 +675,108 @@ export default function UserManagement() {
       setWarnOpen(true);
     }
   };
+
+  const userContextActions = useMemo(() => {
+    const user = menuUser;
+    if (!user) return [];
+    const directory = isDirectoryUser(user);
+    const currentUser = Boolean(
+      me && user.username && String(me.username).toLowerCase() === String(user.username).toLowerCase()
+    );
+    const mfaBusy = Boolean(
+      mfaBusyUser && String(mfaBusyUser).toLowerCase() === String(user.username || "").toLowerCase()
+    );
+    const recoveryRequired = Boolean(user.auth_reset_required);
+    const mfaEnabled = Boolean(user.mfa_enabled);
+    const protectedUserReason = directory
+      ? "Directory users are managed by their source provider."
+      : currentUser
+      ? "Cannot change current signed-in operator."
+      : "";
+    const resetMfaDisabledReason = directory
+      ? "Directory user MFA is reset by account recovery controls."
+      : !mfaEnabled
+      ? "MFA is not enabled."
+      : recoveryRequired
+      ? "Recover account before resetting MFA."
+      : "";
+    const mfaToggleDisabledReason = directory
+      ? "Directory users must keep Borealis MFA enabled."
+      : recoveryRequired
+      ? "Recover account before changing MFA."
+      : mfaBusy
+      ? "MFA update already in progress."
+      : "";
+
+    return [
+      {
+        id: "user-reset-password",
+        label: recoveryRequired ? "Recover Account" : "Reset Password",
+        icon: LockResetIcon,
+        group: "primary",
+        disabled: directory,
+        disabledReason: directory ? "Directory passwords are managed by their source provider." : "",
+        onClick: () => openReset(user),
+      },
+      {
+        id: "user-change-role",
+        label: "Change Role",
+        icon: AdminPanelSettingsIcon,
+        group: "primary",
+        disabled: directory || currentUser,
+        disabledReason: protectedUserReason,
+        onClick: () => openChangeRole(user),
+      },
+      {
+        id: "user-toggle-mfa",
+        label: mfaEnabled ? "Disable MFA" : "Enable MFA",
+        icon: SecurityRoundedIcon,
+        group: "primary",
+        disabled: directory || recoveryRequired || mfaBusy,
+        disabledReason: mfaToggleDisabledReason,
+        onClick: () => openChangeMfaState(user),
+      },
+      {
+        id: "user-reset-mfa",
+        label: "Reset MFA",
+        icon: LockResetIcon,
+        group: "primary",
+        disabled: directory || !mfaEnabled || recoveryRequired,
+        disabledReason: resetMfaDisabledReason,
+        onClick: () => openResetMfa(user),
+      },
+      {
+        id: "user-disable-directory-cache",
+        label: "Disable Directory Cache",
+        icon: AccountTreeRoundedIcon,
+        group: "organize",
+        hidden: !directory,
+        disabled: Boolean(user.directory_disabled),
+        disabledReason: Boolean(user.directory_disabled) ? "Directory cache is already disabled." : "",
+        onClick: () => {
+          setDisableDirectoryTarget(user);
+          setDisableDirectoryOpen(true);
+        },
+      },
+      {
+        id: "user-delete",
+        label: "Delete User",
+        icon: DeleteRoundedIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: directory || currentUser,
+        disabledReason: protectedUserReason,
+        onClick: () => confirmDelete(user),
+      },
+    ];
+  }, [confirmDelete, me, menuUser, mfaBusyUser, openChangeMfaState, openChangeRole, openReset, openResetMfa]);
+
+  const contextMenuSubtitle = useMemo(() => {
+    if (!menuUser) return "User actions";
+    const username = String(menuUser.username || "").trim();
+    const source = userSourceLabel(menuUser);
+    return [username, source].filter(Boolean).join(" - ");
+  }, [menuUser]);
 
   const columnDefs = useMemo(
     () => [
@@ -831,35 +948,9 @@ export default function UserManagement() {
           );
         },
       },
-      {
-        headerName: "Actions",
-        field: "actions",
-        minWidth: 140,
-        flex: 1,
-        sortable: false,
-        filter: false,
-        suppressHeaderMenuButton: true,
-        suppressHeaderContextMenu: true,
-        cellRenderer: (params) => {
-          const user = params.data || {};
-          return (
-            <Box sx={{ display: "flex", alignItems: "center", justifyContent: "flex-end", width: "100%" }}>
-              <IconButton
-                size="small"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openMenu(event, user);
-                }}
-                sx={{ color: "#cbd5e1" }}
-              >
-                <MoreVertIcon fontSize="inherit" />
-              </IconButton>
-            </Box>
-          );
-        },
-      },
+      buildRowContextMenuColumnDef(openMenu, { tooltip: "User Actions" }),
     ],
-    [mfaBusyUser, recoveryTokenTheme, sourceTheme]
+    [mfaBusyUser, openMenu, recoveryTokenTheme, sourceTheme]
   );
 
   const defaultColDef = useMemo(
@@ -984,11 +1075,14 @@ export default function UserManagement() {
                 rowSelection={rowSelection}
                 selectionColumnDef={selectionColumnDef}
                 suppressCellFocus
+                suppressContextMenu
+                preventDefaultOnContextMenu
                 pagination
                 paginationPageSize={20}
                 paginationPageSizeSelector={[20, 50, 100]}
                 animateRows
                 getRowId={(params) => String(params.data?.username || "")}
+                onCellContextMenu={(params) => openMenu(params.event, params.data, params.node)}
                 onGridReady={(params) => {
                   gridApiRef.current = params.api;
                   autoSizeColumns();
@@ -1008,90 +1102,15 @@ export default function UserManagement() {
           </Box>
         </PageBodyFrame>
 
-        <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
+        <RowContextMenu
+          open={Boolean(contextMenu)}
           onClose={closeMenu}
-          anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-          transformOrigin={{ vertical: "top", horizontal: "right" }}
-          PaperProps={{ sx: { bgcolor: "#111827", color: "#e5eefc", fontSize: "0.9rem" } }}
-        >
-          <MenuItem
-            disabled={
-              isDirectoryUser(menuUser) ||
-              (me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase())
-            }
-            onClick={() => {
-              const user = menuUser;
-              closeMenu();
-              confirmDelete(user);
-            }}
-          >
-            Delete User
-          </MenuItem>
-          <MenuItem
-            disabled={isDirectoryUser(menuUser)}
-            onClick={() => {
-              const user = menuUser;
-              closeMenu();
-              openReset(user);
-            }}
-          >
-            {Boolean(menuUser?.auth_reset_required) ? "Recover Account" : "Reset Password"}
-          </MenuItem>
-          <MenuItem
-            disabled={
-              isDirectoryUser(menuUser) ||
-              (me && menuUser && String(me.username).toLowerCase() === String(menuUser.username).toLowerCase())
-            }
-            onClick={() => {
-              const user = menuUser;
-              closeMenu();
-              openChangeRole(user);
-            }}
-          >
-            Change Role
-          </MenuItem>
-          <MenuItem
-            disabled={
-              isDirectoryUser(menuUser) ||
-              Boolean(menuUser?.auth_reset_required) ||
-              Boolean(
-                mfaBusyUser && menuUser && String(mfaBusyUser).toLowerCase() === String(menuUser.username || "").toLowerCase()
-              )
-            }
-            onClick={() => {
-              const user = menuUser;
-              closeMenu();
-              openChangeMfaState(user);
-            }}
-          >
-            {Boolean(menuUser?.mfa_enabled) ? "Disable MFA" : "Enable MFA"}
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              const user = menuUser;
-              closeMenu();
-              openResetMfa(user);
-            }}
-            disabled={isDirectoryUser(menuUser) || !Boolean(menuUser?.mfa_enabled) || Boolean(menuUser?.auth_reset_required)}
-          >
-            Reset MFA
-          </MenuItem>
-          {isDirectoryUser(menuUser) ? (
-            <MenuItem
-              disabled={Boolean(menuUser?.directory_disabled)}
-              onClick={() => {
-                const user = menuUser;
-                closeMenu();
-                setDisableDirectoryTarget(user);
-                setDisableDirectoryOpen(true);
-              }}
-            >
-              Disable Directory Cache
-            </MenuItem>
-          ) : null}
-        </Menu>
+          position={contextMenu ? { top: contextMenu.top, left: contextMenu.left } : null}
+          headerIcon={isDirectoryUser(menuUser) ? AccountTreeRoundedIcon : GroupIcon}
+          title={menuUser?.display_name || menuUser?.username || "User Actions"}
+          subtitle={contextMenuSubtitle}
+          actions={userContextActions}
+        />
 
         <Dialog open={resetOpen} onClose={() => setResetOpen(false)} maxWidth="xs" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
           <DialogTitle sx={DIALOG_TITLE_SX}>

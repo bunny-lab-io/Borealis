@@ -33,6 +33,7 @@ import dayjs from "dayjs";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { CreateSiteDialog, RenameSiteDialog } from "../Dialogs.jsx";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
@@ -2698,6 +2699,20 @@ export default function SiteList() {
     []
   );
 
+  const handleOpenSiteContextMenu = useCallback((event, row, rowNode = null) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (rowNode && !rowNode.isSelected?.()) {
+      rowNode.setSelected?.(true, true);
+    }
+    setSiteContextMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row: row || null,
+    });
+  }, []);
+
   const columnDefs = useMemo(() => [
     {
       headerName: "Name",
@@ -2837,7 +2852,8 @@ export default function SiteList() {
         );
       },
     },
-  ], [handleOpenDevicesForSite]);
+    buildRowContextMenuColumnDef(handleOpenSiteContextMenu, { tooltip: "Site Actions" }),
+  ], [handleOpenDevicesForSite, handleOpenSiteContextMenu]);
 
   const defaultColDef = useMemo(() => ({
     sortable: false,
@@ -2875,20 +2891,6 @@ export default function SiteList() {
     setInstallMenuAnchorEl(event.currentTarget);
     setInstallMenuSite(singleSelectedSite);
   }, [singleSelectedSite]);
-
-  const handleOpenSiteContextMenu = useCallback((event, row, rowNode = null) => {
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    if (rowNode && !rowNode.isSelected?.()) {
-      rowNode.setSelected?.(true, true);
-    }
-    setSiteContextMenu({
-      open: true,
-      top: Number(event?.clientY || 0),
-      left: Number(event?.clientX || 0),
-      row: row || null,
-    });
-  }, []);
 
   const handleCloseSiteContextMenu = useCallback(() => {
     setSiteContextMenu({ open: false, top: 0, left: 0, row: null });

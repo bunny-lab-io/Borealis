@@ -2,15 +2,13 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
-  IconButton,
-  Menu,
-  MenuItem,
   Paper,
   Tooltip,
   Typography,
 } from "@mui/material";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
 import AddIcon from "@mui/icons-material/Add";
+import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LockIcon from "@mui/icons-material/Lock";
 import LockOpenIcon from "@mui/icons-material/LockOpenRounded";
@@ -26,6 +24,8 @@ import { ConfirmDeleteDialog } from "../Dialogs.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useRoutePageChrome } from "../app/hooks/useRoutePageChrome.js";
 import { useAuth } from "../app/providers/AuthContext.jsx";
+import { buildRowContextMenuColumnDef } from "../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../Row_Context_Menu.jsx";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -205,7 +205,7 @@ export default function CredentialList() {
   const [loading, setLoading] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [error, setError] = useState("");
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null);
   const [menuRow, setMenuRow] = useState(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState("create");
@@ -224,13 +224,25 @@ export default function CredentialList() {
   );
   const gridRows = useMemo(() => [aegisRow, githubTokenRow, ...rows], [aegisRow, githubTokenRow, rows]);
 
-  const openMenu = useCallback((event, row) => {
-    setMenuAnchor(event.currentTarget);
+  const openMenu = useCallback((event, row, node = null) => {
+    const mouseEvent = event?.event || event;
+    mouseEvent?.preventDefault?.();
+    mouseEvent?.stopPropagation?.();
+    if (!row) return;
+    try {
+      if (node && !node.isSelected?.()) {
+        node.setSelected?.(true, true);
+      }
+    } catch {}
     setMenuRow(row);
+    setContextMenu({
+      top: Number(mouseEvent?.clientY || 0),
+      left: Number(mouseEvent?.clientX || 0),
+    });
   }, []);
 
   const closeMenu = useCallback(() => {
-    setMenuAnchor(null);
+    setContextMenu(null);
     setMenuRow(null);
   }, []);
 
@@ -266,24 +278,6 @@ export default function CredentialList() {
       </Box>
     );
   }, []);
-
-  const actionCellRenderer = useCallback(
-    (params) => {
-      const row = params.data;
-      if (!row) return null;
-      const handleClick = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        openMenu(event, row);
-      };
-      return (
-        <IconButton size="small" onClick={handleClick} sx={{ color: "#7db7ff" }}>
-          <MoreVertIcon fontSize="small" />
-        </IconButton>
-      );
-    },
-    [openMenu]
-  );
 
   const nameComparator = useCallback((valueA, valueB, nodeA, nodeB) => {
     const sortWeight = (rowKind) => {
@@ -387,20 +381,9 @@ export default function CredentialList() {
         field: "updated_at",
         valueGetter: (params) => formatTs(params.data?.updated_at || params.data?.created_at)
       },
-      {
-        headerName: "",
-        field: "__actions__",
-        minWidth: 70,
-        maxWidth: 80,
-        sortable: false,
-        filter: false,
-        resizable: false,
-        suppressHeaderMenuButton: true,
-        cellRenderer: actionCellRenderer,
-        pinned: "right"
-      }
+      buildRowContextMenuColumnDef(openMenu, { tooltip: "Credential Actions" })
     ],
-    [actionCellRenderer, connectionCellRenderer, nameComparator]
+    [connectionCellRenderer, nameComparator, openMenu]
   );
 
   const defaultColDef = useMemo(
@@ -631,43 +614,64 @@ export default function CredentialList() {
     return actions;
   }, [canMutateCredentials, githubLoading, handleCreate, loading, refreshCredentialPage]);
 
-  const menuItems = useMemo(() => {
+  const menuActions = useMemo(() => {
     if (menuRow?.row_kind === "aegis") {
       return [
-        <MenuItem key="aegis-rotate" onClick={() => handleAegisMenuAction("rotate")}>
-          Rotate Aegis Cipher
-        </MenuItem>,
-        <MenuItem
-          key="aegis-force-reset"
-          onClick={() => handleAegisMenuAction("force_reset")}
-          sx={{ color: "#ff9aa5" }}
-        >
-          Force Reset Aegis Cipher
-        </MenuItem>,
+        {
+          id: "aegis-rotate",
+          label: "Rotate Aegis Cipher",
+          icon: VpnKeyIcon,
+          group: "primary",
+          description: "Re-key protected secret storage.",
+          onClick: () => handleAegisMenuAction("rotate"),
+        },
+        {
+          id: "aegis-force-reset",
+          label: "Force Reset Aegis Cipher",
+          icon: WarningAmberRoundedIcon,
+          group: "danger",
+          intent: "danger",
+          description: "Remove stored protected secret material.",
+          onClick: () => handleAegisMenuAction("force_reset"),
+        },
       ];
     }
     if (menuRow?.row_kind === "github_token") {
       return [
-        <MenuItem key="github-token-edit" disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
-          Edit Token
-        </MenuItem>,
+        {
+          id: "github-token-edit",
+          label: "Edit Token",
+          icon: EditRoundedIcon,
+          group: "primary",
+          disabled: !canMutateCredentials,
+          disabledReason: !canMutateCredentials ? "Finish bootstrap before editing credentials." : "",
+          onClick: () => handleEdit(menuRow),
+        },
       ];
     }
     if (!menuRow) {
       return [];
     }
     return [
-      <MenuItem key="credential-edit" disabled={!canMutateCredentials} onClick={() => handleEdit(menuRow)}>
-        Edit
-      </MenuItem>,
-      <MenuItem
-        key="credential-delete"
-        disabled={!canMutateCredentials}
-        onClick={() => handleDelete(menuRow)}
-        sx={{ color: canMutateCredentials ? "#ff8080" : "inherit" }}
-      >
-        Delete
-      </MenuItem>,
+      {
+        id: "credential-edit",
+        label: "Edit",
+        icon: EditRoundedIcon,
+        group: "primary",
+        disabled: !canMutateCredentials,
+        disabledReason: !canMutateCredentials ? "Finish bootstrap before editing credentials." : "",
+        onClick: () => handleEdit(menuRow),
+      },
+      {
+        id: "credential-delete",
+        label: "Delete",
+        icon: DeleteRoundedIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: !canMutateCredentials,
+        disabledReason: !canMutateCredentials ? "Finish bootstrap before deleting credentials." : "",
+        onClick: () => handleDelete(menuRow),
+      },
     ];
   }, [
     canMutateCredentials,
@@ -676,6 +680,24 @@ export default function CredentialList() {
     handleEdit,
     menuRow,
   ]);
+
+  const contextMenuHeaderIcon = useMemo(() => {
+    if (menuRow?.row_kind === "aegis") return VpnKeyIcon;
+    if (menuRow?.row_kind === "github_token") return GitHubIcon;
+    if (String(menuRow?.credential_type || "").toLowerCase() === "machine") return ComputerIcon;
+    return LockIcon;
+  }, [menuRow]);
+
+  const contextMenuSubtitle = useMemo(() => {
+    if (!menuRow) return "Credential actions";
+    if (menuRow.row_kind === "aegis") {
+      return menuRow.site_name || menuRow.aegis_status_label || "Protected secrets";
+    }
+    if (menuRow.row_kind === "github_token") {
+      return menuRow.github_rate_label || "GitHub API rate limit";
+    }
+    return `${formatCredentialConnectionLabel(menuRow)} - ${menuRow.site_name || "Global"}`;
+  }, [menuRow]);
 
   useRoutePageChrome({
     title: "Credentials",
@@ -781,20 +803,23 @@ export default function CredentialList() {
             getRowId={getRowId}
             overlayNoRowsTemplate="<span class='ag-overlay-no-rows-center'>No credentials have been created yet.</span>"
             suppressCellFocus
+            suppressContextMenu
+            preventDefaultOnContextMenu
+            onCellContextMenu={(params) => openMenu(params.event, params.data, params.node)}
             theme={myTheme}
           />
         </Box>
       </PageBodyFrame>
 
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
+      <RowContextMenu
+        open={Boolean(contextMenu)}
         onClose={closeMenu}
-        elevation={2}
-        PaperProps={{ sx: { bgcolor: "#1f1f1f", color: "#f5f5f5" } }}
-      >
-        {menuItems}
-      </Menu>
+        position={contextMenu ? { top: contextMenu.top, left: contextMenu.left } : null}
+        headerIcon={contextMenuHeaderIcon}
+        title={menuRow?.name || "Credential Actions"}
+        subtitle={contextMenuSubtitle}
+        actions={menuActions}
+      />
 
       <CredentialEditor
         open={editorOpen}

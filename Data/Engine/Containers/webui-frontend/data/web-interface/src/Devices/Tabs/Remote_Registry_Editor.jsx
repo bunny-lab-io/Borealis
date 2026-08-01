@@ -34,6 +34,7 @@ import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRena
 import EditRoundedIcon from "@mui/icons-material/EditRounded";
 import RefreshRoundedIcon from "@mui/icons-material/RefreshRounded";
 import UnfoldLessRoundedIcon from "@mui/icons-material/UnfoldLessRounded";
+import { buildRowContextMenuColumnDef } from "../../Grid_Row_Context_Menu_Button.jsx";
 import {
   DEFAULT_GRID_COL_DEF,
   DEVICE_DETAILS_GRID_THEME,
@@ -888,6 +889,13 @@ export default function RemoteRegistryEditor({ device }) {
     [handleOpenContextMenuAtPointer]
   );
 
+  const handleRowContextMenuButton = useCallback(
+    (event, row, node, params = {}) => {
+      handleGridCellContextMenu({ ...params, event, data: row, node, api: params?.api || gridRef.current?.api });
+    },
+    [handleGridCellContextMenu]
+  );
+
   const handleGridShellContextMenu = useCallback(
     (event) => {
       if (event?.target?.closest?.(".ag-cell")) return;
@@ -1192,8 +1200,9 @@ export default function RemoteRegistryEditor({ device }) {
         resizable: false,
         cellRenderer: (params) => <Typography component="span" sx={GRID_MUTED_CELL_SX}>{params?.value || ""}</Typography>,
       },
+      buildRowContextMenuColumnDef(handleRowContextMenuButton, { tooltip: "Registry Row Actions" }),
     ],
-    []
+    [handleRowContextMenuButton]
   );
 
   const rowSelection = useMemo(() => ({ mode: "singleRow", enableClickSelection: true }), []);

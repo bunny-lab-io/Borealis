@@ -23,6 +23,7 @@ import LockOpenRoundedIcon from "@mui/icons-material/LockOpenRounded";
 import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ConfirmDeleteDialog } from "../../Dialogs.jsx";
+import { buildRowContextMenuColumnDef } from "../../Grid_Row_Context_Menu_Button.jsx";
 import {
   DIALOG_ACTIONS_SX,
   DIALOG_BUTTON_SX,
@@ -2075,8 +2076,9 @@ export default function InstalledSoftwareTab({
           />
         ),
       },
+      buildRowContextMenuColumnDef(handleOpenSoftwareActionMenu, { tooltip: "Software Actions" }),
     ],
-    [busyActionKey, hostname, requestUninstall]
+    [busyActionKey, handleOpenSoftwareActionMenu, hostname, requestUninstall]
   );
 
   const getSoftwareRowId = useCallback(

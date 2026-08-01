@@ -9,7 +9,6 @@ import {
   Typography,
   Button,
   IconButton,
-  Menu,
   MenuItem,
   Popover,
   TextField,
@@ -18,13 +17,21 @@ import {
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import ViewColumnIcon from "@mui/icons-material/ViewColumn";
 import AddIcon from "@mui/icons-material/Add";
+import AltRouteRoundedIcon from "@mui/icons-material/AltRouteRounded";
 import CachedIcon from "@mui/icons-material/Cached";
 import DevicesOtherIcon from "@mui/icons-material/DevicesOther";
 import DeleteRoundedIcon from "@mui/icons-material/DeleteRounded";
+import DriveFileRenameOutlineRoundedIcon from "@mui/icons-material/DriveFileRenameOutlineRounded";
+import LocationCityRoundedIcon from "@mui/icons-material/LocationCityRounded";
 import AccountTreeRoundedIcon from "@mui/icons-material/AccountTreeRounded";
 import { AgGridReact } from "ag-grid-react";
 import { ModuleRegistry, AllCommunityModule, themeQuartz } from "ag-grid-community";
 import { DeleteDeviceDialog, CreateCustomViewDialog, RenameCustomViewDialog } from "../Dialogs.jsx";
+import {
+  ROW_CONTEXT_MENU_BUTTON_SX,
+  ROW_CONTEXT_MENU_COLUMN_WIDTH,
+} from "../Grid_Row_Context_Menu_Button.jsx";
+import RowContextMenu from "../Row_Context_Menu.jsx";
 import AddDevice from "./Add_Device.jsx";
 import PageBodyFrame from "../PageBodyFrame.jsx";
 import { useAppNotifications } from "../app/hooks/useAppNotifications.js";
@@ -947,7 +954,7 @@ export default function DeviceList({
   const [rows, setRows] = useState(() => initialRows);
   const [metadataFields, setMetadataFields] = useState(() => initialMetadataFields);
   const [loading, setLoading] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [deviceContextMenu, setDeviceContextMenu] = useState({ open: false, top: 0, left: 0, row: null });
   const [selected, setSelected] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1042,8 +1049,11 @@ export default function DeviceList({
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const [renameViewName, setRenameViewName] = useState("");
   const [renameTarget, setRenameTarget] = useState(null); // {id, name}
-  const [viewActionAnchor, setViewActionAnchor] = useState(null); // anchor for per-item actions
-  const [viewActionTarget, setViewActionTarget] = useState(null); // view object for actions
+  const [viewActionMenu, setViewActionMenu] = useState({ open: false, top: 0, left: 0, target: null });
+  const viewActionTarget = viewActionMenu.target;
+  const closeViewActionMenu = useCallback(() => {
+    setViewActionMenu({ open: false, top: 0, left: 0, target: null });
+  }, []);
 
   // Column configuration and rearranging state
   const STATIC_COL_LABELS = useMemo(
@@ -1647,6 +1657,50 @@ export default function DeviceList({
     }
   }, [COL_LABELS, defaultColumns, replaceFilters]);
 
+  const viewActionMenuActions = useMemo(
+    () => [
+      {
+        id: "rename-view",
+        label: "Rename View",
+        icon: DriveFileRenameOutlineRoundedIcon,
+        group: "primary",
+        disabled: !viewActionTarget,
+        disabledReason: !viewActionTarget ? "Select a custom view first." : "",
+        description: "Change saved custom view name.",
+        onClick: () => {
+          const view = viewActionTarget;
+          if (!view) return;
+          setRenameTarget(view);
+          setRenameViewName(view.name || "");
+          setRenameDialogOpen(true);
+        },
+      },
+      {
+        id: "delete-view",
+        label: "Delete View",
+        icon: DeleteRoundedIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: !viewActionTarget,
+        disabledReason: !viewActionTarget ? "Select a custom view first." : "",
+        description: "Remove this saved custom Device List view.",
+        onClick: async () => {
+          const view = viewActionTarget;
+          if (!view) return;
+          try {
+            await fetch(`/api/device_list_views/${encodeURIComponent(view.id)}`, { method: "DELETE" });
+          } catch {}
+          setViews((prev) => prev.filter((item) => String(item.id) !== String(view.id)));
+          if (String(selectedViewId) === String(view.id)) {
+            setSelectedViewId("default");
+            applyView({ id: "default" });
+          }
+        },
+      },
+    ],
+    [applyView, selectedViewId, viewActionTarget]
+  );
+
   const statusTokenTheme = useMemo(
     () => ({
       Online: {
@@ -1743,12 +1797,25 @@ export default function DeviceList({
     [deleteTargetIds, rows]
   );
 
-  const closeMenu = useCallback(() => setMenuAnchor(null), []);
+  const closeMenu = useCallback(() => {
+    setDeviceContextMenu({ open: false, top: 0, left: 0, row: null });
+  }, []);
 
-  const openMenu = useCallback((event, row) => {
+  const openMenu = useCallback((event, row, rowNode = null) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (!row) return;
+    if (rowNode && !rowNode.isSelected?.()) {
+      rowNode.setSelected?.(true, true);
+    }
     setDeleteError("");
-    setMenuAnchor(event.currentTarget);
     setSelected(row);
+    setDeviceContextMenu({
+      open: true,
+      top: Number(event?.clientY || 0),
+      left: Number(event?.clientX || 0),
+      row,
+    });
   }, []);
 
   const openPurgeDialog = useCallback((targetRows) => {
@@ -1787,6 +1854,19 @@ export default function DeviceList({
     return selectedDeviceRows;
   }, [selected, selectedDeviceRows, selectedIds]);
 
+  const openSiteAssignmentDialog = useCallback(async () => {
+    closeMenu();
+    await fetchSites();
+    const targets = getContextTargetRows();
+    const hostnames = targets
+      .map((row) => String(row?.hostname || row?.summary?.hostname || "").trim())
+      .filter(Boolean);
+    if (!hostnames.length) return;
+    setAssignTargets(hostnames);
+    setAssignSiteId(null);
+    setAssignDialogOpen(true);
+  }, [closeMenu, fetchSites, getContextTargetRows]);
+
   const fetchAgentBranches = useCallback(async () => {
     setAgentBranchesLoading(true);
     setAgentBranchLoadError("");
@@ -1823,6 +1903,97 @@ export default function DeviceList({
       void fetchAgentBranches();
     },
     [agentBranchChannelSaving, fetchAgentBranches, isAdmin, selectedDeviceRows]
+  );
+
+  const contextTargetRows = getContextTargetRows();
+  const contextTargetCount = contextTargetRows.length;
+  const contextTargetHasPurgeGuid = contextTargetRows.some((row) => resolveDevicePurgeGuid(row));
+  const deviceContextTitle =
+    contextTargetCount > 1
+      ? `${contextTargetCount.toLocaleString()} Devices Selected`
+      : getDeviceDisplayLabel(contextTargetRows[0] || selected);
+  const deviceContextSubtitle =
+    contextTargetCount > 1
+      ? selected
+        ? `Context row: ${getDeviceDisplayLabel(selected)}`
+        : "Bulk device actions"
+      : String(contextTargetRows[0]?.site || contextTargetRows[0]?.summary?.site_name || "Not Configured").trim();
+  const deviceContextActions = useMemo(
+    () => [
+      {
+        id: "add-to-site",
+        label: "Add to Site",
+        icon: AddIcon,
+        group: "primary",
+        disabled: !contextTargetCount,
+        disabledReason: !contextTargetCount ? "Select a device first." : "",
+        description: `Choose a site for ${contextTargetCount || 1} device${contextTargetCount === 1 ? "" : "s"}.`,
+        onClick: () => {
+          void openSiteAssignmentDialog();
+        },
+      },
+      {
+        id: "move-to-site",
+        label: "Move to Another Site",
+        icon: LocationCityRoundedIcon,
+        group: "primary",
+        disabled: !contextTargetCount,
+        disabledReason: !contextTargetCount ? "Select a device first." : "",
+        description: "Reassign selected device inventory to a different site.",
+        onClick: () => {
+          void openSiteAssignmentDialog();
+        },
+      },
+      {
+        id: "change-branch-channel",
+        label: "Change Branch/Channel",
+        icon: AltRouteRoundedIcon,
+        group: "organize",
+        disabled: !isAdmin || !contextTargetHasPurgeGuid || agentBranchChannelSaving,
+        disabledReason: !isAdmin
+          ? "Administrator access is required."
+          : !contextTargetHasPurgeGuid
+            ? "No selected device has an Agent GUID."
+            : agentBranchChannelSaving
+              ? "Branch/channel change already running."
+              : "",
+        description: "Set Agent release channel and branch for selected devices.",
+        onClick: () => {
+          const targets = getContextTargetRows();
+          closeMenu();
+          openAgentBranchChannelDialog(targets);
+        },
+      },
+      {
+        id: "purge-device",
+        label: contextTargetCount > 1 ? "Purge Selected" : "Purge Device",
+        icon: DeleteRoundedIcon,
+        group: "danger",
+        intent: "danger",
+        disabled: !isAdmin || !contextTargetCount || deleteBusy,
+        disabledReason: !isAdmin
+          ? "Administrator access is required."
+          : !contextTargetCount
+            ? "Select a device first."
+            : deleteBusy
+              ? "Device purge already running."
+              : "",
+        description: "Remove selected Agent inventory and related scheduled job links.",
+        onClick: confirmDelete,
+      },
+    ],
+    [
+      agentBranchChannelSaving,
+      closeMenu,
+      confirmDelete,
+      contextTargetCount,
+      contextTargetHasPurgeGuid,
+      deleteBusy,
+      getContextTargetRows,
+      isAdmin,
+      openAgentBranchChannelDialog,
+      openSiteAssignmentDialog,
+    ]
   );
 
   const closeAgentBranchChannelDialog = useCallback(() => {
@@ -2315,11 +2486,10 @@ export default function DeviceList({
       const row = params.data;
       if (!row) return null;
       const handleClick = (event) => {
-        event.stopPropagation();
-        openMenu(event, row);
+        openMenu(event, row, params.node);
       };
       return (
-        <IconButton size="small" onClick={handleClick} sx={{ color: "#ccc" }}>
+        <IconButton size="small" onClick={handleClick} sx={ROW_CONTEXT_MENU_BUTTON_SX}>
           <MoreVertIcon fontSize="small" />
         </IconButton>
       );
@@ -2626,8 +2796,9 @@ export default function DeviceList({
       {
         headerName: "",
         field: "__actions__",
-        width: 64,
-        maxWidth: 64,
+        width: ROW_CONTEXT_MENU_COLUMN_WIDTH,
+        minWidth: ROW_CONTEXT_MENU_COLUMN_WIDTH,
+        maxWidth: ROW_CONTEXT_MENU_COLUMN_WIDTH,
         resizable: false,
         sortable: false,
         suppressHeaderMenuButton: true,
@@ -2814,11 +2985,16 @@ export default function DeviceList({
                         <IconButton
                           size="small"
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
-                            setViewActionAnchor(e.currentTarget);
-                            setViewActionTarget(v);
+                            setViewActionMenu({
+                              open: true,
+                              top: Number(e.clientY || 0),
+                              left: Number(e.clientX || 0),
+                              target: v,
+                            });
                           }}
-                          sx={{ color: "#ccc" }}
+                          sx={ROW_CONTEXT_MENU_BUTTON_SX}
                         >
                           <MoreVertIcon fontSize="small" />
                         </IconButton>
@@ -2940,55 +3116,31 @@ export default function DeviceList({
             rowSelection={rowSelection}
             selectionColumnDef={selectionColumnDef}
             suppressCellFocus
+            suppressContextMenu
+            preventDefaultOnContextMenu
             pagination
             paginationPageSize={100}
             paginationPageSizeSelector={[20, 50, 100]}
             animateRows
             onSelectionChanged={handleSelectionChanged}
             onFilterChanged={handleFilterChanged}
+            onCellContextMenu={(params) => openMenu(params.event, params.data, params.node)}
             onGridReady={handleGridReady}
             getRowId={getRowId}
             theme={myTheme}
           />
         </Box>
       </PageBodyFrame>
-      {/* View actions menu (rename/delete for custom views) */}
-      <Menu
-        anchorEl={viewActionAnchor}
-        open={Boolean(viewActionAnchor)}
-        onClose={() => { setViewActionAnchor(null); setViewActionTarget(null); }}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            fontSize: "13px",
-            border: "1px solid rgba(148,163,184,0.3)",
-            backdropFilter: "blur(16px)",
-          },
-        }}
-      >
-        <MenuItem onClick={() => {
-          const v = viewActionTarget;
-          setViewActionAnchor(null);
-          if (!v) return;
-          setRenameTarget(v);
-          setRenameViewName(v.name || "");
-          setRenameDialogOpen(true);
-        }}>Rename</MenuItem>
-        <MenuItem sx={{ color: '#ff4f4f' }} onClick={async () => {
-          const v = viewActionTarget;
-          setViewActionAnchor(null);
-          if (!v) return;
-          try {
-            await fetch(`/api/device_list_views/${encodeURIComponent(v.id)}`, { method: 'DELETE' });
-          } catch {}
-          setViews((prev) => prev.filter((x) => String(x.id) !== String(v.id)));
-          if (String(selectedViewId) === String(v.id)) {
-            setSelectedViewId('default');
-            applyView({ id: 'default' });
-          }
-        }}>Delete</MenuItem>
-      </Menu>
+      <RowContextMenu
+        open={Boolean(viewActionMenu.open)}
+        onClose={closeViewActionMenu}
+        position={viewActionMenu.open ? { top: viewActionMenu.top, left: viewActionMenu.left } : null}
+        headerIcon={ViewColumnIcon}
+        title={viewActionTarget?.name || "Custom View"}
+        subtitle="Device List view"
+        actions={viewActionMenuActions}
+        widthVariant="compact"
+      />
 
       {/* Create new custom view dialog */}
       <CreateCustomViewDialog
@@ -3214,60 +3366,15 @@ export default function DeviceList({
           ))}
         </Box>
       </Popover>
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor)}
+      <RowContextMenu
+        open={Boolean(deviceContextMenu.open)}
         onClose={closeMenu}
-        PaperProps={{
-          sx: {
-            bgcolor: "rgba(8,12,24,0.96)",
-            color: "#fff",
-            fontSize: "13px",
-            border: "1px solid rgba(148,163,184,0.3)",
-            backdropFilter: "blur(16px)",
-          },
-        }}
-      >
-        <MenuItem onClick={async () => {
-          closeMenu();
-          await fetchSites();
-          const targets = new Set(selectedIds);
-          if (selected && !targets.has(selected.id)) targets.add(selected.id);
-          const idToHost = new Map(rows.map((r) => [r.id, r.hostname]));
-          const hostnames = Array.from(targets).map((id) => idToHost.get(id)).filter(Boolean);
-          setAssignTargets(hostnames);
-          setAssignSiteId(null);
-          setAssignDialogOpen(true);
-        }}>Add to Site</MenuItem>
-        <MenuItem onClick={async () => {
-          closeMenu();
-          await fetchSites();
-          const targets = new Set(selectedIds);
-          if (selected && !targets.has(selected.id)) targets.add(selected.id);
-          const idToHost = new Map(rows.map((r) => [r.id, r.hostname]));
-          const hostnames = Array.from(targets).map((id) => idToHost.get(id)).filter(Boolean);
-          setAssignTargets(hostnames);
-          setAssignSiteId(null);
-          setAssignDialogOpen(true);
-        }}>Move to Another Site</MenuItem>
-        {isAdmin ? (
-          <MenuItem
-            disabled={!getContextTargetRows().some((row) => resolveDevicePurgeGuid(row)) || agentBranchChannelSaving}
-            onClick={() => {
-              const targets = getContextTargetRows();
-              closeMenu();
-              openAgentBranchChannelDialog(targets);
-            }}
-          >
-            Change Branch/Channel
-          </MenuItem>
-        ) : null}
-        {isAdmin ? (
-          <MenuItem onClick={confirmDelete} sx={{ color: '#ff8a8a' }}>
-            {selected?.id != null && selectedIds.has(selected.id) && selectedDeviceRows.length > 1 ? "Purge Selected" : "Purge"}
-          </MenuItem>
-        ) : null}
-      </Menu>
+        position={deviceContextMenu.open ? { top: deviceContextMenu.top, left: deviceContextMenu.left } : null}
+        headerIcon={DevicesOtherIcon}
+        title={deviceContextTitle}
+        subtitle={deviceContextSubtitle}
+        actions={deviceContextActions}
+      />
       <DeleteDeviceDialog
         open={confirmOpen}
         onCancel={() => {

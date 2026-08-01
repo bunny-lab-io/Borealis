@@ -228,6 +228,11 @@ Treat this document as the single source of truth for Borealis WebUI design rule
       - if the operator right-clicks an unselected row, select that row first and then open the menu
       - if the operator right-clicks an already selected row, preserve the existing selection
       - right-clicking empty grid space may still open a context menu when the page has useful non-row actions such as `New Folder` or `Collapse All`
+    - Visible row affordance:
+      - row-level AG Grid context menus should also expose a pinned-right `MoreVert` icon button for each data row
+      - the button must open the same menu as right-click for that row, select the row first when needed, and keep existing right-click behavior intact
+      - use `Data/Engine/Containers/webui-frontend/data/web-interface/src/Grid_Row_Context_Menu_Button.jsx` for the shared button and column definition instead of recreating per-page icon button styling
+      - use `Data/Engine/Containers/webui-frontend/data/web-interface/src/Row_Context_Menu.jsx` for standard grouped row-context menus when a page does not already have a local menu renderer
     - Native browser menu suppression:
       - when Borealis intentionally exposes its own right-click context menu, suppress the browser's native context menu for that interaction target so the operator receives the Borealis menu consistently
       - wire suppression at every menu entrypoint, including DOM `onContextMenu` handlers and component-library context-menu hooks

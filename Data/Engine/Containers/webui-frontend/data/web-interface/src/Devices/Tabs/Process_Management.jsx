@@ -19,6 +19,7 @@ import TerminalRoundedIcon from "@mui/icons-material/TerminalRounded";
 import KeyboardArrowRightRoundedIcon from "@mui/icons-material/KeyboardArrowRightRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import StopCircleRoundedIcon from "@mui/icons-material/StopCircleRounded";
+import { buildRowContextMenuColumnDef } from "../../Grid_Row_Context_Menu_Button.jsx";
 import { DEFAULT_GRID_COL_DEF, GridShell, MAGIC_UI } from "./Shared.jsx";
 import { CountSliderGroup } from "../../Automation/Watchdogs/shared.jsx";
 import { useAppNotifications } from "../../app/hooks/useAppNotifications.js";
@@ -1023,6 +1024,13 @@ export default function ProcessManagement({ device }) {
     });
   }, []);
 
+  const handleRowContextMenuButton = useCallback(
+    (event, row, node, params = {}) => {
+      handleCellContextMenu({ ...params, event, data: row, node, api: params?.api || gridApiRef.current?.api });
+    },
+    [handleCellContextMenu]
+  );
+
   const copyLocationToClipboard = useCallback(async () => {
     const row = contextMenuSubject.row;
     const location = getProcessLocation(row);
@@ -1389,8 +1397,9 @@ export default function ProcessManagement({ device }) {
         cellClass: "auto-col-tight",
         cellRenderer: (params) => <CommandLineCell row={params.data} />,
       },
+      buildRowContextMenuColumnDef(handleRowContextMenuButton, { tooltip: "Process Actions" }),
     ],
-    []
+    [handleRowContextMenuButton]
   );
 
   const defaultColDef = useMemo(
