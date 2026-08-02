@@ -353,6 +353,14 @@ func TestUltraVNCPasswordHashMatchesStoredFormat(t *testing.T) {
 	if got != "E82E982EF7C0723800" {
 		t.Fatalf("unexpected bootpass hash: %s", got)
 	}
+
+	truncated, err := ultraVNCPasswordHash("password-more")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated != "DBD83CFD727A145800" {
+		t.Fatalf("unexpected truncated password hash: %s", truncated)
+	}
 }
 
 func TestNormalizeFirewallRemoteRequiresSingleHost(t *testing.T) {

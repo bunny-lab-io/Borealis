@@ -28,7 +28,11 @@ const (
 	firewallRuleName           = "Borealis - VNC - UltraVNC"
 	recentReadyGraceSeconds    = 20
 	credentialRotationInterval = 24 * time.Hour
+	ultraVNCPasswordBytes      = 8
+	ultraVNCPasswordHashSuffix = "00"
 )
+
+var ultraVNCStoredPasswordDESKey = []byte{0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0}
 
 var (
 	serviceTransitionWait           = 20 * time.Second
@@ -1234,18 +1238,20 @@ func renderUltraVNCConfig(settings map[string]string) string {
 
 func ultraVNCPasswordHash(password string) (string, error) {
 	raw := []byte(password)
-	if len(raw) > 8 {
-		raw = raw[:8]
+	if len(raw) > ultraVNCPasswordBytes {
+		raw = raw[:ultraVNCPasswordBytes]
 	}
-	blockInput := make([]byte, 8)
+	blockInput := make([]byte, ultraVNCPasswordBytes)
 	copy(blockInput, raw)
-	block, err := des.NewCipher([]byte{0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0})
+	// Protocol-required UltraVNC stored-password compatibility. This is not
+	// Borealis secret storage, transport encryption, or operator auth crypto.
+	block, err := des.NewCipher(ultraVNCStoredPasswordDESKey)
 	if err != nil {
 		return "", err
 	}
-	encrypted := make([]byte, 8)
+	encrypted := make([]byte, ultraVNCPasswordBytes)
 	block.Encrypt(encrypted, blockInput)
-	return strings.ToUpper(hex.EncodeToString(encrypted)) + "00", nil
+	return strings.ToUpper(hex.EncodeToString(encrypted)) + ultraVNCPasswordHashSuffix, nil
 }
 
 func normalizeFirewallRemote(value string) string {

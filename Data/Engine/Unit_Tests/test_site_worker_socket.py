@@ -879,6 +879,21 @@ def test_vnc_auth_probe_rejection_text_maps_to_actionable_errors() -> None:
     assert worker_socket._vnc_auth_probe_status("vnc_auth_failed") == 503
 
 
+def test_vnc_auth_challenge_response_matches_rfb_vncauth_vector() -> None:
+    challenge = bytes(range(rfb_probe.RFB_VNC_AUTH_CHALLENGE_BYTES))
+
+    response = rfb_probe._vnc_auth_challenge_response("password", challenge)
+    truncated_response = rfb_probe._vnc_auth_challenge_response("password-more", challenge)
+
+    assert response == bytes.fromhex("b866924125c8eebb9debc1db61c538e2")
+    assert truncated_response == response
+
+
+def test_vnc_auth_challenge_response_rejects_non_rfb_challenge_lengths() -> None:
+    assert rfb_probe._vnc_auth_challenge_response("password", b"short") is None
+    assert rfb_probe._vnc_auth_challenge_response("password", bytes(range(17))) is None
+
+
 def test_site_worker_remote_desktop_rejects_passwordless_vnc_before_guacd(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("BOREALIS_SITE_WORKER_SOCKETIO_ASYNC_MODE", "threading")

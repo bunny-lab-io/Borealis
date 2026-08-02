@@ -15,6 +15,12 @@ import time
 from typing import Any, NamedTuple, Optional
 
 
+RFB_SECURITY_TYPE_NONE = 1
+RFB_SECURITY_TYPE_VNC_AUTH = 2
+RFB_VNC_AUTH_CHALLENGE_BYTES = 16
+RFB_VNC_AUTH_RESPONSE_BYTES = 16
+
+
 class VncAuthProbeResult(NamedTuple):
     checked: bool
     ok: bool
@@ -114,6 +120,14 @@ def _reverse_byte_bits(value: int) -> int:
 
 
 def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[bytes]:
+    """Return RFB security type 2 VNCAuth response bytes.
+
+    RFB VNCAuth requires DES/ECB over one server-issued 16-byte challenge.
+    Keep this helper scoped to VNC compatibility diagnostics only; Borealis
+    must not reuse it for stored secrets, operator auth, or transport crypto.
+    """
+    if len(challenge) != RFB_VNC_AUTH_CHALLENGE_BYTES:
+        return None
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, modes
     except Exception:
@@ -138,6 +152,7 @@ def _vnc_auth_challenge_response(password: str, challenge: bytes) -> Optional[by
         raw_key = str(password or "").encode("latin-1", errors="ignore")[:8].ljust(8, b"\x00")
         key = bytes(_reverse_byte_bits(byte) for byte in raw_key)
         if des_algorithm is not None:
+            # Protocol-required DES. See _vnc_auth_challenge_response docstring.
             algorithm = des_algorithm(key)
         elif triple_des_algorithm is not None:
             algorithm = triple_des_algorithm(key * 3)
@@ -380,7 +395,7 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                         server_version=server_version,
                         offered_security_types=offered_security_types,
                     )
-                if security_type == 1:
+                if security_type == RFB_SECURITY_TYPE_NONE:
                     return _result(
                         True,
                         True,
@@ -390,7 +405,7 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                         offered_security_types=offered_security_types,
                         selected_security_type=1,
                     )
-                if security_type != 2:
+                if security_type != RFB_SECURITY_TYPE_VNC_AUTH:
                     return _result(
                         True,
                         False,
@@ -412,11 +427,11 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                     )
                 security_types = _read_socket_exact(sock, security_type_count)
                 offered_security_types = tuple(int(item) for item in security_types)
-                if 2 in security_types:
-                    security_type = 2
-                    sock.sendall(b"\x02")
-                elif 1 in security_types:
-                    sock.sendall(b"\x01")
+                if RFB_SECURITY_TYPE_VNC_AUTH in security_types:
+                    security_type = RFB_SECURITY_TYPE_VNC_AUTH
+                    sock.sendall(bytes([RFB_SECURITY_TYPE_VNC_AUTH]))
+                elif RFB_SECURITY_TYPE_NONE in security_types:
+                    sock.sendall(bytes([RFB_SECURITY_TYPE_NONE]))
                     return _result(
                         True,
                         True,
@@ -437,7 +452,7 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                         offered_security_types=offered_security_types,
                     )
 
-            if security_type != 2:
+            if security_type != RFB_SECURITY_TYPE_VNC_AUTH:
                 return _result(
                     True,
                     False,
@@ -447,9 +462,9 @@ def probe_vnc_auth(host: str, port: int, password: str, timeout_seconds: float) 
                     offered_security_types=offered_security_types,
                     selected_security_type=security_type,
                 )
-            challenge = _read_socket_exact(sock, 16)
+            challenge = _read_socket_exact(sock, RFB_VNC_AUTH_CHALLENGE_BYTES)
             response = _vnc_auth_challenge_response(password, challenge)
-            if response is None or len(response) != 16:
+            if response is None or len(response) != RFB_VNC_AUTH_RESPONSE_BYTES:
                 return _result(
                     False,
                     True,
