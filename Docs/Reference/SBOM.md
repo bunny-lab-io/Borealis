@@ -2,7 +2,7 @@
 
 This software bill of materials inventories direct, repo-declared, bundled, container base image, or script-installed third-party software used by Borealis. Engine dependencies are grouped by service so reviewers can trace licensing impact to the runtime that uses each dependency.
 
-Repeated entries are intentional when multiple Engine containers install the same requirement file or use the same runtime package. Python requirement files are currently unpinned, so exact resolved versions can change between installs. Explicitly pinned script, Go, Node, and container versions are called out below.
+Repeated entries are intentional when multiple Engine containers install the same requirement file or use the same runtime package. Python requirement files pin Borealis direct dependencies; transitive Python packages still resolve through pip unless promoted to direct requirements. Explicitly pinned script, Go, Node, Python, and container versions are called out below.
 
 **Primary Sources**:
 
@@ -71,33 +71,33 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | remote-desktop-guacd | Apache Guacamole Server (`guacd` and VNC plugin) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-server/blob/1.6.0/LICENSE) |
 | remote-desktop-guacd | LibVNCServer / LibVNCClient | [GPL-2.0-or-later](https://github.com/LibVNC/libvncserver/blob/master/COPYING) |
 | site-worker | Python container base image (`python:3.12-slim-bookworm`) | [PSF License plus Debian package licenses](https://github.com/docker-library/python/blob/master/LICENSE) |
-| site-worker | Flask | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| site-worker | flask-cors | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | Flask-SocketIO | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | eventlet | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | cryptography | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
-| site-worker | PyJWT | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | pyotp | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | qrcode | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
-| site-worker | webauthn | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
-| site-worker | Pillow | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
-| site-worker | requests | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| site-worker | aiohttp | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
-| site-worker | python-socketio | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | websockets | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
-| site-worker | packaging | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
-| site-worker | regex | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
-| site-worker | SQLAlchemy | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | alembic | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | psycopg (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
-| site-worker | ldap3 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
-| site-worker | pytest | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
-| site-worker | ansible-core | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
-| site-worker | ansible-runner | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
-| site-worker | jmespath | [MIT](https://spdx.org/licenses/MIT.html) |
-| site-worker | pywinrm (`pywinrm[credssp]`) | [MIT](https://github.com/diyan/pywinrm/blob/master/LICENSE) |
-| site-worker | pypsrp (`pypsrp[credssp]`) | [MIT](https://github.com/jborean93/pypsrp/blob/master/LICENSE) |
-| site-worker | Impacket | [Apache-2.0](https://github.com/fortra/impacket/blob/master/LICENSE) |
+| site-worker | Flask 3.1.3 | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| site-worker | flask-cors 6.0.5 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | Flask-SocketIO 5.6.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | eventlet 0.41.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | cryptography 50.0.0 | [Apache-2.0 OR BSD-3-Clause](https://github.com/pyca/cryptography/blob/main/LICENSE) |
+| site-worker | PyJWT 2.13.0 (`PyJWT[crypto]`) | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | pyotp 2.10.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | qrcode 8.2 | [BSD](https://github.com/lincolnloop/python-qrcode/blob/main/LICENSE) |
+| site-worker | webauthn 3.0.0 | [BSD-3-Clause](https://github.com/duo-labs/py_webauthn/blob/master/LICENSE) |
+| site-worker | Pillow 12.3.0 | [MIT-CMU](https://github.com/python-pillow/Pillow/blob/main/LICENSE) |
+| site-worker | requests 2.34.2 | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| site-worker | aiohttp 3.14.3 | [Apache-2.0 AND MIT](https://github.com/aio-libs/aiohttp/blob/master/LICENSE.txt) |
+| site-worker | python-socketio 5.16.3 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | websockets 17.0.1 | [BSD-3-Clause](https://spdx.org/licenses/BSD-3-Clause.html) |
+| site-worker | packaging 26.2 | [Apache-2.0 OR BSD-2-Clause](https://github.com/pypa/packaging/blob/main/LICENSE) |
+| site-worker | regex 2026.7.19 | [Apache-2.0 AND CNRI-Python](https://github.com/mrabarnett/mrab-regex/blob/hg/LICENSE.txt) |
+| site-worker | SQLAlchemy 2.0.51 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | alembic 1.18.5 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | psycopg 3.3.4 (`psycopg[binary]`) | [LGPL-3.0-only](https://spdx.org/licenses/LGPL-3.0-only.html) |
+| site-worker | ldap3 2.9.1 | [LGPL-3.0-or-later](https://github.com/cannatag/ldap3/blob/dev/COPYING) |
+| site-worker | pytest 9.1.1 | [MIT](https://github.com/pytest-dev/pytest/blob/main/LICENSE) |
+| site-worker | ansible-core 2.21.2 | [GPL-3.0-or-later](https://spdx.org/licenses/GPL-3.0-or-later.html) |
+| site-worker | ansible-runner 2.4.3 | [Apache-2.0](https://spdx.org/licenses/Apache-2.0.html) |
+| site-worker | jmespath 1.1.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| site-worker | pywinrm 0.5.0 (`pywinrm[credssp]`) | [MIT](https://github.com/diyan/pywinrm/blob/master/LICENSE) |
+| site-worker | pypsrp 0.9.1 (`pypsrp[credssp]`) | [MIT](https://github.com/jborean93/pypsrp/blob/master/LICENSE) |
+| site-worker | Impacket 0.13.1 | [Apache-2.0](https://github.com/fortra/impacket/blob/master/LICENSE) |
 | site-worker | ansible.windows collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.windows/blob/main/LICENSE) |
 | site-worker | ansible.posix collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE) |
 | site-worker | community.general collection | [GPL-3.0-or-later](https://github.com/ansible-collections/community.general/blob/main/COPYING) |

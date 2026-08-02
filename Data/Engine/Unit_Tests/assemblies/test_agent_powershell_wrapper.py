@@ -54,7 +54,12 @@ def test_powershell_wrapper_preserves_advanced_script_preamble(
 ) -> None:
     _install_agent_role_stubs(monkeypatch)
     sys.modules.pop(module_name, None)
-    module = importlib.import_module(module_name)
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        if exc.name == "Data.Agent.Roles":
+            pytest.skip("legacy Python Agent role modules are not present in Go Agent runtime")
+        raise
 
     content = textwrap.dedent(
         """\

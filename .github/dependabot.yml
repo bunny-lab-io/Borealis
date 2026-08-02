@@ -1,11 +1,149 @@
-# To get started with Dependabot version updates, you'll need to specify which
-# package ecosystems to update and where the package manifests are located.
-# Please see the documentation for all configuration options:
-# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
-
 version: 2
+
 updates:
-  - package-ecosystem: "" # See documentation for possible values
-    directory: "/Data" # Location of package manifests
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      github-actions-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directories:
+      - "/Data/Agent"
+      - "/Data/Engine/Containers/api-backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "04:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      go-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      go-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+        group-by: "dependency-name"
+      go-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+        group-by: "dependency-name"
+
+  - package-ecosystem: "pip"
+    directory: "/Data/Engine/Containers/api-backend/data"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "04:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      python-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      python-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "npm"
+    directory: "/Data/Engine/Containers/webui-frontend/data/web-interface"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+      time: "04:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    versioning-strategy: "increase-if-necessary"
+    commit-message:
+      prefix: "deps"
+      prefix-development: "deps-dev"
+      include: "scope"
+    groups:
+      webui-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      webui-production-minor-patch:
+        dependency-type: "production"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      webui-development-minor-patch:
+        dependency-type: "development"
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      webui-major:
+        patterns:
+          - "*"
+        update-types:
+          - "major"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/Data/Engine/Containers/api-backend"
+      - "/Data/Engine/Containers/borealis-operator"
+      - "/Data/Engine/Containers/job-scheduler"
+      - "/Data/Engine/Containers/postgres-db"
+      - "/Data/Engine/Containers/remote-desktop-guacd"
+      - "/Data/Engine/Containers/site-worker"
+      - "/Data/Engine/Containers/traefik-edge"
+      - "/Data/Engine/Containers/webui-frontend"
+      - "/Data/Engine/Containers/wireguard-tunnel"
+    schedule:
+      interval: "weekly"
+      day: "friday"
+      time: "04:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      docker-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      engine-container-base-images:
+        patterns:
+          - "*"
