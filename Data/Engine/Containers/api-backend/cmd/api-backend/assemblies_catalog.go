@@ -585,7 +585,7 @@ func (s *officialCatalogService) updateOfficialAssembly(ctx context.Context, ass
 	}
 	manifest := s.activeManifest(ctx, true, false, false)
 	if !manifest.available() {
-		return nil, http.StatusBadGateway, fmt.Errorf(firstText(manifest.Error, "Official Aurora catalog is unavailable."))
+		return nil, http.StatusBadGateway, errors.New(firstText(manifest.Error, "Official Aurora catalog is unavailable."))
 	}
 	entry, ok := manifest.Entries[guid]
 	if !ok {

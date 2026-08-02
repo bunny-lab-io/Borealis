@@ -189,6 +189,16 @@ func TestServerServiceRestartQueuesSystemdRestartAction(t *testing.T) {
 	if len(commands) < 2 || !strings.HasSuffix(commands[len(commands)-1][0], "/systemd-run") {
 		t.Fatalf("expected systemd-run command, got %+v", commands)
 	}
+	queuedCommand := commands[len(commands)-1]
+	if containsString(queuedCommand, "/bin/bash") || containsString(queuedCommand, "-lc") {
+		t.Fatalf("expected shell-free systemd-run argv, got %+v", queuedCommand)
+	}
+	if !containsString(queuedCommand, "--on-active=2s") {
+		t.Fatalf("expected delayed systemd-run timer, got %+v", queuedCommand)
+	}
+	if len(queuedCommand) < 3 || queuedCommand[len(queuedCommand)-3] != "/usr/bin/systemctl" || queuedCommand[len(queuedCommand)-2] != "restart" || queuedCommand[len(queuedCommand)-1] != "borealis-engine.service" {
+		t.Fatalf("expected systemctl restart argv suffix, got %+v", queuedCommand)
+	}
 }
 
 func TestServerServiceRestartRequiresPostgresqlInstance(t *testing.T) {
@@ -202,4 +212,13 @@ func TestServerServiceRestartRequiresPostgresqlInstance(t *testing.T) {
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

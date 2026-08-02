@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Box, Button, TextField, Typography } from "@mui/material";
 import { useNavigate } from "react-router-dom";
-import { sha512 } from "../utils/crypto.js";
 import { APP_PATHS } from "./paths.js";
 
 function resolveCopy(phase, hasPendingMfa) {
@@ -141,7 +140,6 @@ export default function BootstrapEntry({
     setIsSubmitting(true);
     setError("");
     try {
-      const passwordSha512 = await sha512(password);
       const endpoint =
         phase === "admin_recovery_required"
           ? "/api/bootstrap/admin/recover"
@@ -153,7 +151,7 @@ export default function BootstrapEntry({
         body: JSON.stringify({
           username: username.trim(),
           display_name: displayName.trim(),
-          password_sha512: passwordSha512,
+          password,
         }),
       });
       const payload = await response.json().catch(() => ({}));

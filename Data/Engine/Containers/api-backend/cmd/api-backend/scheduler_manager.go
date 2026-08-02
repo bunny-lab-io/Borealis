@@ -2790,9 +2790,17 @@ func schedulerSafeSegment(value string) string {
 }
 
 func schedulerWorkerPort(workerGUID string, siteID int64, baseEnv, rangeEnv string, defaultBase, defaultRange int64) int64 {
-	base := int64(envInt(baseEnv, int(defaultBase), 1024, 65000))
-	portRange := int64(envInt(rangeEnv, int(defaultRange), 1, int(65535-base)))
+	baseDefault := int64ToIntDefault(defaultBase, 1024)
+	rangeDefault := int64ToIntDefault(defaultRange, 1)
+	base := int64(envInt(baseEnv, baseDefault, 1024, 65000))
+	portRange := int64(envInt(rangeEnv, rangeDefault, 1, int64ToIntDefault(65535-base, rangeDefault)))
 	hash := fnv32(fmt.Sprintf("%s:%d", workerGUID, siteID))
+	if portRange <= 0 || portRange > int64(^uint32(0)) {
+		portRange = int64(rangeDefault)
+	}
+	if portRange <= 0 || portRange > int64(^uint32(0)) {
+		portRange = 1
+	}
 	return base + int64(hash%uint32(portRange))
 }
 

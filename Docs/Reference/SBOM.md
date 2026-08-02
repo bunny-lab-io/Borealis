@@ -43,9 +43,9 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |
 | api-backend | github.com/lib/pq v1.10.9 (Go PostgreSQL driver) | [MIT](https://github.com/lib/pq/blob/master/LICENSE.md) |
-| api-backend | golang.org/x/crypto v0.35.0 (Go scrypt KDF, Curve25519 tunnel helper, and SSH private-key parsing support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
+| api-backend | golang.org/x/crypto v0.52.0 (Go scrypt KDF, Curve25519 tunnel helper, and SSH private-key parsing support) | [BSD-3-Clause](https://cs.opensource.google/go/x/crypto/+/master:LICENSE) |
 | api-backend | github.com/go-ldap/ldap/v3 v3.4.8 (Go LDAP/LDAPS directory-provider support) | [MIT](https://github.com/go-ldap/ldap/blob/master/LICENSE) |
-| api-backend | github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 (Go LDAP NTLM support dependency) | [MIT](https://github.com/Azure/go-ntlmssp/blob/master/LICENSE) |
+| api-backend | github.com/Azure/go-ntlmssp v0.1.1 (Go LDAP NTLM support dependency) | [MIT](https://github.com/Azure/go-ntlmssp/blob/master/LICENSE) |
 | api-backend | github.com/go-asn1-ber/asn1-ber v1.5.5 (Go LDAP ASN.1 BER codec dependency) | [MIT](https://github.com/go-asn1-ber/asn1-ber/blob/master/LICENSE) |
 | api-backend | github.com/go-webauthn/webauthn v0.10.2 (Go WebAuthn passkey ceremonies) | [BSD-3-Clause](https://github.com/go-webauthn/webauthn/blob/master/LICENSE) |
 | api-backend | github.com/fxamacker/cbor/v2 v2.6.0 (Go WebAuthn CBOR codec dependency) | [MIT](https://github.com/fxamacker/cbor/blob/master/LICENSE) |
@@ -55,7 +55,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | api-backend | github.com/google/uuid v1.6.0 (Go WebAuthn UUID support dependency) | [BSD-3-Clause](https://github.com/google/uuid/blob/master/LICENSE) |
 | api-backend | github.com/mitchellh/mapstructure v1.5.0 (Go WebAuthn config decode dependency) | [MIT](https://github.com/mitchellh/mapstructure/blob/main/LICENSE) |
 | api-backend | github.com/x448/float16 v0.8.4 (Go CBOR half-float dependency) | [MIT](https://github.com/x448/float16/blob/master/LICENSE) |
-| api-backend | golang.org/x/sys v0.30.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
+| api-backend | golang.org/x/sys v0.45.0 (Go WebAuthn system support dependency) | [BSD-3-Clause](https://cs.opensource.google/go/x/sys/+/master:LICENSE) |
 | borealis-operator | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
 | borealis-operator | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
 | borealis-operator | Go standard library/runtime (compiled into the Go `api-backend` binary in operator mode) | [BSD-3-Clause](https://go.dev/LICENSE) |
@@ -169,7 +169,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | shared-engine | Open-iSCSI / `iscsi-initiator-utils` host dependency for Longhorn volumes (installed by `Engine.sh` when missing) | [GPL-2.0-only](https://github.com/open-iscsi/open-iscsi/blob/master/COPYING) |
 | shared-engine | iptables (host K3s API firewall rule management) | [GPL-2.0-only](https://git.netfilter.org/iptables/tree/COPYING) |
 | shared-engine | Python (system Python on Linux, used by `Engine.sh` deployment helpers) | [PSF License](https://docs.python.org/3/license.html) |
-| shared-engine | Go toolchain 1.23.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
+| shared-engine | Go toolchain 1.25.12 (native Linux `api-backend` build helper installs official Go into `Dependencies/Go` when missing) | [BSD-3-Clause](https://go.dev/LICENSE) |
 
 ## Maintenance Notes
 

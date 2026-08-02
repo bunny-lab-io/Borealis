@@ -66,6 +66,7 @@ type authLoginTestStore struct {
 	row              authLoginRow
 	found            bool
 	lastLoginUser    string
+	updatedPassword  string
 	updatedMFAUser   string
 	updatedMFASecret string
 }
@@ -90,6 +91,12 @@ func (s *authLoginTestStore) updateLastLogin(_ context.Context, username string,
 	return nil
 }
 
+func (s *authLoginTestStore) updateUserPasswordSecret(_ context.Context, username string, encryptedSecret string, _ int64) error {
+	s.updatedPassword = encryptedSecret
+	s.row.PasswordSecret = encryptedSecret
+	return nil
+}
+
 func (s *authLoginTestStore) updateUserMFASecret(_ context.Context, username string, encryptedSecret string, _ int64) error {
 	s.updatedMFAUser = username
 	s.updatedMFASecret = encryptedSecret
@@ -107,15 +114,25 @@ func newAuthLoginTestService(store *authLoginTestStore, gate *authLoginTestGate,
 	}
 }
 
+const correctPasswordSHA512 = "f30c82a8ee16931f5d2ab132d4d8b4ec940cb6a0a26fb052b7bfe928fafbecc33bf65534835e0bbc823a1d383c987f55c7a151d1f4966608426ec7bc670db267"
+
+func mustPasswordVerifier(t *testing.T, credential passwordCredential) string {
+	t.Helper()
+	verifier, err := newPasswordVerifierFromCredential(credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verifier
+}
+
 func TestAuthLoginLocalMFADisabledIssuesToken(t *testing.T) {
-	passwordHash := sha512Hex("correct-password")
 	store := &authLoginTestStore{
 		profile: operatorProfile{Username: "operator", Role: "Admin"},
 		found:   true,
 		row: authLoginRow{
 			Username:       "operator",
 			Role:           "Admin",
-			PasswordSecret: "enc:" + passwordHash,
+			PasswordSecret: "enc:" + mustPasswordVerifier(t, passwordCredential{Plain: "correct-password"}),
 			AuthSource:     "local",
 			MFADisabled:    true,
 		},
@@ -133,10 +150,14 @@ func TestAuthLoginLocalMFADisabledIssuesToken(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if cleanText(payload["token"]) == "" {
-		t.Fatalf("expected token payload, got %#v", payload)
+	if cleanText(payload["token"]) != "" {
+		t.Fatalf("did not expect browser-readable token payload, got %#v", payload)
 	}
-	if _, err := auth.verifier.verify(cleanText(payload["token"])); err != nil {
+	cookie := recorder.Result().Cookies()[0]
+	if cookie.Name != authCookieName || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("expected secure HttpOnly auth cookie, got %#v", cookie)
+	}
+	if _, err := auth.verifier.verify(cookie.Value); err != nil {
 		t.Fatalf("issued token did not verify: %v", err)
 	}
 	if store.lastLoginUser != "operator" {
@@ -145,19 +166,18 @@ func TestAuthLoginLocalMFADisabledIssuesToken(t *testing.T) {
 }
 
 func TestAuthLoginMFASetupVerifiesSignedPendingToken(t *testing.T) {
-	passwordHash := sha512Hex("correct-password")
 	store := &authLoginTestStore{
 		profile: operatorProfile{Username: "operator", Role: "User"},
 		found:   true,
 		row: authLoginRow{
 			Username:       "operator",
 			Role:           "User",
-			PasswordSecret: "enc:" + passwordHash,
+			PasswordSecret: "enc:" + correctPasswordSHA512,
 			AuthSource:     "local",
 		},
 	}
 	auth := newAuthLoginTestService(store, &authLoginTestGate{state: map[string]any{"phase": bootstrapPhaseLoginRequired, "configured": true, "locked": false}}, &authLoginTestAegis{})
-	loginRequest := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"operator","password_sha512":"`+passwordHash+`"}`))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"operator","password":"correct-password","password_sha512":"`+correctPasswordSHA512+`"}`))
 	loginRecorder := httptest.NewRecorder()
 
 	authLoginHandler(auth, nil).ServeHTTP(loginRecorder, loginRequest)
@@ -185,6 +205,9 @@ func TestAuthLoginMFASetupVerifiesSignedPendingToken(t *testing.T) {
 	}
 	if store.updatedMFAUser != "operator" || store.updatedMFASecret != "enc:"+secret {
 		t.Fatalf("expected encrypted MFA update, got user=%q secret=%q", store.updatedMFAUser, store.updatedMFASecret)
+	}
+	if !strings.HasPrefix(store.updatedPassword, "enc:"+passwordVerifierVersion+"$") {
+		t.Fatalf("expected legacy password verifier upgrade, got %q", store.updatedPassword)
 	}
 }
 

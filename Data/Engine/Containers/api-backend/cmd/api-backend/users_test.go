@@ -17,7 +17,7 @@ type fakeUserMutationStore struct {
 	createUsername    string
 	createDisplayName string
 	createRole        string
-	createPassword    string
+	createPassword    passwordCredential
 	createPayload     map[string]any
 	createStatus      int
 	createErr         error
@@ -29,14 +29,14 @@ type fakeUserMutationStore struct {
 	deleteErr      error
 
 	passwordResetUsername string
-	passwordResetHash     string
+	passwordResetPassword passwordCredential
 	passwordResetPayload  map[string]any
 	passwordResetStatus   int
 	passwordResetErr      error
 
 	ownPasswordUsername string
-	ownPasswordCurrent  string
-	ownPasswordNew      string
+	ownPasswordCurrent  passwordCredential
+	ownPasswordNew      passwordCredential
 	ownPasswordPayload  map[string]any
 	ownPasswordStatus   int
 	ownPasswordErr      error
@@ -75,11 +75,11 @@ func (s *fakeUserMutationStore) lookupOperator(_ context.Context, username strin
 	return profile, nil
 }
 
-func (s *fakeUserMutationStore) createUser(_ context.Context, _ authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error) {
+func (s *fakeUserMutationStore) createUser(_ context.Context, _ authSecretService, username string, displayName string, role string, credential passwordCredential) (map[string]any, int, error) {
 	s.createUsername = username
 	s.createDisplayName = displayName
 	s.createRole = role
-	s.createPassword = passwordSHA512
+	s.createPassword = credential
 	if s.createPayload == nil {
 		s.createPayload = map[string]any{"status": "ok"}
 	}
@@ -103,9 +103,9 @@ func (s *fakeUserMutationStore) deleteUser(_ context.Context, profile operatorPr
 	return s.deletePayload, status, s.deleteErr
 }
 
-func (s *fakeUserMutationStore) resetUserPassword(_ context.Context, _ authSecretService, username string, passwordSHA512 string) (map[string]any, int, error) {
+func (s *fakeUserMutationStore) resetUserPassword(_ context.Context, _ authSecretService, username string, credential passwordCredential) (map[string]any, int, error) {
 	s.passwordResetUsername = username
-	s.passwordResetHash = passwordSHA512
+	s.passwordResetPassword = credential
 	if s.passwordResetPayload == nil {
 		s.passwordResetPayload = map[string]any{"status": "ok"}
 	}
@@ -116,10 +116,10 @@ func (s *fakeUserMutationStore) resetUserPassword(_ context.Context, _ authSecre
 	return s.passwordResetPayload, status, s.passwordResetErr
 }
 
-func (s *fakeUserMutationStore) resetOwnPassword(_ context.Context, _ authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error) {
+func (s *fakeUserMutationStore) resetOwnPassword(_ context.Context, _ authSecretService, username string, currentCredential passwordCredential, newCredential passwordCredential) (map[string]any, int, error) {
 	s.ownPasswordUsername = username
-	s.ownPasswordCurrent = currentPasswordSHA512
-	s.ownPasswordNew = newPasswordSHA512
+	s.ownPasswordCurrent = currentCredential
+	s.ownPasswordNew = newCredential
 	if s.ownPasswordPayload == nil {
 		s.ownPasswordPayload = map[string]any{"status": "ok"}
 	}
@@ -202,13 +202,13 @@ func TestUsersPostCreateDispatchesToGoStore(t *testing.T) {
 	registerUserRoutes(mux, auth, http.NotFoundHandler())
 
 	recorder := httptest.NewRecorder()
-	mux.ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users", `{"username":"created_user","display_name":"Created User","role":"admin","password_sha512":"abc123"}`))
+	mux.ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users", `{"username":"created_user","display_name":"Created User","role":"admin","password":"created-password"}`))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.createUsername != "created_user" || store.createDisplayName != "Created User" || store.createRole != "Admin" || store.createPassword != "abc123" {
-		t.Fatalf("unexpected create dispatch username=%q display=%q role=%q password=%q", store.createUsername, store.createDisplayName, store.createRole, store.createPassword)
+	if store.createUsername != "created_user" || store.createDisplayName != "Created User" || store.createRole != "Admin" || store.createPassword.Plain != "created-password" {
+		t.Fatalf("unexpected create dispatch username=%q display=%q role=%q password=%#v", store.createUsername, store.createDisplayName, store.createRole, store.createPassword)
 	}
 }
 
@@ -311,16 +311,14 @@ func TestOwnMFAResetDispatchesCurrentUser(t *testing.T) {
 func TestUserSubtreeResetPasswordDispatchesToGoStore(t *testing.T) {
 	store := &fakeUserMutationStore{profile: operatorProfile{Username: "operator", Role: "Admin"}}
 	auth := userMutationAuthService(store)
-	passwordHash := strings.Repeat("a", 128)
-
 	recorder := httptest.NewRecorder()
-	userSubtreeHandler(auth, http.NotFoundHandler()).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users/example_user/reset_password", `{"password_sha512":"`+passwordHash+`"}`))
+	userSubtreeHandler(auth, http.NotFoundHandler()).ServeHTTP(recorder, userMutationRequest(http.MethodPost, "/api/users/example_user/reset_password", `{"password":"new-password"}`))
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if store.passwordResetUsername != "example_user" || store.passwordResetHash != passwordHash {
-		t.Fatalf("expected reset dispatch example_user/hash, got %q/%q", store.passwordResetUsername, store.passwordResetHash)
+	if store.passwordResetUsername != "example_user" || store.passwordResetPassword.Plain != "new-password" {
+		t.Fatalf("expected reset dispatch example_user/password, got %q/%#v", store.passwordResetUsername, store.passwordResetPassword)
 	}
 }
 
@@ -337,7 +335,7 @@ func TestOwnPasswordResetHashesPlainPasswordPayloads(t *testing.T) {
 	if store.ownPasswordUsername != "operator" {
 		t.Fatalf("expected own reset username operator, got %q", store.ownPasswordUsername)
 	}
-	if store.ownPasswordCurrent != sha512Hex("old-password") || store.ownPasswordNew != sha512Hex("new-password") {
-		t.Fatalf("expected hashed own password payload, got current=%q new=%q", store.ownPasswordCurrent, store.ownPasswordNew)
+	if store.ownPasswordCurrent.Plain != "old-password" || store.ownPasswordNew.Plain != "new-password" {
+		t.Fatalf("expected raw own password credentials, got current=%#v new=%#v", store.ownPasswordCurrent, store.ownPasswordNew)
 	}
 }

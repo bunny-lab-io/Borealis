@@ -147,8 +147,12 @@ func restartLinuxAgentService(pid uint32) error {
 		time.Sleep(time.Second)
 	}
 	if pid > 0 {
-		if proc, err := os.FindProcess(int(pid)); err == nil {
-			_ = proc.Kill()
+		if targetPID, ok := uint32PIDToInt(pid); ok {
+			if proc, err := os.FindProcess(targetPID); err == nil {
+				_ = proc.Kill()
+			}
+		} else {
+			return fmt.Errorf("systemd service pid out of range: %d", pid)
 		}
 	}
 	time.Sleep(2 * time.Second)

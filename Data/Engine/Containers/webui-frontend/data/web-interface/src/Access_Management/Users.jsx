@@ -86,14 +86,6 @@ function userSourceLabel(user) {
   return provider || domain || "Directory";
 }
 
-async function sha512(text) {
-  const enc = new TextEncoder();
-  const data = enc.encode(text || "");
-  const buf = await crypto.subtle.digest("SHA-512", data);
-  const arr = Array.from(new Uint8Array(buf));
-  return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 export default function UserManagement() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
@@ -530,12 +522,11 @@ export default function UserManagement() {
     const pw = newPassword || "";
     if (!pw.trim()) return;
     try {
-      const hash = await sha512(pw);
       const resp = await fetch(`/api/users/${encodeURIComponent(user.username)}/reset_password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ password_sha512: hash }),
+        body: JSON.stringify({ password: pw }),
       });
       const data = await resp.json();
       if (!resp.ok) {
@@ -653,12 +644,11 @@ export default function UserManagement() {
     const role = createForm.role || "User";
     if (!u || !pw) return;
     try {
-      const hash = await sha512(pw);
       const resp = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ username: u, display_name: dn, password_sha512: hash, role }),
+        body: JSON.stringify({ username: u, display_name: dn, password: pw, role }),
       });
       const data = await resp.json();
       if (!resp.ok) {

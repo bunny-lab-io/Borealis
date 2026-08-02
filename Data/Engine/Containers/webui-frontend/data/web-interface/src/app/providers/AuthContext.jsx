@@ -371,16 +371,14 @@ export function AuthProvider({ children }) {
 
       const currentPasswordHash = await sha512(current);
       const nextPasswordHash = await sha512(next);
-      const payload =
-        currentPasswordHash && nextPasswordHash
-          ? {
-              current_password_sha512: currentPasswordHash,
-              new_password_sha512: nextPasswordHash,
-            }
-          : {
-              current_password: current,
-              new_password: next,
-            };
+      const payload = {
+        current_password: current,
+        new_password: next,
+      };
+      if (currentPasswordHash && nextPasswordHash) {
+        payload.current_password_sha512 = currentPasswordHash;
+        payload.new_password_sha512 = nextPasswordHash;
+      }
 
       const response = await fetch("/api/auth/password/reset", {
         method: "POST",

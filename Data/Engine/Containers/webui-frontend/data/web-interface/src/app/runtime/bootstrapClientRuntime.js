@@ -21,11 +21,6 @@ const LEGACY_SOCKET_EVENTS = new Set([
 ]);
 const LEGACY_SOCKET_EMIT_EVENTS = new Set(["list_agent_windows"]);
 
-function hasAuthCookie() {
-  if (typeof document === "undefined") return false;
-  return document.cookie.split(";").some((item) => item.trim().startsWith("borealis_auth="));
-}
-
 function createBorealisSocketBridge() {
   const legacySocket = io(window.location.origin, {
     transports: ["websocket"],
@@ -80,7 +75,7 @@ function createBorealisSocketBridge() {
   }
 
   function scheduleReconnect() {
-    if (reconnectTimer || !hasAuthCookie()) return;
+    if (reconnectTimer) return;
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;
       connectOperatorEvents();
@@ -88,7 +83,7 @@ function createBorealisSocketBridge() {
   }
 
   function connectOperatorEvents() {
-    if (eventSource || !hasAuthCookie()) return;
+    if (eventSource) return;
     eventSource = new EventSource("/api/realtime/events", { withCredentials: true });
     for (const eventName of GO_REALTIME_EVENTS) {
       eventSource.addEventListener(eventName, (event) => {
@@ -159,11 +154,7 @@ function createBorealisSocketBridge() {
   };
 
   legacySocket.on("connect", connectOperatorEvents);
-  legacySocket.on("disconnect", () => {
-    if (!hasAuthCookie()) {
-      closeOperatorEvents();
-    }
-  });
+  legacySocket.on("disconnect", closeOperatorEvents);
 
   return bridge;
 }

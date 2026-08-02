@@ -379,10 +379,6 @@ def _guacd_error_detail(args: List[str]) -> Tuple[str, str]:
     return message, status or "-"
 
 
-def _token_hint(session: GuacamoleVncSession) -> str:
-    return (session.token or "-")[:8] if session and session.token else "-"
-
-
 def _retryable_guacd_backend_error(
     instructions: List[Tuple[str, List[str]]],
 ) -> Optional[GuacdBackendRetryableError]:
@@ -535,11 +531,7 @@ async def _verify_post_ready_guacd(
         first_frame_opcode = _has_first_frame_instruction(instructions)
         if first_frame_opcode:
             logger.info(
-                "Guacamole VNC backend first frame during startup agent_id=%s session_id=%s participant_id=%s token_hint=%s opcode=%s",
-                session.agent_id,
-                session.session_id or "-",
-                session.participant_id or "-",
-                _token_hint(session),
+                "Guacamole VNC backend first frame during startup opcode=%s",
                 first_frame_opcode,
             )
             return collected
@@ -576,11 +568,7 @@ async def _open_ready_guacd(
             )
             if attempt > 1:
                 logger.info(
-                    "Guacamole VNC backend became ready after retry agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s",
-                    session.agent_id,
-                    session.session_id or "-",
-                    session.participant_id or "-",
-                    _token_hint(session),
+                    "Guacamole VNC backend became ready after retry attempt=%s",
                     attempt,
                 )
             return reader, writer, uuid_value, pending
@@ -588,11 +576,7 @@ async def _open_ready_guacd(
             last_error = exc
             await _close_writer(writer)
             logger.warning(
-                "Guacamole VNC target backend failed agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s status=%s message=%s",
-                session.agent_id,
-                session.session_id or "-",
-                session.participant_id or "-",
-                _token_hint(session),
+                "Guacamole VNC target backend failed attempt=%s/%s status=%s message=%s",
                 attempt,
                 _GUACD_READY_ATTEMPTS,
                 exc.status,
@@ -605,11 +589,7 @@ async def _open_ready_guacd(
             if attempt >= _GUACD_READY_ATTEMPTS:
                 break
             logger.warning(
-                "Guacamole VNC backend not ready agent_id=%s session_id=%s participant_id=%s token_hint=%s attempt=%s/%s error=%s",
-                session.agent_id,
-                session.session_id or "-",
-                session.participant_id or "-",
-                _token_hint(session),
+                "Guacamole VNC backend not ready attempt=%s/%s error=%s",
                 attempt,
                 _GUACD_READY_ATTEMPTS,
                 str(exc)[:180],
@@ -649,18 +629,14 @@ async def proxy_guacamole_vnc_session(
             return
         first_frame_reported = True
         logger.info(
-            "Guacamole VNC first frame agent_id=%s session_id=%s participant_id=%s token_hint=%s opcode=%s",
-            session.agent_id,
-            session.session_id or "-",
-            session.participant_id or "-",
-            _token_hint(session),
+            "Guacamole VNC first frame opcode=%s",
             opcode,
         )
         if callable(session.on_first_frame):
             try:
                 session.on_first_frame(opcode)
             except Exception:
-                logger.debug("Failed to notify Guacamole VNC first frame agent_id=%s", session.agent_id, exc_info=True)
+                logger.debug("Failed to notify Guacamole VNC first frame", exc_info=True)
 
     try:
         reader, writer, uuid_value, pending_instructions = await _open_ready_guacd(
@@ -673,7 +649,7 @@ async def proxy_guacamole_vnc_session(
             try:
                 session.confirm_transport("vnc_backend_connect")
             except Exception:
-                logger.debug("Failed to confirm Guacamole VNC transport agent_id=%s", session.agent_id, exc_info=True)
+                logger.debug("Failed to confirm Guacamole VNC transport", exc_info=True)
         await websocket.send(encode_instruction("", uuid_value))
         if pending_instructions:
             pending_payload = "".join(
@@ -685,11 +661,7 @@ async def proxy_guacamole_vnc_session(
             pending_frame_opcode = _has_first_frame_instruction(pending_instructions)
             for opcode, args in pending_instructions[:3]:
                 logger.info(
-                    "Guacamole VNC backend initial instruction agent_id=%s session_id=%s participant_id=%s token_hint=%s %s",
-                    session.agent_id,
-                    session.session_id or "-",
-                    session.participant_id or "-",
-                    _token_hint(session),
+                    "Guacamole VNC backend initial instruction %s",
                     _guacd_instruction_summary(opcode, args),
                 )
             await websocket.send(pending_payload)
@@ -698,7 +670,7 @@ async def proxy_guacamole_vnc_session(
             try:
                 session.on_open()
             except Exception:
-                logger.debug("Failed to notify Guacamole VNC session open agent_id=%s", session.agent_id, exc_info=True)
+                logger.debug("Failed to notify Guacamole VNC session open", exc_info=True)
 
         async def _ws_to_guacd() -> None:
             async for message in websocket:
@@ -761,38 +733,20 @@ async def proxy_guacamole_vnc_session(
                         message, status = _guacd_error_detail(args)
                         backend_error = (message, status)
                         logger.warning(
-                            "Guacamole VNC backend error agent_id=%s session_id=%s participant_id=%s token_hint=%s guacd_status=%s guacd_message=%s",
-                            session.agent_id,
-                            session.session_id or "-",
-                            session.participant_id or "-",
-                            _token_hint(session),
+                            "Guacamole VNC backend error guacd_status=%s guacd_message=%s",
                             status,
                             message,
                         )
                     elif opcode == "status":
                         logger.warning(
-                            "Guacamole VNC backend status agent_id=%s session_id=%s participant_id=%s token_hint=%s %s",
-                            session.agent_id,
-                            session.session_id or "-",
-                            session.participant_id or "-",
-                            _token_hint(session),
+                            "Guacamole VNC backend status %s",
                             _guacd_instruction_summary(opcode, args),
                         )
                     elif opcode == "disconnect":
-                        logger.info(
-                            "Guacamole VNC backend requested disconnect agent_id=%s session_id=%s participant_id=%s token_hint=%s",
-                            session.agent_id,
-                            session.session_id or "-",
-                            session.participant_id or "-",
-                            _token_hint(session),
-                        )
+                        logger.info("Guacamole VNC backend requested disconnect")
                     elif server_instruction_count <= 3:
                         logger.info(
-                            "Guacamole VNC backend instruction agent_id=%s session_id=%s participant_id=%s token_hint=%s %s",
-                            session.agent_id,
-                            session.session_id or "-",
-                            session.participant_id or "-",
-                            _token_hint(session),
+                            "Guacamole VNC backend instruction %s",
                             _guacd_instruction_summary(opcode, args),
                         )
                 await websocket.send("".join(raw_instruction for raw_instruction, _opcode, _args in instructions))
@@ -801,11 +755,7 @@ async def proxy_guacamole_vnc_session(
                     message, status = backend_error
                     raise RuntimeError(f"guacd_backend_error status={status} message={message}")
             logger.info(
-                "Guacamole VNC backend stream closed agent_id=%s session_id=%s participant_id=%s token_hint=%s server_messages=%s server_instructions=%s server_bytes=%s",
-                session.agent_id,
-                session.session_id or "-",
-                session.participant_id or "-",
-                _token_hint(session),
+                "Guacamole VNC backend stream closed server_messages=%s server_instructions=%s server_bytes=%s",
                 server_message_count,
                 server_instruction_count,
                 server_byte_count,
@@ -815,9 +765,7 @@ async def proxy_guacamole_vnc_session(
                 instruction_buffer += trailing
             if instruction_buffer:
                 logger.debug(
-                    "Guacamole VNC bridge dropped incomplete guacd payload agent_id=%s session_id=%s bytes=%s",
-                    session.agent_id,
-                    session.session_id or "-",
+                    "Guacamole VNC bridge dropped incomplete guacd payload bytes=%s",
                     len(instruction_buffer),
                 )
 
@@ -831,11 +779,7 @@ async def proxy_guacamole_vnc_session(
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         logger.info(
-            "Guacamole VNC bridge completed agent_id=%s session_id=%s participant_id=%s token_hint=%s done=%s client_messages=%s client_instructions=%s client_pings=%s server_messages=%s server_instructions=%s server_bytes=%s",
-            session.agent_id,
-            session.session_id or "-",
-            session.participant_id or "-",
-            _token_hint(session),
+            "Guacamole VNC bridge completed done=%s client_messages=%s client_instructions=%s client_pings=%s server_messages=%s server_instructions=%s server_bytes=%s",
             ",".join(task.get_name() for task in done),
             client_message_count,
             client_instruction_count,

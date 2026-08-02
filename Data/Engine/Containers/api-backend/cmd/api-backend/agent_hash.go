@@ -611,7 +611,7 @@ func claimString(claims map[string]any, key string) string {
 }
 
 func claimInt(claims map[string]any, key string) int {
-	return int(claimInt64(claims, key))
+	return int64ToIntDefault(claimInt64(claims, key), 0)
 }
 
 func claimInt64(claims map[string]any, key string) int64 {

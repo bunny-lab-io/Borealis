@@ -280,10 +280,11 @@ func aegisDBText(value any) (string, error) {
 }
 
 func intFromAnyDefault(value any, fallback int) int {
-	if parsed := int(parseInt64Any(value)); parsed > 0 {
-		return parsed
+	parsed := parseInt64Any(value)
+	if parsed <= 0 {
+		return fallback
 	}
-	return fallback
+	return int64ToIntDefault(parsed, fallback)
 }
 
 func randomBase32Secret() (string, error) {

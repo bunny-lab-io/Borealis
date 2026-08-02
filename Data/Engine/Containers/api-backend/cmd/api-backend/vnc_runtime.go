@@ -149,9 +149,9 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFun
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "site_worker_unavailable", "message": "No active site-worker route is available for this device site."})
 			return
 		}
-		log.Printf("vnc_establish_request agent_id=%s hostname=%s worker_guid=%s route_prefix=%s", result.Device.AgentID, result.Device.Hostname, result.Route.WorkerGUID, result.Route.RoutePathPrefix)
+		log.Printf("vnc_establish_request")
 		payload, statusCode := runtime.issueSession(r.Context(), r, profile, result, body)
-		log.Printf("vnc_establish_response agent_id=%s hostname=%s status=%d error=%s session_id=%s", result.Device.AgentID, result.Device.Hostname, statusCode, cleanText(payload["error"]), cleanText(payload["session_id"]))
+		log.Printf("vnc_establish_response status=%d", statusCode)
 		writeJSON(w, statusCode, payload)
 	}
 }
@@ -167,24 +167,24 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	hostname := result.Device.Hostname
 	serviceMode := serviceModeFromAgentID(agentID)
 	v.cancelPendingStop(agentID, "vnc_establish")
-	log.Printf("vnc_issue_start agent_id=%s hostname=%s service_mode=%s worker_guid=%s", agentID, hostname, serviceMode, result.Route.WorkerGUID)
+	log.Printf("vnc_issue_start service_mode=%s", serviceMode)
 	credentialReason := "vnc_establish"
 	credentialWait := vncBoundedWaitSeconds("BOREALIS_VNC_LIVE_CREDENTIAL_WAIT_SECONDS", defaultVNCLiveCredentialWaitSeconds, establishDeadline)
 	authRetryReserved := false
 	authRetryReservation := v.reserveAgentAuthRetry(agentID, time.Now().UTC(), "")
 	if authRetryReservation.Needed && !authRetryReservation.Reserved {
-		log.Printf("vnc_auth_retry_wait agent_id=%s hostname=%s retry_after_seconds=%d reason=%s", agentID, hostname, authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
+		log.Printf("vnc_auth_retry_wait retry_after_seconds=%d reason=%s", authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
 		return vncAuthRetryInProgressPayload(authRetryReservation.RetryAfterSeconds), http.StatusTooManyRequests
 	}
 	if authRetryReservation.Reserved {
 		authRetryReserved = true
 		credentialReason = "vnc_auth_retry"
 		credentialWait = vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline)
-		log.Printf("vnc_auth_retry_preflight agent_id=%s hostname=%s reason=previous_vnc_auth_failed", agentID, hostname)
+		log.Printf("vnc_auth_retry_preflight reason=previous_vnc_auth_failed")
 	}
 	credential, credErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, credentialReason, credentialWait)
 	if credErr != nil || credential.ControllerPassword == "" {
-		log.Printf("vnc_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, credErr)
+		log.Printf("vnc_credential_failed error=%v", credErr)
 		if authRetryReserved {
 			v.finishAgentAuthRetry(agentID, false, "vnc_agent_live_credentials_unavailable")
 			payload := vncAuthRetryInProgressPayload(v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC()))
@@ -194,7 +194,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		}
 		return map[string]any{"error": "vnc_agent_live_credentials_unavailable"}, http.StatusServiceUnavailable
 	}
-	log.Printf("vnc_credential_received agent_id=%s hostname=%s revision=%d displays=%d", agentID, hostname, credential.CredentialRevision, len(credential.DisplayTopology))
+	log.Printf("vnc_credential_received revision=%d displays=%d", credential.CredentialRevision, len(credential.DisplayTopology))
 	removeWallpaper := true
 	if _, ok := body["remove_wallpaper"]; ok {
 		removeWallpaper = boolFromAny(body["remove_wallpaper"])
@@ -205,7 +205,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	tunnelPayload := v.vpn.sessionPayload(agentID, false)
 	if tunnelPayload == nil {
 		var err error
-		log.Printf("vnc_tunnel_connect agent_id=%s hostname=%s port=%d", agentID, hostname, vncPort)
+		log.Printf("vnc_tunnel_connect port=%d", vncPort)
 		tunnelPayload, err = v.vpn.connect(ctx, vpnConnectRequest{
 			AgentID:       agentID,
 			OperatorID:    profile.Username,
@@ -214,24 +214,24 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 			RequiredPorts: []int{vncPort},
 		})
 		if err != nil {
-			log.Printf("vnc_tunnel_connect_failed agent_id=%s hostname=%s error=%v", agentID, hostname, err)
+			log.Printf("vnc_tunnel_connect_failed error=%v", err)
 			return map[string]any{"error": "tunnel_down", "detail": err.Error()}, http.StatusConflict
 		}
 	} else {
-		log.Printf("vnc_tunnel_existing agent_id=%s hostname=%s tunnel_id=%s port=%d", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]), vncPort)
+		log.Printf("vnc_tunnel_existing port=%d", vncPort)
 		v.vpn.requestAgentStart(ctx, agentID, false, "vnc_establish", []int{vncPort})
 	}
 	virtualIP := cleanText(tunnelPayload["virtual_ip"])
 	host := strings.Split(virtualIP, "/")[0]
 	if host == "" {
-		log.Printf("vnc_tunnel_virtual_ip_missing agent_id=%s hostname=%s tunnel_id=%s", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]))
+		log.Printf("vnc_tunnel_virtual_ip_missing")
 		return map[string]any{"error": "virtual_ip_missing"}, http.StatusInternalServerError
 	}
 	allowedIPs := cleanText(firstNonEmpty(tunnelPayload["allowed_ips"], tunnelPayload["engine_virtual_ip"]))
 	if allowedIPs == "" {
 		allowedIPs = cleanText(tunnelPayload["engine_virtual_ip"])
 	}
-	log.Printf("vnc_tunnel_ready agent_id=%s hostname=%s tunnel_id=%s virtual_ip=%s allowed_ips=%s", agentID, hostname, cleanText(tunnelPayload["tunnel_id"]), host, allowedIPs)
+	log.Printf("vnc_tunnel_ready")
 	v.recordBackendReady(session.SessionID, cleanText(tunnelPayload["tunnel_id"]), allowedIPs, cleanText(tunnelPayload["engine_virtual_ip"]))
 	startResponse, startStatus, startErr := requestVNCStartReady(ctx, v.auth, result.Route, hostname, serviceMode, map[string]any{
 		"agent_id":            agentID,
@@ -244,17 +244,17 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 		"credential_revision": session.CredentialRevision,
 		"reason":              "vnc_establish",
 	}, vncBoundedWaitSeconds("BOREALIS_VNC_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
-	log.Printf("vnc_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s", agentID, hostname, startErr == nil && boolFromAny(startResponse["ready"]), startStatus, cleanText(startErr["error"]), cleanText(startErr["detail"]), session.SessionID)
+	log.Printf("vnc_start_ready ready=%t status=%d error=%s", startErr == nil && boolFromAny(startResponse["ready"]), startStatus, cleanText(startErr["error"]))
 	if startErr != nil {
 		return startErr, startStatus
 	}
 	fastReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_FAST_READY_WAIT_SECONDS", 1.0, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_FAST_READY_POLL_INTERVAL_SECONDS", 0.15))
-	log.Printf("vnc_rfb_probe_fast agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, fastReady)
+	log.Printf("vnc_rfb_probe_fast port=%d ready=%t", vncPort, fastReady)
 	rfbReady := fastReady
 	if !fastReady {
 		rfbReady = waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_RFB_READY_WAIT_SECONDS", defaultVNCRFBReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_RFB_READY_POLL_INTERVAL_SECONDS", 0.5))
 	}
-	log.Printf("vnc_rfb_probe_recovery agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, rfbReady)
+	log.Printf("vnc_rfb_probe_recovery port=%d ready=%t", vncPort, rfbReady)
 	if !rfbReady {
 		v.recordError(session.SessionID, "vnc_backend_no_rfb_banner")
 		return map[string]any{
@@ -267,19 +267,19 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	}
 	health := guacdHealth(ctx, 350*time.Millisecond)
 	if !boolFromAny(health["enabled"]) || !boolFromAny(health["available"]) {
-		log.Printf("vnc_guacd_unavailable agent_id=%s hostname=%s reason=%s", agentID, hostname, firstText(cleanText(health["reason"]), "unavailable"))
+		log.Printf("vnc_guacd_unavailable reason=%s", firstText(cleanText(health["reason"]), "unavailable"))
 		return map[string]any{"error": "guacamole_unavailable", "detail": firstText(cleanText(health["reason"]), "unavailable")}, http.StatusServiceUnavailable
 	}
 	issued, issueErr := v.issueRemoteDesktopToken(profile, result)
 	if issueErr != nil {
-		log.Printf("vnc_token_issue_failed agent_id=%s hostname=%s error=%v", agentID, hostname, issueErr)
+		log.Printf("vnc_token_issue_failed error=%v", issueErr)
 		return map[string]any{"error": "token_issue_failed"}, http.StatusInternalServerError
 	}
 	authProbeRequired := boolFromAny(body["auth_probe"])
-	log.Printf("vnc_worker_session_request agent_id=%s hostname=%s session_id=%s auth_probe=%t", agentID, hostname, session.SessionID, authProbeRequired)
+	log.Printf("vnc_worker_session_request auth_probe=%t", authProbeRequired)
 	workerResponse, workerStatus, workerErr := v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, authProbeRequired)
-	log.Printf("vnc_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
-	logWorkerAuthProbeResult(agentID, hostname, session.SessionID, workerResponse, workerErr)
+	log.Printf("vnc_worker_session_response status=%d error=%s", workerStatus, cleanText(workerErr["error"]))
+	logWorkerAuthProbeResult(workerResponse, workerErr)
 	if authRetryReserved {
 		if workerErr == nil {
 			v.finishAgentAuthRetry(agentID, true, "")
@@ -306,11 +306,11 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 				if authRetryReservation.RetryAfterSeconds <= 0 {
 					authRetryReservation.RetryAfterSeconds = v.agentAuthRetryAfterSeconds(agentID, time.Now().UTC())
 				}
-				log.Printf("vnc_auth_retry_deferred agent_id=%s hostname=%s retry_after_seconds=%d reason=%s", agentID, hostname, authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
+				log.Printf("vnc_auth_retry_deferred retry_after_seconds=%d reason=%s", authRetryReservation.RetryAfterSeconds, authRetryReservation.Reason)
 				workerStatus = http.StatusTooManyRequests
 				workerErr = vncAuthRetryInProgressPayload(authRetryReservation.RetryAfterSeconds)
 			} else {
-				log.Printf("vnc_auth_retry_start agent_id=%s hostname=%s session_id=%s reason=%s", agentID, hostname, session.SessionID, cleanText(workerErr["detail"]))
+				log.Printf("vnc_auth_retry_start reason=%s", cleanText(workerErr["detail"]))
 				retryCredential, retryErr := requestVNCServerCredential(ctx, v.auth, result.Route, hostname, serviceMode, agentID, "vnc_auth_retry", vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_CREDENTIAL_WAIT_SECONDS", defaultVNCAuthRetryCredentialWaitSeconds, establishDeadline))
 				retrySucceeded := false
 				if retryErr == nil && retryCredential.ControllerPassword != "" {
@@ -327,13 +327,13 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 						"credential_revision": session.CredentialRevision,
 						"reason":              "vnc_auth_retry",
 					}, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_START_READY_WAIT_SECONDS", defaultVNCStartReadyWaitSeconds, establishDeadline))
-					log.Printf("vnc_auth_retry_start_ready agent_id=%s hostname=%s ready=%t status=%d error=%s detail=%s session_id=%s revision=%d", agentID, hostname, retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), cleanText(retryStartErr["detail"]), session.SessionID, session.CredentialRevision)
+					log.Printf("vnc_auth_retry_start_ready ready=%t status=%d error=%s revision=%d", retryStartErr == nil && boolFromAny(retryStartResponse["ready"]), retryStartStatus, cleanText(retryStartErr["error"]), session.CredentialRevision)
 					if retryStartErr == nil {
 						retryReady := waitForRFBServer(host, vncPort, vncBoundedWaitSeconds("BOREALIS_VNC_AUTH_RETRY_READY_WAIT_SECONDS", defaultVNCAuthRetryReadyWaitSeconds, establishDeadline), vncEnvFloat("BOREALIS_VNC_AUTH_RETRY_READY_POLL_INTERVAL_SECONDS", 0.5))
-						log.Printf("vnc_auth_retry_rfb_probe agent_id=%s hostname=%s host=%s port=%d ready=%t", agentID, hostname, host, vncPort, retryReady)
+						log.Printf("vnc_auth_retry_rfb_probe port=%d ready=%t", vncPort, retryReady)
 						if retryReady {
 							workerResponse, workerStatus, workerErr = v.postWorkerGuacamoleSession(ctx, profile, result, issued, session, participant, credential, host, vncPort, body, true)
-							log.Printf("vnc_auth_retry_worker_session_response agent_id=%s hostname=%s status=%d error=%s", agentID, hostname, workerStatus, cleanText(workerErr["error"]))
+							log.Printf("vnc_auth_retry_worker_session_response status=%d error=%s", workerStatus, cleanText(workerErr["error"]))
 							retrySucceeded = workerErr == nil
 						} else {
 							workerStatus = http.StatusServiceUnavailable
@@ -344,7 +344,7 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 						workerErr = retryStartErr
 					}
 				} else {
-					log.Printf("vnc_auth_retry_credential_failed agent_id=%s hostname=%s error=%v", agentID, hostname, retryErr)
+					log.Printf("vnc_auth_retry_credential_failed error=%v", retryErr)
 				}
 				v.finishAgentAuthRetry(agentID, retrySucceeded, vncWorkerSessionAuthRetryReason(workerErr))
 				if !retrySucceeded && vncWorkerSessionNeedsAuthRetry(workerErr) {
@@ -366,16 +366,12 @@ func (v *vncRuntime) issueSession(ctx context.Context, r *http.Request, profile 
 	guacToken := cleanText(workerResponse["token"])
 	if guacToken == "" {
 		v.recordError(session.SessionID, "worker_guacamole_token_missing")
-		log.Printf("vnc_worker_token_missing agent_id=%s hostname=%s session_id=%s", agentID, hostname, session.SessionID)
+		log.Printf("vnc_worker_token_missing")
 		return map[string]any{"error": "guacamole_proxy_unavailable", "detail": "worker_token_missing"}, http.StatusServiceUnavailable
 	}
 	_ = v.vpn.confirmTransportSuccess(agentID)
 	wsPath := joinURL(result.Route.RoutePathPrefix, "/remote-desktop/vnc/guacamole")
-	tokenHint := guacToken
-	if len(tokenHint) > 8 {
-		tokenHint = tokenHint[:8]
-	}
-	log.Printf("vnc_establish_success agent_id=%s hostname=%s session_id=%s participant_id=%s host=%s port=%d ws_path=%s token_hint=%s", agentID, hostname, session.SessionID, participant.ParticipantID, host, vncPort, wsPath, tokenHint)
+	log.Printf("vnc_establish_success port=%d", vncPort)
 	urls := remoteOpsWorkerURLs(r, result.Route)
 	snapshot := v.sessionSnapshot(session, profile.Username)
 	snapshot["display_topology"] = credential.DisplayTopology
@@ -450,16 +446,13 @@ func (v *vncRuntime) postWorkerGuacamoleSession(ctx context.Context, profile ope
 	return remoteFilePostWorkerJSON(ctx, v.auth, result.Route, "/remote-desktop/vnc/session", payload, 10*time.Second)
 }
 
-func logWorkerAuthProbeResult(agentID string, hostname string, sessionID string, workerResponse map[string]any, workerErr map[string]any) {
+func logWorkerAuthProbeResult(workerResponse map[string]any, workerErr map[string]any) {
 	payload := workerAuthProbePayload(workerResponse, workerErr)
 	if payload == nil {
 		return
 	}
 	log.Printf(
-		"vnc_worker_auth_probe_result agent_id=%s hostname=%s session_id=%s checked=%t ok=%t reason=%s stage=%s server_version=%s offered_security_types=%s selected_security_type=%s auth_result=%s framebuffer_width=%s framebuffer_height=%s desktop_name_length=%s elapsed_ms=%s socket_error=%s",
-		agentID,
-		hostname,
-		sessionID,
+		"vnc_worker_auth_probe_result checked=%t ok=%t reason=%s stage=%s server_version=%s offered_security_types=%s selected_security_type=%s auth_result=%s framebuffer_width=%s framebuffer_height=%s desktop_name_length=%s elapsed_ms=%s socket_error=%s",
 		boolFromAny(payload["checked"]),
 		boolFromAny(payload["ok"]),
 		cleanText(payload["reason"]),
@@ -1178,7 +1171,7 @@ func (v *vncRuntime) cancelPendingStop(agentID string, reason string) {
 	v.mu.Unlock()
 	if pending != nil {
 		pending.cancel()
-		log.Printf("vnc_stop_debounce_cancelled agent_id=%s reason=%s", agentID, cleanText(reason))
+		log.Printf("vnc_stop_debounce_cancelled reason=%s", cleanText(reason))
 	}
 }
 
@@ -1205,7 +1198,7 @@ func (v *vncRuntime) scheduleVNCStop(auth *authService, route *agentWorkerRoute,
 	v.stops[agentID] = pending
 	v.mu.Unlock()
 	delay := time.Duration(delaySeconds * float64(time.Second))
-	log.Printf("vnc_stop_debounce_scheduled agent_id=%s hostname=%s delay=%s reason=%s", agentID, hostname, delay.Round(time.Millisecond), cleanText(reason))
+	log.Printf("vnc_stop_debounce_scheduled delay=%s reason=%s", delay.Round(time.Millisecond), cleanText(reason))
 	go func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -1224,13 +1217,13 @@ func (v *vncRuntime) scheduleVNCStop(auth *authService, route *agentWorkerRoute,
 		activeSessionID := v.byAgent[agentID]
 		v.mu.Unlock()
 		if activeSessionID != "" {
-			log.Printf("vnc_stop_debounce_skipped agent_id=%s hostname=%s active_session_id=%s reason=%s", agentID, hostname, activeSessionID, cleanText(reason))
+			log.Printf("vnc_stop_debounce_skipped reason=%s", cleanText(reason))
 			return
 		}
 		ctx, cancelEmit := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancelEmit()
 		emitted := emitVNCStop(ctx, auth, route, hostname, serviceMode, agentID, reason)
-		log.Printf("vnc_stop_debounce_emitted agent_id=%s hostname=%s emitted=%t reason=%s", agentID, hostname, emitted, cleanText(reason))
+		log.Printf("vnc_stop_debounce_emitted emitted=%t reason=%s", emitted, cleanText(reason))
 	}()
 }
 
@@ -1384,7 +1377,7 @@ func (v *vncRuntime) recordProxyFirstFrame(sessionID string, participantID strin
 	if participant := session.Participants[participantID]; participant != nil {
 		participant.LastActivityAt = now
 	}
-	log.Printf("vnc_first_frame_recorded agent_id=%s session_id=%s participant_id=%s opcode=%s", session.AgentID, session.SessionID, participantID, cleanText(opcode))
+	log.Printf("vnc_first_frame_recorded opcode=%s", cleanText(opcode))
 }
 
 func (v *vncRuntime) recordProxyClose(sessionID string, participantID string, reason string) {

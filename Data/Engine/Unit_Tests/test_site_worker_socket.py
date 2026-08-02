@@ -354,6 +354,29 @@ def test_site_worker_internal_ansible_route_queues_runner(tmp_path: Path, monkey
     assert calls[0]["target_specifications"][0]["site_id"] == 7
 
 
+def test_site_worker_internal_ansible_route_hides_runner_exception(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
+    runtime, _token = _runtime(tmp_path)
+
+    class _Runner:
+        def queue_run(self, **_kwargs):
+            raise RuntimeError("stack trace includes /tmp/secret-playbook.yml")
+
+    runtime.set_ansible_runner(_Runner())
+    client = runtime.app.test_client()
+    response = client.post(
+        "/automation/ansible/run",
+        headers={INTERNAL_TOKEN_HEADER: internal_token("unit-internal-secret")},
+        json={"queue_run": {"playbook_name": "Ping"}},
+    )
+
+    assert response.status_code == 500
+    payload = response.get_json()
+    assert payload["error"] == "ansible_queue_failed"
+    assert payload["message"] == "Unable to queue Ansible run."
+    assert "secret-playbook" not in response.get_data(as_text=True)
+
+
 def test_site_worker_socket_counts_unique_registered_devices(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("BOREALIS_ENGINE_AUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     runtime, _token = _runtime(tmp_path)

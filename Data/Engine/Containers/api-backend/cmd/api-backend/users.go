@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,10 +18,10 @@ type userListStore interface {
 }
 
 type userMutationStore interface {
-	createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error)
+	createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, credential passwordCredential) (map[string]any, int, error)
 	deleteUser(ctx context.Context, profile operatorProfile, username string) (map[string]any, int, error)
-	resetUserPassword(ctx context.Context, secret authSecretService, username string, passwordSHA512 string) (map[string]any, int, error)
-	resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error)
+	resetUserPassword(ctx context.Context, secret authSecretService, username string, credential passwordCredential) (map[string]any, int, error)
+	resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentCredential passwordCredential, newCredential passwordCredential) (map[string]any, int, error)
 	updateUserRole(ctx context.Context, profile operatorProfile, username string, role string) (map[string]any, int, error)
 	updateUserMFA(ctx context.Context, username string, enabled bool, resetSecret bool) (map[string]any, int, error)
 	resetOwnMFA(ctx context.Context, username string) (map[string]any, int, error)
@@ -172,9 +171,9 @@ func userCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
 	if cleanText(body["role"]) != "" {
 		role = normalizeUserRole(body["role"])
 	}
-	passwordSHA512 := strings.ToLower(cleanText(body["password_sha512"]))
-	if username == "" || passwordSHA512 == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password_sha512 are required"})
+	credential, credentialOK := passwordCredentialFromBody(body, "password", "password_sha512")
+	if username == "" || !credentialOK {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password are required"})
 		return
 	}
 	if role != "User" && role != "Admin" {
@@ -183,7 +182,7 @@ func userCreate(w http.ResponseWriter, r *http.Request, auth *authService) {
 	}
 	ctx, cancel := userTimeoutContext(r.Context(), auth)
 	defer cancel()
-	payload, status, err := store.createUser(ctx, auth.aegis, username, displayName, role, passwordSHA512)
+	payload, status, err := store.createUser(ctx, auth.aegis, username, displayName, role, credential)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -204,14 +203,14 @@ func userPasswordReset(w http.ResponseWriter, r *http.Request, auth *authService
 	if !ok {
 		return
 	}
-	passwordSHA512 := strings.ToLower(cleanText(body["password_sha512"]))
-	if passwordSHA512 == "" || len(passwordSHA512) != 128 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid password hash"})
+	credential, credentialOK := passwordCredentialFromBody(body, "password", "password_sha512")
+	if !credentialOK {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid password"})
 		return
 	}
 	ctx, cancel := userTimeoutContext(r.Context(), auth)
 	defer cancel()
-	payload, status, err := store.resetUserPassword(ctx, auth.aegis, username, passwordSHA512)
+	payload, status, err := store.resetUserPassword(ctx, auth.aegis, username, credential)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -342,19 +341,19 @@ func ownPasswordResetHandler(auth *authService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		currentPasswordSHA512 := extractPasswordHash(body, "current_password", "current_password_sha512")
-		newPasswordSHA512 := extractPasswordHash(body, "new_password", "new_password_sha512")
-		if len(currentPasswordSHA512) != 128 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid current password hash"})
+		currentCredential, currentOK := passwordCredentialFromBody(body, "current_password", "current_password_sha512")
+		newCredential, newOK := passwordCredentialFromBody(body, "new_password", "new_password_sha512")
+		if !currentOK {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid current password"})
 			return
 		}
-		if len(newPasswordSHA512) != 128 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid new password hash"})
+		if !newOK {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid new password"})
 			return
 		}
 		ctx, cancel := userTimeoutContext(r.Context(), auth)
 		defer cancel()
-		payload, status, err := store.resetOwnPassword(ctx, auth.aegis, profile.Username, currentPasswordSHA512, newPasswordSHA512)
+		payload, status, err := store.resetOwnPassword(ctx, auth.aegis, profile.Username, currentCredential, newCredential)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
@@ -409,50 +408,6 @@ func normalizeUserRole(value any) string {
 	default:
 		return ""
 	}
-}
-
-func extractPasswordHash(data map[string]any, plainKey string, hashKey string) string {
-	passwordSHA512 := strings.ToLower(cleanText(data[hashKey]))
-	if passwordSHA512 != "" {
-		return passwordSHA512
-	}
-	raw := passwordPlainText(data[plainKey])
-	if raw == "" {
-		return ""
-	}
-	return sha512Hex(raw)
-}
-
-func passwordPlainText(value any) string {
-	if value == nil {
-		return ""
-	}
-	if text, ok := value.(string); ok {
-		return text
-	}
-	return fmt.Sprint(value)
-}
-
-func encryptUserPassword(ctx context.Context, secret authSecretService, passwordSHA512 string) (string, map[string]any, int, error) {
-	if secret == nil {
-		return "", map[string]any{"error": "aegis_unavailable"}, http.StatusInternalServerError, nil
-	}
-	encrypted, err := secret.encryptSecretText(ctx, strings.ToLower(strings.TrimSpace(passwordSHA512)))
-	if err != nil {
-		return "", nil, http.StatusInternalServerError, err
-	}
-	return encrypted, nil, 0, nil
-}
-
-func decryptUserPassword(ctx context.Context, secret authSecretService, value any) (string, map[string]any, int, error) {
-	if secret == nil {
-		return "", map[string]any{"error": "aegis_unavailable"}, http.StatusInternalServerError, nil
-	}
-	plain, err := secret.decryptSecretText(ctx, value)
-	if err != nil {
-		return "", nil, http.StatusInternalServerError, err
-	}
-	return strings.ToLower(strings.TrimSpace(plain)), nil, 0, nil
 }
 
 func isUniqueViolation(err error) bool {
@@ -558,10 +513,10 @@ func (s *postgresOperatorStore) listUsers(ctx context.Context) ([]map[string]any
 	return users, nil
 }
 
-func (s *postgresOperatorStore) createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, passwordSHA512 string) (map[string]any, int, error) {
+func (s *postgresOperatorStore) createUser(ctx context.Context, secret authSecretService, username string, displayName string, role string, credential passwordCredential) (map[string]any, int, error) {
 	usernameNorm := strings.TrimSpace(username)
-	if usernameNorm == "" || strings.TrimSpace(passwordSHA512) == "" {
-		return map[string]any{"error": "username and password_sha512 are required"}, http.StatusBadRequest, nil
+	if usernameNorm == "" || (strings.TrimSpace(credential.Plain) == "" && strings.TrimSpace(credential.LegacySHA512) == "") {
+		return map[string]any{"error": "username and password are required"}, http.StatusBadRequest, nil
 	}
 	if displayName = strings.TrimSpace(displayName); displayName == "" {
 		displayName = usernameNorm
@@ -570,7 +525,7 @@ func (s *postgresOperatorStore) createUser(ctx context.Context, secret authSecre
 	if role != "User" && role != "Admin" {
 		return map[string]any{"error": "invalid role"}, http.StatusBadRequest, nil
 	}
-	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, passwordSHA512)
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, credential)
 	if payload != nil || err != nil {
 		return payload, status, err
 	}
@@ -606,13 +561,13 @@ func (s *postgresOperatorStore) createUser(ctx context.Context, secret authSecre
 	return map[string]any{"status": "ok"}, http.StatusOK, nil
 }
 
-func (s *postgresOperatorStore) resetUserPassword(ctx context.Context, secret authSecretService, username string, passwordSHA512 string) (map[string]any, int, error) {
+func (s *postgresOperatorStore) resetUserPassword(ctx context.Context, secret authSecretService, username string, credential passwordCredential) (map[string]any, int, error) {
 	usernameNorm := strings.TrimSpace(username)
 	if usernameNorm == "" {
 		return map[string]any{"error": "invalid username"}, http.StatusBadRequest, nil
 	}
-	if passwordSHA512 == "" || len(passwordSHA512) != 128 {
-		return map[string]any{"error": "invalid password hash"}, http.StatusBadRequest, nil
+	if strings.TrimSpace(credential.Plain) == "" && strings.TrimSpace(credential.LegacySHA512) == "" {
+		return map[string]any{"error": "invalid password"}, http.StatusBadRequest, nil
 	}
 	source, found, err := s.userAuthSource(ctx, usernameNorm)
 	if err != nil {
@@ -621,7 +576,7 @@ func (s *postgresOperatorStore) resetUserPassword(ctx context.Context, secret au
 	if found && directoryLocalActionDisabled(source) {
 		return map[string]any{"error": "directory_user_local_action_disabled"}, http.StatusForbidden, nil
 	}
-	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, passwordSHA512)
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, credential)
 	if payload != nil || err != nil {
 		return payload, status, err
 	}
@@ -668,16 +623,16 @@ func (s *postgresOperatorStore) resetUserPassword(ctx context.Context, secret au
 	return map[string]any{"status": "ok"}, http.StatusOK, nil
 }
 
-func (s *postgresOperatorStore) resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentPasswordSHA512 string, newPasswordSHA512 string) (map[string]any, int, error) {
+func (s *postgresOperatorStore) resetOwnPassword(ctx context.Context, secret authSecretService, username string, currentCredential passwordCredential, newCredential passwordCredential) (map[string]any, int, error) {
 	usernameNorm := strings.TrimSpace(username)
 	if usernameNorm == "" {
 		return map[string]any{"error": "unauthorized"}, http.StatusUnauthorized, nil
 	}
-	if len(currentPasswordSHA512) != 128 {
-		return map[string]any{"error": "invalid current password hash"}, http.StatusBadRequest, nil
+	if strings.TrimSpace(currentCredential.Plain) == "" && strings.TrimSpace(currentCredential.LegacySHA512) == "" {
+		return map[string]any{"error": "invalid current password"}, http.StatusBadRequest, nil
 	}
-	if len(newPasswordSHA512) != 128 {
-		return map[string]any{"error": "invalid new password hash"}, http.StatusBadRequest, nil
+	if strings.TrimSpace(newCredential.Plain) == "" && strings.TrimSpace(newCredential.LegacySHA512) == "" {
+		return map[string]any{"error": "invalid new password"}, http.StatusBadRequest, nil
 	}
 	state, found, err := s.loadUserPasswordAuthState(ctx, usernameNorm)
 	if err != nil {
@@ -692,19 +647,25 @@ func (s *postgresOperatorStore) resetOwnPassword(ctx context.Context, secret aut
 	if state.AuthResetRequired {
 		return map[string]any{"error": "auth_reset_required"}, http.StatusLocked, nil
 	}
-	storedHash, payload, status, err := decryptUserPassword(ctx, secret, state.PasswordSecret)
+	storedSecret, payload, status, err := decryptUserPassword(ctx, secret, state.PasswordSecret)
 	if payload != nil || err != nil {
 		return payload, status, err
 	}
-	currentHash := strings.ToLower(strings.TrimSpace(currentPasswordSHA512))
-	newHash := strings.ToLower(strings.TrimSpace(newPasswordSHA512))
-	if storedHash != currentHash {
+	currentOK, _, err := verifyPasswordSecret(storedSecret, currentCredential)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if !currentOK {
 		return map[string]any{"error": "invalid current password"}, http.StatusUnauthorized, nil
 	}
-	if storedHash == newHash {
+	newMatchesStored, _, err := verifyPasswordSecret(storedSecret, newCredential)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+	if newMatchesStored {
 		return map[string]any{"error": "new password must differ from the current password"}, http.StatusBadRequest, nil
 	}
-	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, newHash)
+	encryptedPassword, payload, status, err := encryptUserPassword(ctx, secret, newCredential)
 	if payload != nil || err != nil {
 		return payload, status, err
 	}

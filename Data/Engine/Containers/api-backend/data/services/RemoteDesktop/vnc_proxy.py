@@ -136,8 +136,7 @@ class VncProxyServer:
         port = session.port if session else 0
         agent_id = session.agent_id if session else ""
         if not host or not port or not agent_id:
-            token_hint = token[:8] if token else "-"
-            self.logger.warning("Guacamole proxy rejected session (token=%s path=%s)", token_hint, raw_path)
+            self.logger.warning("Guacamole proxy rejected session")
             await websocket.close(code=1008, reason="invalid_session")
             return
         original_confirm_transport = session.confirm_transport
@@ -153,11 +152,7 @@ class VncProxyServer:
         connection_id = ""
         close_reason = "session_end"
         logger.info(
-            "Guacamole VNC session start agent_id=%s session_id=%s participant_id=%s token_hint=%s role=%s",
-            agent_id,
-            session.session_id or "-",
-            session.participant_id or "-",
-            (token or "-")[:8] if token else "-",
+            "Guacamole VNC session start role=%s",
             session.role or "-",
         )
         try:
@@ -173,11 +168,7 @@ class VncProxyServer:
             except websockets.exceptions.ConnectionClosed as exc:
                 close_reason = str(getattr(exc, "reason", "") or "client_closed").strip()[:120]
                 logger.info(
-                    "Guacamole VNC websocket closed agent_id=%s session_id=%s participant_id=%s token_hint=%s code=%s reason=%s",
-                    agent_id,
-                    session.session_id or "-",
-                    session.participant_id or "-",
-                    (token or "-")[:8] if token else "-",
+                    "Guacamole VNC websocket closed code=%s reason=%s",
                     getattr(exc, "code", "-"),
                     close_reason or "-",
                 )
@@ -197,16 +188,11 @@ class VncProxyServer:
                     session.on_close(close_reason)
                 except Exception:
                     self.logger.debug(
-                        "Failed to notify Guacamole VNC session close agent_id=%s",
-                        session.agent_id,
+                        "Failed to notify Guacamole VNC session close",
                         exc_info=True,
                     )
             logger.info(
-                "Guacamole VNC session ended agent_id=%s session_id=%s participant_id=%s token_hint=%s role=%s reason=%s",
-                agent_id,
-                session.session_id or "-",
-                session.participant_id or "-",
-                (token or "-")[:8] if token else "-",
+                "Guacamole VNC session ended role=%s reason=%s",
                 session.role or "-",
                 close_reason,
             )

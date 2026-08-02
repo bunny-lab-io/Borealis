@@ -8,10 +8,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
+import tempfile
 from typing import Iterator
 
 import pytest
+
+os.environ.setdefault(
+    "BOREALIS_ENGINE_CERT_ROOT",
+    tempfile.mkdtemp(prefix="borealis-engine-test-certs-"),
+)
+os.environ.setdefault(
+    "BOREALIS_ENGINE_SECRET_PATH",
+    str(Path(tempfile.mkdtemp(prefix="borealis-engine-test-secret-")) / "engine_secret.txt"),
+)
 
 
 @dataclass

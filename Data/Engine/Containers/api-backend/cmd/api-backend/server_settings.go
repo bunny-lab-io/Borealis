@@ -304,12 +304,25 @@ func intFromAny(value any) (int, error) {
 	case int:
 		return typed, nil
 	case int64:
+		if !int64FitsInt(typed) {
+			return 0, strconv.ErrRange
+		}
 		return int(typed), nil
 	case float64:
-		return int(typed), nil
+		parsed := int64(typed)
+		if !int64FitsInt(parsed) {
+			return 0, strconv.ErrRange
+		}
+		return int(parsed), nil
 	case json.Number:
 		parsed, err := typed.Int64()
-		return int(parsed), err
+		if err != nil {
+			return 0, err
+		}
+		if !int64FitsInt(parsed) {
+			return 0, strconv.ErrRange
+		}
+		return int(parsed), nil
 	case string:
 		return strconv.Atoi(strings.TrimSpace(typed))
 	default:
