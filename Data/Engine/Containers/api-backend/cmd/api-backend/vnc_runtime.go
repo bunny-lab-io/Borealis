@@ -151,7 +151,7 @@ func vncEstablishHandler(auth *authService, runtime *vncRuntime) http.HandlerFun
 		}
 		log.Printf("vnc_establish_request")
 		payload, statusCode := runtime.issueSession(r.Context(), r, profile, result, body)
-		log.Printf("vnc_establish_response status=%d error=%s", statusCode, cleanText(payload["error"]))
+		log.Printf("vnc_establish_response status=%d", statusCode)
 		writeJSON(w, statusCode, payload)
 	}
 }

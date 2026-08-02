@@ -1,12 +1,9 @@
 package agentruntime
 
-import (
-	"math"
-	"strconv"
-)
+const maxAgentInt = uint64(^uint(0) >> 1)
 
 func uint32PIDToInt(pid uint32) (int, bool) {
-	if strconv.IntSize == 32 && pid > math.MaxInt32 {
+	if uint64(pid) > maxAgentInt {
 		return 0, false
 	}
 	return int(pid), true

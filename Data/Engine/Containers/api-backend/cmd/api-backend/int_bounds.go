@@ -1,15 +1,12 @@
 package main
 
-import (
-	"math"
-	"strconv"
+const (
+	maxBorealisInt = int64(^uint(0) >> 1)
+	minBorealisInt = -maxBorealisInt - 1
 )
 
 func int64FitsInt(value int64) bool {
-	if strconv.IntSize == 32 {
-		return value >= math.MinInt32 && value <= math.MaxInt32
-	}
-	return true
+	return value >= minBorealisInt && value <= maxBorealisInt
 }
 
 func int64ToIntDefault(value int64, fallback int) int {
