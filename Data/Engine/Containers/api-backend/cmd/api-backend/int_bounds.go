@@ -1,12 +1,9 @@
 package main
 
-const (
-	maxBorealisInt = int64(^uint(0) >> 1)
-	minBorealisInt = -maxBorealisInt - 1
-)
+import "math"
 
 func int64FitsInt(value int64) bool {
-	return value >= minBorealisInt && value <= maxBorealisInt
+	return value >= math.MinInt32 && value <= math.MaxInt32
 }
 
 func int64ToIntDefault(value int64, fallback int) int {

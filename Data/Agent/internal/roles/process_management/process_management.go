@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,11 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
-
-const (
-	maxProcessInt = int64(^uint(0) >> 1)
-	minProcessInt = -maxProcessInt - 1
 )
 
 const (
@@ -840,7 +836,7 @@ func mapSlice(value any) []map[string]any {
 
 func asInt(value any) int {
 	parsed := asInt64(value)
-	if parsed < minProcessInt || parsed > maxProcessInt {
+	if parsed < math.MinInt32 || parsed > math.MaxInt32 {
 		return 0
 	}
 	return int(parsed)
