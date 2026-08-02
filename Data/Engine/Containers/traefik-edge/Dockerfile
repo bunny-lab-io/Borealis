@@ -1,4 +1,4 @@
-FROM traefik:v3.3
+FROM traefik:v3.5
 
 COPY entrypoint.sh /usr/local/bin/borealis-traefik-edge
 RUN chmod +x /usr/local/bin/borealis-traefik-edge

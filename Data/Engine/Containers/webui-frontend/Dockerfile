@@ -1,4 +1,4 @@
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 
 ARG BOREALIS_ENGINE_RUNTIME_UID=64646
 ARG BOREALIS_ENGINE_RUNTIME_GID=64646
@@ -36,7 +36,7 @@ FROM source AS build
 
 RUN NODE_ENV=production npm run build
 
-FROM node:22-alpine AS prod
+FROM node:26-alpine AS prod
 
 ARG BOREALIS_ENGINE_RUNTIME_UID=64646
 ARG BOREALIS_ENGINE_RUNTIME_GID=64646
