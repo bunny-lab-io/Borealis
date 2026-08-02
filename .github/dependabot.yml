@@ -116,6 +116,10 @@ updates:
       semver-major-days: 30
       semver-minor-days: 7
       semver-patch-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "deps"
       include: "scope"
@@ -131,12 +135,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      python-major:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
   - package-ecosystem: "npm"
     directory: "/Data/Engine/Containers/webui-frontend/data/web-interface"
@@ -152,6 +150,10 @@ updates:
       semver-major-days: 30
       semver-minor-days: 7
       semver-patch-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "deps"
       prefix-development: "deps-dev"
@@ -177,12 +179,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-      webui-major:
-        applies-to: "version-updates"
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
   - package-ecosystem: "docker"
     directories:
