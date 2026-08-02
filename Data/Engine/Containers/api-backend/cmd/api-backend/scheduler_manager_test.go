@@ -312,6 +312,23 @@ func TestSchedulerK3sSiteWorkerGUIDStableBySite(t *testing.T) {
 	}
 }
 
+func TestSchedulerWorkerPortBoundsRangeBeforeHashModulo(t *testing.T) {
+	t.Setenv("BOREALIS_TEST_WORKER_PORT_BASE", "65000")
+	t.Setenv("BOREALIS_TEST_WORKER_PORT_RANGE", "999999")
+
+	port := schedulerWorkerPort(
+		"worker-1",
+		7,
+		"BOREALIS_TEST_WORKER_PORT_BASE",
+		"BOREALIS_TEST_WORKER_PORT_RANGE",
+		56000,
+		2000,
+	)
+	if port < 65000 || port > 65534 {
+		t.Fatalf("worker port out of bounded range: %d", port)
+	}
+}
+
 func TestSchedulerRemoveOrphanRouteFiles(t *testing.T) {
 	routeDir := t.TempDir()
 	t.Setenv("BOREALIS_TRAEFIK_DYNAMIC_CONFIG_DIR", routeDir)

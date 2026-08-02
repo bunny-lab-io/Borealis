@@ -2801,7 +2801,7 @@ func schedulerWorkerPort(workerGUID string, siteID int64, baseEnv, rangeEnv stri
 	if portRange <= 0 || portRange > int64(^uint32(0)) {
 		portRange = 1
 	}
-	return base + int64(hash%uint32(portRange))
+	return base + (int64(hash) % portRange)
 }
 
 func fnv32(value string) uint32 {
