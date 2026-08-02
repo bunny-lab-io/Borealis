@@ -8,7 +8,9 @@ updates:
       day: "monday"
       time: "04:00"
       timezone: "America/Denver"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "deps"
       include: "scope"
@@ -18,40 +20,88 @@ updates:
         patterns:
           - "*"
       github-actions:
+        applies-to: "version-updates"
         patterns:
           - "*"
 
   - package-ecosystem: "gomod"
-    directories:
-      - "/Data/Agent"
-      - "/Data/Engine/Containers/api-backend"
+    directory: "/Data/Agent"
     schedule:
       interval: "weekly"
       day: "tuesday"
       time: "04:00"
       timezone: "America/Denver"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "deps"
       include: "scope"
     groups:
-      go-security:
+      agent-go-security:
         applies-to: "security-updates"
         patterns:
           - "*"
-      go-minor-patch:
+      agent-go-minor-patch:
+        applies-to: "version-updates"
         patterns:
           - "*"
         update-types:
           - "minor"
           - "patch"
-        group-by: "dependency-name"
-      go-major:
+      agent-go-major:
+        applies-to: "version-updates"
         patterns:
           - "*"
         update-types:
           - "major"
-        group-by: "dependency-name"
+
+  - package-ecosystem: "gomod"
+    directory: "/Data/Engine/Containers/api-backend"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "04:30"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      engine-go-security:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+      engine-go-passkey-sensitive:
+        applies-to: "version-updates"
+        patterns:
+          - "github.com/go-webauthn/webauthn"
+        update-types:
+          - "minor"
+          - "patch"
+      engine-go-minor-patch:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/go-webauthn/webauthn"
+        update-types:
+          - "minor"
+          - "patch"
+      engine-go-major:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
+        update-types:
+          - "major"
 
   - package-ecosystem: "pip"
     directory: "/Data/Engine/Containers/api-backend/data"
@@ -60,7 +110,16 @@ updates:
       day: "wednesday"
       time: "04:00"
       timezone: "America/Denver"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "deps"
       include: "scope"
@@ -70,16 +129,12 @@ updates:
         patterns:
           - "*"
       python-minor-patch:
+        applies-to: "version-updates"
         patterns:
           - "*"
         update-types:
           - "minor"
           - "patch"
-      python-major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
   - package-ecosystem: "npm"
     directory: "/Data/Engine/Containers/webui-frontend/data/web-interface"
@@ -88,8 +143,17 @@ updates:
       day: "thursday"
       time: "04:00"
       timezone: "America/Denver"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     versioning-strategy: "increase-if-necessary"
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "deps"
       prefix-development: "deps-dev"
@@ -101,6 +165,7 @@ updates:
           - "*"
       webui-production-minor-patch:
         dependency-type: "production"
+        applies-to: "version-updates"
         patterns:
           - "*"
         update-types:
@@ -108,16 +173,12 @@ updates:
           - "patch"
       webui-development-minor-patch:
         dependency-type: "development"
+        applies-to: "version-updates"
         patterns:
           - "*"
         update-types:
           - "minor"
           - "patch"
-      webui-major:
-        patterns:
-          - "*"
-        update-types:
-          - "major"
 
   - package-ecosystem: "docker"
     directories:
@@ -135,7 +196,20 @@ updates:
       day: "friday"
       time: "04:00"
       timezone: "America/Denver"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: "postgres"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
     commit-message:
       prefix: "deps"
       include: "scope"
@@ -145,5 +219,9 @@ updates:
         patterns:
           - "*"
       engine-container-base-images:
+        applies-to: "version-updates"
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
