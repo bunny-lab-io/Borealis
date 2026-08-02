@@ -11,13 +11,12 @@ describe("site install command builder", () => {
 
     expect(command).toContain("Data/Agent/dist/linux-amd64/Agent");
     expect(command).toContain("curl -fsSL");
-    expect(command).toContain("-o Borealis-Agent");
-    expect(command).toContain("chmod 700 Borealis-Agent");
-    expect(command).toContain("sudo ./Borealis-Agent");
+    expect(command).toContain("-o /tmp/Borealis-Agent");
+    expect(command).toContain("chmod 700 /tmp/Borealis-Agent");
+    expect(command).toContain("sudo /tmp/Borealis-Agent");
     expect(command).not.toContain("| sudo bash");
     expect(command).not.toContain("mktemp");
     expect(command).not.toContain("trap ");
-    expect(command).not.toContain("/tmp/Borealis-Agent");
     expect(command).not.toContain("sudo install");
     expect(command).not.toContain("wget");
     expect(command).toContain("--server-url");
@@ -26,7 +25,7 @@ describe("site install command builder", () => {
     expect(command).toContain("main");
     expect(command).toContain("--site-enrollment-code");
     expect(command).toContain("E925-448B-626D-D595-5A0F-FB24-B4D6-6983");
-    expect(command).not.toContain("--install-service");
+    expect(command).toContain("--install-service");
     expect(command).not.toContain("Agent.exe");
   });
 
@@ -63,15 +62,14 @@ describe("site install command builder", () => {
     );
 
     expect(command).toContain("Data/Agent/dist/windows-amd64/Agent.exe");
-    expect(command).toContain('-OutFile ".\\Borealis-Agent.exe"');
-    expect(command).toContain('& ".\\Borealis-Agent.exe"');
+    expect(command).toContain('$borealisAgent = Join-Path $env:TEMP "Borealis-Agent.exe"');
+    expect(command).toContain("-OutFile $borealisAgent");
+    expect(command).toContain("& $borealisAgent");
     expect(command).toContain("Invoke-WebRequest -UseBasicParsing");
     expect(command).toContain('--server-url "https://borealis.example.com"');
     expect(command).toContain('--repo-ref "feature/test-agent-install"');
     expect(command).toContain('--site-enrollment-code "CODE-1234"');
     expect(command).not.toContain('$ErrorActionPreference');
-    expect(command).not.toContain("Join-Path");
-    expect(command).not.toContain("$env:TEMP");
     expect(command).not.toContain("NewGuid");
     expect(command).not.toContain("try {");
     expect(command).not.toContain("Unblock-File");

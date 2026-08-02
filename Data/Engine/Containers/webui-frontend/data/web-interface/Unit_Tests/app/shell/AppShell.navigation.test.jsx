@@ -125,7 +125,7 @@ describe("AppShell buffered navigation", () => {
     });
   });
 
-  it("hides the primary navigation sidebar on the remote desktop page", async () => {
+  it("hides the primary navigation sidebar on device shell pages", async () => {
     const router = createMemoryRouter(
       [
         {
@@ -177,6 +177,6 @@ describe("AppShell buffered navigation", () => {
     await waitFor(() => {
       expect(screen.getByText("Device Summary")).toBeInTheDocument();
     });
-    expect(screen.getByText("Sidebar")).toBeInTheDocument();
+    expect(screen.queryByText("Sidebar")).not.toBeInTheDocument();
   });
 });
