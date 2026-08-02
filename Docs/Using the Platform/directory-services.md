@@ -23,6 +23,8 @@ Providers stay disabled until they pass connectivity testing.
 
 Use LDAPS when possible. Borealis can use system trust, uploaded CA PEM, or a reviewed/pinned server certificate. Host overrides let the Engine connect to a specific IP while preserving FQDN certificate validation.
 
+When a provider lists more than one domain controller, uploaded Root/Intermediate CA PEM is preferred because each DC can present a different leaf certificate. If you pin leaf certificates instead, the PEM field must cover the non-expired certificate used by each reachable LDAPS server, or Borealis should connect only to the server whose leaf certificate is pinned. Expired certificates are rejected even when pinned.
+
 ## Map Access
 
 - Admin group DNs grant Borealis Admin.

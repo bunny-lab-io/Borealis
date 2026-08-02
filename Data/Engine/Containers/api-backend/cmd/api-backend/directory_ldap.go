@@ -284,11 +284,6 @@ func directoryTLSConfig(provider directoryProviderConfig, target directoryConnec
 		}
 		config.RootCAs = pool
 	}
-	if caPEM != "" && pemContainsPinnedLeaf(caPEM) {
-		if err := verifyPinnedLDAPSDirectoryCertificate(target.ServerURL, caPEM, provider.hostOverrides()); err != nil {
-			return nil, err
-		}
-	}
 	return config, nil
 }
 
@@ -392,26 +387,6 @@ func fetchLDAPSDirectoryCertificate(serverURL string, hostOverrides map[string]s
 	return directoryCertificateMetadata(state.PeerCertificates[0], scheme+"://"+net.JoinHostPort(tlsHost, fmt.Sprint(port)), tlsHost, connectHost, host, port), nil
 }
 
-func verifyPinnedLDAPSDirectoryCertificate(serverURL string, pemText string, hostOverrides map[string]string) error {
-	expected := map[string]bool{}
-	for _, cert := range pemCertificates(pemText) {
-		if !certificateIsCA(cert) {
-			expected[certificateFingerprint(cert)] = true
-		}
-	}
-	if len(expected) == 0 {
-		return nil
-	}
-	certificate, err := fetchLDAPSDirectoryCertificate(serverURL, hostOverrides)
-	if err != nil {
-		return err
-	}
-	if !expected[cleanText(certificate["sha256_fingerprint"])] {
-		return newDirectoryError("pinned_certificate_mismatch", "LDAPS certificate does not match the trusted certificate pinned for this provider.", http.StatusBadGateway)
-	}
-	return nil
-}
-
 func directoryCertificateMetadata(cert *x509.Certificate, serverURL string, host string, connectHost string, requestedHost string, port int) map[string]any {
 	dnsNames := append([]string{}, cert.DNSNames...)
 	ipAddresses := make([]string, 0, len(cert.IPAddresses))
@@ -445,38 +420,6 @@ func certificateFingerprint(cert *x509.Certificate) string {
 		parts = append(parts, raw[i:i+2])
 	}
 	return strings.Join(parts, ":")
-}
-
-func pemContainsPinnedLeaf(pemText string) bool {
-	for _, cert := range pemCertificates(pemText) {
-		if !certificateIsCA(cert) {
-			return true
-		}
-	}
-	return false
-}
-
-func pemCertificates(pemText string) []*x509.Certificate {
-	certs := []*x509.Certificate{}
-	rest := []byte(pemText)
-	for {
-		block, remaining := pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		rest = remaining
-		if block.Type != "CERTIFICATE" {
-			continue
-		}
-		if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
-			certs = append(certs, cert)
-		}
-	}
-	return certs
-}
-
-func certificateIsCA(cert *x509.Certificate) bool {
-	return cert != nil && cert.IsCA
 }
 
 func defaultDirectoryScheme(provider directoryProviderConfig) string {
