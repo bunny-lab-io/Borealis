@@ -358,6 +358,15 @@ def save_settings(settings: LetsEncryptSettings) -> Path:
     return path
 
 
+def _write_private_text(path: Path, content: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(path, flags, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(path, mode)
+
+
 def _render_runtime_env(settings: LetsEncryptSettings) -> str:
     pairs = {
         "BOREALIS_PUBLIC_EDGE_ENABLED": "1" if settings.enabled else "0",
@@ -558,8 +567,7 @@ def write_runtime_artifacts(settings: LetsEncryptSettings) -> Dict[str, str]:
         pass
 
     runtime_env_path = Path(settings.runtime_env_path)
-    runtime_env_path.parent.mkdir(parents=True, exist_ok=True)
-    runtime_env_path.write_text(_render_runtime_env(settings), encoding="utf-8")
+    _write_private_text(runtime_env_path, _render_runtime_env(settings))
 
     static_config_path = Path(settings.traefik_static_config_path)
     static_config_path.parent.mkdir(parents=True, exist_ok=True)

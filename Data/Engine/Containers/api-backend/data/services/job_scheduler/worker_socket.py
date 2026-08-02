@@ -497,7 +497,7 @@ class SiteWorkerSocketRuntime:
                 run_id = self._ansible_runner.queue_run(**queue_payload)
             except Exception as exc:
                 self._log(f"ansible queue failed err={exc}", level="ERROR")
-                return jsonify({"error": "ansible_queue_failed", "message": str(exc)}), 500
+                return jsonify({"error": "ansible_queue_failed", "message": "Unable to queue Ansible run."}), 500
             return jsonify({"queued": True, "run_id": run_id, "worker_guid": self.worker_guid}), 200
 
     def _require_internal_request(self) -> Optional[tuple[Dict[str, Any], int]]:
@@ -999,13 +999,10 @@ class SiteWorkerSocketRuntime:
             security_types = ".".join(str(item) for item in security_preflight_detail.get("offered_security_types") or [])
             self._log(
                 (
-                    "remote_desktop_vnc_security_preflight_result agent_id={0} session_id={1} host={2} port={3} "
-                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
-                    "offered_security_types={10} elapsed_ms={11} socket_error={12}"
+                    "remote_desktop_vnc_security_preflight_result port={0} "
+                    "enabled={1} checked={2} ok={3} reason={4} stage={5} server_version={6} "
+                    "offered_security_types={7} elapsed_ms={8} socket_error={9}"
                 ).format(
-                    agent_id,
-                    session_id,
-                    host,
                     port,
                     bool(security_preflight_enabled),
                     security_preflight.checked,
@@ -1023,10 +1020,7 @@ class SiteWorkerSocketRuntime:
                 error_code = _vnc_auth_probe_error(security_preflight.reason)
                 status_code = _vnc_auth_probe_status(error_code)
                 self._log(
-                    "remote_desktop_vnc_security_preflight_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
-                        agent_id,
-                        session_id,
-                        host,
+                    "remote_desktop_vnc_security_preflight_failed port={0} error={1} reason={2}".format(
                         port,
                         error_code,
                         security_preflight.reason,
@@ -1044,10 +1038,7 @@ class SiteWorkerSocketRuntime:
                     status_code,
                 )
             self._log(
-                "remote_desktop_vnc_auth_probe_start agent_id={0} session_id={1} host={2} port={3} enabled={4}".format(
-                    agent_id,
-                    session_id,
-                    host,
+                "remote_desktop_vnc_auth_probe_start port={0} enabled={1}".format(
                     port,
                     bool(auth_probe_enabled),
                 )
@@ -1064,15 +1055,12 @@ class SiteWorkerSocketRuntime:
             offered_security_types = ".".join(str(item) for item in auth_probe_detail.get("offered_security_types") or [])
             self._log(
                 (
-                    "remote_desktop_vnc_auth_probe_result agent_id={0} session_id={1} host={2} port={3} "
-                    "enabled={4} checked={5} ok={6} reason={7} stage={8} server_version={9} "
-                    "offered_security_types={10} selected_security_type={11} auth_result={12} "
-                    "framebuffer_width={13} framebuffer_height={14} desktop_name_length={15} "
-                    "elapsed_ms={16} socket_error={17}"
+                    "remote_desktop_vnc_auth_probe_result port={0} "
+                    "enabled={1} checked={2} ok={3} reason={4} stage={5} server_version={6} "
+                    "offered_security_types={7} selected_security_type={8} auth_result={9} "
+                    "framebuffer_width={10} framebuffer_height={11} desktop_name_length={12} "
+                    "elapsed_ms={13} socket_error={14}"
                 ).format(
-                    agent_id,
-                    session_id,
-                    host,
                     port,
                     bool(auth_probe_enabled),
                     auth_probe.checked,
@@ -1095,10 +1083,7 @@ class SiteWorkerSocketRuntime:
                 error_code = _vnc_auth_probe_error(auth_probe.reason)
                 status_code = _vnc_auth_probe_status(error_code)
                 self._log(
-                    "remote_desktop_vnc_auth_probe_failed agent_id={0} session_id={1} host={2} port={3} error={4} reason={5}".format(
-                        agent_id,
-                        session_id,
-                        host,
+                    "remote_desktop_vnc_auth_probe_failed port={0} error={1} reason={2}".format(
                         port,
                         error_code,
                         auth_probe.reason,
@@ -1159,14 +1144,7 @@ class SiteWorkerSocketRuntime:
                 ),
             )
             self._log(
-                "remote_desktop_session_registered agent_id={0} session_id={1} participant_id={2} host={3} port={4} token_hint={5}".format(
-                    agent_id,
-                    session_id,
-                    participant_id,
-                    host,
-                    port,
-                    guacamole_session.token[:8] if guacamole_session.token else "-",
-                )
+                "remote_desktop_session_registered port={0}".format(port)
             )
             return (
                 jsonify(
@@ -1253,22 +1231,16 @@ class SiteWorkerSocketRuntime:
                 guid=str(auth_context.get("guid") or ""),
             )
             self.logger.info(
-                "Site-worker Agent socket registered worker_guid=%s site_id=%s agent_id=%s hostname=%s service_mode=%s helper_contexts=%s sid=%s",
+                "Site-worker Agent socket registered worker_guid=%s site_id=%s service_mode=%s helper_contexts=%s",
                 self.worker_guid,
                 self.site_id,
-                agent_id,
-                inferred_hostname,
                 service_mode,
                 ",".join(helper_contexts) if helper_contexts else "-",
-                request.sid,
             )
             self._log(
-                "agent_socket_register agent_id={0} hostname={1} service_mode={2} helper_contexts={3} sid={4} remote={5}".format(
-                    agent_id,
-                    inferred_hostname or "-",
+                "agent_socket_register service_mode={0} helper_contexts={1} remote={2}".format(
                     service_mode or "-",
                     ",".join(helper_contexts) if helper_contexts else "-",
-                    request.sid,
                     _remote_addr() or "-",
                 )
             )
@@ -1281,13 +1253,11 @@ class SiteWorkerSocketRuntime:
             shell_closed = self._close_shell_session(request.sid, reason="operator_socket_disconnect")
             if agent_id:
                 self.logger.info(
-                    "Site-worker Agent socket disconnected worker_guid=%s site_id=%s agent_id=%s sid=%s",
+                    "Site-worker Agent socket disconnected worker_guid=%s site_id=%s",
                     self.worker_guid,
                     self.site_id,
-                    agent_id,
-                    request.sid,
                 )
-                self._log("agent_socket_disconnect agent_id={0} sid={1}".format(agent_id, request.sid))
+                self._log("agent_socket_disconnect")
             elif shell_closed:
                 self._log("vpn_shell_client_disconnect sid={0} remote={1}".format(request.sid, _remote_addr() or "-"))
 
@@ -1336,7 +1306,7 @@ class SiteWorkerSocketRuntime:
                 )
                 row = cur.fetchone()
         except Exception:
-            self.logger.debug("site-worker shell VPN lease lookup failed agent_id=%s", clean_agent_id, exc_info=True)
+            self.logger.debug("site-worker shell VPN lease lookup failed", exc_info=True)
             return ""
         if not row:
             return ""

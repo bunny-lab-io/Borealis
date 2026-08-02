@@ -1292,7 +1292,7 @@ func directoryLoginAndRespond(w http.ResponseWriter, r *http.Request, auth *auth
 	if strings.TrimSpace(row.MFASecret) != "" {
 		existingSecret, _ = auth.aegis.decryptSecretText(ctx, row.MFASecret)
 	}
-	beginMFAOrFinalize(w, r, auth, loginStore, row.Username, firstText(row.Role, result.Role, defaultUserRole), strings.TrimSpace(existingSecret), false)
+	beginMFAOrFinalize(w, r, auth, loginStore, row.Username, firstText(row.Role, result.Role, defaultUserRole), strings.TrimSpace(existingSecret), false, "")
 }
 
 func (p directoryProviderConfig) id() int64 {

@@ -4,8 +4,8 @@ set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "${script_dir}/../../../.." && pwd)"
 minimum_go_major=1
-minimum_go_minor=23
-go_version="${BOREALIS_GO_VERSION:-1.23.12}"
+minimum_go_minor=25
+go_version="${BOREALIS_GO_VERSION:-1.25.12}"
 go_install_root="${BOREALIS_GO_INSTALL_ROOT:-${repo_root}/Dependencies/Go/go${go_version}}"
 version_value="${BOREALIS_API_BACKEND_VERSION:-$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || echo dev)}"
 output_root="${BOREALIS_GO_API_BACKEND_OUTPUT_ROOT:-${script_dir}/dist}"

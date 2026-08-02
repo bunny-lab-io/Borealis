@@ -1209,20 +1209,12 @@ func (s *postgresOperatorStore) updateWorkflowRun(ctx context.Context, runID int
 	if len(fields) == 0 {
 		return nil
 	}
+	query, args, err := workflowUpdateSQL("engine.workflow_runs", "id", runID, fields, workflowRunUpdateColumns)
+	if err != nil {
+		return err
+	}
 	return s.withWorkflowConn(ctx, func(conn *sql.Conn) error {
-		sets := make([]string, 0, len(fields))
-		args := make([]any, 0, len(fields)+1)
-		keys := make([]string, 0, len(fields))
-		for key := range fields {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			args = append(args, fields[key])
-			sets = append(sets, key+"=$"+strconv.Itoa(len(args)))
-		}
-		args = append(args, runID)
-		_, err := conn.ExecContext(ctx, "UPDATE engine.workflow_runs SET "+strings.Join(sets, ", ")+" WHERE id=$"+strconv.Itoa(len(args)), args...)
+		_, err := conn.ExecContext(ctx, query, args...)
 		return err
 	})
 }
@@ -1271,6 +1263,24 @@ type workflowChildJobUpdate struct {
 	Payload       map[string]any
 }
 
+var workflowRunUpdateColumns = map[string]string{
+	"status":              "status",
+	"started_ts":          "started_ts",
+	"updated_at":          "updated_at",
+	"error":               "error",
+	"final_payload_json":  "final_payload_json",
+	"final_metadata_json": "final_metadata_json",
+	"finished_ts":         "finished_ts",
+}
+
+var workflowChildJobUpdateColumns = map[string]string{
+	"status":         "status",
+	"updated_at":     "updated_at",
+	"stdout_summary": "stdout_summary",
+	"stderr_summary": "stderr_summary",
+	"payload_json":   "payload_json",
+}
+
 func (s *postgresOperatorStore) createWorkflowChildJob(ctx context.Context, req workflowChildJobInsert) (int64, error) {
 	now := time.Now().Unix()
 	payloadJSON, _ := json.Marshal(req.Payload)
@@ -1316,22 +1326,39 @@ func (s *postgresOperatorStore) updateWorkflowChildJob(ctx context.Context, chil
 		payloadJSON, _ := json.Marshal(req.Payload)
 		fields["payload_json"] = string(payloadJSON)
 	}
+	query, args, err := workflowUpdateSQL("engine.workflow_child_jobs", "id", childJobID, fields, workflowChildJobUpdateColumns)
+	if err != nil {
+		return err
+	}
 	return s.withWorkflowConn(ctx, func(conn *sql.Conn) error {
-		sets := make([]string, 0, len(fields))
-		args := make([]any, 0, len(fields)+1)
-		keys := make([]string, 0, len(fields))
-		for key := range fields {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			args = append(args, fields[key])
-			sets = append(sets, key+"=$"+strconv.Itoa(len(args)))
-		}
-		args = append(args, childJobID)
-		_, err := conn.ExecContext(ctx, "UPDATE engine.workflow_child_jobs SET "+strings.Join(sets, ", ")+" WHERE id=$"+strconv.Itoa(len(args)), args...)
+		_, err := conn.ExecContext(ctx, query, args...)
 		return err
 	})
+}
+
+func workflowUpdateSQL(table string, idColumn string, id int64, fields map[string]any, allowed map[string]string) (string, []any, error) {
+	if len(fields) == 0 {
+		return "", nil, errors.New("workflow_update_fields_required")
+	}
+	if len(fields) > len(allowed) {
+		return "", nil, errors.New("workflow_update_field_count_invalid")
+	}
+	sets := make([]string, 0, len(fields))
+	args := make([]any, 0, len(fields)+1)
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		if _, ok := allowed[key]; !ok {
+			return "", nil, fmt.Errorf("workflow_update_field_not_allowed: %s", key)
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		args = append(args, fields[key])
+		sets = append(sets, allowed[key]+"=$"+strconv.Itoa(len(args)))
+	}
+	args = append(args, id)
+	return "UPDATE " + table + " SET " + strings.Join(sets, ", ") + " WHERE " + idColumn + "=$" + strconv.Itoa(len(args)), args, nil
 }
 
 func (s *postgresOperatorStore) waitForWorkflowRun(ctx context.Context, runID int64, timeoutSeconds int64) map[string]any {

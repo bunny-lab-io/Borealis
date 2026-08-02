@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/sha512"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -25,6 +23,7 @@ type bootstrapStateReader interface {
 type authLoginStore interface {
 	loadLoginRow(ctx context.Context, username string) (authLoginRow, bool, error)
 	updateLastLogin(ctx context.Context, username string, now int64) error
+	updateUserPasswordSecret(ctx context.Context, username string, encryptedSecret string, now int64) error
 	updateUserMFASecret(ctx context.Context, username string, encryptedSecret string, now int64) error
 }
 
@@ -161,8 +160,8 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 
 		username := cleanText(body["username"])
 		password := cleanText(body["password"])
-		passwordSHA512 := strings.ToLower(cleanText(body["password_sha512"]))
-		if username == "" || (password == "" && passwordSHA512 == "") {
+		credential, credentialOK := passwordCredentialFromBody(body, "password", "password_sha512")
+		if username == "" || !credentialOK {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "missing credentials"})
 			return
 		}
@@ -199,7 +198,7 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 			writeJSON(w, http.StatusLocked, map[string]any{"error": "auth_reset_required"})
 			return
 		}
-		storedHash, err := auth.aegis.decryptSecretText(ctx, row.PasswordSecret)
+		storedSecret, err := auth.aegis.decryptSecretText(ctx, row.PasswordSecret)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": firstText(err.Error(), "auth_secret_unavailable")})
 			return
@@ -209,15 +208,24 @@ func authLoginHandler(auth *authService, fallback http.Handler) http.HandlerFunc
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": firstText(err.Error(), "auth_secret_unavailable")})
 			return
 		}
-		checkHash := passwordSHA512
-		if checkHash == "" {
-			checkHash = sha512Hex(password)
+		passwordOK, needsUpgrade, err := verifyPasswordSecret(storedSecret, credential)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "auth_secret_unavailable"})
+			return
 		}
-		if strings.ToLower(strings.TrimSpace(storedHash)) != strings.ToLower(strings.TrimSpace(checkHash)) {
+		if !passwordOK {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid username or password"})
 			return
 		}
-		beginMFAOrFinalize(w, r, auth, store, row.Username, firstText(row.Role, defaultUserRole), strings.TrimSpace(existingSecret), row.MFADisabled)
+		passwordVerifierUpgrade := ""
+		if needsUpgrade {
+			passwordVerifierUpgrade, err = newPasswordVerifierFromCredential(credential)
+			if err != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "auth_secret_unavailable"})
+				return
+			}
+		}
+		beginMFAOrFinalize(w, r, auth, store, row.Username, firstText(row.Role, defaultUserRole), strings.TrimSpace(existingSecret), row.MFADisabled, passwordVerifierUpgrade)
 	}
 }
 
@@ -332,6 +340,13 @@ func authMFAVerifyHandler(auth *authService, fallback http.Handler) http.Handler
 			return
 		}
 
+		if passwordVerifierUpgrade := cleanText(pending["password_verifier"]); passwordVerifierUpgrade != "" {
+			if err := upgradeLoginPasswordIfNeeded(ctx, auth, store, username, passwordVerifierUpgrade); err != nil {
+				writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_store_unavailable", "message": err.Error()})
+				return
+			}
+		}
+
 		finalizeLogin(w, r, auth, store, username, role)
 	}
 }
@@ -405,6 +420,31 @@ func (s *postgresOperatorStore) updateLastLogin(ctx context.Context, username st
 	return err
 }
 
+func (s *postgresOperatorStore) updateUserPasswordSecret(ctx context.Context, username string, encryptedSecret string, now int64) error {
+	if strings.TrimSpace(username) == "" {
+		return errors.New("username required")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	result, err := conn.ExecContext(ctx, `
+		UPDATE engine.users
+		   SET password_sha512=$1,
+		       updated_at=$2
+		 WHERE LOWER(username)=LOWER($3)
+		   AND COALESCE(auth_source, 'local')='local'
+	`, encryptedSecret, now, username)
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected <= 0 {
+		return errOperatorNotFound
+	}
+	return nil
+}
+
 func (s *postgresOperatorStore) updateUserMFASecret(ctx context.Context, username string, encryptedSecret string, now int64) error {
 	if strings.TrimSpace(username) == "" {
 		return errors.New("username required")
@@ -431,8 +471,12 @@ func (s *postgresOperatorStore) updateUserMFASecret(ctx context.Context, usernam
 	return nil
 }
 
-func beginMFAOrFinalize(w http.ResponseWriter, r *http.Request, auth *authService, store authLoginStore, username string, role string, existingSecret string, mfaDisabled bool) {
+func beginMFAOrFinalize(w http.ResponseWriter, r *http.Request, auth *authService, store authLoginStore, username string, role string, existingSecret string, mfaDisabled bool, passwordVerifierUpgrade string) {
 	if mfaDisabled {
+		if err := upgradeLoginPasswordIfNeeded(r.Context(), auth, store, username, passwordVerifierUpgrade); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "auth_store_unavailable", "message": err.Error()})
+			return
+		}
 		finalizeLogin(w, r, auth, store, username, role)
 		return
 	}
@@ -455,6 +499,9 @@ func beginMFAOrFinalize(w http.ResponseWriter, r *http.Request, auth *authServic
 	}
 	if stage == "setup" {
 		pending["secret"] = secret
+	}
+	if strings.TrimSpace(passwordVerifierUpgrade) != "" {
+		pending["password_verifier"] = passwordVerifierUpgrade
 	}
 	token, err := auth.verifier.signPayload(pending)
 	if err != nil {
@@ -504,7 +551,8 @@ func finalizeLogin(w http.ResponseWriter, r *http.Request, auth *authService, st
 		Name:     authCookieName,
 		Value:    token,
 		Path:     "/",
-		HttpOnly: false,
+		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -512,7 +560,6 @@ func finalizeLogin(w http.ResponseWriter, r *http.Request, auth *authService, st
 		"username":    username,
 		"role":        role,
 		"auth_source": firstText(profile.AuthSource, "local"),
-		"token":       token,
 	})
 }
 
@@ -568,9 +615,4 @@ func readAuthJSONRaw(w http.ResponseWriter, r *http.Request) ([]byte, map[string
 		body = map[string]any{}
 	}
 	return raw, body, true
-}
-
-func sha512Hex(value string) string {
-	sum := sha512.Sum512([]byte(value))
-	return hex.EncodeToString(sum[:])
 }

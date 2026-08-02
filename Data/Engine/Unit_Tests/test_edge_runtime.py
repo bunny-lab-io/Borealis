@@ -47,8 +47,10 @@ def test_dynamic_config_excludes_acme_challenge_from_http_redirect(tmp_path: Pat
 
     artifacts = write_runtime_artifacts(settings)
     dynamic_config = Path(artifacts["traefik_dynamic_config_path"]).read_text(encoding="utf-8")
+    runtime_env_mode = Path(artifacts["runtime_env_path"]).stat().st_mode & 0o777
 
     assert 'Host(`borealis.example.com`) && !PathPrefix(`/.well-known/acme-challenge/`)' in dynamic_config
+    assert runtime_env_mode == 0o600
 
 
 def test_dynamic_config_routes_hostname_aliases(tmp_path: Path) -> None:

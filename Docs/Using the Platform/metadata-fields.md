@@ -125,8 +125,8 @@ Blank values queue a clear.
         - `Data/Engine/Unit_Tests/test_metadata_fields.py`
         - `Data/Engine/Containers/webui-frontend/data/web-interface/Unit_Tests/Admin/Metadata_Field_List.reservedFields.test.jsx`
     7. Run focused validation before handoff:
-        - `/opt/Borealis/Dependencies/Go/go1.23.12/bin/gofmt -w Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
-        - `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.23.12/bin/go test ./cmd/api-backend -run 'TestMetadata'`
+        - `/opt/Borealis/Dependencies/Go/go1.25.12/bin/gofmt -w Data/Engine/Containers/api-backend/cmd/api-backend/metadata_fields.go Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go`
+        - `cd Data/Engine/Containers/api-backend && /opt/Borealis/Dependencies/Go/go1.25.12/bin/go test ./cmd/api-backend -run 'TestMetadata'`
         - `python3 -m py_compile Data/Engine/Containers/api-backend/data/services/metadata_fields.py Data/Engine/Unit_Tests/test_metadata_fields.py`
         - `./Engine_Unit_Tests.sh --domain webui` when the WebUI runtime test cache exists.
 

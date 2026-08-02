@@ -44,7 +44,7 @@ func decideWatchdogRecovery(input watchdogDecisionInput) watchdogDecision {
 	if !input.ServiceRunning {
 		return watchdogDecision{Action: "start_service", Outcome: "needed", Reason: "service_stopped"}
 	}
-	if input.ServicePID > 0 && input.LivenessPID > 0 && int(input.ServicePID) != input.LivenessPID {
+	if input.ServicePID > 0 && input.LivenessPID > 0 && !uint32PIDMatchesInt(input.ServicePID, input.LivenessPID) {
 		return restartWatchdogDecision(input, fmt.Sprintf("pid_mismatch_service=%d_liveness=%d", input.ServicePID, input.LivenessPID))
 	}
 	if input.LastLocalTickAt <= 0 {

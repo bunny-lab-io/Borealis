@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -834,7 +835,18 @@ func mapSlice(value any) []map[string]any {
 }
 
 func asInt(value any) int {
-	return int(asInt64(value))
+	parsed := asInt64(value)
+	if !int64FitsInt(parsed) {
+		return 0
+	}
+	return int(parsed)
+}
+
+func int64FitsInt(value int64) bool {
+	if strconv.IntSize == 32 {
+		return value >= math.MinInt32 && value <= math.MaxInt32
+	}
+	return true
 }
 
 func asInt64(value any) int64 {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -161,15 +162,15 @@ func queueDetachedSystemdRestart(ctx context.Context, serviceKey string, unitNam
 		return "", fmt.Errorf("systemd-run or systemctl is unavailable on this engine host")
 	}
 	jobUnit := fmt.Sprintf("%s-%s-%s", systemdRestartJobUnitPrefix, strings.ToLower(cleanText(serviceKey)), strconv.FormatInt(time.Now().UnixNano(), 36))
-	shellCommand := fmt.Sprintf("sleep %d; %s restart %s", int(systemdServiceRestartDelay/time.Second), shellQuote(systemctlBin), shellQuote(unitName))
 	result := systemdRunCommand(ctx, []string{
 		systemdRunBin,
 		"--unit=" + jobUnit,
 		"--collect",
 		"--service-type=oneshot",
-		"/bin/bash",
-		"-lc",
-		shellCommand,
+		"--on-active=" + systemdServiceRestartDelay.String(),
+		systemctlBin,
+		"restart",
+		unitName,
 	})
 	if result.Code != 0 {
 		return "", fmt.Errorf("%s", firstText(cleanText(result.Stderr), cleanText(result.Stdout), "unable to queue restart"))
@@ -368,15 +369,19 @@ func systemdPendingKey(serviceKey string, instance string) string {
 }
 
 func runSystemdCommand(ctx context.Context, args []string) systemCommandResult {
-	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		return systemCommandResult{Code: 1, Stderr: "empty command"}
+	validatedArgs, validateErr := validateSystemdCommandArgs(args)
+	if validateErr != nil {
+		return systemCommandResult{Code: 1, Stderr: validateErr.Error()}
 	}
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd, err := systemdCommandContext(ctx, validatedArgs)
+	if err != nil {
+		return systemCommandResult{Code: 1, Stderr: err.Error()}
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	code := 0
 	if err != nil {
 		code = 1
@@ -389,6 +394,84 @@ func runSystemdCommand(ctx context.Context, args []string) systemCommandResult {
 		}
 	}
 	return systemCommandResult{Code: code, Stdout: stdout.String(), Stderr: stderr.String()}
+}
+
+func systemdCommandContext(ctx context.Context, validatedArgs []string) (*exec.Cmd, error) {
+	if len(validatedArgs) == 0 {
+		return nil, errors.New("empty command")
+	}
+	switch filepath.Base(validatedArgs[0]) {
+	case "systemctl":
+		return exec.CommandContext(ctx, "systemctl", validatedArgs[1:]...), nil
+	case "systemd-run":
+		return exec.CommandContext(ctx, "systemd-run", validatedArgs[1:]...), nil
+	default:
+		return nil, errors.New("systemd command not allowed")
+	}
+}
+
+func validateSystemdCommandArgs(args []string) ([]string, error) {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return nil, errors.New("empty command")
+	}
+	candidate := strings.TrimSpace(args[0])
+	commandName := filepath.Base(candidate)
+	switch commandName {
+	case "systemctl", "systemd-run":
+	default:
+		return nil, fmt.Errorf("systemd command not allowed: %s", commandName)
+	}
+	validated := make([]string, len(args))
+	validated[0] = candidate
+	for index := 1; index < len(args); index++ {
+		if strings.ContainsAny(args[index], "\x00\r\n") {
+			return nil, fmt.Errorf("systemd command argument invalid: %d", index)
+		}
+		validated[index] = args[index]
+	}
+	if !systemdCommandShapeAllowed(commandName, validated[1:]) {
+		return nil, fmt.Errorf("systemd command shape not allowed: %s", commandName)
+	}
+	return validated, nil
+}
+
+func systemdCommandShapeAllowed(commandName string, args []string) bool {
+	switch commandName {
+	case "systemctl":
+		if len(args) == 5 && args[0] == "show" && systemdUnitNameAllowed(args[1]) && args[2] == "--no-pager" && args[3] == "--property" && args[4] == strings.Join(systemdShowProperties, ",") {
+			return true
+		}
+		if len(args) == 4 && args[0] == "list-unit-files" && args[1] == "postgresql@*.service" && args[2] == "--no-legend" && args[3] == "--no-pager" {
+			return true
+		}
+		if len(args) == 5 && args[0] == "list-units" && args[1] == "postgresql@*.service" && args[2] == "--all" && args[3] == "--no-legend" && args[4] == "--no-pager" {
+			return true
+		}
+	case "systemd-run":
+		return len(args) == 7 &&
+			strings.HasPrefix(args[0], "--unit="+systemdRestartJobUnitPrefix+"-") &&
+			args[1] == "--collect" &&
+			args[2] == "--service-type=oneshot" &&
+			args[3] == "--on-active="+systemdServiceRestartDelay.String() &&
+			filepath.Base(strings.TrimSpace(args[4])) == "systemctl" &&
+			args[5] == "restart" &&
+			systemdUnitNameAllowed(args[6])
+	}
+	return false
+}
+
+func systemdUnitNameAllowed(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, "/") || !strings.HasSuffix(value, ".service") {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' || r == '@' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func shellQuote(value string) string {

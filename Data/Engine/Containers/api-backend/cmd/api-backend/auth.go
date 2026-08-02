@@ -6,7 +6,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
@@ -318,7 +318,8 @@ func clearAuthCookies(w http.ResponseWriter) {
 			Path:     "/",
 			Expires:  expired,
 			MaxAge:   -1,
-			HttpOnly: name == "session",
+			HttpOnly: true,
+			Secure:   true,
 			SameSite: http.SameSiteLaxMode,
 		})
 	}
@@ -577,8 +578,8 @@ func (v *tokenVerifier) signatureSegment(value []byte) string {
 }
 
 func (v *tokenVerifier) signingMAC(value []byte) []byte {
-	derived := sha1.Sum(bytes.Join([][]byte{[]byte(authTokenSalt), []byte("signer"), v.secret}, nil))
-	mac := hmac.New(sha1.New, derived[:])
+	derived := sha256.Sum256(bytes.Join([][]byte{[]byte(authTokenSalt), []byte("signer"), v.secret}, nil))
+	mac := hmac.New(sha256.New, derived[:])
 	_, _ = mac.Write(value)
 	return mac.Sum(nil)
 }

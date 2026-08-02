@@ -123,8 +123,12 @@ func restartStaleService(service *mgr.Service, pid uint32) error {
 		time.Sleep(time.Second)
 	}
 	if pid > 0 {
-		if proc, err := os.FindProcess(int(pid)); err == nil {
-			_ = proc.Kill()
+		if targetPID, ok := uint32PIDToInt(pid); ok {
+			if proc, err := os.FindProcess(targetPID); err == nil {
+				_ = proc.Kill()
+			}
+		} else {
+			return fmt.Errorf("service pid out of range: %d", pid)
 		}
 	}
 	deadline = time.Now().Add(10 * time.Second)

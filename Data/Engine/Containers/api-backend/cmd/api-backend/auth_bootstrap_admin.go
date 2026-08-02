@@ -46,12 +46,12 @@ func bootstrapAdminSetupHandler(auth *authService) http.HandlerFunc {
 		}
 		username := cleanText(body["username"])
 		displayName := firstText(cleanText(body["display_name"]), username)
-		passwordHash := strings.ToLower(cleanText(body["password_sha512"]))
-		if username == "" || len(passwordHash) != 128 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password_sha512 are required"})
+		credential, credentialOK := passwordCredentialFromBody(body, "password", "password_sha512")
+		if username == "" || !credentialOK {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password are required"})
 			return
 		}
-		writeBootstrapAdminPending(w, auth, "setup", username, displayName, "Admin", passwordHash)
+		writeBootstrapAdminPending(w, auth, "setup", username, displayName, "Admin", credential)
 	}
 }
 
@@ -79,9 +79,9 @@ func bootstrapAdminRecoverHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		username := cleanText(body["username"])
-		passwordHash := strings.ToLower(cleanText(body["password_sha512"]))
-		if username == "" || len(passwordHash) != 128 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password_sha512 are required"})
+		credential, credentialOK := passwordCredentialFromBody(body, "password", "password_sha512")
+		if username == "" || !credentialOK {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "username and password are required"})
 			return
 		}
 		store, ok := auth.store.(bootstrapAdminStore)
@@ -102,7 +102,7 @@ func bootstrapAdminRecoverHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "admin_recovery_not_required"})
 			return
 		}
-		writeBootstrapAdminPending(w, auth, "recover", username, firstText(displayName, username), "Admin", passwordHash)
+		writeBootstrapAdminPending(w, auth, "recover", username, firstText(displayName, username), "Admin", credential)
 	}
 }
 
@@ -143,9 +143,9 @@ func bootstrapAdminMFAVerifyHandler(auth *authService) http.HandlerFunc {
 		username := cleanText(pending["u"])
 		displayName := firstText(cleanText(pending["display_name"]), username)
 		role := firstText(cleanText(pending["r"]), "Admin")
-		passwordHash := strings.ToLower(cleanText(pending["password_sha512"]))
+		passwordVerifier := cleanText(pending["password_verifier"])
 		flow := cleanText(pending["flow"])
-		if username == "" || len(passwordHash) != 128 || (flow != "setup" && flow != "recover") {
+		if username == "" || !passwordVerifierLooksValid(passwordVerifier) || (flow != "setup" && flow != "recover") {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid_session"})
 			return
 		}
@@ -177,7 +177,7 @@ func bootstrapAdminMFAVerifyHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusConflict, payload)
 			return
 		}
-		encryptedPassword, err := auth.aegis.encryptSecretText(ctx, passwordHash)
+		encryptedPassword, err := auth.aegis.encryptSecretText(ctx, passwordVerifier)
 		if err != nil {
 			writeBootstrapRequired(w, state)
 			return
@@ -209,20 +209,25 @@ func bootstrapAdminMFAVerifyHandler(auth *authService) http.HandlerFunc {
 	}
 }
 
-func writeBootstrapAdminPending(w http.ResponseWriter, auth *authService, flow string, username string, displayName string, role string, passwordHash string) {
+func writeBootstrapAdminPending(w http.ResponseWriter, auth *authService, flow string, username string, displayName string, role string, credential passwordCredential) {
 	secret, err := randomBase32Secret()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "mfa_setup_unavailable"})
 		return
 	}
+	passwordVerifier, err := newPasswordVerifierFromCredential(credential)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "password_verifier_failed"})
+		return
+	}
 	token, err := auth.verifier.signPayload(map[string]any{
-		"typ":             bootstrapAdminPendingTokenType,
-		"flow":            flow,
-		"u":               username,
-		"display_name":    firstText(displayName, username),
-		"r":               firstText(role, "Admin"),
-		"password_sha512": passwordHash,
-		"secret":          secret,
+		"typ":               bootstrapAdminPendingTokenType,
+		"flow":              flow,
+		"u":                 username,
+		"display_name":      firstText(displayName, username),
+		"r":                 firstText(role, "Admin"),
+		"password_verifier": passwordVerifier,
+		"secret":            secret,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "mfa_session_failed"})

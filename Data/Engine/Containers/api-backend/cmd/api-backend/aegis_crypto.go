@@ -280,8 +280,9 @@ func aegisDBText(value any) (string, error) {
 }
 
 func intFromAnyDefault(value any, fallback int) int {
-	if parsed := int(parseInt64Any(value)); parsed > 0 {
-		return parsed
+	parsed := parseInt64Any(value)
+	if parsed > 0 && int64FitsInt(parsed) {
+		return int(parsed)
 	}
 	return fallback
 }

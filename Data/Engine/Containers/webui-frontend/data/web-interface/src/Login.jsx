@@ -93,11 +93,6 @@ export default function Login({ onLogin }) {
         setPassword("");
         return;
       }
-      if (data?.token) {
-        try {
-          document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
-        } catch (_) {}
-      }
       onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });
     } catch (err) {
       const msg = err?.message || "Unable to log in";
@@ -113,11 +108,6 @@ export default function Login({ onLogin }) {
     setError("");
     try {
       const data = await authenticateWithPasskey();
-      if (data?.token) {
-        try {
-          document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
-        } catch (_) {}
-      }
       setError("");
       onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });
     } catch (err) {
@@ -166,11 +156,6 @@ export default function Login({ onLogin }) {
         };
         setError(msgMap[errKey] || data?.error || "Failed to verify code.");
         return;
-      }
-      if (data?.token) {
-        try {
-          document.cookie = `borealis_auth=${data.token}; Path=/; SameSite=Lax`;
-        } catch (_) {}
       }
       setError("");
       onLogin({ username: data.username, role: data.role, auth_source: data.auth_source });

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -799,6 +800,9 @@ func passkeyStoredWebAuthnCredential(ctx context.Context, secret authSecretServi
 		return webauthnlib.Credential{}, err
 	}
 	aaguidBytes, _ := decodeWebAuthnStorageValue(aaguid)
+	if signCount < 0 || signCount > math.MaxUint32 {
+		return webauthnlib.Credential{}, errors.New("passkey sign count out of range")
+	}
 	return webauthnlib.Credential{
 		ID:        idBytes,
 		PublicKey: publicKeyBytes,

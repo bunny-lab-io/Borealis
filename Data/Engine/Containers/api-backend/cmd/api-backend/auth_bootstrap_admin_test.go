@@ -29,7 +29,7 @@ func (s *authBootstrapAdminTestStore) createBootstrapAdmin(_ context.Context, us
 	s.createdPassword = encryptedPassword
 	s.createdMFA = encryptedMFASecret
 	s.profile = operatorProfile{Username: username, Role: "Admin"}
-	s.row = authLoginRow{Username: username, Role: "Admin", AuthSource: "local", MFADisabled: true}
+	s.row = authLoginRow{Username: username, Role: "Admin", PasswordSecret: encryptedPassword, AuthSource: "local", MFADisabled: true}
 	s.found = true
 	return nil
 }
@@ -42,7 +42,6 @@ func (s *authBootstrapAdminTestStore) recoverBootstrapAdmin(_ context.Context, u
 }
 
 func TestBootstrapAdminSetupUsesSignedPendingToken(t *testing.T) {
-	passwordHash := strings.Repeat("a", 128)
 	store := &authBootstrapAdminTestStore{}
 	auth := &authService{
 		verifier:      &tokenVerifier{secret: []byte("test-secret"), maxAge: time.Hour, now: time.Now},
@@ -51,7 +50,7 @@ func TestBootstrapAdminSetupUsesSignedPendingToken(t *testing.T) {
 		aegis:         &authLoginTestAegis{},
 		timeout:       time.Second,
 	}
-	setupRequest := httptest.NewRequest(http.MethodPost, "/api/bootstrap/admin/setup", strings.NewReader(`{"username":"operator","password_sha512":"`+passwordHash+`"}`))
+	setupRequest := httptest.NewRequest(http.MethodPost, "/api/bootstrap/admin/setup", strings.NewReader(`{"username":"operator","password":"correct-password"}`))
 	setupRecorder := httptest.NewRecorder()
 
 	bootstrapAdminSetupHandler(auth).ServeHTTP(setupRecorder, setupRequest)
@@ -77,7 +76,7 @@ func TestBootstrapAdminSetupUsesSignedPendingToken(t *testing.T) {
 	if verifyRecorder.Code != http.StatusOK {
 		t.Fatalf("expected verify 200, got %d body=%s", verifyRecorder.Code, verifyRecorder.Body.String())
 	}
-	if store.createdUsername != "operator" || store.createdPassword != "enc:"+passwordHash || store.createdMFA != "enc:"+secret {
+	if store.createdUsername != "operator" || !strings.HasPrefix(store.createdPassword, "enc:"+passwordVerifierVersion+"$") || store.createdMFA != "enc:"+secret {
 		t.Fatalf("unexpected created admin user=%q password=%q mfa=%q", store.createdUsername, store.createdPassword, store.createdMFA)
 	}
 }

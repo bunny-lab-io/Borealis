@@ -276,12 +276,6 @@ func directoryTLSConfig(provider directoryProviderConfig, target directoryConnec
 	}
 	serverName := firstText(target.Host, target.RequestedHost)
 	caPEM := strings.TrimSpace(nullString(provider.Row.TLSCAPEM))
-	if caPEM != "" && pemContainsPinnedLeaf(caPEM) {
-		if err := verifyPinnedLDAPSDirectoryCertificate(target.ServerURL, caPEM, provider.hostOverrides()); err != nil {
-			return nil, err
-		}
-		return &tls.Config{ServerName: serverName, InsecureSkipVerify: true}, nil
-	}
 	config := &tls.Config{ServerName: serverName}
 	if caPEM != "" {
 		pool := x509.NewCertPool()
@@ -290,8 +284,10 @@ func directoryTLSConfig(provider directoryProviderConfig, target directoryConnec
 		}
 		config.RootCAs = pool
 	}
-	if !sqlIntBool(provider.Row.TLSRequired) && caPEM == "" {
-		config.InsecureSkipVerify = true
+	if caPEM != "" && pemContainsPinnedLeaf(caPEM) {
+		if err := verifyPinnedLDAPSDirectoryCertificate(target.ServerURL, caPEM, provider.hostOverrides()); err != nil {
+			return nil, err
+		}
 	}
 	return config, nil
 }
@@ -379,16 +375,21 @@ func fetchLDAPSDirectoryCertificate(serverURL string, hostOverrides map[string]s
 	if tlsHost == "" {
 		tlsHost = host
 	}
-	config := &tls.Config{ServerName: tlsHost, InsecureSkipVerify: true}
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 10 * time.Second}, "tcp", net.JoinHostPort(connectHost, fmt.Sprint(port)), config)
+	rawConn, err := (&net.Dialer{Timeout: 10 * time.Second}).Dial("tcp", net.JoinHostPort(connectHost, fmt.Sprint(port)))
 	if err != nil {
 		return nil, newDirectoryError("certificate_download_failed", err.Error(), http.StatusBadGateway)
 	}
+	conn := tls.Client(rawConn, &tls.Config{ServerName: tlsHost})
 	defer conn.Close()
-	if len(conn.ConnectionState().PeerCertificates) == 0 {
+	handshakeErr := conn.Handshake()
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		if handshakeErr != nil {
+			return nil, newDirectoryError("certificate_download_failed", handshakeErr.Error(), http.StatusBadGateway)
+		}
 		return nil, newDirectoryError("certificate_download_failed", "LDAPS server did not present a certificate.", http.StatusBadGateway)
 	}
-	return directoryCertificateMetadata(conn.ConnectionState().PeerCertificates[0], scheme+"://"+net.JoinHostPort(tlsHost, fmt.Sprint(port)), tlsHost, connectHost, host, port), nil
+	return directoryCertificateMetadata(state.PeerCertificates[0], scheme+"://"+net.JoinHostPort(tlsHost, fmt.Sprint(port)), tlsHost, connectHost, host, port), nil
 }
 
 func verifyPinnedLDAPSDirectoryCertificate(serverURL string, pemText string, hostOverrides map[string]string) error {

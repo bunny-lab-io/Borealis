@@ -101,7 +101,7 @@ BOREALIS_AGENT_UNIT_TEST_DOMAIN=go-agent ./Data/Agent/Unit_Tests/Agent_Unit_Test
 ## Expected Setup
 - Run scripts from repo root.
 - Engine tests prefer `Engine/bin/python` when available because Engine venv includes pytest.
-- Engine Go backend tests/builds use Go 1.23+; `Data/Engine/Containers/api-backend/build-api-backend.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
+- Engine Go backend tests/builds use Go 1.25+; `Data/Engine/Containers/api-backend/build-api-backend.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
 - Agent tests use Go 1.22+; `Data/Agent/build-agent.sh` installs a native Go toolchain under `Dependencies/Go` on Linux when missing.
 - WebUI tests require a prepared runtime cache at `Engine/Services/webui-frontend/cache/web-interface` with `node_modules` and `Unit_Tests`. Container deploys also seed editable dev/HMR source under `Engine/Services/webui-frontend/data/web-interface/`, but that source folder is not the test dependency cache.
 - Do not run npm or Vite from `Data/Engine/Containers/webui-frontend/data/web-interface`; use a prepared runtime cache, the dev/HMR runtime source, or defer UI runtime validation to the operator redeploying the WebUI container.

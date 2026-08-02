@@ -1748,23 +1748,27 @@ func (w *wireGuardRuntime) bin(name string) string {
 }
 
 func (w *wireGuardRuntime) runCommand(args []string) (int, string, string) {
+	validatedArgs, err := w.validatedWireGuardCommandArgs(args)
+	if err != nil {
+		return 1, "", err.Error()
+	}
 	if w != nil && w.commandRunner != nil {
-		return w.commandRunner(args)
+		return w.commandRunner(validatedArgs)
 	}
 	socketPath := cleanText(os.Getenv("BOREALIS_WIREGUARD_CONTROL_SOCKET"))
-	if socketPath != "" && len(args) > 0 {
-		code, out, errOut, err := runWireGuardControlCommand(socketPath, args)
+	if socketPath != "" {
+		code, out, errOut, err := runWireGuardControlCommand(socketPath, validatedArgs)
 		if err == nil {
 			return code, out, errOut
 		}
 		return 1, "", err.Error()
 	}
-	if len(args) == 0 {
-		return 1, "", "missing command"
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	proc := exec.CommandContext(ctx, args[0], args[1:]...)
+	proc, err := wireGuardCommandContext(ctx, validatedArgs)
+	if err != nil {
+		return 1, "", err.Error()
+	}
 	stdout, err := proc.Output()
 	if err == nil {
 		return 0, strings.TrimSpace(string(stdout)), ""
@@ -1776,6 +1780,151 @@ func (w *wireGuardRuntime) runCommand(args []string) (int, string, string) {
 		return exitErr.ExitCode(), strings.TrimSpace(string(stdout)), stderr
 	}
 	return 1, strings.TrimSpace(string(stdout)), err.Error()
+}
+
+func wireGuardCommandContext(ctx context.Context, validatedArgs []string) (*exec.Cmd, error) {
+	if len(validatedArgs) == 0 {
+		return nil, errors.New("missing command")
+	}
+	switch filepath.Base(validatedArgs[0]) {
+	case "wg":
+		return exec.CommandContext(ctx, "wg", validatedArgs[1:]...), nil
+	case "wg-quick":
+		return exec.CommandContext(ctx, "wg-quick", validatedArgs[1:]...), nil
+	case "ip":
+		return exec.CommandContext(ctx, "ip", validatedArgs[1:]...), nil
+	case "iptables":
+		return exec.CommandContext(ctx, "iptables", validatedArgs[1:]...), nil
+	default:
+		return nil, errors.New("wireguard command not allowed")
+	}
+}
+
+func (w *wireGuardRuntime) validatedWireGuardCommandArgs(args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, errors.New("missing command")
+	}
+	candidate := strings.TrimSpace(args[0])
+	if candidate == "" {
+		return nil, errors.New("missing command")
+	}
+	commandName := filepath.Base(candidate)
+	switch commandName {
+	case "wg", "wg-quick", "ip", "iptables":
+	default:
+		return nil, fmt.Errorf("wireguard_command_not_allowed: %s", commandName)
+	}
+	validated := make([]string, len(args))
+	validated[0] = w.bin(commandName)
+	for idx := 1; idx < len(args); idx++ {
+		value := args[idx]
+		if strings.ContainsAny(value, "\x00\r\n") {
+			return nil, fmt.Errorf("wireguard_command_arg_invalid: %d", idx)
+		}
+		validated[idx] = value
+	}
+	if !w.wireGuardCommandShapeAllowed(commandName, validated[1:]) {
+		return nil, fmt.Errorf("wireguard_command_shape_not_allowed: %s", commandName)
+	}
+	return validated, nil
+}
+
+func (w *wireGuardRuntime) wireGuardCommandShapeAllowed(commandName string, args []string) bool {
+	if w == nil {
+		return false
+	}
+	iface := w.interfaceName
+	switch commandName {
+	case "wg":
+		if len(args) == 3 && args[0] == "show" && args[1] == iface && (args[2] == "peers" || args[2] == "latest-handshakes") {
+			return true
+		}
+		if len(args) == 2 && args[0] == "show" && args[1] == iface {
+			return true
+		}
+		if len(args) == 6 && args[0] == "set" && args[1] == iface && args[2] == "peer" && validWireGuardPublicKey(args[3]) && args[4] == "allowed-ips" {
+			return validWireGuardAllowedIPs(args[5], w.peerPrefix, w.enginePrefix)
+		}
+		if len(args) == 5 && args[0] == "set" && args[1] == iface && args[2] == "peer" && validWireGuardPublicKey(args[3]) && args[4] == "remove" {
+			return true
+		}
+		if len(args) == 6 && args[0] == "set" && args[1] == iface && args[2] == "listen-port" && args[4] == "private-key" {
+			port, err := strconv.Atoi(args[3])
+			return err == nil && port > 0 && port <= 65535 && filepath.Clean(args[5]) == filepath.Clean(w.privateKeyPath)
+		}
+	case "wg-quick":
+		return len(args) == 2 && args[0] == "up" && filepath.Clean(args[1]) == filepath.Clean(filepath.Join(w.configRoot, defaultWireGuardConfigName+".conf"))
+	case "ip":
+		if len(args) == 5 && args[0] == "address" && args[1] == "replace" && args[3] == "dev" && args[4] == iface {
+			return args[2] == w.enginePrefix.String()
+		}
+		if len(args) == 5 && args[0] == "route" && args[1] == "replace" && args[3] == "dev" && args[4] == iface {
+			return args[2] == w.peerPrefix.String()
+		}
+		if len(args) == 5 && args[0] == "link" && args[1] == "set" && args[2] == "up" && args[3] == "dev" && args[4] == iface {
+			return true
+		}
+		if len(args) == 5 && args[0] == "link" && args[1] == "show" && args[2] == "dev" && args[3] == iface {
+			return false
+		}
+		if len(args) == 4 && args[0] == "link" && args[1] == "show" && args[2] == "dev" && args[3] == iface {
+			return true
+		}
+	case "iptables":
+		return w.iptablesCommandShapeAllowed(args)
+	}
+	return false
+}
+
+func validWireGuardPublicKey(value string) bool {
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
+	return err == nil && len(raw) == 32
+}
+
+func validWireGuardAllowedIPs(value string, peerPrefix netip.Prefix, enginePrefix netip.Prefix) bool {
+	parts := strings.Split(value, ",")
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(part))
+		if err != nil || !prefix.Addr().Is4() || prefix.Bits() != 32 {
+			return false
+		}
+		prefix = prefix.Masked()
+		if !peerPrefix.Contains(prefix.Addr()) || !usablePeerVirtualAddr(prefix.Addr(), peerPrefix, enginePrefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *wireGuardRuntime) iptablesCommandShapeAllowed(args []string) bool {
+	if len(args) == 2 && (args[0] == "-N" || args[0] == "-F") {
+		return args[1] == wireGuardInputChain || args[1] == wireGuardForwardChain
+	}
+	if len(args) == 5 && args[0] == "-C" && (args[1] == "INPUT" || args[1] == "FORWARD") && args[2] == "-i" && args[3] == w.interfaceName && args[4] == "-j" {
+		return false
+	}
+	if len(args) == 6 && args[0] == "-C" && (args[1] == "INPUT" || args[1] == "FORWARD") && args[2] == "-i" && args[3] == w.interfaceName && args[4] == "-j" {
+		return args[5] == wireGuardInputChain || args[5] == wireGuardForwardChain
+	}
+	if len(args) == 7 && args[0] == "-I" && (args[1] == "INPUT" || args[1] == "FORWARD") && args[2] == "1" && args[3] == "-i" && args[4] == w.interfaceName && args[5] == "-j" {
+		return args[6] == wireGuardInputChain || args[6] == wireGuardForwardChain
+	}
+	if len(args) >= 10 && args[0] == "-A" && (args[1] == wireGuardInputChain || args[1] == wireGuardForwardChain) {
+		if args[len(args)-2] != "-j" || (args[len(args)-1] != "DROP" && args[len(args)-1] != "ACCEPT") {
+			return false
+		}
+		if args[2] == "-s" {
+			return args[3] == w.peerPrefix.String()
+		}
+		if args[2] == "-i" {
+			return len(args) >= 8 && args[3] == w.interfaceName
+		}
+		return args[2] == "-m" && args[3] == "conntrack"
+	}
+	return false
 }
 
 func runWireGuardControlCommand(socketPath string, args []string) (int, string, string, error) {
