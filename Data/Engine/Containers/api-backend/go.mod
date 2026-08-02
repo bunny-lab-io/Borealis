@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/go-webauthn/webauthn v0.10.2
-	github.com/lib/pq v1.10.9
+	github.com/lib/pq v1.12.3
 )
 
 require (
