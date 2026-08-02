@@ -177,3 +177,5 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 - Keep Agent and Engine inventories separate so deployment reviewers can quickly assess licensing impact by runtime.
 - Keep Engine dependency entries under the service that installs or vendors them. Use `shared-engine` for deployment or cross-container orchestration dependencies.
 - If Borealis later adopts lockfiles or generated SBOM tooling, this file can be expanded to include resolved transitive dependencies.
+- Dependabot security updates stay enabled across monitored ecosystems, but routine version updates are rate-limited and grouped by runtime blast radius. Treat Agent Go, Engine Go, Python, WebUI, GitHub Actions, and Docker base-image updates as separate review lanes.
+- Docker base-image major runtime changes need planned upgrade work before merging. PostgreSQL major, Node major, and Python runtime-line jumps are intentionally suppressed from routine Dependabot version-update PRs.
