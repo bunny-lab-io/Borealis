@@ -106,50 +106,50 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | traefik-edge | Traefik (Borealis-managed local HTTPS edge and ACME client) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | webui-frontend | Node.js container base image (`node:22-alpine`) | [MIT plus Alpine package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
 | webui-frontend | @emotion/react | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @emotion/styled | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @fortawesome/fontawesome-free | [CC-BY-4.0 AND OFL-1.1 AND MIT](https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt) |
-| webui-frontend | @fontsource/ibm-plex-sans | [OFL-1.1](https://openfontlicense.org/open-font-license-official-text/) |
-| webui-frontend | @mui/icons-material | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @mui/material | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @mui/x-date-pickers | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @mui/x-tree-view | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @emotion/styled 11.14.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @fortawesome/fontawesome-free 7.3.1 | [CC-BY-4.0 AND OFL-1.1 AND MIT](https://github.com/FortAwesome/Font-Awesome/blob/7.x/LICENSE.txt) |
+| webui-frontend | @fontsource/ibm-plex-sans 5.3.0 | [OFL-1.1](https://openfontlicense.org/open-font-license-official-text/) |
+| webui-frontend | @mui/icons-material 7.3.11 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/material 7.3.11 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/x-date-pickers 8.29.2 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @mui/x-tree-view 8.29.2 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @simplewebauthn/browser | [MIT](https://github.com/MasterKale/SimpleWebAuthn/blob/master/LICENSE) |
-| webui-frontend | ag-grid-community | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | ag-grid-react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | ag-grid-community 34.3.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | ag-grid-react 34.3.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | Apache Guacamole Client (`guacamole-common-js`) 1.6.0 | [Apache-2.0](https://github.com/apache/guacamole-client/blob/1.6.0/LICENSE) |
 | webui-frontend | @codemirror/lang-css | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-html | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-javascript | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-json | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lang-markdown | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lang-markdown 6.5.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-python | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-sql | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-xml | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/lang-yaml | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/language | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/language 6.12.4 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/legacy-modes | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/lint | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/merge | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/search | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/state | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/lint 6.9.7 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/merge 6.12.2 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/search 6.7.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/state 6.7.1 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @codemirror/theme-one-dark | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @codemirror/view | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | @codemirror/view 6.43.7 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @lezer/highlight | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | @uiw/react-codemirror | [MIT](https://github.com/uiwjs/react-codemirror/blob/master/LICENSE) |
+| webui-frontend | @uiw/react-codemirror 4.25.11 | [MIT](https://github.com/uiwjs/react-codemirror/blob/master/LICENSE) |
 | webui-frontend | codemirror | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | dayjs | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | dayjs 1.11.21 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | normalize.css | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | prismjs | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-simple-code-editor | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-simple-code-editor 0.14.1 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react 19.2.8 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-color | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-dom | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-dom 19.2.8 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | react-router-dom | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-resizable | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-markdown | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-resizable 3.2.0 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-markdown 8.0.7 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | reactflow | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | react-simple-keyboard | [MIT](https://spdx.org/licenses/MIT.html) |
-| webui-frontend | socket.io-client | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | react-simple-keyboard 3.8.254 | [MIT](https://spdx.org/licenses/MIT.html) |
+| webui-frontend | socket.io-client 4.8.3 | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @testing-library/jest-dom | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @testing-library/react | [MIT](https://spdx.org/licenses/MIT.html) |
 | webui-frontend | @vitejs/plugin-react ^4.7.0 | [MIT](https://spdx.org/licenses/MIT.html) |

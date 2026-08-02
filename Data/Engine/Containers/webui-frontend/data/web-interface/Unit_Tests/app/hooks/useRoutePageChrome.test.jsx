@@ -54,6 +54,7 @@ describe("useRoutePageChrome", () => {
         breadcrumbLabel: "",
         actions: [],
         controls: [],
+        navigationSidebar: null,
       },
       EMPTY_PAGE_CHROME,
     ]);

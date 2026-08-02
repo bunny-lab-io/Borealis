@@ -55,7 +55,7 @@ describe("AgentHealthTab", () => {
     expect(screen.getByText("Engine authentication")).toBeInTheDocument();
     expect(screen.getByText("Agent role loading")).toBeInTheDocument();
     expect(screen.getByText("Runtime role health")).toBeInTheDocument();
-    expect(screen.getByText("WireGuard VPN")).toBeInTheDocument();
+    expect(screen.getByText("Borealis Agent - WireGuard")).toBeInTheDocument();
     expect(screen.queryByText("Current Phase")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Startup Timeline" })).not.toBeInTheDocument();
   });
@@ -94,15 +94,16 @@ describe("AgentHealthTab", () => {
     expect(refresh).toHaveBeenCalledWith({ silent: true, includeAgents: false });
   });
 
-  it("keeps Agent Health as a right-anchored Device Summary tab", () => {
+  it("keeps role health visible through the Device Summary readiness header", () => {
     const source = fs.readFileSync(
       path.resolve(process.cwd(), "src/Devices/Tabs/Device_Summary.jsx"),
       "utf8"
     );
 
-    expect(source).toContain('key: "agent_health"');
-    expect(source).toContain('label: "Agent Health"');
-    expect(source).toContain('align: "right"');
-    expect(source).toContain('ml: "auto"');
+    expect(source).toContain("buildAgentHealthRows");
+    expect(source).toContain("RuntimeRoleHealthBreakdown");
+    expect(source).toContain("DeviceReadinessHeader");
+    expect(source).toContain('id: "roles"');
+    expect(source).toContain("navigationSidebar: deviceNavigationSidebar");
   });
 });
