@@ -39,11 +39,7 @@ const (
 	wireGuardMSISHA256AMD64              = "6daa5d37a9e2950dfb8c48b95ab8e562cb2bad1c785d020f38f97bea4c6a5566"
 	wireGuardMSISHA256ARM64              = "a2a67fbb2db199525c35ce79ea6dd9031b116ba46561f2b993fb858668440131"
 	wireGuardMSISHA256X86                = "71811698d544607e6bd94bbfff14e936b186da53b2934ff74d736daa74105481"
-	bootstrapUltraVNCPasswordBytes       = 8
-	bootstrapUltraVNCPasswordHashSuffix  = "00"
 )
-
-var bootstrapUltraVNCStoredPasswordDESKey = []byte{0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0}
 
 func ensureAgentDependencies(cfg BootstrapConfig, logger *BootstrapLogger) error {
 	startedAt := time.Now()
@@ -427,19 +423,18 @@ func ultraVNCCaptureSettings() ultraVNCCaptureConfig {
 }
 
 func generateUltraVNCStoredPasswordHash() (string, error) {
-	password := make([]byte, bootstrapUltraVNCPasswordBytes)
+	password := make([]byte, 8)
 	if _, err := rand.Read(password); err != nil {
 		return "", err
 	}
-	// Protocol-required UltraVNC stored-password compatibility. This is not
-	// Borealis secret storage, transport encryption, or operator auth crypto.
-	block, err := des.NewCipher(bootstrapUltraVNCStoredPasswordDESKey)
+	// UltraVNC's D3DES reverses key bit order internally; Go DES does not.
+	block, err := des.NewCipher([]byte{0xE8, 0x4A, 0xD6, 0x60, 0xC4, 0x72, 0x1A, 0xE0})
 	if err != nil {
 		return "", err
 	}
-	encrypted := make([]byte, bootstrapUltraVNCPasswordBytes)
+	encrypted := make([]byte, 8)
 	block.Encrypt(encrypted, password)
-	return strings.ToUpper(hex.EncodeToString(encrypted)) + bootstrapUltraVNCPasswordHashSuffix, nil
+	return strings.ToUpper(hex.EncodeToString(encrypted)) + "00", nil
 }
 
 func mirrorUltraVNCBootstrapConfigToServiceDir(exePath string, configPath string, logger *BootstrapLogger) string {
