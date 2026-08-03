@@ -102,7 +102,7 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | site-worker | ansible.posix collection | [GPL-3.0-or-later](https://github.com/ansible-collections/ansible.posix/blob/main/LICENSE) |
 | site-worker | community.general collection | [GPL-3.0-or-later](https://github.com/ansible-collections/community.general/blob/main/COPYING) |
 | site-worker | WireGuard tools | [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html) |
-| traefik-edge | Traefik container image (`traefik:v3.3`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
+| traefik-edge | Traefik container image (`traefik:v3.5`) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | traefik-edge | Traefik (Borealis-managed local HTTPS edge and ACME client) | [MIT](https://github.com/traefik/traefik/blob/master/LICENSE.md) |
 | webui-frontend | Node.js container base image (`node:22-alpine`) | [MIT plus Alpine package licenses](https://github.com/nodejs/node/blob/main/LICENSE) |
 | webui-frontend | @emotion/react | [MIT](https://spdx.org/licenses/MIT.html) |
