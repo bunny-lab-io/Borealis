@@ -30,6 +30,24 @@ sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
 !!! tip "WebUI HMR"
     Use [WebUI HMR Development](webui-hmr-development.md) for frontend-only edit loops. `webui-frontend rebuild dev` syncs staged WebUI source into the runtime HMR copy and reconciles only the WebUI workload when WebUI inputs changed.
 
+!!! warning "Repository binary history cleanup"
+    `Data/Agent/dist/` is generated output and should not stay in future commits. Removing older binary blobs from Git history requires coordinated repository maintenance, not a normal Engine deploy. Do this only after open PRs are merged or rebased, protected branches are ready for a force-push window, and operators know they must refresh local clones.
+
+    ```sh
+    # Install git-filter-repo if it is not already available.
+    python3 -m pip install --user git-filter-repo
+
+    # Run from a fresh clone or maintenance clone.
+    git filter-repo \
+      --path Data/Agent/dist/windows-amd64/Agent.exe \
+      --path Data/Agent/dist/linux-amd64/Agent \
+      --invert-paths
+
+    # Push rewritten refs only during an approved maintenance window.
+    git push --force-with-lease origin main
+    git push --force-with-lease --tags origin
+    ```
+
 ??? example "Detailed Codex Breakdown"
 
     ### Related documentation
@@ -47,3 +65,4 @@ sudo bash Engine.sh --network-mode local --service wireguard-tunnel reconcile
     - `webui-frontend rebuild prod` rebuilds the production WebUI image and reconciles the K3s WebUI workload.
     - `webui-frontend rebuild dev` syncs staged WebUI source, rebuilds the development image, and keeps Vite/HMR behavior available in the K3s WebUI workload.
     - `wireguard-tunnel reconcile` runs through the K3s tunnel pod and repairs Engine-side tunnel state without requiring a full stack redeploy.
+    - History cleanup is intentionally manual. Codex must not run `git filter-repo`, force-push rewritten refs, or remove branch history unless the operator explicitly approves that maintenance window.

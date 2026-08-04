@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -108,6 +109,88 @@ func TestAgentReleaseChannelsUpdateRefreshesArtifacts(t *testing.T) {
 	mux.ServeHTTP(refreshRecorder, refreshRequest)
 	if refreshRecorder.Code != http.StatusOK {
 		t.Fatalf("expected refresh 200, got %d body=%s", refreshRecorder.Code, refreshRecorder.Body.String())
+	}
+}
+
+func TestAgentReleaseChannelsEngineSourceBuildsLocalArtifact(t *testing.T) {
+	tmpRoot := t.TempDir()
+	settingsPath := filepath.Join(tmpRoot, "Engine", "Services", "api-backend", "config", "agent_release_channels.json")
+	t.Setenv("BOREALIS_PROJECT_ROOT", tmpRoot)
+	t.Setenv("BOREALIS_AGENT_RELEASE_CHANNELS_PATH", settingsPath)
+	t.Setenv("BOREALIS_ENGINE_SOURCE_BUILD_ID", "cccccccccccccccccccccccccccccccccccccccc")
+	t.Setenv("BOREALIS_ENGINE_SOURCE_BRANCH", "main")
+	if err := os.MkdirAll(filepath.Join(tmpRoot, "Data", "Agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpRoot, "Data", "Agent", "build-agent.sh"), []byte("#!/usr/bin/env bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expectedBuildID, err := sourceTreeDigest(filepath.Join(tmpRoot, "Data", "Agent"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalBuilder := agentReleaseBuildAgentBinaries
+	t.Cleanup(func() { agentReleaseBuildAgentBinaries = originalBuilder })
+	agentReleaseBuildAgentBinaries = func(_ context.Context, _ string, outputRoot string) error {
+		if err := os.MkdirAll(filepath.Join(outputRoot, "windows-amd64"), 0o755); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(outputRoot, "linux-amd64"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(outputRoot, "windows-amd64", "Agent.exe"), []byte("windows-agent"), 0o600); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(outputRoot, "linux-amd64", "Agent"), []byte("linux-agent"), 0o600)
+	}
+
+	auth, _ := testAuthServiceWithStore(operatorProfile{Username: "operator", Role: "Admin"})
+	mux := http.NewServeMux()
+	registerAgentReleaseChannelRoutes(mux, auth, http.NotFoundHandler())
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/server/agent-release-channels", bytes.NewBufferString(`{"binary_source":"engine","repo":"owner/repo"}`))
+	request.Header.Set("Authorization", "Bearer "+testAuthToken)
+	request.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["binary_source"] != "engine" {
+		t.Fatalf("expected engine source, got %#v", payload["binary_source"])
+	}
+	if payload["last_refresh_error"] != "" {
+		t.Fatalf("expected no refresh error, got %#v", payload["last_refresh_error"])
+	}
+	channels := payload["channels"].(map[string]any)
+	stable := channels["stable"].(map[string]any)
+	if stable["source"] != "engine" {
+		t.Fatalf("expected engine stable source, got %+v", stable)
+	}
+	if stable["build_id"] != expectedBuildID {
+		t.Fatalf("expected Agent source digest build id %s, got %+v", expectedBuildID, stable)
+	}
+	if stable["compiled_at"] == nil || coerceInt64(stable["compiled_at"]) == 0 {
+		t.Fatalf("expected Engine artifact compile timestamp, got %+v", stable)
+	}
+	artifactPath := cleanText(stable["artifact_path"])
+	if artifactPath == "" {
+		t.Fatalf("expected artifact path")
+	}
+	if err := validateAgentReleaseArtifact(artifactPath); err != nil {
+		t.Fatalf("expected valid Engine artifact: %v", err)
+	}
+	info, err := os.Stat(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiledAt := agentReleaseArtifactCompiledAt(artifactPath, info); compiledAt == 0 {
+		t.Fatalf("expected compile timestamp in Engine artifact manifest")
 	}
 }
 

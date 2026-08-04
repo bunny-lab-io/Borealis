@@ -66,9 +66,11 @@ type operatorStore interface {
 }
 
 type postgresOperatorStore struct {
-	db                  *sql.DB
-	patchPolicySchemaMu sync.Mutex
-	patchPolicySchemaOK bool
+	db                       *sql.DB
+	patchPolicySchemaMu      sync.Mutex
+	patchPolicySchemaOK      bool
+	agentInstallLinkSchemaMu sync.Mutex
+	agentInstallLinkSchemaOK bool
 }
 
 type authService struct {
@@ -163,6 +165,10 @@ func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
 	if err := store.ensureAssemblyTables(ctx); err != nil {
 		_ = db.Close()
 		return nil, func() {}, fmt.Errorf("failed to ensure assembly tables: %w", err)
+	}
+	if err := store.ensureAgentInstallLinkSchema(ctx); err != nil && !errors.Is(err, errAgentInstallLinkSchemaPending) {
+		_ = db.Close()
+		return nil, func() {}, fmt.Errorf("failed to ensure Agent install link tables: %w", err)
 	}
 	return store, func() { _ = db.Close() }, nil
 }

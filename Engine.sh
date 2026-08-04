@@ -18,6 +18,8 @@ COMPOSE_FILE="${CONTAINER_SOURCE_DIR}/compose.yaml"
 BUILD_MANIFEST="${CONTAINER_SOURCE_DIR}/build-manifest.json"
 ENV_EXAMPLE="${CONTAINER_SOURCE_DIR}/compose.env.example"
 RUNTIME_ROOT="${SCRIPT_DIR}/Engine"
+AGENT_STAGED_SOURCE_DIR="${SCRIPT_DIR}/Data/Agent"
+AGENT_UPDATE_CACHE_ROOT="${RUNTIME_ROOT}/Services/api-backend/cache/AgentUpdates"
 WEBUI_STAGED_SOURCE_DIR="${CONTAINER_SOURCE_DIR}/webui-frontend/data/web-interface"
 WEBUI_RUNTIME_SOURCE_DIR="${RUNTIME_ROOT}/Services/webui-frontend/data/web-interface"
 DEPLOY_DIR="${RUNTIME_ROOT}/Deploy"
@@ -219,7 +221,7 @@ log() {
 
 dashboard_static_row() {
   case "$1" in
-    "site-worker"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
+    "Agent Installer Cache"|"site-worker"|"Ensuring Cluster Exists"|"k3s-longhorn-storage"|"k3s-postgres-db"|"borealis-operator"|"k3s-api-backend"|"k3s-job-scheduler"|"k3s-wireguard-tunnel"|"k3s-traefik-edge"|"k3s-webui-frontend"|"k3s-remote-desktop-guacd"|"Docker Compose"|"Docker Cleanup"|"WebUI Accessible")
       return 0
       ;;
     *)
@@ -233,7 +235,7 @@ dashboard_row_section() {
     "webui-frontend")
       printf '%s\n' "Frontend"
       ;;
-    "api-backend"|"api-backend > job-scheduler"|"site-worker"|"remote-desktop-guacd")
+    "api-backend"|"api-backend > job-scheduler"|"Agent Installer Cache"|"site-worker"|"remote-desktop-guacd")
       printf '%s\n' "Backend"
       ;;
     "traefik-edge"|"wireguard-tunnel"|"Local CA"|"Local TLS leaf")
@@ -281,6 +283,7 @@ dashboard_ensure_row() {
 dashboard_seed_rows() {
   local row=""
   for row in \
+    "Agent Installer Cache" \
     "Ensuring Cluster Exists" \
     "k3s-longhorn-storage" \
     "k3s-postgres-db" \
@@ -382,6 +385,9 @@ dashboard_row_label() {
       ;;
     "api-backend > job-scheduler")
       printf '%s\n' "Job Scheduler"
+      ;;
+    "Agent Installer Cache")
+      printf '%s\n' "Agent Installer Cache"
       ;;
     "site-worker")
       printf '%s\n' "Site Worker"
@@ -7080,6 +7086,231 @@ seed_webui_runtime_source() {
   printf '[%s] WebUI runtime source seeded mode=%s staged=%s runtime=%s\n' "$(date +%FT%T)" "${mode}" "${WEBUI_STAGED_SOURCE_DIR}" "${WEBUI_RUNTIME_SOURCE_DIR}" >> "${BUILD_LOG}"
 }
 
+agent_source_digest() {
+  python3 - "${AGENT_STAGED_SOURCE_DIR}" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+if not root.is_dir():
+    raise SystemExit(f"Agent source missing: {root}")
+
+digest = hashlib.sha256()
+for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+    relative = path.relative_to(root).as_posix().strip("/")
+    if not relative:
+        continue
+    if relative == "dist" or relative.startswith("dist/"):
+        continue
+    if relative == "cmd/agent/agent_windows.syso":
+        continue
+    if path.is_dir():
+        continue
+    digest.update(relative.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(path.read_bytes())
+    digest.update(b"\0")
+print(digest.hexdigest())
+PY
+}
+
+package_engine_agent_install_cache() {
+  local build_id="$1"
+  local dist_root="$2"
+  local branch="$3"
+  local config_path="${RUNTIME_ROOT}/Services/api-backend/config/agent_release_channels.json"
+  python3 - "${AGENT_UPDATE_CACHE_ROOT}" "${config_path}" "${dist_root}" "${build_id}" "${branch}" <<'PY'
+import hashlib
+import json
+import pathlib
+import re
+import shutil
+import sys
+import time
+import zipfile
+from datetime import datetime, timezone
+
+cache_root = pathlib.Path(sys.argv[1])
+config_path = pathlib.Path(sys.argv[2])
+dist_root = pathlib.Path(sys.argv[3])
+build_id = str(sys.argv[4]).strip().lower()
+branch = str(sys.argv[5]).strip() or "main"
+
+platform_artifacts = {
+    "windows-amd64": "Data/Agent/dist/windows-amd64/Agent.exe",
+    "linux-amd64": "Data/Agent/dist/linux-amd64/Agent",
+}
+compiled_at = int(time.time())
+published_at = datetime.fromtimestamp(compiled_at, timezone.utc).isoformat().replace("+00:00", "Z")
+
+def clean_artifact_id(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", value.strip().lower()).strip("-")
+    return cleaned or "build"
+
+def artifact_id(channel: str) -> str:
+    cleaned_build = clean_artifact_id(build_id)[:20] or "build"
+    return f"{clean_artifact_id(channel)}-{cleaned_build}"
+
+def sha256_file(path: pathlib.Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+def load_existing(path: pathlib.Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def package_channel(channel: str) -> dict:
+    artifact = artifact_id(f"engine-{channel}")
+    artifact_path = cache_root / f"{artifact}.zip"
+    manifest_path = cache_root / f"{artifact}.json"
+    build_root = cache_root / "Builds" / artifact
+    build_dist = build_root / "dist"
+    if build_root.exists():
+        shutil.rmtree(build_root)
+    shutil.copytree(dist_root, build_dist)
+
+    manifest = {
+        "channel": channel,
+        "repo": "bunny-lab-io/Borealis",
+        "source": "engine",
+        "artifact_format": "borealis-go-agent-v1",
+        "platform_artifacts": platform_artifacts,
+        "build_id": build_id,
+        "artifact_id": artifact,
+        "artifact_path": str(artifact_path),
+        "artifact_sha256": "",
+        "artifact_size": 0,
+        "download_url": "",
+        "fallback_url": "",
+        "version_label": f"engine:{branch}",
+        "release_tag": "",
+        "release_name": "Engine-Compiled Agent",
+        "published_at": published_at,
+        "branch": branch,
+        "compiled_at": compiled_at,
+        "promoted_at": compiled_at,
+        "refreshed_at": compiled_at,
+        "last_error": "",
+    }
+
+    temp_zip = artifact_path.with_suffix(artifact_path.suffix + ".tmp")
+    with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        for platform, archive_name in platform_artifacts.items():
+            source_name = archive_name.removeprefix("Data/Agent/dist/")
+            source_path = dist_root / source_name
+            if not source_path.is_file() or source_path.stat().st_size <= 0:
+                raise SystemExit(f"compiled Agent binary missing for {platform}: {source_path}")
+            archive.write(source_path, archive_name)
+    temp_zip.replace(artifact_path)
+    artifact_path.chmod(0o600)
+    manifest["artifact_sha256"] = sha256_file(artifact_path)
+    manifest["artifact_size"] = artifact_path.stat().st_size
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path.chmod(0o600)
+    return manifest
+
+cache_root.mkdir(parents=True, exist_ok=True)
+(cache_root / "Builds").mkdir(parents=True, exist_ok=True)
+config_path.parent.mkdir(parents=True, exist_ok=True)
+
+existing = load_existing(config_path)
+created_at = int(existing.get("created_at") or compiled_at)
+github = existing.get("github") if isinstance(existing.get("github"), dict) else {}
+github["repo"] = str(github.get("repo") or "bunny-lab-io/Borealis")
+github["default_branch"] = str(github.get("default_branch") or "main")
+stable = package_channel("stable")
+unstable = package_channel("unstable")
+settings = {
+    "version": 1,
+    "default_channel": "stable",
+    "binary_source": "engine",
+    "github_fallback_enabled": False,
+    "github": github,
+    "channels": {
+        "stable": stable,
+        "unstable": unstable,
+    },
+    "last_refresh_started_at": compiled_at,
+    "last_refresh_completed_at": compiled_at,
+    "last_refresh_error": "",
+    "created_at": created_at,
+    "updated_at": compiled_at,
+}
+temp_config = config_path.with_suffix(config_path.suffix + ".tmp")
+temp_config.write_text(json.dumps(settings, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+temp_config.chmod(0o600)
+temp_config.replace(config_path)
+print(f"{stable['artifact_id']}\t{build_id}\t{compiled_at}")
+PY
+}
+
+ensure_engine_agent_install_cache() {
+  local build_script="${AGENT_STAGED_SOURCE_DIR}/build-agent.sh"
+  [[ -f "${build_script}" ]] || die "Agent build script missing: ${build_script}"
+  mkdir -p "${AGENT_UPDATE_CACHE_ROOT}/Builds" "${AGENT_UPDATE_CACHE_ROOT}/Go"
+
+  local initial_build_id
+  initial_build_id="$(agent_source_digest)"
+  [[ -n "${initial_build_id}" ]] || die "Agent source digest unavailable."
+
+  local temp_root
+  temp_root="$(mktemp -d "${AGENT_UPDATE_CACHE_ROOT}/Builds/.deploy-agent.XXXXXX")"
+  local dist_root="${temp_root}/dist"
+  local go_install_root="${AGENT_UPDATE_CACHE_ROOT}/Go/go1.22.12"
+  local branch
+  branch="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || true)"
+  branch="${branch:-main}"
+
+  log_status "Agent Installer Cache" "Building Agent" "${C_YELLOW}"
+  if ! BOREALIS_AGENT_VERSION="${initial_build_id}" \
+    BOREALIS_GO_AGENT_OUTPUT_ROOT="${dist_root}" \
+    BOREALIS_GO_INSTALL_ROOT="${go_install_root}" \
+    bash "${build_script}" >> "${BUILD_LOG}" 2>&1; then
+    rm -rf "${temp_root}"
+    log_status "Agent Installer Cache" "Build Failed" "${C_RED}"
+    die "Engine Agent build failed. See ${BUILD_LOG}."
+  fi
+
+  local final_build_id
+  final_build_id="$(agent_source_digest)"
+  [[ -n "${final_build_id}" ]] || die "Agent source digest unavailable after build."
+  if [[ "${final_build_id}" != "${initial_build_id}" ]]; then
+    printf '[%s] Agent source digest changed after first build; rebuilding with final build id %s\n' "$(date +%FT%T)" "${final_build_id}" >> "${BUILD_LOG}"
+    rm -rf "${dist_root}"
+    if ! BOREALIS_AGENT_VERSION="${final_build_id}" \
+      BOREALIS_GO_AGENT_OUTPUT_ROOT="${dist_root}" \
+      BOREALIS_GO_INSTALL_ROOT="${go_install_root}" \
+      bash "${build_script}" >> "${BUILD_LOG}" 2>&1; then
+      rm -rf "${temp_root}"
+      log_status "Agent Installer Cache" "Build Failed" "${C_RED}"
+      die "Engine Agent rebuild failed after source digest changed. See ${BUILD_LOG}."
+    fi
+  fi
+
+  local metadata
+  if ! metadata="$(package_engine_agent_install_cache "${final_build_id}" "${dist_root}" "${branch}")"; then
+    rm -rf "${temp_root}"
+    log_status "Agent Installer Cache" "Package Failed" "${C_RED}"
+    die "Engine Agent install cache packaging failed. See ${BUILD_LOG}."
+  fi
+  rm -rf "${temp_root}"
+  apply_runtime_service_ownership
+
+  local artifact_id
+  local packaged_build_id
+  local compiled_at
+  IFS=$'\t' read -r artifact_id packaged_build_id compiled_at <<< "${metadata}"
+  printf '[%s] Engine Agent install cache ready artifact=%s build_id=%s compiled_at=%s\n' "$(date +%FT%T)" "${artifact_id}" "${packaged_build_id}" "${compiled_at}" >> "${BUILD_LOG}"
+  log_status "Agent Installer Cache" "Ready - ${artifact_id}" "${C_GREEN}"
+}
+
 prune_empty_legacy_runtime_paths() {
   local name=""
   local path=""
@@ -7982,6 +8213,11 @@ write_compose_env() {
   db_user="$(read_env_value POSTGRES_USER)"
   db_name="${db_name:-borealis}"
   db_user="${db_user:-borealis}"
+  local engine_source_build_id
+  local engine_source_branch
+  engine_source_build_id="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || printf 'dev')"
+  engine_source_branch="$(git -C "${SCRIPT_DIR}" branch --show-current 2>/dev/null || printf '')"
+  engine_source_branch="${engine_source_branch:-main}"
 
   local public_base_url="https://${public_host}"
   if [[ "${public_host}" == *":443" ]]; then
@@ -8060,6 +8296,8 @@ write_compose_env() {
 
   cat > "${RUNTIME_ENV}" <<EOF
 BOREALIS_PROJECT_ROOT=${SCRIPT_DIR}
+BOREALIS_ENGINE_SOURCE_BUILD_ID=${engine_source_build_id}
+BOREALIS_ENGINE_SOURCE_BRANCH=${engine_source_branch}
 BOREALIS_COMPOSE_PROJECT_NAME=${PROJECT_NAME}
 BOREALIS_RUNTIME_ENV_FILE=${RUNTIME_ENV}
 BOREALIS_WEBUI_ENV_FILE=${WEBUI_ENV}
@@ -9079,6 +9317,7 @@ deploy_engine() {
   local previous_internal_api_base_url=""
   previous_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   prepare_runtime "${mode}"
+  ensure_engine_agent_install_cache
   build_images "${mode}"
   export_image_manifest_env
   write_image_manifest "${mode}"
@@ -9301,6 +9540,9 @@ service_action() {
       ;;
     rebuild)
       local build_service="${service}"
+      if [[ "${build_service}" == "api-backend" ]]; then
+        ensure_engine_agent_install_cache
+      fi
       build_images "${mode}" "${build_service}"
       export_image_manifest_env
       write_image_manifest "${mode}"

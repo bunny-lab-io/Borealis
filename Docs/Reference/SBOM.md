@@ -38,7 +38,9 @@ Use `shared-engine` for dependencies that support host deployment, build orchest
 | Service | Dependency | License |
 | :--- | :--- | :--- |
 | api-backend | Alpine Linux container base image (`alpine:3.24`) | [Package-specific Alpine Linux licenses](https://pkgs.alpinelinux.org/packages) |
+| api-backend | Bash | [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) |
 | api-backend | ca-certificates | [MPL-2.0](https://spdx.org/licenses/MPL-2.0.html) |
+| api-backend | curl | [curl License](https://curl.se/docs/copyright.html) |
 | api-backend | Git | [GPL-2.0-only](https://github.com/git/git/blob/master/COPYING) |
 | api-backend | tzdata | [Public Domain](https://data.iana.org/time-zones/tzdb/LICENSE) |
 | api-backend | Go standard library/runtime (compiled into the Go `api-backend` gateway) | [BSD-3-Clause](https://go.dev/LICENSE) |

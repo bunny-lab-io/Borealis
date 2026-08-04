@@ -25,3 +25,5 @@ Data/Engine/Containers/webui-frontend/data/web-interface/coverage
 Data/Engine/Containers/webui-frontend/data/web-interface/.eslintcache
 Data/Engine/Containers/**/.pytest_cache
 Data/Engine/Containers/**/__pycache__
+Data/Agent/dist
+Data/Agent/cmd/agent/agent_windows.syso

@@ -47,6 +47,7 @@ func registerSiteRoutes(mux *http.ServeMux, auth *authService) {
 	mux.HandleFunc("POST /api/sites/assign", siteAssignHandler(auth))
 	mux.HandleFunc("POST /api/sites/rename", siteRenameHandler(auth))
 	mux.HandleFunc("POST /api/sites/{site_id}/auto-approval", siteAutoApprovalHandler(auth))
+	mux.HandleFunc("POST /api/sites/{site_id}/agent-install-links/{platform}/revoke", siteAgentInstallLinkRevokeHandler(auth))
 }
 
 func siteListHandler(auth *authService) http.HandlerFunc {
@@ -94,6 +95,7 @@ func handleSiteList(w http.ResponseWriter, r *http.Request, auth *authService) {
 		return
 	}
 	payload := siteInstallMetadata(r)
+	attachAgentInstallDownloads(r, auth, payload, sites)
 	payload["sites"] = sites
 	writeJSON(w, http.StatusOK, payload)
 }
@@ -376,6 +378,64 @@ func siteAutoApprovalHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, status, payload)
+	}
+}
+
+func siteAgentInstallLinkRevokeHandler(auth *authService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, failure := requireAdmin(r.Context(), auth, r); failure != nil {
+			failure.write(w)
+			return
+		}
+		siteID, ok := parseInt64Value(r.PathValue("site_id"))
+		if !ok || siteID <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid site_id"})
+			return
+		}
+		platform := normalizeAgentInstallPlatform(r.PathValue("platform"))
+		if platform == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid platform"})
+			return
+		}
+		store, ok := auth.store.(agentInstallLinkStore)
+		if !ok {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "agent_install_links_unavailable"})
+			return
+		}
+		target, artifactID, cacheReady := currentAgentInstallArtifactTarget()
+		if !cacheReady || artifactID == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "agent_install_cache_unavailable"})
+			return
+		}
+		ctx, cancel := requestTimeout(r.Context(), auth)
+		defer cancel()
+		enrollmentCode, err := store.siteEnrollmentCode(ctx, siteID)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "site_not_found"})
+			return
+		}
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		expiresAt := agentInstallDownloadNow(auth).Add(agentInstallDownloadTokenTTL()).UTC().Truncate(time.Second).Unix()
+		link, err := store.revokeAgentInstallLink(ctx, siteID, platform, artifactID, expiresAt)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		metadata := siteInstallMetadata(r)
+		download := agentInstallDownloadPayload(auth, strings.TrimRight(cleanText(metadata["public_base_url"]), "/"), enrollmentCode, link)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":      "ok",
+			"site_id":     siteID,
+			"platform":    platform,
+			"os":          agentInstallOSID(platform),
+			"artifact_id": artifactID,
+			"source":      cleanText(target["source"]),
+			"download":    download,
+			"replaced":    true,
+		})
 	}
 }
 
